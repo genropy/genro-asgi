@@ -511,6 +511,7 @@ References
 - urllib.parse: https://docs.python.org/3/library/urllib.parse.html
 """
 
+from collections.abc import Mapping
 from typing import Any, Iterator
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -1089,14 +1090,14 @@ class State:
         return f"State({self._state!r})"
 
 
-def headers_from_scope(scope: dict[str, Any]) -> Headers:
+def headers_from_scope(scope: Mapping[str, Any]) -> Headers:
     """
     Create Headers instance from ASGI scope.
 
     Convenience function to extract and parse headers from an ASGI scope dict.
 
     Args:
-        scope: ASGI scope dictionary containing "headers" key.
+        scope: ASGI scope mapping containing "headers" key.
 
     Returns:
         Headers instance. Returns empty Headers if "headers" not in scope.
@@ -1110,14 +1111,14 @@ def headers_from_scope(scope: dict[str, Any]) -> Headers:
     return Headers(scope.get("headers", []))
 
 
-def query_params_from_scope(scope: dict[str, Any]) -> QueryParams:
+def query_params_from_scope(scope: Mapping[str, Any]) -> QueryParams:
     """
     Create QueryParams instance from ASGI scope.
 
-    Convenience function to extract and parse query string from an ASGI scope dict.
+    Convenience function to extract and parse query string from an ASGI scope mapping.
 
     Args:
-        scope: ASGI scope dictionary containing "query_string" key.
+        scope: ASGI scope mapping containing "query_string" key.
 
     Returns:
         QueryParams instance. Returns empty QueryParams if "query_string" not in scope.
