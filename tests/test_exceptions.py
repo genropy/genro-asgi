@@ -33,13 +33,33 @@ class TestHTTPException:
         assert exc.detail == "Not found"
         assert exc.headers is None
 
-    def test_with_headers(self) -> None:
-        """Test creating exception with custom headers."""
+    def test_with_headers_dict(self) -> None:
+        """Test creating exception with dict headers (converted to list)."""
         headers = {"WWW-Authenticate": "Bearer realm='api'"}
         exc = HTTPException(401, detail="Unauthorized", headers=headers)
         assert exc.status_code == 401
         assert exc.detail == "Unauthorized"
-        assert exc.headers == headers
+        # Dict is converted to list of tuples
+        assert exc.headers == [("WWW-Authenticate", "Bearer realm='api'")]
+
+    def test_with_headers_list(self) -> None:
+        """Test creating exception with list of tuple headers."""
+        headers = [("Set-Cookie", "a=1"), ("Set-Cookie", "b=2")]
+        exc = HTTPException(400, detail="Bad request", headers=headers)
+        assert exc.headers == [("Set-Cookie", "a=1"), ("Set-Cookie", "b=2")]
+
+    def test_duplicate_headers(self) -> None:
+        """Test that duplicate header names are preserved."""
+        headers = [
+            ("Set-Cookie", "session=abc"),
+            ("Set-Cookie", "prefs=dark"),
+            ("Set-Cookie", "lang=en"),
+        ]
+        exc = HTTPException(200, headers=headers)
+        assert len(exc.headers) == 3
+        assert exc.headers[0] == ("Set-Cookie", "session=abc")
+        assert exc.headers[1] == ("Set-Cookie", "prefs=dark")
+        assert exc.headers[2] == ("Set-Cookie", "lang=en")
 
     def test_default_detail(self) -> None:
         """Test that detail defaults to empty string."""
@@ -102,11 +122,12 @@ class TestHTTPException:
         assert HTTPException(502).status_code == 502
         assert HTTPException(503).status_code == 503
 
-    def test_headers_not_modified(self) -> None:
-        """Test that headers dict is stored as-is."""
-        headers = {"X-Custom": "value"}
+    def test_headers_list_copied(self) -> None:
+        """Test that headers list is copied (not same object)."""
+        headers = [("X-Custom", "value")]
         exc = HTTPException(400, headers=headers)
-        assert exc.headers is headers  # Same object
+        assert exc.headers == headers
+        assert exc.headers is not headers  # Copied, not same object
 
 
 class TestWebSocketException:

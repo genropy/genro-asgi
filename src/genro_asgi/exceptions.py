@@ -36,8 +36,8 @@ Design Decisions
   from __slots__. This also maintains compatibility with Exception base class.
 - No common base: Each exception inherits directly from Exception for simplicity.
   Use tuple syntax for catching multiple: `except (HTTPException, WebSocketException)`
-- headers as dict[str, str]: Simple single-value headers. For multi-value headers
-  (rare in error responses), handle at the response level.
+- headers: Accepts both dict[str, str] for simple headers and list[tuple[str, str]]
+  for headers that may have duplicate names (e.g., multiple Set-Cookie headers).
 
 HTTPException
 -------------
@@ -46,11 +46,14 @@ Raise in handlers to return an HTTP error response.
 Attributes:
     status_code (int): HTTP status code (expected 4xx or 5xx)
     detail (str): Error detail message (default: "")
-    headers (dict[str, str] | None): Optional response headers (default: None)
+    headers (list[tuple[str, str]] | None): Optional response headers as list of
+        tuples. Supports duplicate header names (e.g., multiple Set-Cookie).
+        Input can be dict[str, str] or list[tuple[str, str]], stored as list.
 
 Example:
     >>> raise HTTPException(404, detail="User not found")
     >>> raise HTTPException(401, detail="Auth required", headers={"WWW-Authenticate": "Bearer"})
+    >>> raise HTTPException(400, headers=[("Set-Cookie", "a=1"), ("Set-Cookie", "b=2")])
 
 WebSocketException
 ------------------
@@ -128,18 +131,19 @@ class HTTPException(Exception):
     Attributes:
         status_code: HTTP status code (expected 4xx or 5xx, not validated)
         detail: Error detail message
-        headers: Optional response headers
+        headers: Response headers as list of tuples (supports duplicate names)
 
     Example:
         >>> raise HTTPException(404, detail="User not found")
         >>> raise HTTPException(401, headers={"WWW-Authenticate": "Bearer"})
+        >>> raise HTTPException(400, headers=[("Set-Cookie", "a=1"), ("Set-Cookie", "b=2")])
     """
 
     def __init__(
         self,
         status_code: int,
         detail: str = "",
-        headers: dict[str, str] | None = None,
+        headers: dict[str, str] | list[tuple[str, str]] | None = None,
     ) -> None:
         """
         Initialize HTTP exception.
@@ -147,11 +151,18 @@ class HTTPException(Exception):
         Args:
             status_code: HTTP status code (4xx, 5xx expected)
             detail: Error detail message (default: "")
-            headers: Optional response headers (default: None)
+            headers: Response headers as dict or list of tuples (default: None).
+                     Dict is converted to list internally to support duplicate names.
         """
         self.status_code = status_code
         self.detail = detail
-        self.headers = headers
+        # Normalize headers to list[tuple[str, str]] for consistent internal format
+        if headers is None:
+            self.headers: list[tuple[str, str]] | None = None
+        elif isinstance(headers, dict):
+            self.headers = list(headers.items())
+        else:
+            self.headers = list(headers)
         super().__init__(detail)
 
     def __repr__(self) -> str:

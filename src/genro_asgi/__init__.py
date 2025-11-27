@@ -27,7 +27,15 @@ from .datastructures import (
 from .exceptions import HTTPException, WebSocketDisconnect, WebSocketException
 from .lifespan import Lifespan
 from .request import Request
-from .response import HTMLResponse, JSONResponse, PlainTextResponse, Response
+from .response import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from .types import ASGIApp, Message, Receive, Scope, Send
 
 __all__ = [
@@ -38,6 +46,9 @@ __all__ = [
     "JSONResponse",
     "HTMLResponse",
     "PlainTextResponse",
+    "RedirectResponse",
+    "StreamingResponse",
+    "FileResponse",
     "Lifespan",
     # Data structures
     "Address",
