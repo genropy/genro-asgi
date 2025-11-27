@@ -91,6 +91,10 @@ genro-asgi provides features that Starlette does NOT include:
 
 - Implement the module to pass all tests
 - Follow the docstring specification exactly
+- **Write complete docstrings for all classes and methods** (for ReadTheDocs/Sphinx autodoc):
+  - Class docstrings: purpose, attributes, usage example
+  - Method docstrings: description, args, returns, raises, example if useful
+  - All docstrings in English
 - Run `pytest`, `mypy`, `ruff` after implementation
 
 ### Step 5: Documentation

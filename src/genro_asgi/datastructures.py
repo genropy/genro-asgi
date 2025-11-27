@@ -526,18 +526,55 @@ __all__ = [
 
 
 class Address:
-    """Client or server address."""
+    """
+    Client or server address wrapper.
+
+    Wraps the ``(host, port)`` tuple used in ASGI scope for ``client`` and
+    ``server`` fields. Provides named attribute access instead of tuple indexing.
+
+    Attributes:
+        host: The hostname or IP address.
+        port: The port number.
+
+    Example:
+        >>> addr = Address("192.168.1.1", 8080)
+        >>> addr.host
+        '192.168.1.1'
+        >>> addr.port
+        8080
+        >>> addr == ("192.168.1.1", 8080)  # Compare with ASGI tuple
+        True
+    """
 
     __slots__ = ("host", "port")
 
     def __init__(self, host: str, port: int) -> None:
+        """
+        Initialize an Address.
+
+        Args:
+            host: The hostname or IP address.
+            port: The port number.
+        """
         self.host = host
         self.port = port
 
     def __repr__(self) -> str:
+        """Return string representation for debugging."""
         return f"Address(host={self.host!r}, port={self.port})"
 
     def __eq__(self, other: object) -> bool:
+        """
+        Compare with another Address or tuple.
+
+        Supports comparison with ASGI-style tuples for backward compatibility.
+
+        Args:
+            other: An Address instance or a ``(host, port)`` tuple.
+
+        Returns:
+            True if host and port match, False otherwise.
+        """
         if isinstance(other, Address):
             return self.host == other.host and self.port == other.port
         if isinstance(other, tuple) and len(other) == 2:
@@ -546,49 +583,100 @@ class Address:
 
 
 class URL:
-    """URL parsing and components."""
+    """
+    URL parser with component access.
+
+    Parses a URL string and provides access to its components (scheme, host,
+    path, query, etc.). Wraps ``urllib.parse.urlparse`` internally.
+
+    Attributes:
+        scheme: The URL scheme (e.g., "https", "http").
+        netloc: Network location including host and optional port.
+        path: URL path, automatically unquoted. Defaults to "/" if empty.
+        query: Query string without the leading "?".
+        fragment: Fragment identifier without the leading "#".
+        hostname: Hostname extracted from netloc (None if not present).
+        port: Port number extracted from netloc (None if not present).
+
+    Example:
+        >>> url = URL("https://example.com:8080/path?q=1#section")
+        >>> url.scheme
+        'https'
+        >>> url.hostname
+        'example.com'
+        >>> url.port
+        8080
+        >>> url.path
+        '/path'
+        >>> str(url)
+        'https://example.com:8080/path?q=1#section'
+    """
 
     __slots__ = ("_url", "_parsed")
 
     def __init__(self, url: str) -> None:
+        """
+        Initialize URL from a URL string.
+
+        Args:
+            url: The URL string to parse.
+        """
         self._url = url
         self._parsed = urlparse(url)
 
     @property
     def scheme(self) -> str:
+        """The URL scheme (e.g., 'https', 'http', 'ws')."""
         return self._parsed.scheme
 
     @property
     def netloc(self) -> str:
+        """Network location (e.g., 'user:pass@host:port')."""
         return self._parsed.netloc
 
     @property
     def path(self) -> str:
+        """URL path, unquoted. Returns '/' if path is empty."""
         return unquote(self._parsed.path) or "/"
 
     @property
     def query(self) -> str:
+        """Query string without leading '?'."""
         return self._parsed.query
 
     @property
     def fragment(self) -> str:
+        """Fragment identifier without leading '#'."""
         return self._parsed.fragment
 
     @property
     def hostname(self) -> str | None:
+        """Hostname from netloc, or None if not present."""
         return self._parsed.hostname
 
     @property
     def port(self) -> int | None:
+        """Port number from netloc, or None if not specified."""
         return self._parsed.port
 
     def __str__(self) -> str:
+        """Return the original URL string."""
         return self._url
 
     def __repr__(self) -> str:
+        """Return string representation for debugging."""
         return f"URL({self._url!r})"
 
     def __eq__(self, other: object) -> bool:
+        """
+        Compare with another URL or string.
+
+        Args:
+            other: A URL instance or URL string.
+
+        Returns:
+            True if URLs match, False otherwise.
+        """
         if isinstance(other, URL):
             return self._url == other._url
         if isinstance(other, str):
@@ -597,11 +685,47 @@ class URL:
 
 
 class Headers:
-    """Case-insensitive HTTP headers with multi-value support."""
+    """
+    Immutable, case-insensitive HTTP headers with multi-value support.
+
+    HTTP header names are case-insensitive per RFC 7230. This class normalizes
+    header names to lowercase internally while preserving values. The same
+    header can appear multiple times (e.g., Set-Cookie).
+
+    ASGI provides headers as ``list[tuple[bytes, bytes]]`` with Latin-1 encoding.
+    This class decodes them to strings automatically.
+
+    This class is read-only. For mutable headers (response building), use
+    ``list[tuple[bytes, bytes]]`` directly or a future MutableHeaders class.
+
+    Example:
+        >>> raw = [(b"Content-Type", b"application/json"), (b"Accept", b"text/html")]
+        >>> headers = Headers(raw)
+        >>> headers.get("content-type")  # Case-insensitive
+        'application/json'
+        >>> headers["ACCEPT"]  # Also case-insensitive
+        'text/html'
+        >>> "content-type" in headers
+        True
+
+        # Multi-value headers
+        >>> raw = [(b"Set-Cookie", b"a=1"), (b"Set-Cookie", b"b=2")]
+        >>> headers = Headers(raw)
+        >>> headers.getlist("set-cookie")
+        ['a=1', 'b=2']
+    """
 
     __slots__ = ("_headers",)
 
     def __init__(self, raw_headers: list[tuple[bytes, bytes]]) -> None:
+        """
+        Initialize Headers from raw ASGI headers.
+
+        Args:
+            raw_headers: List of (name, value) byte tuples from ASGI scope.
+                         Both name and value are decoded as Latin-1.
+                         Names are normalized to lowercase.
+        """
         self._headers: list[tuple[str, str]] = []
         for name, value in raw_headers:
             self._headers.append(
@@ -609,7 +733,16 @@ class Headers:
             )
 
     def get(self, key: str, default: str | None = None) -> str | None:
-        """Get first value for key (case-insensitive)."""
+        """
+        Get the first value for a header (case-insensitive).
+
+        Args:
+            key: Header name (case-insensitive).
+            default: Value to return if header not found.
+
+        Returns:
+            The first value for the header, or default if not found.
+        """
         key_lower = key.lower()
         for name, value in self._headers:
             if name == key_lower:
@@ -617,12 +750,27 @@ class Headers:
         return default
 
     def getlist(self, key: str) -> list[str]:
-        """Get all values for key (case-insensitive)."""
+        """
+        Get all values for a header (case-insensitive).
+
+        Useful for headers that can appear multiple times like Set-Cookie.
+
+        Args:
+            key: Header name (case-insensitive).
+
+        Returns:
+            List of all values for the header, empty list if not found.
+        """
         key_lower = key.lower()
         return [value for name, value in self._headers if name == key_lower]
 
     def keys(self) -> list[str]:
-        """Return unique header names."""
+        """
+        Return unique header names (lowercase).
+
+        Returns:
+            List of unique header names in order of first occurrence.
+        """
         seen: set[str] = set()
         result: list[str] = []
         for name, _ in self._headers:
@@ -632,69 +780,173 @@ class Headers:
         return result
 
     def values(self) -> list[str]:
-        """Return all header values."""
+        """
+        Return all header values.
+
+        Returns:
+            List of all values in order, including duplicates.
+        """
         return [value for _, value in self._headers]
 
     def items(self) -> list[tuple[str, str]]:
-        """Return all (name, value) pairs."""
+        """
+        Return all (name, value) pairs.
+
+        Returns:
+            List of tuples with lowercase names, including duplicates.
+        """
         return list(self._headers)
 
     def __getitem__(self, key: str) -> str:
+        """
+        Get header value by name, raising KeyError if not found.
+
+        Args:
+            key: Header name (case-insensitive).
+
+        Returns:
+            The first value for the header.
+
+        Raises:
+            KeyError: If header is not present.
+        """
         value = self.get(key)
         if value is None:
             raise KeyError(key)
         return value
 
     def __contains__(self, key: object) -> bool:
+        """Check if header exists (case-insensitive)."""
         if not isinstance(key, str):
             return False
         return self.get(key) is not None
 
     def __iter__(self) -> Iterator[str]:
+        """Iterate over unique header names."""
         return iter(self.keys())
 
     def __len__(self) -> int:
+        """Return total number of header entries (including duplicates)."""
         return len(self._headers)
 
     def __repr__(self) -> str:
+        """Return string representation for debugging."""
         return f"Headers({self._headers!r})"
 
 
 class QueryParams:
-    """Query string parameters with multi-value support."""
+    """
+    Parsed query string parameters with multi-value support.
+
+    Parses URL query strings (e.g., "name=john&tags=a&tags=b") into an
+    accessible structure. Unlike Headers, parameter names are case-sensitive.
+
+    Uses ``urllib.parse.parse_qs`` internally, which handles URL decoding
+    (e.g., ``%20`` becomes space) automatically.
+
+    Example:
+        >>> params = QueryParams(b"name=john&tags=python&tags=web")
+        >>> params.get("name")
+        'john'
+        >>> params.getlist("tags")
+        ['python', 'web']
+        >>> params["name"]
+        'john'
+        >>> "tags" in params
+        True
+
+        # Empty values are preserved
+        >>> params = QueryParams("key=&other=value")
+        >>> params.get("key")
+        ''
+    """
 
     __slots__ = ("_params",)
 
     def __init__(self, query_string: bytes | str) -> None:
+        """
+        Initialize QueryParams from a query string.
+
+        Args:
+            query_string: The query string to parse (bytes or str).
+                          Bytes are decoded as Latin-1. URL encoding
+                          (e.g., %20) is decoded automatically.
+        """
         if isinstance(query_string, bytes):
             query_string = query_string.decode("latin-1")
         self._params = parse_qs(query_string, keep_blank_values=True)
 
     def get(self, key: str, default: str | None = None) -> str | None:
-        """Get first value for key."""
+        """
+        Get the first value for a parameter.
+
+        Args:
+            key: Parameter name (case-sensitive).
+            default: Value to return if parameter not found.
+
+        Returns:
+            The first value for the parameter, or default if not found.
+        """
         values = self._params.get(key)
         if values:
             return values[0]
         return default
 
     def getlist(self, key: str) -> list[str]:
-        """Get all values for key."""
+        """
+        Get all values for a parameter.
+
+        Useful for parameters that appear multiple times (e.g., "?tag=a&tag=b").
+
+        Args:
+            key: Parameter name (case-sensitive).
+
+        Returns:
+            List of all values, empty list if parameter not found.
+        """
         return self._params.get(key, [])
 
     def keys(self) -> list[str]:
-        """Return all parameter names."""
+        """
+        Return all parameter names.
+
+        Returns:
+            List of unique parameter names.
+        """
         return list(self._params.keys())
 
     def values(self) -> list[str]:
-        """Return first value for each parameter."""
+        """
+        Return the first value for each parameter.
+
+        Returns:
+            List of first values in parameter order.
+        """
         return [v[0] for v in self._params.values() if v]
 
     def items(self) -> list[tuple[str, str]]:
-        """Return (name, first_value) pairs."""
+        """
+        Return (name, first_value) pairs.
+
+        Returns:
+            List of tuples with first value for each parameter.
+        """
         return [(k, v[0]) for k, v in self._params.items() if v]
 
     def multi_items(self) -> list[tuple[str, str]]:
-        """Return all (name, value) pairs including duplicates."""
+        """
+        Return all (name, value) pairs including duplicates.
+
+        Useful for iterating all values when parameters have multiple values.
+
+        Returns:
+            List of all (name, value) tuples.
+
+        Example:
+            >>> params = QueryParams("a=1&a=2&b=3")
+            >>> params.multi_items()
+            [('a', '1'), ('a', '2'), ('b', '3')]
+        """
         result: list[tuple[str, str]] = []
         for key, values in self._params.items():
             for value in values:
@@ -702,66 +954,178 @@ class QueryParams:
         return result
 
     def __getitem__(self, key: str) -> str:
+        """
+        Get parameter value by name, raising KeyError if not found.
+
+        Args:
+            key: Parameter name (case-sensitive).
+
+        Returns:
+            The first value for the parameter.
+
+        Raises:
+            KeyError: If parameter is not present.
+        """
         value = self.get(key)
         if value is None:
             raise KeyError(key)
         return value
 
     def __contains__(self, key: object) -> bool:
+        """Check if parameter exists (case-sensitive)."""
         if not isinstance(key, str):
             return False
         return key in self._params
 
     def __iter__(self) -> Iterator[str]:
+        """Iterate over parameter names."""
         return iter(self._params)
 
     def __len__(self) -> int:
+        """Return number of unique parameters."""
         return len(self._params)
 
     def __bool__(self) -> bool:
+        """Return True if there are any parameters."""
         return bool(self._params)
 
     def __repr__(self) -> str:
+        """Return string representation for debugging."""
         return f"QueryParams({self._params!r})"
 
 
 class State:
-    """Request/application state container with attribute access."""
+    """
+    Request-scoped state container with attribute access.
+
+    Provides ergonomic attribute-style access to request state, commonly used
+    by middleware to attach data (e.g., authenticated user, request ID).
+
+    Uses Python's magic attribute methods (``__getattr__``/``__setattr__``) to
+    store data in an internal dictionary while providing ``state.attr`` syntax.
+    This is a standard pattern used by Starlette, Flask, and other frameworks.
+
+    Example:
+        >>> state = State()
+        >>> state.user_id = 123
+        >>> state.is_authenticated = True
+        >>> state.user_id
+        123
+        >>> "user_id" in state
+        True
+        >>> del state.user_id
+        >>> "user_id" in state
+        False
+
+        # Missing attributes raise AttributeError
+        >>> state.missing  # doctest: +IGNORE_EXCEPTION_DETAIL
+        Traceback (most recent call last):
+            ...
+        AttributeError: State has no attribute 'missing'
+    """
 
     __slots__ = ("_state",)
 
     def __init__(self) -> None:
+        """
+        Initialize an empty State container.
+
+        Uses ``object.__setattr__`` to initialize the internal dict without
+        triggering our custom ``__setattr__`` override.
+        """
         object.__setattr__(self, "_state", {})
 
     def __setattr__(self, name: str, value: Any) -> None:
+        """
+        Set a state attribute.
+
+        Args:
+            name: Attribute name.
+            value: Value to store.
+        """
         self._state[name] = value
 
     def __getattr__(self, name: str) -> Any:
+        """
+        Get a state attribute.
+
+        Args:
+            name: Attribute name.
+
+        Returns:
+            The stored value.
+
+        Raises:
+            AttributeError: If attribute does not exist.
+        """
         try:
             return self._state[name]
         except KeyError:
             raise AttributeError(f"State has no attribute '{name}'") from None
 
     def __delattr__(self, name: str) -> None:
+        """
+        Delete a state attribute.
+
+        Args:
+            name: Attribute name to delete.
+
+        Raises:
+            AttributeError: If attribute does not exist.
+        """
         try:
             del self._state[name]
         except KeyError:
             raise AttributeError(f"State has no attribute '{name}'") from None
 
     def __contains__(self, name: object) -> bool:
+        """Check if attribute exists in state."""
         if not isinstance(name, str):
             return False
         return name in self._state
 
     def __repr__(self) -> str:
+        """Return string representation for debugging."""
         return f"State({self._state!r})"
 
 
 def headers_from_scope(scope: dict[str, Any]) -> Headers:
-    """Create Headers from ASGI scope."""
+    """
+    Create Headers instance from ASGI scope.
+
+    Convenience function to extract and parse headers from an ASGI scope dict.
+
+    Args:
+        scope: ASGI scope dictionary containing "headers" key.
+
+    Returns:
+        Headers instance. Returns empty Headers if "headers" not in scope.
+
+    Example:
+        >>> scope = {"type": "http", "headers": [(b"host", b"example.com")]}
+        >>> headers = headers_from_scope(scope)
+        >>> headers.get("host")
+        'example.com'
+    """
     return Headers(scope.get("headers", []))
 
 
 def query_params_from_scope(scope: dict[str, Any]) -> QueryParams:
-    """Create QueryParams from ASGI scope."""
+    """
+    Create QueryParams instance from ASGI scope.
+
+    Convenience function to extract and parse query string from an ASGI scope dict.
+
+    Args:
+        scope: ASGI scope dictionary containing "query_string" key.
+
+    Returns:
+        QueryParams instance. Returns empty QueryParams if "query_string" not in scope.
+
+    Example:
+        >>> scope = {"type": "http", "query_string": b"page=1&limit=10"}
+        >>> params = query_params_from_scope(scope)
+        >>> params.get("page")
+        '1'
+    """
     return QueryParams(scope.get("query_string", b""))
