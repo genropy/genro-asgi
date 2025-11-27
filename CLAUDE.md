@@ -140,35 +140,62 @@ All code must have tests:
 4. **Minimal abstractions**: Close to ASGI, avoid over-engineering
 5. **Apache 2.0 license**: Permissive, business-friendly
 
+## Git Hooks (MANDATORY)
+
+**ALWAYS verify hooks exist at session start:**
+
+```bash
+ls -la .git/hooks/pre-commit .git/hooks/pre-push
+```
+
+If hooks are missing, create them:
+
+### pre-commit hook
+
+Location: `.git/hooks/pre-commit`
+Runs: `ruff check src/` + `mypy src/`
+
+### pre-push hook
+
+Location: `.git/hooks/pre-push`
+Runs: `pytest tests/`
+Skip with: `SKIP_TESTS=1 git push` (use with caution)
+
 ## Development Workflow
 
 **MANDATORY sequence before every push:**
 
 1. **Run pytest locally**
+
    ```bash
    pytest
    ```
 
 2. **Run ruff locally**
+
    ```bash
    ruff check .
    ```
 
 3. **Run mypy locally**
+
    ```bash
    mypy src
    ```
 
 4. **Push only if all pass**
+
    ```bash
    git push origin main
    ```
 
 **CRITICAL RULES:**
-- ❌ **NEVER use `--no-verify`** without explicit user authorization
-- ✅ **ALWAYS investigate** pre-push failures instead of bypassing
-- ✅ Local testing is FAST (seconds) vs CI is SLOW (minutes)
-- ✅ "LOCALE PRIMA, CI POI" (Local first, CI after)
+
+- **NEVER use `--no-verify`** without explicit user authorization
+- **ALWAYS investigate** pre-push failures instead of bypassing
+- Local testing is FAST (seconds) vs CI is SLOW (minutes)
+- "LOCALE PRIMA, CI POI" (Local first, CI after)
+- **ALWAYS verify hooks exist** at the start of each session
 
 ## Mistakes to Avoid
 

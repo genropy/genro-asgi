@@ -32,17 +32,17 @@ class Request:
     @property
     def method(self) -> str:
         """HTTP method (GET, POST, etc.)."""
-        return self.scope.get("method", "GET")
+        return str(self.scope.get("method", "GET"))
 
     @property
     def path(self) -> str:
         """Request path."""
-        return self.scope.get("path", "/")
+        return str(self.scope.get("path", "/"))
 
     @property
     def query_string(self) -> bytes:
         """Query string (raw bytes)."""
-        return self.scope.get("query_string", b"")
+        return bytes(self.scope.get("query_string", b""))
 
     @property
     def headers(self) -> dict[str, str]:
@@ -55,12 +55,15 @@ class Request:
     @property
     def scheme(self) -> str:
         """URL scheme (http or https)."""
-        return self.scope.get("scheme", "http")
+        return str(self.scope.get("scheme", "http"))
 
     @property
     def server(self) -> tuple[str, int]:
         """Server host and port."""
-        return self.scope.get("server", ("localhost", 8000))
+        server = self.scope.get("server")
+        if server is None:
+            return ("localhost", 8000)
+        return (str(server[0]), int(server[1]))
 
     @property
     def client(self) -> tuple[str, int] | None:
