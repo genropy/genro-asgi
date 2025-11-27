@@ -19,6 +19,8 @@ from genro_asgi.datastructures import (
     Address,
     Headers,
     QueryParams,
+    RequestEnvelope,
+    ResponseEnvelope,
     State,
     URL,
     headers_from_scope,
@@ -468,6 +470,140 @@ class TestQueryParamsFromScope:
         assert len(params) == 0
 
 
+class TestRequestEnvelope:
+    """Test RequestEnvelope class."""
+
+    def test_create_default(self):
+        """RequestEnvelope should have default values."""
+        env = RequestEnvelope()
+        assert env.internal_id  # UUID generated
+        assert env.external_id is None
+        assert env.tytx_mode is False
+        assert env.params == {}
+        assert env.metadata == {}
+        assert env.created_at > 0
+        assert env._http_request is None
+        assert env._wsx_message is None
+
+    def test_create_with_values(self):
+        """RequestEnvelope should accept custom values."""
+        env = RequestEnvelope(
+            internal_id="test-id",
+            external_id="client-123",
+            tytx_mode=True,
+            params={"user_id": 42},
+            metadata={"source": "test"},
+        )
+        assert env.internal_id == "test-id"
+        assert env.external_id == "client-123"
+        assert env.tytx_mode is True
+        assert env.params == {"user_id": 42}
+        assert env.metadata == {"source": "test"}
+
+    def test_is_http_false_by_default(self):
+        """is_http should be False when no HTTP request."""
+        env = RequestEnvelope()
+        assert env.is_http is False
+
+    def test_is_websocket_false_by_default(self):
+        """is_websocket should be False when no WSX message."""
+        env = RequestEnvelope()
+        assert env.is_websocket is False
+
+    def test_is_websocket_with_message(self):
+        """is_websocket should be True when WSX message present."""
+        env = RequestEnvelope(_wsx_message={"type": "rpc.request"})
+        assert env.is_websocket is True
+        assert env.is_http is False
+
+    def test_http_request_raises_when_not_http(self):
+        """http_request should raise when not HTTP transport."""
+        env = RequestEnvelope()
+        with pytest.raises(RuntimeError, match="not from HTTP"):
+            _ = env.http_request
+
+    def test_wsx_message_raises_when_not_ws(self):
+        """wsx_message should raise when not WebSocket transport."""
+        env = RequestEnvelope()
+        with pytest.raises(RuntimeError, match="not from WebSocket"):
+            _ = env.wsx_message
+
+    def test_wsx_message_returns_message(self):
+        """wsx_message should return the WSX message."""
+        msg = {"type": "rpc.request", "method": "test"}
+        env = RequestEnvelope(_wsx_message=msg)
+        assert env.wsx_message == msg
+
+    def test_unique_internal_ids(self):
+        """Each envelope should have unique internal_id."""
+        env1 = RequestEnvelope()
+        env2 = RequestEnvelope()
+        assert env1.internal_id != env2.internal_id
+
+
+class TestResponseEnvelope:
+    """Test ResponseEnvelope class."""
+
+    def test_create_minimal(self):
+        """ResponseEnvelope should accept minimal args."""
+        env = ResponseEnvelope(request_id="req-123")
+        assert env.request_id == "req-123"
+        assert env.external_id is None
+        assert env.tytx_mode is False
+        assert env.data is None
+        assert env.metadata == {}
+
+    def test_create_with_values(self):
+        """ResponseEnvelope should accept all values."""
+        env = ResponseEnvelope(
+            request_id="req-123",
+            external_id="client-456",
+            tytx_mode=True,
+            data={"result": "ok"},
+            metadata={"timing": 0.5},
+        )
+        assert env.request_id == "req-123"
+        assert env.external_id == "client-456"
+        assert env.tytx_mode is True
+        assert env.data == {"result": "ok"}
+        assert env.metadata == {"timing": 0.5}
+
+    def test_from_request(self):
+        """from_request should copy IDs and tytx_mode from request."""
+        req = RequestEnvelope(
+            internal_id="internal-999",
+            external_id="external-888",
+            tytx_mode=True,
+        )
+        resp = ResponseEnvelope.from_request(req, data={"status": "ok"})
+
+        assert resp.request_id == "internal-999"
+        assert resp.external_id == "external-888"
+        assert resp.tytx_mode is True
+        assert resp.data == {"status": "ok"}
+
+    def test_from_request_without_tytx(self):
+        """from_request should preserve tytx_mode=False."""
+        req = RequestEnvelope(
+            internal_id="req-1",
+            tytx_mode=False,
+        )
+        resp = ResponseEnvelope.from_request(req, data={"value": 42})
+
+        assert resp.tytx_mode is False
+        assert resp.data == {"value": 42}
+
+    def test_from_request_with_metadata(self):
+        """from_request should accept metadata."""
+        req = RequestEnvelope(internal_id="req-1")
+        resp = ResponseEnvelope.from_request(
+            req,
+            data="test",
+            metadata={"custom": "value"},
+        )
+        assert resp.metadata == {"custom": "value"}
+
+
 class TestExports:
     """Test module exports."""
 
@@ -481,6 +617,8 @@ class TestExports:
             "Headers",
             "QueryParams",
             "State",
+            "RequestEnvelope",
+            "ResponseEnvelope",
             "headers_from_scope",
             "query_params_from_scope",
         }
@@ -492,6 +630,8 @@ class TestExports:
             Address,
             Headers,
             QueryParams,
+            RequestEnvelope,
+            ResponseEnvelope,
             State,
             URL,
             headers_from_scope,
@@ -503,5 +643,7 @@ class TestExports:
         assert Headers is not None
         assert QueryParams is not None
         assert State is not None
+        assert RequestEnvelope is not None
+        assert ResponseEnvelope is not None
         assert headers_from_scope is not None
         assert query_params_from_scope is not None

@@ -512,8 +512,14 @@ References
 """
 
 from collections.abc import Mapping
-from typing import Any, Iterator
+from dataclasses import dataclass, field
+from time import time
+from typing import TYPE_CHECKING, Any, Iterator
 from urllib.parse import parse_qs, unquote, urlparse
+from uuid import uuid4
+
+if TYPE_CHECKING:
+    from .request import Request
 
 __all__ = [
     "Address",
@@ -521,6 +527,8 @@ __all__ = [
     "Headers",
     "QueryParams",
     "State",
+    "RequestEnvelope",
+    "ResponseEnvelope",
     "headers_from_scope",
     "query_params_from_scope",
 ]
@@ -1088,6 +1096,157 @@ class State:
     def __repr__(self) -> str:
         """Return string representation for debugging."""
         return f"State({self._state!r})"
+
+
+@dataclass
+class RequestEnvelope:
+    """
+    Unified request wrapper for HTTP and WebSocket transports.
+
+    Provides a transport-agnostic abstraction for request handling. Every incoming
+    request (HTTP or WebSocket message) is wrapped in an envelope that provides:
+
+    - Unique internal ID for tracking
+    - External ID preservation for client correlation
+    - TYTX mode detection and propagation
+    - Unified parameter access (already hydrated if TYTX)
+    - Metadata storage for middleware
+
+    The envelope pattern enables:
+    - Unified handler API regardless of transport
+    - Request/response correlation
+    - Automatic TYTX symmetry (receive TYTX → respond TYTX)
+    - Request lifecycle tracking
+
+    Attributes:
+        internal_id: Server-generated unique ID (UUID). Always present.
+        external_id: Client-provided ID (e.g., WSX message id). Optional, echoed back.
+        tytx_mode: True if request had ::TYTX marker. Response will also use TYTX.
+        params: Request parameters, already hydrated if TYTX mode.
+        metadata: Additional context for middleware/handlers.
+        created_at: Timestamp when envelope was created.
+        _http_request: Reference to original HTTP Request (if HTTP transport).
+        _wsx_message: Reference to original WSX message dict (if WebSocket transport).
+
+    Example:
+        >>> # HTTP request
+        >>> envelope = RequestEnvelope.from_http(request)
+        >>> print(envelope.internal_id)  # "550e8400-e29b-41d4-a716-446655440000"
+        >>> print(envelope.params)  # {"user_id": 123}  (hydrated if TYTX)
+
+        >>> # WebSocket message
+        >>> envelope = RequestEnvelope.from_wsx(message, tytx_mode=True)
+        >>> print(envelope.external_id)  # "client-req-42"
+        >>> print(envelope.tytx_mode)  # True
+    """
+
+    internal_id: str = field(default_factory=lambda: str(uuid4()))
+    external_id: str | None = None
+    tytx_mode: bool = False
+    params: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: float = field(default_factory=time)
+    _http_request: "Request | None" = field(default=None, repr=False)
+    _wsx_message: dict[str, Any] | None = field(default=None, repr=False)
+
+    @property
+    def is_http(self) -> bool:
+        """True if this envelope wraps an HTTP request."""
+        return self._http_request is not None
+
+    @property
+    def is_websocket(self) -> bool:
+        """True if this envelope wraps a WebSocket message."""
+        return self._wsx_message is not None
+
+    @property
+    def http_request(self) -> "Request":
+        """
+        Get the underlying HTTP request.
+
+        Returns:
+            The original HTTP Request object.
+
+        Raises:
+            RuntimeError: If this envelope is not from HTTP transport.
+        """
+        if self._http_request is None:
+            raise RuntimeError("This envelope is not from HTTP transport")
+        return self._http_request
+
+    @property
+    def wsx_message(self) -> dict[str, Any]:
+        """
+        Get the underlying WSX message.
+
+        Returns:
+            The original WSX message dict.
+
+        Raises:
+            RuntimeError: If this envelope is not from WebSocket transport.
+        """
+        if self._wsx_message is None:
+            raise RuntimeError("This envelope is not from WebSocket transport")
+        return self._wsx_message
+
+
+@dataclass
+class ResponseEnvelope:
+    """
+    Unified response wrapper for HTTP and WebSocket transports.
+
+    Pairs with RequestEnvelope to complete the request/response cycle.
+    Automatically inherits TYTX mode from the request envelope.
+
+    Attributes:
+        request_id: Reference to RequestEnvelope.internal_id.
+        external_id: Echoed from request for client correlation.
+        tytx_mode: Inherited from request. If True, response uses TYTX serialization.
+        data: Response payload (will be serialized with TYTX if tytx_mode=True).
+        metadata: Additional response metadata.
+
+    Example:
+        >>> # Create response from request envelope
+        >>> response = ResponseEnvelope.from_request(
+        ...     request_envelope,
+        ...     data={"status": "ok", "user": user_data}
+        ... )
+        >>> print(response.tytx_mode)  # Same as request_envelope.tytx_mode
+    """
+
+    request_id: str
+    external_id: str | None = None
+    tytx_mode: bool = False
+    data: Any = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_request(
+        cls,
+        request: RequestEnvelope,
+        data: Any = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> "ResponseEnvelope":
+        """
+        Create a response envelope from a request envelope.
+
+        Automatically copies request_id, external_id, and tytx_mode.
+
+        Args:
+            request: The request envelope to respond to.
+            data: Response payload.
+            metadata: Optional response metadata.
+
+        Returns:
+            A new ResponseEnvelope linked to the request.
+        """
+        return cls(
+            request_id=request.internal_id,
+            external_id=request.external_id,
+            tytx_mode=request.tytx_mode,
+            data=data,
+            metadata=metadata or {},
+        )
 
 
 def headers_from_scope(scope: Mapping[str, Any]) -> Headers:
