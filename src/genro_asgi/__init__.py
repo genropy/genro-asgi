@@ -15,9 +15,18 @@
 __version__ = "0.1.0"
 
 from .application import Application
-from .request import Request
-from .response import Response, JSONResponse, HTMLResponse, PlainTextResponse
+from .datastructures import (
+    Address,
+    Headers,
+    QueryParams,
+    State,
+    URL,
+    headers_from_scope,
+    query_params_from_scope,
+)
 from .lifespan import Lifespan
+from .request import Request
+from .response import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from .types import ASGIApp, Message, Receive, Scope, Send
 
 __all__ = [
@@ -29,6 +38,14 @@ __all__ = [
     "HTMLResponse",
     "PlainTextResponse",
     "Lifespan",
+    # Data structures
+    "Address",
+    "URL",
+    "Headers",
+    "QueryParams",
+    "State",
+    "headers_from_scope",
+    "query_params_from_scope",
     # ASGI types
     "ASGIApp",
     "Message",
