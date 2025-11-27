@@ -71,7 +71,11 @@ genro-asgi provides features that Starlette does NOT include:
 - Discuss the block's purpose and scope
 - Ask questions, explore options
 - Make design decisions
-- Document decisions in the block's `.md` file
+- **Create analysis document** in `implementation-plan/analysis/XX-name-analysis.md`:
+  - Document all questions and decisions
+  - Include alternatives considered with pros/cons
+  - Record final decisions with rationale
+  - This becomes the reference for implementation
 
 ### Step 2: Module Docstring (Source of Truth)
 
