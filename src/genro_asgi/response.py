@@ -315,7 +315,15 @@ The module exports (via __all__)::
         "RedirectResponse",
         "StreamingResponse",
         "FileResponse",
+        "make_cookie",
     ]
+
+Helper Functions
+================
+``make_cookie(key, value, **options) -> tuple[str, str]``
+    Creates a Set-Cookie header tuple for use with Response headers.
+    This is a module-level function (not a method) to preserve Response
+    immutability - cookies must be defined at Response construction time.
 
 Usage Examples
 ==============
@@ -371,16 +379,16 @@ File download::
         )
         await response(scope, receive, send)
 
-Multiple Set-Cookie headers::
+Setting cookies with make_cookie::
 
-    from genro_asgi import Response
+    from genro_asgi import Response, make_cookie
 
     async def handler(scope, receive, send):
         response = Response(
             content="OK",
             headers=[
-                ("Set-Cookie", "session=abc123"),
-                ("Set-Cookie", "prefs=dark"),
+                make_cookie("session", "abc123", httponly=True, secure=True),
+                make_cookie("prefs", "dark", max_age=31536000),
             ]
         )
         await response(scope, receive, send)
@@ -430,6 +438,7 @@ __all__ = [
     "RedirectResponse",
     "StreamingResponse",
     "FileResponse",
+    "make_cookie",
 ]
 
 # Optional fast JSON serialization
@@ -502,6 +511,11 @@ class Response:
             status_code: HTTP status code (default 200).
             headers: Response headers as dict or list of tuples.
             media_type: Content-Type media type (overrides class default).
+
+        Note:
+            HTTP status codes 204 (No Content) and 304 (Not Modified) must not
+            have body content per RFC 7230. If you provide content with these
+            status codes, the ASGI server may reject or truncate the response.
         """
         self.status_code = status_code
         self._headers: list[tuple[str, str]] = _normalize_headers(headers)
@@ -738,7 +752,11 @@ class StreamingResponse:
         if self.media_type is not None:
             header_names = {name.lower() for name, _ in self._headers}
             if "content-type" not in header_names:
-                self._headers.append(("content-type", self.media_type))
+                content_type = self.media_type
+                # Auto-append charset for text/* types (same behavior as Response)
+                if content_type.startswith("text/") and "charset" not in content_type:
+                    content_type = f"{content_type}; charset={self.charset}"
+                self._headers.append(("content-type", content_type))
 
     def _build_headers(self) -> list[tuple[bytes, bytes]]:
         """Build ASGI headers list."""
@@ -789,6 +807,7 @@ class FileResponse:
     Response that streams a file from disk.
 
     Supports automatic media type detection and Content-Disposition for downloads.
+    File reading is performed in a thread pool to avoid blocking the event loop.
 
     Attributes:
         path: Path object for the file.
@@ -859,7 +878,7 @@ class FileResponse:
         """
         ASGI application interface.
 
-        Streams file content in chunks.
+        Streams file content in chunks using thread pool for non-blocking I/O.
 
         Args:
             scope: ASGI scope dict.
@@ -869,6 +888,8 @@ class FileResponse:
         Raises:
             FileNotFoundError: If file does not exist.
         """
+        import asyncio
+
         await send(
             {
                 "type": "http.response.start",
@@ -877,10 +898,12 @@ class FileResponse:
             }
         )
 
-        # Stream file in chunks (synchronous I/O)
+        loop = asyncio.get_running_loop()
+
+        # Stream file in chunks using thread pool to avoid blocking event loop
         with open(self.path, "rb") as f:
             while True:
-                chunk = f.read(self.chunk_size)
+                chunk = await loop.run_in_executor(None, f.read, self.chunk_size)
                 more_body = len(chunk) == self.chunk_size
                 await send(
                     {
@@ -891,6 +914,77 @@ class FileResponse:
                 )
                 if not more_body:
                     break
+
+
+def make_cookie(
+    key: str,
+    value: str = "",
+    *,
+    max_age: int | None = None,
+    path: str = "/",
+    domain: str | None = None,
+    secure: bool = False,
+    httponly: bool = False,
+    samesite: str | None = "lax",
+) -> tuple[str, str]:
+    """
+    Create a Set-Cookie header tuple.
+
+    This is a helper function for creating cookie headers without modifying
+    the immutable Response object. The returned tuple can be passed directly
+    to Response headers.
+
+    .. note:: Design Decision - Module-level function vs method
+
+        This is a **module-level function** (not a Response method) to preserve
+        Response immutability. Response objects are "frozen" after construction
+        - all headers must be provided at creation time. A ``response.set_cookie()``
+        method would violate this principle by modifying headers after construction.
+
+        Using ``make_cookie()`` the user creates cookie tuples BEFORE constructing
+        the Response, keeping the Response immutable and predictable.
+
+    Args:
+        key: Cookie name.
+        value: Cookie value (will be URL-encoded).
+        max_age: Max age in seconds. None means session cookie.
+        path: Cookie path (default "/").
+        domain: Cookie domain. None means current domain only.
+        secure: If True, cookie only sent over HTTPS.
+        httponly: If True, cookie not accessible via JavaScript.
+        samesite: SameSite policy ("strict", "lax", "none", or None to omit).
+
+    Returns:
+        Tuple of ("set-cookie", cookie_string) for use in Response headers.
+
+    Example:
+        >>> from genro_asgi import Response, make_cookie
+        >>> response = Response(
+        ...     content="OK",
+        ...     headers=[
+        ...         make_cookie("session", "abc123", httponly=True, secure=True),
+        ...         make_cookie("prefs", "dark", max_age=31536000),
+        ...     ]
+        ... )
+    """
+    from urllib.parse import quote
+
+    cookie = f"{key}={quote(value, safe='')}"
+
+    if max_age is not None:
+        cookie += f"; Max-Age={max_age}"
+    if path:
+        cookie += f"; Path={path}"
+    if domain:
+        cookie += f"; Domain={domain}"
+    if secure:
+        cookie += "; Secure"
+    if httponly:
+        cookie += "; HttpOnly"
+    if samesite:
+        cookie += f"; SameSite={samesite.capitalize()}"
+
+    return ("set-cookie", cookie)
 
 
 if __name__ == "__main__":

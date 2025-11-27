@@ -35,6 +35,7 @@ from .response import (
     RedirectResponse,
     Response,
     StreamingResponse,
+    make_cookie,
 )
 from .types import ASGIApp, Message, Receive, Scope, Send
 
@@ -50,6 +51,8 @@ __all__ = [
     "StreamingResponse",
     "FileResponse",
     "Lifespan",
+    # Helper functions
+    "make_cookie",
     # Data structures
     "Address",
     "URL",

@@ -578,7 +578,7 @@ class TestStreamingResponse:
 
     @pytest.mark.asyncio
     async def test_media_type(self, scope: dict, send: MockSend) -> None:
-        """Media type sets Content-Type header."""
+        """Media type sets Content-Type header with charset for text types."""
         from genro_asgi.response import StreamingResponse
 
         async def generate():
@@ -587,7 +587,8 @@ class TestStreamingResponse:
         response = StreamingResponse(generate(), media_type="text/event-stream")
         await response(scope, mock_receive, send)
 
-        assert send.headers[b"content-type"] == b"text/event-stream"
+        # text/* types get charset appended automatically (same as Response)
+        assert send.headers[b"content-type"] == b"text/event-stream; charset=utf-8"
 
     @pytest.mark.asyncio
     async def test_custom_status_code(self, scope: dict, send: MockSend) -> None:
@@ -855,6 +856,7 @@ class TestModuleLevel:
             RedirectResponse,
             Response,
             StreamingResponse,
+            make_cookie,
         )
 
         assert Response is not None
@@ -864,3 +866,221 @@ class TestModuleLevel:
         assert RedirectResponse is not None
         assert StreamingResponse is not None
         assert FileResponse is not None
+        assert make_cookie is not None
+
+
+# =============================================================================
+# Test make_cookie Function
+# =============================================================================
+
+
+class TestMakeCookie:
+    """Tests for make_cookie helper function."""
+
+    def test_basic_cookie(self) -> None:
+        """Basic cookie with key and value."""
+        from genro_asgi.response import make_cookie
+
+        name, value = make_cookie("session", "abc123")
+        assert name == "set-cookie"
+        assert "session=abc123" in value
+
+    def test_value_url_encoded(self) -> None:
+        """Cookie value is URL-encoded."""
+        from genro_asgi.response import make_cookie
+
+        _, value = make_cookie("data", "hello world")
+        assert "hello%20world" in value
+
+    def test_special_chars_encoded(self) -> None:
+        """Special characters in value are encoded."""
+        from genro_asgi.response import make_cookie
+
+        _, value = make_cookie("data", "a=b&c=d")
+        assert "=" not in value.split("=", 1)[1].split(";")[0] or "%3D" in value
+
+    def test_max_age(self) -> None:
+        """Max-Age attribute is set."""
+        from genro_asgi.response import make_cookie
+
+        _, value = make_cookie("session", "abc", max_age=3600)
+        assert "Max-Age=3600" in value
+
+    def test_path_default(self) -> None:
+        """Default path is '/'."""
+        from genro_asgi.response import make_cookie
+
+        _, value = make_cookie("session", "abc")
+        assert "Path=/" in value
+
+    def test_path_custom(self) -> None:
+        """Custom path is set."""
+        from genro_asgi.response import make_cookie
+
+        _, value = make_cookie("session", "abc", path="/api")
+        assert "Path=/api" in value
+
+    def test_domain(self) -> None:
+        """Domain attribute is set."""
+        from genro_asgi.response import make_cookie
+
+        _, value = make_cookie("session", "abc", domain="example.com")
+        assert "Domain=example.com" in value
+
+    def test_secure(self) -> None:
+        """Secure flag is set."""
+        from genro_asgi.response import make_cookie
+
+        _, value = make_cookie("session", "abc", secure=True)
+        assert "; Secure" in value
+
+    def test_httponly(self) -> None:
+        """HttpOnly flag is set."""
+        from genro_asgi.response import make_cookie
+
+        _, value = make_cookie("session", "abc", httponly=True)
+        assert "; HttpOnly" in value
+
+    def test_samesite_default_lax(self) -> None:
+        """Default SameSite is Lax."""
+        from genro_asgi.response import make_cookie
+
+        _, value = make_cookie("session", "abc")
+        assert "SameSite=Lax" in value
+
+    def test_samesite_strict(self) -> None:
+        """SameSite=Strict is set."""
+        from genro_asgi.response import make_cookie
+
+        _, value = make_cookie("session", "abc", samesite="strict")
+        assert "SameSite=Strict" in value
+
+    def test_samesite_none(self) -> None:
+        """SameSite=None is set (requires Secure)."""
+        from genro_asgi.response import make_cookie
+
+        _, value = make_cookie("session", "abc", samesite="none", secure=True)
+        assert "SameSite=None" in value
+        assert "Secure" in value
+
+    def test_samesite_omitted(self) -> None:
+        """SameSite can be omitted."""
+        from genro_asgi.response import make_cookie
+
+        _, value = make_cookie("session", "abc", samesite=None)
+        assert "SameSite" not in value
+
+    def test_all_attributes(self) -> None:
+        """All attributes together."""
+        from genro_asgi.response import make_cookie
+
+        _, value = make_cookie(
+            "session",
+            "abc123",
+            max_age=86400,
+            path="/app",
+            domain=".example.com",
+            secure=True,
+            httponly=True,
+            samesite="strict",
+        )
+        assert "session=abc123" in value
+        assert "Max-Age=86400" in value
+        assert "Path=/app" in value
+        assert "Domain=.example.com" in value
+        assert "Secure" in value
+        assert "HttpOnly" in value
+        assert "SameSite=Strict" in value
+
+    def test_empty_value(self) -> None:
+        """Empty value for deleting cookie."""
+        from genro_asgi.response import make_cookie
+
+        _, value = make_cookie("session", "", max_age=0)
+        assert "session=" in value
+        assert "Max-Age=0" in value
+
+    def test_use_with_response(self) -> None:
+        """Cookie can be used with Response."""
+        from genro_asgi.response import Response, make_cookie
+
+        cookie1 = make_cookie("session", "abc", httponly=True)
+        cookie2 = make_cookie("prefs", "dark", max_age=31536000)
+
+        response = Response(content="OK", headers=[cookie1, cookie2])
+        assert len(response._headers) >= 2
+
+
+# =============================================================================
+# Test StreamingResponse Charset
+# =============================================================================
+
+
+class TestStreamingResponseCharset:
+    """Tests for StreamingResponse charset handling."""
+
+    @pytest.fixture
+    def scope(self) -> dict:
+        return {"type": "http"}
+
+    @pytest.fixture
+    def send(self) -> MockSend:
+        return MockSend()
+
+    @pytest.mark.asyncio
+    async def test_text_type_gets_charset(self, scope: dict, send: MockSend) -> None:
+        """text/* media types get charset appended."""
+        from genro_asgi.response import StreamingResponse
+
+        async def generate():
+            yield b"data"
+
+        response = StreamingResponse(generate(), media_type="text/plain")
+        await response(scope, mock_receive, send)
+
+        assert send.headers[b"content-type"] == b"text/plain; charset=utf-8"
+
+    @pytest.mark.asyncio
+    async def test_text_html_gets_charset(self, scope: dict, send: MockSend) -> None:
+        """text/html media type gets charset."""
+        from genro_asgi.response import StreamingResponse
+
+        async def generate():
+            yield b"<html></html>"
+
+        response = StreamingResponse(generate(), media_type="text/html")
+        await response(scope, mock_receive, send)
+
+        assert send.headers[b"content-type"] == b"text/html; charset=utf-8"
+
+    @pytest.mark.asyncio
+    async def test_non_text_no_charset(self, scope: dict, send: MockSend) -> None:
+        """Non-text media types don't get charset."""
+        from genro_asgi.response import StreamingResponse
+
+        async def generate():
+            yield b"\x00\x01"
+
+        response = StreamingResponse(generate(), media_type="application/octet-stream")
+        await response(scope, mock_receive, send)
+
+        assert send.headers[b"content-type"] == b"application/octet-stream"
+
+    @pytest.mark.asyncio
+    async def test_explicit_charset_not_duplicated(
+        self, scope: dict, send: MockSend
+    ) -> None:
+        """Explicit charset in media_type is not duplicated."""
+        from genro_asgi.response import StreamingResponse
+
+        async def generate():
+            yield b"data"
+
+        response = StreamingResponse(
+            generate(), media_type="text/plain; charset=latin-1"
+        )
+        await response(scope, mock_receive, send)
+
+        content_type = send.headers[b"content-type"].decode()
+        assert content_type.count("charset") == 1
+        assert "latin-1" in content_type
