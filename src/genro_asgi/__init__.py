@@ -24,6 +24,7 @@ from .datastructures import (
     headers_from_scope,
     query_params_from_scope,
 )
+from .exceptions import HTTPException, WebSocketDisconnect, WebSocketException
 from .lifespan import Lifespan
 from .request import Request
 from .response import HTMLResponse, JSONResponse, PlainTextResponse, Response
@@ -46,6 +47,10 @@ __all__ = [
     "State",
     "headers_from_scope",
     "query_params_from_scope",
+    # Exceptions
+    "HTTPException",
+    "WebSocketException",
+    "WebSocketDisconnect",
     # ASGI types
     "ASGIApp",
     "Message",
