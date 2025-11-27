@@ -140,6 +140,63 @@ All code must have tests:
 4. **Minimal abstractions**: Close to ASGI, avoid over-engineering
 5. **Apache 2.0 license**: Permissive, business-friendly
 
+## Coding Style Rules (MANDATORY)
+
+### 1. No globals
+
+No global variables at module level (except constants and type aliases).
+
+### 2. No class methods
+
+Avoid `@classmethod`. If factory pattern needed, use module-level functions or alternative patterns.
+
+### 3. Module entry point
+
+Every module with a primary class ends with:
+
+```python
+if __name__ == '__main__':
+    instance = MyClass(...)
+    instance.xxx()
+```
+
+### 4. Nested classes: explicit parent with semantic name
+
+When a child class needs reference to parent:
+
+- Pass parent to constructor
+- Save with **semantic name**, NOT `self._parent`
+- Use `self.application`, `self.request`, `self.connection`, etc.
+
+```python
+# ✅ Correct
+class Response:
+    def __init__(self, request: Request):
+        self.request = request  # Semantic name
+
+# ❌ Wrong
+class Response:
+    def __init__(self, parent):
+        self._parent = parent  # Generic, unclear
+```
+
+### 5. Simple patterns only
+
+- Always use simple, direct patterns
+- For complex patterns → ask for approval before implementing
+- Exceptions to these rules → case-by-case approval required
+
+## Implementation Workflow (6 Steps)
+
+For each implementation block:
+
+1. **Preliminary Discussion**: Ask questions, clarify scope, make design decisions
+2. **Module Docstring (Source of Truth)**: Write extremely detailed docstring - if code is deleted, must be able to recreate from docstring alone
+3. **Write Tests First**: Based on docstring, cover happy path, edge cases, errors
+4. **Implementation**: Implement to pass all tests, follow docstring exactly
+5. **Documentation**: User-facing docs if applicable
+6. **Commit**: One commit per block
+
 ## Git Hooks (MANDATORY)
 
 **ALWAYS verify hooks exist at session start:**

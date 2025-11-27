@@ -18,8 +18,10 @@ from .application import Application
 from .request import Request
 from .response import Response, JSONResponse, HTMLResponse, PlainTextResponse
 from .lifespan import Lifespan
+from .types import ASGIApp, Message, Receive, Scope, Send
 
 __all__ = [
+    # Core classes
     "Application",
     "Request",
     "Response",
@@ -27,4 +29,10 @@ __all__ = [
     "HTMLResponse",
     "PlainTextResponse",
     "Lifespan",
+    # ASGI types
+    "ASGIApp",
+    "Message",
+    "Receive",
+    "Scope",
+    "Send",
 ]
