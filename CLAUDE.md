@@ -142,15 +142,114 @@ All code must have tests:
 
 ## Coding Style Rules (MANDATORY)
 
+### 0. Code Readability (CRITICAL)
+
+**Every module, every class must be readable and clear.**
+
+- Code must be self-explanatory
+- No magic, no obscure patterns
+- If someone reads the code, they must understand it immediately
+- Clarity over cleverness
+
+**Docstrings: compact, not verbose.**
+
+- Max ~30 lines visible at a glance - the code structure must be immediately clear
+- Docstrings must NOT steal lines from code readability
+- NO excessive blank lines in docstrings
+- NO walls of text - be concise
+- The code itself should be the primary documentation
+
+```python
+# ❌ WRONG - docstring too long, steals screen space
+class Request:
+    """
+    Request class for handling HTTP requests.
+
+    This class provides a comprehensive interface for working with
+    HTTP requests in an ASGI application. It wraps the ASGI scope
+    and provides convenient access to headers, query parameters,
+    cookies, and request body.
+
+    Attributes:
+        scope: The ASGI scope dictionary
+        headers: Parsed headers as dict
+        ...20 more lines...
+    """
+    def __init__(self, scope):
+        ...
+
+# ✅ CORRECT - compact docstring, code visible
+class Request:
+    """HTTP request wrapper. Provides: headers, query, cookies, body."""
+
+    def __init__(self, scope):
+        self._scope = scope
+        self._headers = self._parse_headers()
+```
+
 ### 1. No globals
 
 No global variables at module level (except constants and type aliases).
 
-### 2. No class methods
+### 2. Only instance methods
 
-Avoid `@classmethod`. If factory pattern needed, use module-level functions or alternative patterns.
+**NEVER use:**
 
-### 3. Module entry point
+- `@classmethod` - NO
+- `@staticmethod` - NO
+- Module-level functions that should be methods - NO
+
+**ALWAYS use instance methods.** If you need a factory, use `__init__` or a separate factory class.
+
+```python
+# ❌ WRONG - classmethod
+class Request:
+    @classmethod
+    def from_scope(cls, scope):
+        return cls(scope)
+
+# ❌ WRONG - staticmethod
+class Request:
+    @staticmethod
+    def parse_headers(raw):
+        return dict(raw)
+
+# ✅ CORRECT - instance method or __init__
+class Request:
+    def __init__(self, scope):
+        self._scope = scope
+        self._headers = self._parse_headers(scope)
+
+    def _parse_headers(self, scope):
+        return dict(scope.get("headers", []))
+```
+
+### 3. No scattered HTML/templates
+
+**NEVER put HTML strings scattered in code.**
+
+- HTML goes in dedicated template files or dedicated modules
+- If HTML is needed, create a `templates/` folder or a `default_pages.py` module
+- Keep code and presentation separate
+
+```python
+# ❌ WRONG - HTML in business logic
+class MyHandler:
+    def render(self):
+        return "<html><body>Hello</body></html>"
+
+# ✅ CORRECT - HTML in dedicated module
+# default_pages.py
+DEFAULT_INDEX_HTML = """<!DOCTYPE html>..."""
+
+# handler.py
+from .default_pages import DEFAULT_INDEX_HTML
+class MyHandler:
+    def render(self):
+        return DEFAULT_INDEX_HTML
+```
+
+### 4. Module entry point
 
 Every module with a primary class ends with:
 
