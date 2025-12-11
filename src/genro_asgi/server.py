@@ -18,6 +18,7 @@ from genro_toolbox import SmartOptions  # type: ignore[import-untyped]
 
 from .dispatcher import Dispatcher
 from .lifespan import ServerLifespan
+from .middleware import build_middleware_chain
 from .response import Response
 from .request import RequestRegistry
 from .types import Receive, Scope, Send
@@ -47,7 +48,7 @@ class AsgiServer(RoutedClass):
         Override _configure_server() to replace self.dispatcher.
     """
 
-    __slots__ = ("apps", "router", "opts", "logger", "lifespan", "request_registry", "dispatcher", "_started", "__dict__")
+    __slots__ = ("apps", "router", "opts", "logger", "lifespan", "request_registry", "dispatcher", "_started", "_middleware_chain", "__dict__")
 
     def __init__(
         self,
@@ -65,6 +66,7 @@ class AsgiServer(RoutedClass):
         self.request_registry = RequestRegistry()
         self.dispatcher = Dispatcher(self)
         self._started = False
+        self._middleware_chain = self._build_middleware_chain()
         self._configure_server()
         self._attach_instances()
 
@@ -83,7 +85,7 @@ class AsgiServer(RoutedClass):
         if scope["type"] == "lifespan":
             await self.lifespan(scope, receive, send)
         else:
-            await self.dispatcher.dispatch(scope, receive, send)
+            await self._middleware_chain(scope, receive, send)
 
     def run(self) -> None:
         """Run the server using Uvicorn. Config from self.opts."""
@@ -136,6 +138,13 @@ class AsgiServer(RoutedClass):
     def _configure_server(self) -> None:
         """Hook for subclasses to configure server after init."""
         pass
+
+    def _build_middleware_chain(self) -> Any:
+        """Build middleware chain from config, wrapping dispatcher."""
+        middleware_config = self.opts.get("middleware", [])
+        if middleware_config:
+            return build_middleware_chain(self.dispatcher.dispatch, middleware_config)
+        return self.dispatcher.dispatch
 
     def _attach_instances(self) -> None:
         """Attach app instances from config."""

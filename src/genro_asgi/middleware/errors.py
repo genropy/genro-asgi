@@ -1,48 +1,70 @@
 # Copyright 2025 Softwell S.r.l.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License, Version 2.0
 
-from typing import Callable, Any
+"""Error Handling Middleware."""
+
+from __future__ import annotations
+
+import traceback
+from typing import TYPE_CHECKING, Any
+
+from . import BaseMiddleware
+
+if TYPE_CHECKING:
+    from ..types import ASGIApp, Receive, Scope, Send
 
 
-class ErrorMiddleware:
-    """Error Handling Middleware.
+class ErrorMiddleware(BaseMiddleware):
+    """Error handling middleware - catches exceptions and returns error responses.
 
-    Catches exceptions and returns appropriate error responses.
+    Config options:
+        debug: Show detailed error messages and tracebacks. Default: False
     """
 
-    def __init__(self, app: Callable, debug: bool = False) -> None:
-        """Initialize error middleware.
+    __slots__ = ("debug",)
 
-        Args:
-            app: ASGI application to wrap
-            debug: Enable debug mode (show detailed error messages)
-        """
-        self.app = app
+    def __init__(
+        self,
+        app: ASGIApp,
+        debug: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(app, **kwargs)
         self.debug = debug
 
-    async def __call__(
-        self,
-        scope: dict[str, Any],
-        receive: Callable,
-        send: Callable
-    ) -> None:
-        """ASGI interface.
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """ASGI interface - catch errors and return error response."""
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-        Args:
-            scope: ASGI connection scope
-            receive: ASGI receive callable
-            send: ASGI send callable
-        """
-        # Stub implementation - just pass through to app
-        await self.app(scope, receive, send)
+        try:
+            await self.app(scope, receive, send)
+        except Exception as e:
+            await self._send_error_response(send, e)
+
+    async def _send_error_response(self, send: Send, error: Exception) -> None:
+        """Send error response."""
+        if self.debug:
+            body = f"Internal Server Error\n\n{traceback.format_exc()}"
+        else:
+            body = "Internal Server Error"
+
+        body_bytes = body.encode("utf-8")
+
+        await send({
+            "type": "http.response.start",
+            "status": 500,
+            "headers": [
+                (b"content-type", b"text/plain; charset=utf-8"),
+                (b"content-length", str(len(body_bytes)).encode()),
+            ],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": body_bytes,
+        })
+
+
+if __name__ == "__main__":
+    pass

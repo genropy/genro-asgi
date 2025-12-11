@@ -1,56 +1,116 @@
 # Copyright 2025 Softwell S.r.l.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License, Version 2.0
 
-from typing import Callable, Any
+"""Static Files Middleware."""
+
+from __future__ import annotations
+
+import mimetypes
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from . import BaseMiddleware
+
+if TYPE_CHECKING:
+    from ..types import ASGIApp, Receive, Scope, Send
 
 
-class StaticFilesMiddleware:
-    """Static Files Middleware.
+class StaticFilesMiddleware(BaseMiddleware):
+    """Static files middleware - serves files from a directory.
 
-    Serves static files from a directory.
+    Config options:
+        directory: Directory containing static files. Required.
+        prefix: URL prefix for static files. Default: "/static"
+        html: Serve index.html for directories. Default: True
     """
+
+    __slots__ = ("directory", "prefix", "html")
 
     def __init__(
         self,
-        app: Callable,
+        app: ASGIApp,
         directory: str | Path,
-        prefix: str = "/static"
+        prefix: str = "/static",
+        html: bool = True,
+        **kwargs: Any,
     ) -> None:
-        """Initialize static files middleware.
-
-        Args:
-            app: ASGI application to wrap
-            directory: Directory containing static files
-            prefix: URL prefix for static files
-        """
-        self.app = app
-        self.directory = Path(directory)
+        super().__init__(app, **kwargs)
+        self.directory = Path(directory).resolve()
         self.prefix = prefix.rstrip("/")
+        self.html = html
 
-    async def __call__(
-        self,
-        scope: dict[str, Any],
-        receive: Callable,
-        send: Callable
-    ) -> None:
-        """ASGI interface.
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """ASGI interface - serve static files or pass through."""
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-        Args:
-            scope: ASGI connection scope
-            receive: ASGI receive callable
-            send: ASGI send callable
-        """
-        # Stub implementation - just pass through to app
-        await self.app(scope, receive, send)
+        path = scope.get("path", "/")
+
+        # Check if path matches prefix
+        if not path.startswith(self.prefix):
+            await self.app(scope, receive, send)
+            return
+
+        # Get file path
+        relative_path = path[len(self.prefix):].lstrip("/")
+        file_path = (self.directory / relative_path).resolve()
+
+        # Security: ensure path is within directory
+        try:
+            file_path.relative_to(self.directory)
+        except ValueError:
+            await self._send_404(send)
+            return
+
+        # Check if it's a directory and serve index.html
+        if file_path.is_dir() and self.html:
+            file_path = file_path / "index.html"
+
+        # Check if file exists
+        if not file_path.is_file():
+            await self._send_404(send)
+            return
+
+        await self._send_file(send, file_path)
+
+    async def _send_file(self, send: Send, file_path: Path) -> None:
+        """Send file content."""
+        content_type, _ = mimetypes.guess_type(str(file_path))
+        if content_type is None:
+            content_type = "application/octet-stream"
+
+        content = file_path.read_bytes()
+
+        await send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [
+                (b"content-type", content_type.encode()),
+                (b"content-length", str(len(content)).encode()),
+            ],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": content,
+        })
+
+    async def _send_404(self, send: Send) -> None:
+        """Send 404 response."""
+        body = b"Not Found"
+        await send({
+            "type": "http.response.start",
+            "status": 404,
+            "headers": [
+                (b"content-type", b"text/plain"),
+                (b"content-length", str(len(body)).encode()),
+            ],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": body,
+        })
+
+
+if __name__ == "__main__":
+    pass
