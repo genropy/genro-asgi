@@ -26,7 +26,13 @@ from .datastructures import (
 )
 from .exceptions import HTTPException, WebSocketDisconnect, WebSocketException
 from .lifespan import Lifespan, ServerLifespan
-from .request import Request
+from .request import (
+    BaseRequest,
+    HttpRequest,
+    MsgRequest,
+    RequestRegistry,
+    REQUEST_FACTORIES,
+)
 from .response import (
     FileResponse,
     HTMLResponse,
@@ -47,12 +53,25 @@ from .executors import (
     LocalExecutor,
 )
 from .server import AsgiServer
+from .publisher import AsgiPublisher
+from .static import StaticFiles
+from .config import load_config, find_config_file, ConfigError, validate_keys
 from .websocket import WebSocket, WebSocketState
+
+# Backwards compatibility alias
+Request = HttpRequest
 
 __all__ = [
     # Core classes
     "Application",
-    "Request",
+    # Request classes
+    "BaseRequest",
+    "HttpRequest",
+    "MsgRequest",
+    "Request",  # alias for HttpRequest
+    "RequestRegistry",
+    "REQUEST_FACTORIES",
+    # Response classes
     "Response",
     "JSONResponse",
     "HTMLResponse",
@@ -84,6 +103,7 @@ __all__ = [
     "Send",
     # Server integration
     "AsgiServer",
+    "AsgiPublisher",
     "ServerBinder",
     "AsgiServerEnabler",
     # Executors
@@ -95,4 +115,11 @@ __all__ = [
     # WebSocket
     "WebSocket",
     "WebSocketState",
+    # Static files
+    "StaticFiles",
+    # Configuration
+    "load_config",
+    "find_config_file",
+    "ConfigError",
+    "validate_keys",
 ]

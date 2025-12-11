@@ -4,126 +4,75 @@
 """
 ASGI Server - Root dispatcher for multi-app architecture.
 
-Purpose
-=======
-AsgiServer is a root dispatcher that routes requests to specialized ASGI
-applications based on the first path segment. Each app owns its path and
-handles all sub-paths internally.
-
-Features:
-- Multi-app mount with flat path dispatch (first segment only)
-- Lifespan management (startup/shutdown sequence)
-- Auto-binding for apps that inherit AsgiServerEnabler
-- 404 handling when no app matches
-
-Architecture::
-
-    ┌─────────────┐         ┌─────────────────────────────────────────────────────────┐
-    │   Uvicorn   │         │  AsgiServer (Root Dispatcher)                           │
-    │   :8000     │ ──────► │                                                         │
-    │             │         │  Dispatch by first path segment:                        │
-    │             │         │                                                         │
-    │             │         │    /api/*     → apps["/api"]     (handles sub-paths)    │
-    │             │         │    /stream/*  → apps["/stream"]  (handles sub-paths)    │
-    │             │         │                                                         │
-    └─────────────┘         └─────────────────────────────────────────────────────────┘
-
-Definition::
-
-    class AsgiServer:
-        __slots__ = ("apps", "config", "logger", "lifespan", "_started")
-
-        def __init__(self, config: dict | None = None)
-        def mount(self, path: str, app: ASGIApp) -> None
-        def run(self, host: str = None, port: int = None, **kwargs) -> None
-        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None
-
-Example::
-
-    from genro_asgi import AsgiServer, AsgiServerEnabler
-
-    class BusinessApp(AsgiServerEnabler):
-        async def __call__(self, scope, receive, send):
-            # scope["path"] contains sub-path (e.g., "/users/123")
-            self.binder.logger.info(f"Request: {scope['path']}")
-
-    server = AsgiServer(config={"host": "0.0.0.0", "port": 8000})
-    server.mount("/api", BusinessApp())      # handles /api, /api/users, /api/users/123
-    server.mount("/stream", StreamingApp())  # handles /stream, /stream/events
-    server.run()
-
-Lifespan::
-
-    Lifespan is managed by ServerLifespan class (self.lifespan):
-    1. Startup: Sub-apps on_startup (registration order)
-    2. Shutdown: Sub-apps on_shutdown (reverse order)
-
-Design Notes
-============
-- Uses SmartOptions from genro-toolbox for config
-- Path matching is exact on first segment (dict lookup O(1))
-- Sub-apps receive remaining path and handle their own routing
-- 404 for HTTP, close 4404 for WebSocket when no match
-- Lifespan delegated to ServerLifespan for separation of concerns
+Two modes: flat (mount by path) or router (genro_routes).
+See docs/architecture/01-server.md for full documentation.
 """
 
 from __future__ import annotations
 
+import importlib
 import logging
 from typing import Any
 
 from genro_toolbox import SmartOptions  # type: ignore[import-untyped]
 
-from .binder import AsgiServerEnabler, ServerBinder
-from .exceptions import HTTPException
+from .dispatcher import Dispatcher
 from .lifespan import ServerLifespan
-from .types import ASGIApp, Receive, Scope, Send
+from .response import Response
+from .request import RequestRegistry
+from .types import Receive, Scope, Send
+
+from genro_routes import RoutedClass, Router, route
 
 __all__ = ["AsgiServer"]
 
 
-class AsgiServer:
+class AsgiServer(RoutedClass):
     """
-    Root ASGI dispatcher for multi-app architecture.
+    Base ASGI server with routing via genro_routes.
 
-    Manages multiple ASGI applications mounted on different paths.
-    Each app owns its path and handles all sub-paths internally.
+    Provides core ASGI handling with dispatcher pattern.
+    For multi-app mounting, use AsgiPublisher instead.
 
     Attributes:
-        apps: Dict mapping path to ASGI app.
-        config: Server configuration as SmartOptions.
+        apps: Dict for mounted apps (used by subclasses).
+        router: genro_routes Router for dispatch.
+        dispatcher: Dispatcher handling request routing.
+        opts: Server configuration as SmartOptions.
         logger: Server logger instance.
-        lifespan: ServerLifespan instance managing startup/shutdown.
+        lifespan: ServerLifespan for startup/shutdown.
+        request_registry: RequestRegistry for tracking requests.
 
-    Example:
-        >>> server = AsgiServer(config={"debug": True})
-        >>> server.mount("/api", api_app)
-        >>> server.mount("/stream", stream_app)
-        >>>
-        >>> # Run with uvicorn
-        >>> # uvicorn mymodule:server
+    Subclassing:
+        Override _configure_server() to replace self.dispatcher.
     """
 
-    __slots__ = ("apps", "config", "logger", "lifespan", "_started")
+    __slots__ = ("apps", "router", "opts", "logger", "lifespan", "request_registry", "dispatcher", "_started", "__dict__")
 
-    def __init__(self, config: dict[str, Any] | None = None) -> None:
-        """
-        Initialize AsgiServer.
-
-        Args:
-            config: Optional configuration dict. Wrapped in SmartOptions.
-        """
-        self.apps: dict[str, ASGIApp] = {}
-        self.config = SmartOptions(config or {})
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 8000,
+        reload: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize AsgiServer. Config via _configure()."""
+        self.opts = self._configure(host=host, port=port, reload=reload, **kwargs)
+        self.apps: dict[str, RoutedClass] = {}
+        self.router = Router(self, name="root")
         self.logger = logging.getLogger("genro_asgi")
         self.lifespan = ServerLifespan(self)
+        self.request_registry = RequestRegistry()
+        self.dispatcher = Dispatcher(self)
         self._started = False
+        self._configure_server()
+        self._attach_instances()
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """
         Handle ASGI request.
 
-        Dispatches to mounted apps based on first path segment.
+        Dispatches via genro_routes Router.
         Handles lifespan events via self.lifespan.
 
         Args:
@@ -131,138 +80,79 @@ class AsgiServer:
             receive: ASGI receive callable.
             send: ASGI send callable.
         """
-        scope_type = scope["type"]
-
-        # Handle lifespan via dedicated handler
-        if scope_type == "lifespan":
+        if scope["type"] == "lifespan":
             await self.lifespan(scope, receive, send)
-            return
+        else:
+            await self.dispatcher.dispatch(scope, receive, send)
 
-        # Dispatch HTTP/WebSocket
-        app = self.get_app(scope)
-        await app(scope, receive, send)
-
-    def run(
-        self,
-        host: str | None = None,
-        port: int | None = None,
-        **kwargs: Any,
-    ) -> None:
-        """
-        Run the server using Uvicorn.
-
-        Args:
-            host: Host to bind (default: from config or "127.0.0.1").
-            port: Port to bind (default: from config or 8000).
-            **kwargs: Additional arguments passed to uvicorn.run().
-
-        Example:
-            >>> server = AsgiServer()
-            >>> server.mount("/api", my_app)
-            >>> server.run(host="0.0.0.0", port=8000)
-        """
+    def run(self) -> None:
+        """Run the server using Uvicorn. Config from self.opts."""
         import uvicorn
 
-        # Get from args, config, or defaults
-        run_host = host or self.config.get("host", "127.0.0.1")
-        run_port = port or self.config.get("port", 8000)
+        host = self.opts.get("host")
+        port = self.opts.get("port")
+        reload = self.opts.get("reload", False)
 
-        self.logger.info(f"Starting server on {run_host}:{run_port}")
-        uvicorn.run(self, host=run_host, port=run_port, **kwargs)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Helper methods
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def mount(self, path: str, app: ASGIApp) -> None:
-        """
-        Mount an ASGI application at a path.
-
-        The app will handle all requests starting with this path.
-        Sub-paths are handled by the app itself.
-
-        If app inherits from AsgiServerEnabler, a ServerBinder is
-        automatically attached.
-
-        Args:
-            path: Mount path (e.g., "/api", "/stream"). Must be unique.
-            app: ASGI application to mount.
-
-        Raises:
-            ValueError: If path is already mounted.
-
-        Example:
-            >>> server.mount("/api", api_app)      # handles /api/*
-            >>> server.mount("/stream", stream_app)  # handles /stream/*
-        """
-        # Normalize path
-        if not path.startswith("/"):
-            path = "/" + path
-        if path.endswith("/") and path != "/":
-            path = path.rstrip("/")
-
-        # Check for duplicate
-        if path in self.apps:
-            raise ValueError(f"Path {path!r} is already mounted")
-
-        # Auto-bind if app supports it
-        if isinstance(app, AsgiServerEnabler):
-            app.binder = ServerBinder(self)
-
-        self.apps[path] = app
-
-    def get_app(self, scope: Scope) -> ASGIApp:
-        """
-        Get the app for a request and prepare scope with subpath.
-
-        Extracts the first path segment to find the mounted app,
-        then modifies scope in-place with root_path and remaining path.
-
-        Args:
-            scope: ASGI scope dict (modified in-place if app found).
-
-        Returns:
-            The matched app.
-
-        Raises:
-            HTTPException: 404 if no app matches the path.
-
-        Example:
-            >>> app = server.get_app(scope)
-            >>> await app(scope, receive, send)
-        """
-        path = scope.get("path", "/")
-
-        # Extract first segment: "/api/users/123" -> "/api"
-        if path == "/":
-            prefix = "/"
-        else:
-            parts = path.split("/", 2)  # ['', 'api', 'users/123'] or ['', 'api']
-            prefix = "/" + parts[1] if len(parts) > 1 else "/"
-
-        app = self.apps.get(prefix)
-        if app is None:
-            raise HTTPException(404, detail=f"Application not found: {prefix}")
-
-        # Modify scope in-place for sub-app
-        scope["root_path"] = scope.get("root_path", "") + prefix
-        scope["path"] = path[len(prefix):] or "/"
-        return app
+        self.logger.info(f"Starting server on {host}:{port}")
+        uvicorn.run(self, host=host, port=port, reload=reload)
 
     def __repr__(self) -> str:
         """Return string representation."""
+        if self.router is not None:
+            return f"AsgiServer(router={self.router.name!r})"
         apps_str = ", ".join(f"{path!r}" for path in self.apps)
         return f"AsgiServer(apps=[{apps_str}])"
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # Router mode methods
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @route("root")
+    def index(self) -> Response:
+        """Default index page for router mode."""
+        from .default_pages import DEFAULT_INDEX_HTML
+        from .response import HTMLResponse
+        return HTMLResponse(content=DEFAULT_INDEX_HTML)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Private helpers
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _configure(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 8000,
+        reload: bool = False,
+        **kwargs: Any,
+    ) -> SmartOptions:
+        """Build server configuration from init params."""
+        return SmartOptions({
+            "host": host,
+            "port": port,
+            "reload": reload,
+            **kwargs,
+        })
+
+    def _configure_server(self) -> None:
+        """Hook for subclasses to configure server after init."""
+        pass
+
+    def _attach_instances(self) -> None:
+        """Attach app instances from config."""
+        apps_config = self.opts.get("apps", {})
+        for name, spec in apps_config.items():
+            self.attach_instance(name, spec)
+
+    def attach_instance(self, name: str, spec: str) -> None:
+        """Attach a single app instance from spec (module:Class)."""
+        module_name, class_name = spec.split(":")
+        module = importlib.import_module(module_name)
+        cls = getattr(module, class_name)
+        instance = cls()
+        self.apps[name] = instance
+        self.router.attach_instance(instance, name=name)
+
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Run AsgiServer")
-    parser.add_argument("--host", default="127.0.0.1", help="Host to bind (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=8000, help="Port to bind (default: 8000)")
-    parser.add_argument("--reload", action="store_true", help="Enable auto-reload")
-    args = parser.parse_args()
-
     server = AsgiServer()
-    server.run(host=args.host, port=args.port, reload=args.reload)
+    server.run()

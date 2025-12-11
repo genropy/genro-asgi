@@ -13,365 +13,43 @@
 # limitations under the License.
 
 """
-HTTP Request wrapper for ASGI applications.
-
-This module provides the Request class, a high-level wrapper around the raw ASGI
-scope and receive callable. It offers an ergonomic API for accessing request
-metadata (method, path, headers, query parameters) and reading the request body
-in various formats (raw bytes, JSON, form data).
-
-Design Philosophy
-=================
-The Request class follows these principles:
-
-1. **Lazy evaluation**: Headers, query parameters, URL, and state are created
-   only when first accessed, avoiding unnecessary object creation.
-
-2. **Single read**: The request body can only be read ONCE from the ASGI receive
-   callable. Once read, it is cached internally for subsequent access.
-
-3. **Immutable view**: The Request provides a read-only view of the incoming
-   request data. Modifications should be made through middleware or State.
-
-4. **Zero dependencies**: Uses only Python stdlib, with optional orjson support
-   for faster JSON parsing.
-
-ASGI Scope Mapping
-==================
-The Request class wraps the following ASGI HTTP scope fields::
-
-    ASGI scope field          Request property/method
-    ================          =======================
-    scope["method"]           request.method -> str
-    scope["path"]             request.path -> str
-    scope["scheme"]           request.scheme -> str
-    scope["query_string"]     request.query_params -> QueryParams
-    scope["headers"]          request.headers -> Headers
-    scope["server"]           (used in url construction)
-    scope["client"]           request.client -> Address | None
-    scope["root_path"]        (used in url construction)
-    (computed)                request.url -> URL
-    (internal)                request.state -> State
-
-Body Reading (IMPORTANT)
-========================
-The request body is received through the ASGI receive callable as a sequence
-of ``http.request`` messages. Key constraints:
-
-1. **Single consumption**: The receive callable can only be consumed ONCE.
-   After reading, the body is cached in ``_body`` for subsequent access.
-
-2. **stream() vs body()**: These methods are MUTUALLY EXCLUSIVE.
-
-   - Use ``stream()`` when you need to process large bodies in chunks
-     without loading everything into memory.
-   - Use ``body()`` when you need the complete body as bytes.
-   - Calling ``body()`` (or ``json()``/``form()``) after ``stream()`` has
-     started consuming raises ``RuntimeError``.
-
-3. **Caching behavior**:
-
-   - ``body()`` caches the complete body, subsequent calls return cached value
-   - ``json()`` caches the parsed JSON, subsequent calls return cached value
-   - ``form()`` does NOT cache - parses body each time (body itself is cached)
-
-JSON Parsing
-============
-The ``json()`` method supports two backends:
-
-1. **orjson** (if installed): Faster, accepts bytes directly, assumes UTF-8
-2. **stdlib json**: Fallback, decodes body as UTF-8 before parsing
-
-Charset handling:
-- JSON is **always decoded as UTF-8** (RFC 8259 standard)
-- Content-Type charset parameter is ignored for JSON parsing
-- Invalid UTF-8 sequences will raise an exception
-
-Form Parsing
-============
-The ``form()`` method supports only ``application/x-www-form-urlencoded``:
-
-- Decodes body as UTF-8
-- Uses stdlib ``urllib.parse.parse_qs``
-- Returns single values (not lists) when field appears once
-- Returns lists when field appears multiple times
-
-**NOT SUPPORTED**: multipart/form-data (file uploads). For multipart support,
-use a dedicated library or middleware (future consideration).
-
-Charset handling:
-- Form data is **always decoded as UTF-8** (modern standard)
-- Content-Type charset parameter is ignored
-
-Class: Request
-==============
-Main class providing the request wrapper.
-
-Constructor
------------
-``__init__(self, scope: Scope, receive: Receive) -> None``
-
-Args:
-    scope: ASGI HTTP connection scope dict. Must contain at minimum:
-           - type: "http"
-           - method: HTTP method string
-           - path: Request path string
-    receive: ASGI receive callable for reading body messages
-
-The constructor initializes lazy attributes to None. No I/O is performed.
-
-Slots
------
-The class uses ``__slots__`` for memory efficiency::
-
-    __slots__ = (
-        "_scope",            # Scope: raw ASGI scope dict
-        "_receive",          # Receive: ASGI receive callable
-        "_body",             # bytes | None: cached body after read
-        "_json",             # Any: cached parsed JSON
-        "_headers",          # Headers | None: lazy headers object
-        "_query_params",     # QueryParams | None: lazy query params
-        "_url",              # URL | None: lazy URL object
-        "_state",            # State | None: lazy state object
-        "_stream_consumed",  # bool: True if stream() started consuming
-    )
-
-Properties (Synchronous)
-------------------------
-These properties access scope data synchronously:
-
-``scope -> Scope``
-    Raw ASGI scope dict. Provides access to any scope field not exposed
-    through dedicated properties.
-
-``method -> str``
-    HTTP method: "GET", "POST", "PUT", "DELETE", etc.
-    Default: "GET" if not in scope.
-
-``path -> str``
-    Request path without query string: "/users/123", "/api/items".
-    Default: "/" if not in scope.
-
-``scheme -> str``
-    URL scheme: "http" or "https".
-    Default: "http" if not in scope.
-
-``url -> URL``
-    Full request URL as URL object. Constructed lazily from:
-    - scheme (from scope)
-    - server host:port (from scope, or Host header fallback)
-    - root_path + path (for mounted applications)
-    - query_string (if present)
-
-    URL construction rules:
-    - Default ports (80 for http, 443 for https) are omitted from netloc
-    - If server is None, uses Host header or "localhost" fallback
-    - Query string is decoded as latin-1 (HTTP standard)
-
-``headers -> Headers``
-    Request headers as case-insensitive Headers object.
-    Created lazily using headers_from_scope() helper.
-
-``query_params -> QueryParams``
-    Query string parameters as QueryParams object.
-    Created lazily using query_params_from_scope() helper.
-
-``client -> Address | None``
-    Client address (host, port) if available.
-    Returns None when client info is not available (e.g., Unix sockets, tests).
-
-``state -> State``
-    Request-scoped state container for storing custom data.
-    Each Request instance has its own isolated State.
-    Use for passing data between middleware and handlers.
-
-``content_type -> str | None``
-    Shortcut for headers.get("content-type").
-    Returns None if Content-Type header is not present.
-
-Methods (Asynchronous)
-----------------------
-These methods perform I/O and must be awaited:
-
-``async def body(self) -> bytes``
-    Read and return the complete request body as bytes.
-
-    - First call reads from receive() and caches result
-    - Subsequent calls return cached value
-    - Empty body returns b""
-
-    Returns:
-        Complete request body as bytes
-
-    Raises:
-        RuntimeError: If stream() has already started consuming the body.
-
-``async def stream(self) -> AsyncIterator[bytes]``
-    Yield request body chunks as they arrive.
-
-    Use for large request bodies to avoid memory issues.
-    Each chunk is raw bytes from receive() messages.
-
-    - If body was already read (cached), yields the cached body as single chunk
-    - Empty chunks from receive() are skipped
-    - Iteration ends when more_body is False
-    - Once iteration starts, body()/json()/form() will raise RuntimeError
-
-    Yields:
-        Body chunks as bytes
-
-    Note:
-        Mutually exclusive with body(). Once stream() starts consuming,
-        body()/json()/form() cannot be used.
-
-``async def json(self) -> Any``
-    Parse request body as JSON and return the result.
-
-    - First call parses and caches result
-    - Subsequent calls return cached value
-    - Uses orjson if available, else stdlib json
-    - Body is decoded as UTF-8
-
-    Returns:
-        Parsed JSON (dict, list, str, int, float, bool, or None)
-
-    Raises:
-        json.JSONDecodeError: If body is not valid JSON (stdlib)
-        orjson.JSONDecodeError: If body is not valid JSON (orjson)
-
-``async def form(self) -> dict[str, Any]``
-    Parse request body as URL-encoded form data.
-
-    Only supports application/x-www-form-urlencoded.
-    For multipart/form-data, use dedicated middleware.
-
-    - Body is decoded as UTF-8
-    - Single-value fields return string
-    - Multi-value fields return list of strings
-    - URL-encoded values are decoded (e.g., %40 -> @)
-
-    Returns:
-        Dict mapping field names to values (str or list[str])
-
-Special Methods
----------------
-``__repr__(self) -> str``
-    Returns string representation: "Request(method='GET', path='/users')"
-
-Usage Examples
-==============
-Basic request handling::
-
-    async def handler(scope, receive, send):
-        request = Request(scope, receive)
-
-        # Access metadata
-        print(f"{request.method} {request.path}")
-        print(f"Client: {request.client}")
-
-        # Access headers
-        auth = request.headers.get("authorization")
-        content_type = request.content_type
-
-        # Access query params
-        page = request.query_params.get("page", "1")
-        limit = request.query_params.get("limit", "10")
-
-        # Read body
-        if request.method == "POST":
-            if content_type == "application/json":
-                data = await request.json()
-            elif content_type == "application/x-www-form-urlencoded":
-                data = await request.form()
-            else:
-                data = await request.body()
-
-Streaming large uploads::
-
-    async def upload_handler(scope, receive, send):
-        request = Request(scope, receive)
-
-        with open("upload.bin", "wb") as f:
-            async for chunk in request.stream():
-                f.write(chunk)
-
-Using request state::
-
-    # In middleware
-    async def auth_middleware(scope, receive, send):
-        request = Request(scope, receive)
-        token = request.headers.get("authorization")
-        request.state.user = validate_token(token)
-        # ... pass to next handler
-
-    # In handler
-    async def handler(scope, receive, send):
-        request = Request(scope, receive)
-        user = request.state.user  # Set by middleware
-
-Dependencies
-============
-Internal imports from genro_asgi:
-
-- ``.types``: Scope, Receive, Message type aliases
-- ``.datastructures``: Address, URL, Headers, QueryParams, State,
-                       headers_from_scope, query_params_from_scope
-
-Optional external:
-
-- ``orjson``: Fast JSON parsing (falls back to stdlib if not installed)
-
-Module-Level Constants
-======================
-``HAS_ORJSON: bool``
-    True if orjson is available for fast JSON parsing.
-
-Public Exports
-==============
-The module exports (via __all__)::
-
-    __all__ = ["Request"]
-
-Entry Point
-===========
-When run as main module, demonstrates basic Request usage::
-
-    if __name__ == "__main__":
-        # Create mock scope and receive for demonstration
-        scope = {
-            "type": "http",
-            "method": "GET",
-            "path": "/test",
-            "query_string": b"name=world",
-            "headers": [(b"host", b"localhost:8000")],
-            "scheme": "http",
-            "server": ("localhost", 8000),
-            "client": ("127.0.0.1", 50000),
-            "root_path": "",
-        }
-
-        async def receive():
-            return {"type": "http.request", "body": b"", "more_body": False}
-
-        import asyncio
-
-        async def demo():
-            request = Request(scope, receive)
-            print(f"Request: {request}")
-            print(f"Method: {request.method}")
-            print(f"Path: {request.path}")
-            print(f"URL: {request.url}")
-            print(f"Query params: {list(request.query_params.items())}")
-            print(f"Headers: {list(request.headers.items())}")
-            print(f"Client: {request.client}")
-
-        asyncio.run(demo())
+Transport-agnostic request system.
+
+This module provides the complete request handling infrastructure:
+- BaseRequest: Abstract interface for all request types
+- HttpRequest: ASGI HTTP request adapter
+- MsgRequest: Message-based request adapter (WSX over WebSocket, NATS)
+- RequestRegistry: Factory and tracking for active requests
+
+Architecture:
+    BaseRequest (ABC)
+        ├── HttpRequest     # ASGI HTTP scope
+        └── MsgRequest      # WSX message (WebSocket, NATS)
+
+Every request:
+1. Gets a unique `id` (correlation ID)
+2. Is registered in RequestRegistry
+3. Has `app_name` for per-app metrics
+4. Has `created_at` for age tracking
+5. Is unregistered on completion
+
+Example:
+    registry = RequestRegistry()
+    request = await registry.create(scope, receive, send)
+    try:
+        result = await handler(request)
+    finally:
+        registry.unregister(request.id)
 """
 
 from __future__ import annotations
 
 import json as stdlib_json
-from collections.abc import AsyncIterator
+import time
+import uuid
+from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from http.cookies import SimpleCookie
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs
 
@@ -384,12 +62,18 @@ from .datastructures import (
     headers_from_scope,
     query_params_from_scope,
 )
-from .types import Message, Receive, Scope
+from .types import Message, Receive, Scope, Send
 
 if TYPE_CHECKING:
-    pass
+    from .websocket import WebSocket
 
-__all__ = ["Request"]
+__all__ = [
+    "BaseRequest",
+    "HttpRequest",
+    "MsgRequest",
+    "RequestRegistry",
+    "REQUEST_FACTORIES",
+]
 
 # Optional fast JSON parsing
 try:
@@ -401,25 +85,142 @@ except ImportError:
     HAS_ORJSON = False
 
 
-class Request:
+class BaseRequest(ABC):
     """
-    HTTP Request wrapper for ASGI applications.
+    Abstract base class for transport-agnostic requests.
 
-    Provides convenient access to ASGI scope data and request body reading
-    with support for JSON and form parsing.
+    All request implementations (HTTP, Message-based) must implement
+    this interface, allowing handlers to work uniformly across transports.
 
-    The Request uses lazy initialization for headers, query_params, url, and
-    state to avoid creating objects that may not be used.
+    Properties:
+        id: Server-generated correlation ID (internal)
+        external_id: Client-provided ID for correlation (optional)
+        method: HTTP method (GET, POST, PUT, DELETE, PATCH)
+        path: Request path (e.g., '/users/42')
+        headers: Request headers as dict
+        cookies: Request cookies as dict
+        query: Query parameters
+        data: Request body/payload
+        transport: Transport type ('http', 'websocket', 'nats')
+        app_name: Name of the app handling this request (for metrics)
+        created_at: Timestamp when request was created (for age tracking)
+        tytx_mode: True if request uses TYTX serialization
+    """
 
-    Attributes:
-        scope: The raw ASGI scope dict.
+    __slots__ = ("_app_name", "_created_at", "_external_id", "_tytx_mode")
+
+    def __init__(self) -> None:
+        self._app_name: str | None = None
+        self._created_at: float = time.time()
+        self._external_id: str | None = None
+        self._tytx_mode: bool = False
+
+    @property
+    @abstractmethod
+    def id(self) -> str:
+        """Correlation ID for request/response matching."""
+
+    @property
+    @abstractmethod
+    def method(self) -> str:
+        """HTTP method: GET, POST, PUT, DELETE, PATCH."""
+
+    @property
+    @abstractmethod
+    def path(self) -> str:
+        """Request path (e.g., '/users/42')."""
+
+    @property
+    @abstractmethod
+    def headers(self) -> dict[str, str]:
+        """Request headers (lowercase keys)."""
+
+    @property
+    @abstractmethod
+    def cookies(self) -> dict[str, str]:
+        """Request cookies."""
+
+    @property
+    @abstractmethod
+    def query(self) -> dict[str, Any]:
+        """Query parameters."""
+
+    @property
+    @abstractmethod
+    def data(self) -> Any:
+        """Request body/payload."""
+
+    @property
+    @abstractmethod
+    def transport(self) -> str:
+        """Transport type: 'http', 'websocket', 'nats'."""
+
+    @property
+    def external_id(self) -> str | None:
+        """Client-provided ID for correlation (e.g., WSX message id)."""
+        return self._external_id
+
+    @external_id.setter
+    def external_id(self, value: str | None) -> None:
+        self._external_id = value
+
+    @property
+    def tytx_mode(self) -> bool:
+        """True if request uses TYTX serialization."""
+        return self._tytx_mode
+
+    @tytx_mode.setter
+    def tytx_mode(self, value: bool) -> None:
+        self._tytx_mode = value
+
+    @property
+    def app_name(self) -> str | None:
+        """Name of the app handling this request (set after routing)."""
+        return self._app_name
+
+    @app_name.setter
+    def app_name(self, value: str | None) -> None:
+        self._app_name = value
+
+    @property
+    def created_at(self) -> float:
+        """Timestamp when request was created."""
+        return self._created_at
+
+    @property
+    def age(self) -> float:
+        """Seconds since request was created."""
+        return time.time() - self._created_at
+
+    @classmethod
+    @abstractmethod
+    async def from_scope(
+        cls,
+        scope: Scope,
+        receive: Receive,
+        send: Send | None = None,
+        **kwargs: Any,
+    ) -> "BaseRequest":
+        """Factory method to create request from ASGI scope."""
+
+    def __repr__(self) -> str:
+        return (
+            f"<{self.__class__.__name__} "
+            f"id={self.id!r} method={self.method} path={self.path!r} "
+            f"transport={self.transport}>"
+        )
+
+
+class HttpRequest(BaseRequest):
+    """
+    HTTP request adapter wrapping ASGI scope.
+
+    Provides BaseRequest interface for ASGI HTTP requests.
 
     Example:
-        >>> async def handler(scope, receive, send):
-        ...     request = Request(scope, receive)
-        ...     print(f"{request.method} {request.path}")
-        ...     if request.method == "POST":
-        ...         data = await request.json()
+        request = await HttpRequest.from_scope(scope, receive)
+        print(f"{request.method} {request.path}")
+        data = request.data
     """
 
     __slots__ = (
@@ -428,96 +229,159 @@ class Request:
         "_body",
         "_json",
         "_headers",
-        "_query_params",
+        "_headers_obj",
+        "_cookies",
+        "_query",
+        "_query_obj",
+        "_data",
+        "_id",
         "_url",
         "_state",
         "_stream_consumed",
     )
 
-    def __init__(self, scope: Scope, receive: Receive) -> None:
-        """
-        Initialize request from ASGI scope and receive callable.
-
-        Args:
-            scope: ASGI HTTP connection scope dict containing request metadata.
-            receive: ASGI receive callable for reading request body messages.
-
-        Note:
-            No I/O is performed during construction. All body reading is
-            deferred until body(), stream(), json(), or form() is called.
-        """
+    def __init__(self, scope: Scope, body: bytes) -> None:
+        super().__init__()
         self._scope = scope
-        self._receive = receive
-        self._body: bytes | None = None
+        self._body = body
         self._json: Any = None
-        self._headers: Headers | None = None
-        self._query_params: QueryParams | None = None
         self._url: URL | None = None
         self._state: State | None = None
         self._stream_consumed: bool = False
+        self._receive: Receive | None = None
+        self._headers_obj: Headers | None = None
+        self._query_obj: QueryParams | None = None
+
+        # Parse headers
+        self._headers: dict[str, str] = {}
+        for name, value in scope.get("headers", []):
+            self._headers[name.decode("latin-1").lower()] = value.decode("latin-1")
+
+        # Parse cookies from Cookie header
+        self._cookies: dict[str, str] = {}
+        if "cookie" in self._headers:
+            cookie = SimpleCookie()
+            cookie.load(self._headers["cookie"])
+            for key, morsel in cookie.items():
+                self._cookies[key] = morsel.value
+
+        # Parse query string
+        self._query: dict[str, Any] = {}
+        query_string = scope.get("query_string", b"")
+        if query_string:
+            parsed = parse_qs(query_string.decode("utf-8"), keep_blank_values=True)
+            for key, values in parsed.items():
+                self._query[key] = values[0] if len(values) == 1 else values
+
+        # Parse body as JSON if applicable
+        self._data: Any = None
+        content_type = self._headers.get("content-type", "")
+
+        # Detect TYTX mode from content-type
+        if "tytx" in content_type.lower():
+            self._tytx_mode = True
+
+        if body:
+            if "json" in content_type:
+                if HAS_ORJSON:
+                    self._data = orjson.loads(body)
+                else:
+                    self._data = stdlib_json.loads(body.decode("utf-8"))
+
+        # Hydrate TYTX values if TYTX mode
+        if self._tytx_mode:
+            self._hydrate_values()
+
+        # Generate or extract request ID
+        self._id = self._headers.get("x-request-id", str(uuid.uuid4()))
+
+        # Extract external_id from header if present
+        self._external_id = self._headers.get("x-external-id")
+
+    def _hydrate_values(self) -> None:
+        """Hydrate TYTX typed values in query and data."""
+        try:
+            from genro_tytx import hydrate_dict
+
+            if self._query:
+                self._query = hydrate_dict(self._query)
+            if isinstance(self._data, dict):
+                self._data = hydrate_dict(self._data)
+        except ImportError:
+            pass
+
+    @classmethod
+    async def from_scope(
+        cls,
+        scope: Scope,
+        receive: Receive,
+        send: Send | None = None,
+        **kwargs: Any,
+    ) -> "HttpRequest":
+        """Create HttpRequest from ASGI scope and receive callable."""
+        body_chunks: list[bytes] = []
+        more_body = True
+
+        while more_body:
+            message = await receive()
+            body_chunks.append(message.get("body", b""))
+            more_body = message.get("more_body", False)
+
+        body = b"".join(body_chunks)
+        instance = cls(scope, body)
+        instance._receive = receive
+        return instance
 
     @property
-    def scope(self) -> Scope:
-        """
-        Raw ASGI scope dict.
-
-        Provides access to any scope field not exposed through dedicated
-        properties, such as custom fields added by middleware.
-
-        Returns:
-            The ASGI scope dict passed to the constructor.
-        """
-        return self._scope
+    def id(self) -> str:
+        return self._id
 
     @property
     def method(self) -> str:
-        """
-        HTTP request method.
-
-        Returns:
-            The HTTP method string (GET, POST, PUT, DELETE, etc.).
-            Defaults to "GET" if not present in scope.
-        """
-        return str(self._scope.get("method", "GET"))
+        return str(self._scope.get("method", "GET")).upper()
 
     @property
     def path(self) -> str:
-        """
-        Request path without query string.
-
-        Returns:
-            The URL path component (e.g., "/users/123").
-            Defaults to "/" if not present in scope.
-        """
         return str(self._scope.get("path", "/"))
 
     @property
-    def scheme(self) -> str:
-        """
-        URL scheme.
+    def headers(self) -> dict[str, str]:
+        return self._headers
 
-        Returns:
-            The URL scheme ("http" or "https").
-            Defaults to "http" if not present in scope.
-        """
+    @property
+    def cookies(self) -> dict[str, str]:
+        return self._cookies
+
+    @property
+    def query(self) -> dict[str, Any]:
+        return self._query
+
+    @property
+    def data(self) -> Any:
+        return self._data
+
+    @property
+    def transport(self) -> str:
+        return "http"
+
+    @property
+    def scope(self) -> Scope:
+        """Raw ASGI scope dict."""
+        return self._scope
+
+    @property
+    def body(self) -> bytes:
+        """Raw body bytes."""
+        return self._body
+
+    @property
+    def scheme(self) -> str:
+        """URL scheme: http or https."""
         return str(self._scope.get("scheme", "http"))
 
     @property
     def url(self) -> URL:
-        """
-        Full request URL.
-
-        Constructed lazily from scope fields: scheme, server, root_path,
-        path, and query_string.
-
-        Returns:
-            URL object representing the complete request URL.
-
-        Note:
-            Default ports (80 for HTTP, 443 for HTTPS) are omitted from
-            the URL string. If server is not available, the Host header
-            is used as fallback.
-        """
+        """Full request URL."""
         if self._url is None:
             scheme = self.scheme
             server = self._scope.get("server")
@@ -526,14 +390,12 @@ class Request:
 
             if server:
                 host, port = server
-                if (scheme == "http" and port == 80) or (
-                    scheme == "https" and port == 443
-                ):
+                if (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
                     netloc = host
                 else:
                     netloc = f"{host}:{port}"
             else:
-                netloc = self.headers.get("host", "localhost")
+                netloc = self._headers.get("host", "localhost")
 
             url_str = f"{scheme}://{netloc}{path}"
             if query_string:
@@ -543,45 +405,22 @@ class Request:
         return self._url
 
     @property
-    def headers(self) -> Headers:
-        """
-        Request headers.
-
-        Returns:
-            Case-insensitive Headers object containing all request headers.
-
-        Note:
-            Created lazily on first access using headers_from_scope().
-        """
-        if self._headers is None:
-            self._headers = headers_from_scope(self._scope)
-        return self._headers
+    def headers_obj(self) -> Headers:
+        """Request headers as Headers object (case-insensitive)."""
+        if self._headers_obj is None:
+            self._headers_obj = headers_from_scope(self._scope)
+        return self._headers_obj
 
     @property
     def query_params(self) -> QueryParams:
-        """
-        Query string parameters.
-
-        Returns:
-            QueryParams object for accessing URL query parameters.
-
-        Note:
-            Created lazily on first access using query_params_from_scope().
-        """
-        if self._query_params is None:
-            self._query_params = query_params_from_scope(self._scope)
-        return self._query_params
+        """Query string parameters as QueryParams object."""
+        if self._query_obj is None:
+            self._query_obj = query_params_from_scope(self._scope)
+        return self._query_obj
 
     @property
     def client(self) -> Address | None:
-        """
-        Client address.
-
-        Returns:
-            Address object with host and port if available, None otherwise.
-            May be None for Unix sockets, during testing, or when client
-            info is not provided by the server.
-        """
+        """Client address (host, port) if available."""
         client = self._scope.get("client")
         if client:
             return Address(host=client[0], port=client[1])
@@ -589,165 +428,325 @@ class Request:
 
     @property
     def state(self) -> State:
-        """
-        Request-scoped state container.
-
-        Use to store custom data that needs to be passed between middleware
-        and request handlers.
-
-        Returns:
-            State object for storing arbitrary attributes.
-
-        Note:
-            Each Request instance has its own isolated State. Creating
-            multiple Request objects from the same scope will have
-            separate State instances.
-        """
+        """Request-scoped state container."""
         if self._state is None:
             self._state = State()
         return self._state
 
     @property
     def content_type(self) -> str | None:
-        """
-        Content-Type header value.
+        """Content-Type header value."""
+        return self._headers.get("content-type")
 
-        Returns:
-            The Content-Type header value if present, None otherwise.
-            Includes any parameters like charset if present in the header.
-        """
-        return self.headers.get("content-type")
+    def make_response(self, result: Any) -> Any:
+        """Convert handler result to Response object."""
+        from .response import JSONResponse, PlainTextResponse, Response
 
-    async def body(self) -> bytes:
-        """
-        Read and return the complete request body.
+        if isinstance(result, Response):
+            return result
+        if isinstance(result, dict):
+            return JSONResponse(result)
+        if isinstance(result, list):
+            return JSONResponse(result)
+        if isinstance(result, str):
+            return PlainTextResponse(result)
+        if result is None:
+            return PlainTextResponse("")
+        return PlainTextResponse(str(result))
 
-        The body is read from the ASGI receive callable and cached for
-        subsequent calls.
 
-        Returns:
-            The complete request body as bytes.
+class MsgRequest(BaseRequest):
+    """
+    Message-based request adapter (WSX over WebSocket, NATS, etc.).
 
-        Raises:
-            RuntimeError: If stream() has already started consuming the body.
-        """
-        if self._body is not None:
-            return self._body
-        if self._stream_consumed:
-            raise RuntimeError(
-                "Cannot call body() after stream() has started consuming. "
-                "Use either stream() OR body(), not both."
-            )
-        chunks: list[bytes] = []
-        async for chunk in self.stream():
-            chunks.append(chunk)
-        self._body = b"".join(chunks)
-        return self._body
+    Parses WSX:// formatted messages into BaseRequest interface.
+    Transport-agnostic: works with any message-based protocol.
 
-    async def stream(self) -> AsyncIterator[bytes]:
-        """
-        Stream the request body in chunks.
+    Example:
+        request = await MsgRequest.from_scope(
+            scope, receive, send,
+            message='WSX://{"id":"123","method":"GET","path":"/users"}'
+        )
+        print(request.transport)  # "websocket" or "nats"
+    """
 
-        Use for large request bodies to avoid loading everything into
-        memory at once.
+    __slots__ = (
+        "_scope",
+        "_send",
+        "_id",
+        "_method",
+        "_path",
+        "_headers",
+        "_cookies",
+        "_query",
+        "_data",
+        "_transport_type",
+        "_websocket",
+    )
 
-        Yields:
-            Body chunks as bytes.
+    def __init__(
+        self,
+        message: str | bytes,
+        *,
+        scope: Scope | None = None,
+        send: Send | None = None,
+        transport_type: str = "websocket",
+        websocket: "WebSocket | None" = None,
+    ) -> None:
+        super().__init__()
+        self._scope = scope or {}
+        self._send = send
+        self._transport_type = transport_type
+        self._websocket = websocket
 
-        Note:
-            If body() was previously called, yields the cached body as
-            a single chunk. Empty chunks from receive() are skipped.
-            Once iteration starts, body()/json()/form() will raise RuntimeError.
-        """
-        if self._body is not None:
-            yield self._body
-            return
+        # Parse WSX message
+        parsed = self._parse_wsx_message(message)
 
-        self._stream_consumed = True
-        while True:
-            message: Message = await self._receive()
-            body = message.get("body", b"")
-            if body:
-                yield body
-            if not message.get("more_body", False):
-                break
+        # Required fields
+        if "id" not in parsed:
+            raise ValueError("WSX message missing required 'id' field")
+        if "method" not in parsed:
+            raise ValueError("WSX message missing required 'method' field")
 
-    async def json(self) -> Any:
-        """
-        Parse request body as JSON.
+        # The WSX message 'id' is the client's external_id
+        self._external_id = parsed["id"]
+        # Generate internal server id
+        self._id: str = str(uuid.uuid4())
 
-        Uses orjson if available for better performance, falls back to
-        stdlib json otherwise. The result is cached for subsequent calls.
+        self._method: str = parsed["method"].upper()
+        self._path: str = parsed.get("path", "/")
+        self._headers: dict[str, str] = parsed.get("headers", {})
+        self._cookies: dict[str, str] = parsed.get("cookies", {})
+        self._query: dict[str, Any] = parsed.get("query", {})
+        self._data: Any = parsed.get("data")
 
-        Returns:
-            The parsed JSON value (dict, list, str, int, float, bool, or None).
+        # Detect TYTX mode from message marker or header
+        self._tytx_mode = parsed.get("tytx", False) or "tytx" in self._headers.get("content-type", "").lower()
 
-        Raises:
-            json.JSONDecodeError: If body is not valid JSON (stdlib backend).
-            orjson.JSONDecodeError: If body is not valid JSON (orjson backend).
+        # Hydrate TYTX values if TYTX mode
+        if self._tytx_mode:
+            self._hydrate_values()
 
-        Note:
-            Body is always decoded as UTF-8 per RFC 8259.
-        """
-        if self._json is None:
-            body = await self.body()
-            if HAS_ORJSON:
-                self._json = orjson.loads(body)
-            else:
-                self._json = stdlib_json.loads(body.decode("utf-8"))
-        return self._json
+    def _parse_wsx_message(self, data: str | bytes) -> dict[str, Any]:
+        """Parse WSX:// message into dict."""
+        if isinstance(data, bytes):
+            data = data.decode("utf-8")
 
-    async def form(self) -> dict[str, Any]:
-        """
-        Parse request body as URL-encoded form data.
+        if data.startswith("WSX://"):
+            data = data[6:]
 
-        Only supports application/x-www-form-urlencoded format.
-        For multipart/form-data (file uploads), use a dedicated library.
+        return dict(stdlib_json.loads(data))
 
-        Returns:
-            Dict mapping field names to values. Single-value fields return
-            a string, multi-value fields return a list of strings.
+    def _hydrate_values(self) -> None:
+        """Hydrate TYTX typed values in query and data."""
+        try:
+            from genro_tytx import hydrate_dict
 
-        Note:
-            Body is decoded as UTF-8. The result is NOT cached - each call
-            parses the body again (though the body bytes are cached).
-        """
-        body = await self.body()
-        parsed = parse_qs(body.decode("utf-8"), keep_blank_values=True)
-        return {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
+            if self._query:
+                self._query = hydrate_dict(self._query)
+            if isinstance(self._data, dict):
+                self._data = hydrate_dict(self._data)
+        except ImportError:
+            pass
+
+    @classmethod
+    async def from_scope(
+        cls,
+        scope: Scope,
+        receive: Receive,
+        send: Send | None = None,
+        **kwargs: Any,
+    ) -> "MsgRequest":
+        """Create MsgRequest from ASGI scope and WSX message."""
+        message = kwargs.get("message")
+        if message is None:
+            raise ValueError("MsgRequest.from_scope requires 'message' kwarg")
+
+        transport_type = kwargs.get("transport_type", "websocket")
+        websocket = kwargs.get("websocket")
+
+        return cls(
+            message,
+            scope=scope,
+            send=send,
+            transport_type=transport_type,
+            websocket=websocket,
+        )
+
+    @property
+    def id(self) -> str:
+        return self._id
+
+    @property
+    def method(self) -> str:
+        return self._method
+
+    @property
+    def path(self) -> str:
+        return self._path
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return self._headers
+
+    @property
+    def cookies(self) -> dict[str, str]:
+        return self._cookies
+
+    @property
+    def query(self) -> dict[str, Any]:
+        return self._query
+
+    @property
+    def data(self) -> Any:
+        return self._data
+
+    @property
+    def transport(self) -> str:
+        return self._transport_type
+
+    @property
+    def scope(self) -> Scope:
+        """Access to raw ASGI scope."""
+        return self._scope
+
+    @property
+    def websocket(self) -> "WebSocket | None":
+        """Access to underlying WebSocket connection (if available)."""
+        return self._websocket
+
+    @property
+    def client(self) -> tuple[str, int] | None:
+        """Client address as (host, port) tuple."""
+        return self._scope.get("client")
+
+
+# Default factory mapping
+REQUEST_FACTORIES: dict[str, type[BaseRequest]] = {
+    "http": HttpRequest,
+    "websocket": MsgRequest,
+}
+
+
+class RequestRegistry:
+    """
+    Registry for creating and tracking active requests.
+
+    Responsibilities:
+    - Maps scope types to request factory classes
+    - Creates appropriate request based on scope["type"]
+    - Tracks active requests for monitoring and metrics
+    - Provides iteration and lookup by request ID
+
+    Example:
+        registry = RequestRegistry()
+
+        # Create and track request
+        request = await registry.create(scope, receive, send)
+        print(f"Active: {len(registry)}")
+
+        # Find by ID
+        req = registry.get("abc-123")
+
+        # Iterate for monitoring
+        for req in registry:
+            if req.age > 30:
+                logger.warning(f"Slow request: {req.id}")
+
+        # Cleanup
+        registry.unregister(request.id)
+    """
+
+    def __init__(
+        self,
+        factories: dict[str, type[BaseRequest]] | None = None,
+    ) -> None:
+        """Initialize registry with optional custom factories."""
+        self.factories = factories if factories is not None else REQUEST_FACTORIES.copy()
+        self._requests: dict[str, BaseRequest] = {}
+
+    def register_factory(self, scope_type: str, factory: type[BaseRequest]) -> None:
+        """Register a factory for a scope type."""
+        self.factories[scope_type] = factory
+
+    async def create(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send | None = None,
+        **kwargs: Any,
+    ) -> BaseRequest:
+        """Create and register a request from ASGI scope."""
+        scope_type = scope.get("type", "")
+        factory = self.factories.get(scope_type)
+
+        if factory is None:
+            raise ValueError(f"No factory registered for scope type: {scope_type!r}")
+
+        request = await factory.from_scope(scope, receive, send, **kwargs)
+        self._requests[request.id] = request
+        return request
+
+    def unregister(self, request_id: str) -> BaseRequest | None:
+        """Unregister and return a request."""
+        return self._requests.pop(request_id, None)
+
+    def get(self, request_id: str) -> BaseRequest | None:
+        """Get a request by id."""
+        return self._requests.get(request_id)
+
+    def count_by_app(self, app_name: str) -> int:
+        """Count active requests for a specific app."""
+        return sum(1 for req in self._requests.values() if req.app_name == app_name)
+
+    def __len__(self) -> int:
+        """Return number of active requests."""
+        return len(self._requests)
+
+    def __iter__(self) -> Iterator[BaseRequest]:
+        """Iterate over active requests."""
+        return iter(self._requests.values())
+
+    def __contains__(self, request_id: str) -> bool:
+        """Check if a request is registered."""
+        return request_id in self._requests
 
     def __repr__(self) -> str:
-        """Return string representation of the request."""
-        return f"Request(method={self.method!r}, path={self.path!r})"
+        return f"RequestRegistry(active={len(self._requests)}, factories={list(self.factories.keys())})"
 
 
 if __name__ == "__main__":
     import asyncio
 
-    # Create mock scope and receive for demonstration
-    demo_scope: Scope = {
-        "type": "http",
-        "method": "GET",
-        "path": "/test",
-        "query_string": b"name=world",
-        "headers": [(b"host", b"localhost:8000")],
-        "scheme": "http",
-        "server": ("localhost", 8000),
-        "client": ("127.0.0.1", 50000),
-        "root_path": "",
-    }
-
-    async def demo_receive() -> Message:
-        return {"type": "http.request", "body": b"", "more_body": False}
-
     async def demo() -> None:
-        request = Request(demo_scope, demo_receive)
+        # Demo HTTP request
+        demo_scope: Scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/test",
+            "query_string": b"name=world",
+            "headers": [(b"host", b"localhost:8000")],
+            "scheme": "http",
+            "server": ("localhost", 8000),
+            "client": ("127.0.0.1", 50000),
+            "root_path": "",
+        }
+
+        async def demo_receive() -> Message:
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        registry = RequestRegistry()
+        request = await registry.create(demo_scope, demo_receive)
+
         print(f"Request: {request}")
+        print(f"ID: {request.id}")
         print(f"Method: {request.method}")
         print(f"Path: {request.path}")
-        print(f"URL: {request.url}")
-        print(f"Query params: {list(request.query_params.items())}")
-        print(f"Headers: {list(request.headers.items())}")
-        print(f"Client: {request.client}")
+        print(f"Transport: {request.transport}")
+        print(f"Age: {request.age:.3f}s")
+        print(f"Active requests: {len(registry)}")
+
+        registry.unregister(request.id)
+        print(f"After unregister: {len(registry)}")
 
     asyncio.run(demo())
