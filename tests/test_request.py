@@ -23,7 +23,10 @@ from typing import Any
 
 import pytest
 
-from genro_asgi.request import Request
+from genro_asgi.request import HttpRequest
+
+# Alias for backwards compatibility in tests
+Request = HttpRequest
 from genro_asgi.datastructures import Address, Headers, QueryParams, State, URL
 
 

@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Genro Modules Documentation</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #e4e4e4;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 60px;
+        }
+        h1 {
+            font-size: 3rem;
+            font-weight: 300;
+            margin-bottom: 10px;
+            color: #fff;
+        }
+        h1 span {
+            color: #0ea5e9;
+        }
+        .subtitle {
+            font-size: 1.2rem;
+            color: #94a3b8;
+        }
+        .modules {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 24px;
+        }
+        .module-card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 24px;
+            transition: transform 0.2s, border-color 0.2s;
+        }
+        .module-card:hover {
+            transform: translateY(-4px);
+            border-color: #0ea5e9;
+        }
+        .module-card h2 {
+            font-size: 1.4rem;
+            margin-bottom: 12px;
+            color: #fff;
+        }
+        .module-card h2 a {
+            color: inherit;
+            text-decoration: none;
+        }
+        .module-card h2 a:hover {
+            color: #0ea5e9;
+        }
+        .module-card p {
+            color: #94a3b8;
+            line-height: 1.6;
+            margin-bottom: 16px;
+        }
+        .module-card .link {
+            display: inline-block;
+            color: #0ea5e9;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .module-card .link:hover {
+            text-decoration: underline;
+        }
+        .module-card .status {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-left: 8px;
+        }
+        .status.alpha {
+            background: rgba(234, 179, 8, 0.2);
+            color: #eab308;
+        }
+        .status.beta {
+            background: rgba(14, 165, 233, 0.2);
+            color: #0ea5e9;
+        }
+        .status.stable {
+            background: rgba(34, 197, 94, 0.2);
+            color: #22c55e;
+        }
+        footer {
+            text-align: center;
+            margin-top: 60px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            color: #64748b;
+        }
+        footer a {
+            color: #0ea5e9;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Genro <span>Modules</span></h1>
+            <p class="subtitle">Documentation Hub</p>
+        </header>
+
+        <div class="modules">
+            <div class="module-card">
+                <h2>
+                    <a href="/storage/">genro-storage</a>
+                    <span class="status beta">Beta</span>
+                </h2>
+                <p>
+                    Storage abstraction layer with support for filesystem, S3,
+                    and other backends. Unified API for file operations.
+                </p>
+                <a href="/storage/" class="link">View Documentation &rarr;</a>
+            </div>
+
+            <div class="module-card">
+                <h2>
+                    <a href="/tytx/">genro-tytx</a>
+                    <span class="status alpha">Alpha</span>
+                </h2>
+                <p>
+                    Type serialization with TYTX format. Preserves Python types
+                    in JSON for seamless client-server communication.
+                </p>
+                <a href="/tytx/" class="link">View Documentation &rarr;</a>
+            </div>
+
+            <div class="module-card">
+                <h2>
+                    <a href="/mail-proxy/">genro-mail-proxy</a>
+                    <span class="status beta">Beta</span>
+                </h2>
+                <p>
+                    Email proxy service with template support, queue management,
+                    and multiple provider backends.
+                </p>
+                <a href="/mail-proxy/" class="link">View Documentation &rarr;</a>
+            </div>
+
+            <div class="module-card">
+                <h2>
+                    <a href="#">genro-asgi</a>
+                    <span class="status alpha">Alpha</span>
+                </h2>
+                <p>
+                    Minimal ASGI foundation. Static file serving, routing with
+                    smartroute, and WSX protocol support.
+                </p>
+                <a href="#" class="link">Documentation coming soon</a>
+            </div>
+
+            <div class="module-card">
+                <h2>
+                    <a href="#">genro-toolbox</a>
+                    <span class="status stable">Stable</span>
+                </h2>
+                <p>
+                    Common utilities: SmartOptions, decorators, helpers.
+                    Foundation for all genro modules.
+                </p>
+                <a href="#" class="link">Documentation coming soon</a>
+            </div>
+
+            <div class="module-card">
+                <h2>
+                    <a href="#">genro-auth</a>
+                    <span class="status alpha">Alpha</span>
+                </h2>
+                <p>
+                    Authentication and authorization. JWT tokens, sessions,
+                    permission management.
+                </p>
+                <a href="#" class="link">Documentation coming soon</a>
+            </div>
+        </div>
+
+        <footer>
+            <p>
+                Powered by <a href="https://github.com/softwell/genro-asgi">genro-asgi</a> |
+                &copy; 2025 Softwell S.r.l.
+            </p>
+        </footer>
+    </div>
+</body>
+</html>

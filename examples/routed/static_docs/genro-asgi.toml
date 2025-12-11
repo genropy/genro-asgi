@@ -1,0 +1,31 @@
+# genro-asgi.toml
+# Static documentation server for genro-modules
+#
+# NOTE: Keys cannot contain underscore (_) as it's used as separator
+# for flattening nested config and environment variable overrides.
+
+[server]
+host = "127.0.0.1"
+port = 8080
+debug = true
+loglevel = "info"
+
+# Static sites with named keys (not anonymous arrays)
+# Each site has: path (URL mount point), directory, index, fallback
+
+[staticsites.landing]
+path = "/"
+directory = "./public"
+index = "index.html"
+
+[staticsites.storage]
+path = "/storage"
+directory = "../../../genro-storage/docs/_build/html"
+
+[staticsites.tytx]
+path = "/tytx"
+directory = "../../../genro-tytx/docs/_build/html"
+
+[staticsites.mailproxy]
+path = "/mail-proxy"
+directory = "../../../genro-mail-proxy/docs/_build/html"
