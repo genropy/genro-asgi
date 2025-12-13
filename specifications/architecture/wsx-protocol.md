@@ -367,13 +367,31 @@ Per risposte streaming (es. Server-Sent Events equivalent):
 - Campo aggiuntivo `"stream": true` per indicare che seguono altri messaggi
 - `"stream": false` o assente indica messaggio finale
 
+## Stato Implementazione
+
+| Componente | Stato | Note |
+|------------|-------|------|
+| `WSX_PREFIX`, `is_wsx_message()` | ✅ Implementato | `wsx/protocol.py` |
+| `parse_wsx_message()` | ✅ Implementato | `wsx/protocol.py` |
+| `build_wsx_message()` | ✅ Implementato | `wsx/protocol.py` |
+| `build_wsx_response()` | ✅ Implementato | `wsx/protocol.py` |
+| `BaseRequest` | ✅ Implementato | `request.py` |
+| `HttpRequest` | ✅ Implementato | `request.py` |
+| `MsgRequest` | ✅ Implementato | `request.py` - usa WSX parsing |
+| `WsxRequest`, `WsRequest` | ❌ Non implementato | Planned |
+| `NatsRequest` | ❌ Non implementato | Planned |
+| `BaseResponse` | ❌ Non implementato | Planned |
+| `WsxResponse`, `WsResponse` | ❌ Non implementato | Planned |
+| `NatsResponse` | ❌ Non implementato | Planned |
+| Integrazione NATS | ❌ Non implementato | Planned |
+
 ## Implementazione Pianificata
 
-1. **Fase 1**: BaseRequest/BaseResponse ABC
-2. **Fase 2**: HttpRequest/HttpResponse (ASGI HTTP)
-3. **Fase 3**: WsxRequest/WsxResponse (parsing WSX)
-4. **Fase 4**: WsRequest/WsResponse (ASGI WebSocket)
-5. **Fase 5**: NatsRequest/NatsResponse (quando necessario)
+1. **Fase 1**: BaseRequest/BaseResponse ABC ✅ (parziale - solo BaseRequest)
+2. **Fase 2**: HttpRequest/HttpResponse (ASGI HTTP) ✅ (parziale - solo HttpRequest)
+3. **Fase 3**: WsxRequest/WsxResponse (parsing WSX) ❌
+4. **Fase 4**: WsRequest/WsResponse (ASGI WebSocket) ❌
+5. **Fase 5**: NatsRequest/NatsResponse (quando necessario) ❌
 
 ---
 
