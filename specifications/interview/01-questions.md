@@ -162,6 +162,16 @@
 
 ---
 
+## N. CLI
+
+**Come si avvia genro-asgi da riga di comando?**
+
+- C'è un comando CLI?
+- Come funziona `python -m genro_asgi`?
+- Quali opzioni sono disponibili?
+
+---
+
 ## Prossimi passi
 
 1. Rispondere a queste domande una alla volta

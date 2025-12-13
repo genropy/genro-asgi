@@ -17,6 +17,7 @@
 | F. Transport and Serialization | [F-transport.md](F-transport.md) | ✅ Verified |
 | L. External Apps Integration | [L-external-apps.md](L-external-apps.md) | ✅ Verified |
 | M. Resources and Assets | [M-resources.md](M-resources.md) | ✅ Verified |
+| N. CLI | [N-cli.md](N-cli.md) | ✅ Verified |
 
 ## Sections to complete
 

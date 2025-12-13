@@ -1,6 +1,10 @@
-# Legacy Migration Documentation
+# WSGI Support Documentation
 
-This folder contains all documentation related to migrating from the current WSGI/Tornado architecture to the new ASGI-based system.
+This folder contains documentation for running legacy WSGI applications within genro-asgi's ASGI server.
+
+## Purpose
+
+genro-asgi can wrap and serve legacy WSGI applications, enabling gradual migration to ASGI while maintaining backward compatibility.
 
 ## Documents
 
@@ -11,7 +15,23 @@ This folder contains all documentation related to migrating from the current WSG
 | [03-page-id-routing.md](03-page-id-routing.md) | Page ID format with process indicator |
 | [04-migration-phases.md](04-migration-phases.md) | Detailed migration phases (0→3→4→5→6→7) |
 | [05-deployment-strategy.md](05-deployment-strategy.md) | Green/Blue/Canary deployment |
-| [claude_opinion.md](claude_opinion.md) | Independent analysis: pros, cons, risks |
+
+## Key Capability
+
+**ASGI wrapping WSGI**: Mount legacy WSGI apps alongside native ASGI apps.
+
+```python
+from genro_asgi import AsgiServer
+from asgiref.wsgi import WsgiToAsgi
+
+# Wrap legacy WSGI app
+legacy_wsgi_app = WsgiToAsgi(my_wsgi_app)
+
+# Mount alongside ASGI apps
+server = AsgiServer()
+server.mount("/legacy", legacy_wsgi_app)
+server.mount("/api", my_asgi_app)
+```
 
 ## Context
 
@@ -42,9 +62,8 @@ Phases 1-2 (sticky sessions, NATS) are deferred and integrated into Phase 7.
 1. **Gradual migration** - Each phase is independently deployable
 2. **Rollback capability** - Can revert at any stage
 3. **Mono-process first** - Delay sticky session complexity
-4. **Resident pages** - Eliminate reconstruction overhead
+4. **Backward compatibility** - WSGI apps continue to work
 
-## Related Documents
+## Related
 
-- [../architecture.md](../architecture.md) - Core genro-asgi architecture
-- Original migration docs: `/Users/gporcari/Sviluppo/genro_ng/migrate_docs/EN/`
+- `interview/answers/` - Will contain WSGI support answer section (O-wsgi-support.md)
