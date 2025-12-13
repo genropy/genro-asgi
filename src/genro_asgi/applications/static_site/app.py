@@ -27,12 +27,22 @@ class StaticSite(AsgiApplication):
         name: "docs"
     """
 
-    __slots__ = ("directory", "name", "router", "_routers")
+    __slots__ = ("directory", "name", "index", "router", "_routers")
 
-    def __init__(self, directory: str | Path, name: str = "static") -> None:
-        self.directory = Path(directory)
+    def __init__(
+        self,
+        directory: str | Path,
+        name: str = "static",
+        index: str = "index.html",
+        app_dir: str | Path | None = None,
+    ) -> None:
+        directory_path = Path(directory)
+        if app_dir and not directory_path.is_absolute():
+            directory_path = Path(app_dir) / directory_path
+        self.directory = directory_path.resolve()
         self.name = name
-        self.router = StaticRouter(self.directory, name=name)
+        self.index = index
+        self.router = StaticRouter(self.directory, name=name, html_index=bool(index))
         self._routers = {"router": self.router}
 
     def get(self, selector: str, **options: Any) -> Any:

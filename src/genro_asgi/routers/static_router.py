@@ -19,6 +19,7 @@ Usage:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -37,7 +38,7 @@ class StaticRouter(RouterInterface):
     Subdirectories become child routers lazily.
     """
 
-    __slots__ = ("directory", "name", "_html_index", "_children")
+    __slots__ = ("directory", "name", "_html_index")
 
     def __init__(
         self,
@@ -49,60 +50,42 @@ class StaticRouter(RouterInterface):
         self.directory = Path(directory)
         self.name = name
         self._html_index = html_index
-        self._children: dict[str, StaticRouter] = {}
 
-    def get(self, selector: str, **options: Any) -> Callable | StaticRouter | None:
-        """Resolve selector to file handler or child router.
+    def get(self, selector: str, **options: Any) -> Callable:
+        """Resolve selector to file handler.
 
         Args:
             selector: Path relative to directory (e.g., "index.html", "css/style.css")
 
         Returns:
-            - Callable handler if selector points to a file
-            - StaticRouter if selector points to a directory
-            - None if not found
+            Callable handler that returns file info dict.
+
+        Raises:
+            FileNotFoundError: If file does not exist (404)
+            PermissionError: If file is not readable (403)
         """
         if not selector or selector == "index":
-            if self._html_index:
-                index_path = self.directory / "index.html"
-                if index_path.is_file():
-                    return self._make_file_handler(index_path)
-            return None
+            selector = "index.html" if self._html_index else ""
 
-        if "/" in selector:
-            parts = selector.split("/")
-            first, rest = parts[0], "/".join(parts[1:])
-            child = self._get_child_or_file(first)
-            if isinstance(child, StaticRouter):
-                return child.get(rest, **options)
-            return None
+        if not selector:
+            raise FileNotFoundError("No index file")
 
-        return self._get_child_or_file(selector)
+        path = (self.directory / selector).resolve()
 
-    def _get_child_or_file(self, name: str) -> Callable | StaticRouter | None:
-        """Get file handler or child router for a single path segment."""
-        target = self.directory / name
-        if target.is_file():
-            return self._make_file_handler(target)
-        if target.is_dir():
-            return self._get_or_create_child(name, target)
-        if self._html_index:
-            html_target = self.directory / f"{name}.html"
-            if html_target.is_file():
-                return self._make_file_handler(html_target)
-        return None
+        # Security: ensure path is within directory
+        if not str(path).startswith(str(self.directory.resolve())):
+            raise PermissionError("Path traversal not allowed")
 
-    def _get_or_create_child(self, name: str, path: Path) -> StaticRouter:
-        """Get or create child router for subdirectory."""
-        if name in self._children:
-            return self._children[name]
-        child = StaticRouter(
-            path,
-            name=name,
-            html_index=self._html_index,
-        )
-        self._children[name] = child
-        return child
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {selector}")
+
+        if not path.is_file():
+            raise FileNotFoundError(f"Not a file: {selector}")
+
+        if not os.access(path, os.R_OK):
+            raise PermissionError(f"Cannot read: {selector}")
+
+        return self._make_file_handler(path)
 
     def _make_file_handler(self, path: Path) -> Callable:
         """Create handler that returns file info dict."""
@@ -115,16 +98,14 @@ class StaticRouter(RouterInterface):
             }
         return handler
 
+    def _on_attached_to_parent(self, parent: Any) -> None:
+        """Called when attached to a parent router. No-op for static router."""
+        pass
+
     def members(
         self, basepath: str | None = None, lazy: bool = False, **kwargs: Any
     ) -> dict[str, Any]:
         """List files and directories as entries and routers."""
-        if basepath:
-            target = self.get(basepath)
-            if isinstance(target, StaticRouter):
-                return target.members(lazy=lazy, **kwargs)
-            return {}
-
         if not self.directory.exists():
             return {}
 
@@ -142,12 +123,10 @@ class StaticRouter(RouterInterface):
                     "size": item.stat().st_size,
                 }
             elif item.is_dir():
+                child = StaticRouter(item, name=item.name, html_index=self._html_index)
                 if lazy:
-                    routers[item.name] = lambda p=item: StaticRouter(
-                        p, name=item.name
-                    ).members(lazy=True, **kwargs)
+                    routers[item.name] = lambda c=child: c.members(lazy=True, **kwargs)
                 else:
-                    child = self._get_or_create_child(item.name, item)
                     child_members = child.members(**kwargs)
                     if child_members:
                         routers[item.name] = child_members

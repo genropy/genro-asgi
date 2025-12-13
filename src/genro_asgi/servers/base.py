@@ -220,6 +220,8 @@ class AsgiServer(RoutedClass):
         module_name, class_name = module_path.split(":")
         module = importlib.import_module(module_name)
         cls = getattr(module, class_name)
+        # Pass app_dir so apps can resolve relative paths
+        kwargs["app_dir"] = self.opts.server.app_dir
         instance = cls(**kwargs)
         self.apps[name] = instance
 
