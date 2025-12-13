@@ -1,0 +1,12 @@
+# Docs Site Example - Serve Sphinx documentation
+# Run: python -m genro_asgi serve examples/docs_site
+
+server:
+  host: "127.0.0.1"
+  port: 8000
+
+apps:
+  docs:
+    module: "genro_asgi:StaticSite"
+    directory: "../../docs/_build/html"
+    index: "index.html"

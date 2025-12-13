@@ -89,7 +89,7 @@ class StaticRouter(RouterInterface):
 
     def _make_file_handler(self, path: Path) -> Callable:
         """Create handler that returns file info dict."""
-        def handler() -> dict[str, Any]:
+        def handler(**kwargs: Any) -> dict[str, Any]:
             return {
                 "type": "file",
                 "path": path,
