@@ -8,20 +8,17 @@ from __future__ import annotations
 import inspect
 from typing import TYPE_CHECKING, Any
 
-from .response import JSONResponse
+from genro_routes import RouterInterface
+
+from .response import FileResponse, HTMLResponse, JSONResponse, Response
 
 if TYPE_CHECKING:
-    from .server import AsgiServer
+    from .servers import AsgiServer
     from .types import Receive, Scope, Send
 
 
 class Dispatcher:
-    """
-    Routes ASGI requests to handlers via genro_routes Router.
-
-    Converts URL paths to selectors, creates requests, invokes handlers,
-    and converts results to responses. Used internally by AsgiServer.
-    """
+    """Routes ASGI requests to handlers via genro_routes Router."""
 
     __slots__ = ("server",)
 
@@ -43,43 +40,56 @@ class Dispatcher:
         """Proxy to server.logger."""
         return self.server.logger
 
-    def path_to_selector(self, path: str) -> str:
-        """
-        Convert URL path to genro_routes selector.
+    def _render_members_html(self, path: str, router: RouterInterface) -> HTMLResponse:
+        """Render router members as HTML directory listing."""
+        path = path.rstrip("/")
+        members = list(router.members())
 
-        Examples:
-            "/" -> "index"
-            "/sites" -> "sites"
-            "/_sys/sites" -> "_sys.sites"
-            "/shop/products" -> "shop.products"
-        """
-        path = path.strip("/")
-        if not path:
-            return "index"
-        return path.replace("/", ".")
+        items_html = []
+        for entry in members:
+            name = entry.name
+            href = f"{path}/{name}"
+            icon = "📁" if entry.is_branch else "📄"
+            items_html.append(f'<li><a href="{href}">{icon} {name}</a></li>')
 
-    async def dispatch(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """
-        Dispatch request to handler via router.
+        html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Index of {path}</title>
+<style>
+body {{ font-family: system-ui, sans-serif; margin: 2rem; background: #1a1a2e; color: #e4e4e4; }}
+h1 {{ color: #0ea5e9; }}
+ul {{ list-style: none; padding: 0; }}
+li {{ padding: 0.5rem 0; }}
+a {{ color: #22c55e; text-decoration: none; }}
+a:hover {{ text-decoration: underline; }}
+</style></head>
+<body><h1>Index of {path}/</h1>
+<ul>{''.join(items_html)}</ul>
+</body></html>"""
+        return HTMLResponse(html)
 
-        1. Convert path to selector
-        2. Find handler in router
-        3. Create and register request
-        4. Call handler with appropriate params
-        5. Convert result to response
-        6. Cleanup request from registry
-        """
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """ASGI interface - dispatch request to handler via router."""
         path = scope.get("path", "/")
-        selector = self.path_to_selector(path)
+        selector = path.strip("/") or "index"
 
-        try:
-            handler = self.router.get(selector)
-        except (KeyError, NotImplementedError):
-            response = JSONResponse(
+        handler = self.router.get(selector)
+
+        # If we got a router (not a handler), try index or show members
+        if isinstance(handler, RouterInterface):
+            subrouter = handler
+            handler = subrouter.get("index")
+            if handler is None:
+                # No index - render members list as HTML
+                response = self._render_members_html(path, subrouter)
+                await response(scope, receive, send)
+                return
+
+        if handler is None:
+            err_response: Response = JSONResponse(
                 {"error": f"Not found: {path}"},
                 status_code=404,
             )
-            await response(scope, receive, send)
+            await err_response(scope, receive, send)
             return
 
         request = await self.request_registry.create(scope, receive, send)
@@ -103,16 +113,21 @@ class Dispatcher:
             if inspect.isawaitable(result):
                 result = await result
 
-            response = request.make_response(result)
-            await response(scope, receive, send)
+            # Handle file responses from StaticRouter
+            if isinstance(result, dict) and result.get("type") == "file":
+                handler_response = FileResponse(result["path"])
+            else:
+                handler_response = request.make_response(result)
+
+            await handler_response(scope, receive, send)
 
         except Exception as e:
             self.logger.exception(f"Handler error: {e}")
-            response = JSONResponse(
+            exc_response: Response = JSONResponse(
                 {"error": str(e)},
                 status_code=500,
             )
-            await response(scope, receive, send)
+            await exc_response(scope, receive, send)
         finally:
             self.request_registry.unregister(request.id)
 

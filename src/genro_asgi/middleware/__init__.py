@@ -49,11 +49,49 @@ def _autodiscover() -> None:
         importlib.import_module(f".{module_name}", __package__)
 
 
-def build_middleware_chain(
-    app: ASGIApp, middlewares: list[tuple[type | str, dict[str, Any]]]
+def _extract_flattened_middleware(flat_config: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Extract middleware config from flattened keys like middleware_static_directory."""
+    middlewares: dict[str, dict[str, Any]] = {}
+    prefix = "middleware_"
+
+    for key, value in flat_config.items():
+        if not key.startswith(prefix):
+            continue
+        rest = key[len(prefix):]
+        if "_" not in rest:
+            continue
+        mw_name, param = rest.split("_", 1)
+        if mw_name not in middlewares:
+            middlewares[mw_name] = {}
+        middlewares[mw_name][param] = value
+
+    return [(name, config) for name, config in middlewares.items()]
+
+
+def middleware_chain(
+    middlewares: list[tuple[type | str, dict[str, Any]] | dict[str, Any]] | dict[str, Any],
+    app: ASGIApp,
 ) -> ASGIApp:
-    """Build middleware chain from list of (class_or_name, config) tuples."""
-    for cls_or_name, config in reversed(middlewares):
+    """Build middleware chain from config.
+
+    Accepts three formats:
+    - List of tuples: [(name, config), ...]
+    - List of dicts: [{"type": name, ...config}, ...]
+    - Flattened dict: {"middleware_static_directory": "...", ...}
+    """
+    items: list[tuple[str, dict[str, Any]] | dict[str, Any]]
+    if isinstance(middlewares, dict):
+        items = _extract_flattened_middleware(middlewares)  # type: ignore[assignment]
+    else:
+        items = middlewares  # type: ignore[assignment]
+
+    for item in reversed(items):
+        if isinstance(item, dict):
+            config = dict(item)
+            cls_or_name: type | str = config.pop("type")
+        else:
+            cls_or_name, config = item
+
         if isinstance(cls_or_name, str):
             if cls_or_name not in MIDDLEWARE_REGISTRY:
                 raise ValueError(f"Unknown middleware: {cls_or_name}")
@@ -64,4 +102,4 @@ def build_middleware_chain(
 
 _autodiscover()
 
-__all__ = ["BaseMiddleware"]
+__all__ = ["BaseMiddleware", "middleware_chain"]

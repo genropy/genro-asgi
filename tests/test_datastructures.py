@@ -508,7 +508,7 @@ class TestExports:
 
     def test_binder_importable(self):
         """Verify binder exports are importable."""
-        from genro_asgi.binder import (
+        from genro_asgi.utils import (
             AsgiServerEnabler,
             ServerBinder,
         )
@@ -518,6 +518,6 @@ class TestExports:
 
     def test_server_importable(self):
         """Verify server exports are importable."""
-        from genro_asgi.server import AsgiServer
+        from genro_asgi.servers import AsgiServer
 
         assert AsgiServer is not None

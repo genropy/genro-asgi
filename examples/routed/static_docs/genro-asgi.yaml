@@ -1,0 +1,25 @@
+# Static documentation server for genro-modules
+
+server:
+  host: "127.0.0.1"
+  port: 8080
+  debug: true
+  loglevel: "info"
+
+# Static sites as apps
+apps:
+  landing:
+    type: "genro_asgi:StaticSite"
+    directory: "./public"
+
+  storage:
+    type: "genro_asgi:StaticSite"
+    directory: "../../../genro-storage/docs/_build/html"
+
+  tytx:
+    type: "genro_asgi:StaticSite"
+    directory: "../../../genro-tytx/docs/_build/html"
+
+  mailproxy:
+    type: "genro_asgi:StaticSite"
+    directory: "../../../genro-mail-proxy/docs/_build/html"

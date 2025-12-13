@@ -5,5 +5,5 @@ server:
   port: 8000
 
 apps:
-  shop: shop:ShopApp
-  office: office:OfficeApp
+  shop: "shop:ShopApp"
+  office: "office:OfficeApp"

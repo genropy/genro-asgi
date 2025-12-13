@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contact - genro-asgi</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">genro-asgi</div>
+        <ul class="nav-links">
+            <li><a href="/">Home</a></li>
+            <li><a href="/about.html">About</a></li>
+            <li><a href="/features.html">Features</a></li>
+            <li><a href="/contact.html" class="active">Contact</a></li>
+        </ul>
+    </nav>
+
+    <main class="container">
+        <section class="content">
+            <h1>Contact Us</h1>
+
+            <div class="contact-grid">
+                <div class="contact-info">
+                    <h2>Get in Touch</h2>
+                    <p>Have questions or feedback? We'd love to hear from you!</p>
+
+                    <div class="contact-item">
+                        <strong>GitHub:</strong>
+                        <a href="https://github.com/genropy/genro-asgi">github.com/genropy/genro-asgi</a>
+                    </div>
+
+                    <div class="contact-item">
+                        <strong>PyPI:</strong>
+                        <a href="https://pypi.org/project/genro-asgi/">pypi.org/project/genro-asgi</a>
+                    </div>
+                </div>
+
+                <div class="contact-form">
+                    <h2>Send a Message</h2>
+                    <form id="contactForm">
+                        <div class="form-group">
+                            <label for="name">Name</label>
+                            <input type="text" id="name" name="name" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="email">Email</label>
+                            <input type="email" id="email" name="email" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="message">Message</label>
+                            <textarea id="message" name="message" rows="4" required></textarea>
+                        </div>
+                        <button type="submit" class="btn">Send Message</button>
+                    </form>
+                    <p id="formResult" class="form-result"></p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <p>&copy; 2025 genro-asgi. Built with Python.</p>
+    </footer>
+
+    <script src="/js/app.js"></script>
+</body>
+</html>

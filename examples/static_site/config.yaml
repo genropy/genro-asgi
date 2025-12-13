@@ -1,0 +1,11 @@
+# Static Site Example Configuration
+
+server:
+  host: "127.0.0.1"
+  port: 8000
+
+apps:
+  static:
+    module: "genro_asgi:StaticSite"
+    directory: "./public"
+    index: "index.html"

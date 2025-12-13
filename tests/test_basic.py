@@ -22,7 +22,7 @@ def test_version() -> None:
 
 def test_exports() -> None:
     """Test that main exports are available."""
-    assert hasattr(genro_asgi, "Application")
+    assert hasattr(genro_asgi, "AsgiApplication")
     assert hasattr(genro_asgi, "Request")
     assert hasattr(genro_asgi, "Response")
     assert hasattr(genro_asgi, "JSONResponse")

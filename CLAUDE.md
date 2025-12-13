@@ -80,6 +80,34 @@ genro-asgi/
 4. **Production-ready**: Stable, tested, documented
 5. **Framework-agnostic**: Not tied to any specific framework
 
+### Architectural Principle: Instance Isolation
+
+**genro-asgi usa server e apps come istanze isolate, non funzioni globali.**
+
+> Il server è un'istanza con proprio stato (config, risorse, ciclo di vita).
+> Ogni app montata è un'istanza isolata.
+> `del server` → tutto viene garbage collected, zero residui.
+
+**Pattern: Relazione Duale Parent-Child**
+
+Ogni oggetto creato dal parent mantiene riferimento al parent:
+
+```python
+# Server crea Dispatcher passando se stesso
+self.dispatcher = Dispatcher(self)
+
+# Dispatcher ha ref semantica al server
+class Dispatcher:
+    def __init__(self, server):
+        self.server = server  # nome semantico, NON "_parent"
+```
+
+**REGOLA AGENTE**: Verificare SEMPRE che il codice non inquini lo spazio condiviso Python:
+- ❌ NO variabili globali mutabili
+- ❌ NO `global` keyword
+- ❌ NO singleton via modulo
+- ✅ Stato sempre dentro istanze
+
 ### Testing
 
 All code must have tests:

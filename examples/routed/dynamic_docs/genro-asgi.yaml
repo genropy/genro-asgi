@@ -1,0 +1,11 @@
+# Dynamic documentation hub configuration
+
+server:
+  host: "127.0.0.1"
+  port: 8090
+  debug: true
+  loglevel: "info"
+
+app:
+  # Directory to scan for genro-* modules
+  modulesdir: "../../.."

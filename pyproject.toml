@@ -30,6 +30,7 @@ classifiers = [
 dependencies = [
     "genro-toolbox>=0.2.0",
     "uvicorn>=0.30.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -79,6 +80,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
+norecursedirs = ["old_tests"]
 python_classes = "Test*"
 python_functions = "test_*"
 addopts = "-v --cov=genro_asgi --cov-report=term-missing --cov-report=html --cov-report=xml"

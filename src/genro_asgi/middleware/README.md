@@ -2,73 +2,72 @@
 
 ## Overview
 
-Il sistema middleware di genro-asgi usa un pattern **onion-style** con auto-registrazione.
-I middleware wrappano l'applicazione ASGI e possono intercettare/modificare request e response.
+The genro-asgi middleware system uses an **onion-style** pattern with auto-registration.
+Middleware wraps the ASGI application and can intercept/modify requests and responses.
 
-## Due Modalità di Utilizzo
+## Two Usage Modes
 
-### 1. Config-Driven (raccomandato)
+### 1. Config-Driven (recommended)
 
-Middleware dichiarati in configurazione TOML, risolti per nome dal registry:
+Middleware declared in YAML configuration, resolved by name from registry:
 
-```toml
-[[middleware]]
-name = "CORSMiddleware"
-allowOrigins = ["*"]
+```yaml
+middleware:
+  - type: CORSMiddleware
+    allow_origins: ["*"]
 
-[[middleware]]
-name = "CompressionMiddleware"
-minimumSize = 1000
+  - type: CompressionMiddleware
+    minimum_size: 1000
 ```
 
-**Requisito**: il middleware deve ereditare da `BaseMiddleware` per auto-registrarsi.
+**Requirement**: middleware must inherit from `BaseMiddleware` for auto-registration.
 
-### 2. Programmatico (override)
+### 2. Programmatic (override)
 
-Chi eredita da `AsgiServer` può fare override di `_build_middleware_chain`:
+Subclasses of `AsgiServer` can override `_build_middleware_chain`:
 
 ```python
 class MyServer(AsgiServer):
     def _build_middleware_chain(self) -> Any:
-        # Usa qualsiasi middleware ASGI-compatibile
+        # Use any ASGI-compatible middleware
         from some_library import TheirMiddleware
 
-        app = self.dispatcher.dispatch
+        app = Dispatcher(self)
         app = TheirMiddleware(app, option="value")
         app = MyCustomMiddleware(app)
         return app
 ```
 
-Oppure mix (config + custom):
+Or mix (config + custom):
 
 ```python
 class MyServer(AsgiServer):
     def _build_middleware_chain(self) -> Any:
-        # Prima applica i middleware da config
+        # First apply config middleware
         app = super()._build_middleware_chain()
-        # Poi aggiungi middleware custom
+        # Then add custom middleware
         app = MyCustomMiddleware(app)
         return app
 ```
 
-**Nessun requisito**: qualsiasi callable ASGI `(scope, receive, send) -> None` funziona.
+**No requirement**: any ASGI callable `(scope, receive, send) -> None` works.
 
-## Architettura
+## Architecture
 
 ```text
 Request → [Middleware1 → [Middleware2 → [App] → Middleware2] → Middleware1] → Response
 ```
 
-Ogni middleware:
+Each middleware:
 
-1. Riceve `scope`, `receive`, `send` (interfaccia ASGI standard)
-2. Può modificare lo scope o intercettare i messaggi
-3. Chiama `self.app(scope, receive, send)` per passare al layer successivo
-4. Può wrappare `send` per modificare la response
+1. Receives `scope`, `receive`, `send` (standard ASGI interface)
+2. Can modify scope or intercept messages
+3. Calls `self.app(scope, receive, send)` to pass to next layer
+4. Can wrap `send` to modify response
 
-## Creare un Middleware Compatibile
+## Creating a Compatible Middleware
 
-### Struttura Base
+### Base Structure
 
 ```python
 # my_middleware.py
@@ -83,11 +82,11 @@ if TYPE_CHECKING:
 
 
 class MyMiddleware(BaseMiddleware):
-    """Descrizione del middleware.
+    """Middleware description.
 
     Config options:
-        option1: Descrizione. Default: value
-        option2: Descrizione. Default: value
+        option1: Description. Default: value
+        option2: Description. Default: value
     """
 
     __slots__ = ("option1", "option2")
@@ -105,12 +104,12 @@ class MyMiddleware(BaseMiddleware):
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """ASGI interface."""
-        # Filtra solo HTTP (o websocket se necessario)
+        # Filter HTTP only (or websocket if needed)
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
-        # La tua logica qui
+        # Your logic here
         await self.app(scope, receive, send)
 
 
@@ -118,33 +117,33 @@ if __name__ == "__main__":
     pass
 ```
 
-### Requisiti Obbligatori
+### Mandatory Requirements
 
-| Requisito | Descrizione |
-|-----------|-------------|
-| Eredita `BaseMiddleware` | Auto-registrazione nel registry |
-| `__slots__` | Dichiara tutti gli attributi dell'istanza |
-| `super().__init__(app, **kwargs)` | Passa app e kwargs al parent |
-| `**kwargs` nel costruttore | Permette configurazioni future |
-| `async def __call__` | Implementa l'interfaccia ASGI |
-| `if __name__ == "__main__": pass` | Entry point obbligatorio |
+| Requirement | Description |
+|-------------|-------------|
+| Inherit `BaseMiddleware` | Auto-registration in registry |
+| `__slots__` | Declare all instance attributes |
+| `super().__init__(app, **kwargs)` | Pass app and kwargs to parent |
+| `**kwargs` in constructor | Allows future configurations |
+| `async def __call__` | Implements ASGI interface |
+| `if __name__ == "__main__": pass` | Mandatory entry point |
 
-### Auto-Registrazione
+### Auto-Registration
 
-Quando crei una sottoclasse di `BaseMiddleware`:
+When you create a `BaseMiddleware` subclass:
 
-- `__init_subclass__` registra automaticamente la classe in `MIDDLEWARE_REGISTRY`
-- Il nome di default è `cls.__name__` (es. `"MyMiddleware"`)
-- Puoi customizzare con `middleware_name` class attribute
+- `__init_subclass__` automatically registers the class in `MIDDLEWARE_REGISTRY`
+- Default name is `cls.__name__` (e.g., `"MyMiddleware"`)
+- Customize with `middleware_name` class attribute
 
 ```python
 class MyMiddleware(BaseMiddleware):
-    middleware_name = "my_custom_name"  # opzionale
+    middleware_name = "my_custom_name"  # optional
 ```
 
-## Pattern Comuni
+## Common Patterns
 
-### 1. Pass-Through (solo HTTP)
+### 1. Pass-Through (HTTP only)
 
 ```python
 async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -152,11 +151,11 @@ async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         await self.app(scope, receive, send)
         return
 
-    # logica per HTTP
+    # HTTP logic
     await self.app(scope, receive, send)
 ```
 
-### 2. Wrapping di `send` (modifica response)
+### 2. Wrapping `send` (modify response)
 
 ```python
 async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -166,7 +165,7 @@ async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
 
     async def wrapped_send(message: MutableMapping[str, Any]) -> None:
         if message["type"] == "http.response.start":
-            # Modifica headers
+            # Modify headers
             headers = list(message.get("headers", []))
             headers.append((b"x-custom-header", b"value"))
             message = {**message, "headers": headers}
@@ -175,7 +174,7 @@ async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
     await self.app(scope, receive, wrapped_send)
 ```
 
-### 3. Buffering Response (es. compression)
+### 3. Buffering Response (e.g., compression)
 
 ```python
 async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -201,14 +200,14 @@ async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
 
             if not more_body:
                 full_body = b"".join(body_parts)
-                # Processa full_body
+                # Process full_body
                 await send(initial_message)
                 await send({"type": "http.response.body", "body": full_body})
 
     await self.app(scope, receive, buffer_send)
 ```
 
-### 4. Short-Circuit (risponde senza chiamare app)
+### 4. Short-Circuit (respond without calling app)
 
 ```python
 async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -216,10 +215,10 @@ async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         await self.app(scope, receive, send)
         return
 
-    # Condizione per rispondere direttamente
+    # Condition to respond directly
     if self._should_handle_directly(scope):
         await self._send_direct_response(send)
-        return  # Non chiama self.app
+        return  # Don't call self.app
 
     await self.app(scope, receive, send)
 ```
@@ -238,9 +237,9 @@ async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         await self._send_error_response(send, e)
 ```
 
-## Uso del Middleware
+## Middleware Usage
 
-### Diretto
+### Direct
 
 ```python
 from genro_asgi.middleware.cors import CORSMiddleware
@@ -248,10 +247,10 @@ from genro_asgi.middleware.cors import CORSMiddleware
 app = CORSMiddleware(my_app, allow_origins=["*"])
 ```
 
-### Via Registry (configurazione)
+### Via Registry (configuration)
 
 ```python
-from genro_asgi.middleware import build_middleware_chain
+from genro_asgi.middleware import middleware_chain
 
 middlewares = [
     ("CORSMiddleware", {"allow_origins": ["*"]}),
@@ -259,29 +258,30 @@ middlewares = [
     ("LoggingMiddleware", {"level": "DEBUG"}),
 ]
 
-app = build_middleware_chain(my_app, middlewares)
+app = middleware_chain(middlewares, my_app)
 ```
 
-## Middleware Inclusi
+## Included Middleware
 
-| Middleware | Scopo |
-|------------|-------|
+| Middleware | Purpose |
+|------------|---------|
 | `CORSMiddleware` | Cross-Origin Resource Sharing |
 | `CompressionMiddleware` | Gzip compression |
 | `ErrorMiddleware` | Error handling |
-| `StaticFilesMiddleware` | Serve static files |
 | `LoggingMiddleware` | Request/response logging |
 
-## Checklist per Nuovo Middleware
+**Note**: For serving static files, use `StaticSite` as an app, not middleware.
+
+## Checklist for New Middleware
 
 - [ ] File in `src/genro_asgi/middleware/`
-- [ ] Copyright header Apache 2.0
-- [ ] Eredita `BaseMiddleware`
-- [ ] Usa `__slots__`
-- [ ] Costruttore con `**kwargs`
-- [ ] Chiama `super().__init__(app, **kwargs)`
-- [ ] Implementa `async def __call__`
-- [ ] Filtra per `scope["type"]`
-- [ ] Docstring con config options
+- [ ] Apache 2.0 copyright header
+- [ ] Inherit `BaseMiddleware`
+- [ ] Use `__slots__`
+- [ ] Constructor with `**kwargs`
+- [ ] Call `super().__init__(app, **kwargs)`
+- [ ] Implement `async def __call__`
+- [ ] Filter by `scope["type"]`
+- [ ] Docstring with config options
 - [ ] `if __name__ == "__main__": pass`
-- [ ] Test corrispondente
+- [ ] Corresponding test

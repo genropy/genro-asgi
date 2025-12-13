@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>About - genro-asgi</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">genro-asgi</div>
+        <ul class="nav-links">
+            <li><a href="/">Home</a></li>
+            <li><a href="/about.html" class="active">About</a></li>
+            <li><a href="/features.html">Features</a></li>
+            <li><a href="/contact.html">Contact</a></li>
+        </ul>
+    </nav>
+
+    <main class="container">
+        <section class="content">
+            <h1>About genro-asgi</h1>
+
+            <p class="lead">
+                genro-asgi is a lightweight ASGI server framework designed for
+                simplicity and performance.
+            </p>
+
+            <h2>Why genro-asgi?</h2>
+            <ul class="feature-list">
+                <li>Zero external dependencies (stdlib only)</li>
+                <li>Full type hints for better IDE support</li>
+                <li>Simple TOML-based configuration</li>
+                <li>Built-in static file serving</li>
+                <li>Middleware support</li>
+            </ul>
+
+            <h2>Getting Started</h2>
+            <pre><code># Install
+pip install genro-asgi
+
+# Create config.toml
+[server]
+host = "127.0.0.1"
+port = 8000
+
+[staticsites.main]
+path = "/"
+directory = "public"
+
+# Run
+genro-asgi serve .</code></pre>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <p>&copy; 2025 genro-asgi. Built with Python.</p>
+    </footer>
+
+    <script src="/js/app.js"></script>
+</body>
+</html>

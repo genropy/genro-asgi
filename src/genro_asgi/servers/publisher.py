@@ -7,10 +7,10 @@ from __future__ import annotations
 
 from genro_routes import RoutedClass
 
-from .server import AsgiServer
-from .dispatcher import Dispatcher
-from .response import JSONResponse
-from .types import Receive, Scope, Send
+from .base import AsgiServer
+from ..dispatcher import Dispatcher
+from ..response import JSONResponse
+from ..types import Receive, Scope, Send
 
 __all__ = ["AsgiPublisher", "PublisherDispatcher"]
 
@@ -18,7 +18,7 @@ __all__ = ["AsgiPublisher", "PublisherDispatcher"]
 class PublisherDispatcher(Dispatcher):
     """Dispatcher with system routes support."""
 
-    async def dispatch(self, scope: Scope, receive: Receive, send: Send) -> None:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Dispatch with system routes handling."""
         path = scope.get("path", "/")
 
@@ -27,7 +27,7 @@ class PublisherDispatcher(Dispatcher):
             await self._handle_system(scope, receive, send, path)
             return
 
-        await super().dispatch(scope, receive, send)
+        await super().__call__(scope, receive, send)
 
     async def _handle_system(
         self, scope: Scope, receive: Receive, send: Send, path: str

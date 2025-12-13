@@ -1,10 +1,13 @@
 # Office App
 
-from genro_routes import RoutedClass, route
+from genro_routes import RoutedClass, Router, route
 
 
 class OfficeApp(RoutedClass):
     """Office application."""
+
+    def __init__(self):
+        self.api = Router(self, name="api")
 
     @route("api")
     def documents(self):

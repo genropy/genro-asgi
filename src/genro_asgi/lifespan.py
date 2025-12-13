@@ -60,7 +60,7 @@ from typing import TYPE_CHECKING, Callable, Awaitable
 from .types import Receive, Scope, Send
 
 if TYPE_CHECKING:
-    from .server import AsgiServer
+    from .servers import AsgiServer
 
 __all__ = ["ServerLifespan"]
 
@@ -81,7 +81,7 @@ class ServerLifespan:
         >>> # server.lifespan is a ServerLifespan instance
     """
 
-    __slots__ = ("server", "_logger")
+    __slots__ = ("server", "_logger", "_started")
 
     def __init__(self, server: AsgiServer) -> None:
         """
@@ -92,6 +92,7 @@ class ServerLifespan:
         """
         self.server = server
         self._logger = logging.getLogger("genro_asgi.lifespan")
+        self._started = False
 
     async def __call__(
         self, scope: Scope, receive: Receive, send: Send  # noqa: ARG002
@@ -144,7 +145,7 @@ class ServerLifespan:
                 self._logger.debug(f"Starting app at {path}")
                 await self._call_handler(app, "on_startup")
 
-        self.server._started = True
+        self._started = True
         self._logger.info("AsgiServer started")
 
     async def shutdown(self) -> None:
@@ -166,7 +167,7 @@ class ServerLifespan:
                 except Exception:
                     self._logger.exception(f"Error shutting down app at {path}")
 
-        self.server._started = False
+        self._started = False
         self._logger.info("AsgiServer stopped")
 
     async def _call_handler(self, app: object, method_name: str) -> None:
