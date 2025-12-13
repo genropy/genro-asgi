@@ -1,34 +1,31 @@
 # Copyright 2025 Softwell S.r.l.
 # Licensed under the Apache License, Version 2.0
 
-"""StaticSite - Application for serving static files.
-
-A minimal app that uses StaticRouter to serve files from disk.
-Can be mounted on AsgiServer like any other app.
-
-Config in YAML:
-    apps:
-      docs:
-        module: "genro_asgi:StaticSite"
-        directory: "./public"
-"""
+"""StaticSite application class."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from .base import AsgiApplication
-from ..routers import StaticRouter
-
-if TYPE_CHECKING:
-    pass
+from ..base import AsgiApplication
+from ...routers import StaticRouter
 
 __all__ = ["StaticSite"]
 
 
 class StaticSite(AsgiApplication):
-    """Application that serves static files from a directory."""
+    """Application that serves static files from a directory.
+
+    Config in YAML (as path-based app):
+        apps:
+          docs:
+            path: "./my_static_site"
+
+    Where ./my_static_site/config.yaml contains:
+        directory: "./public"
+        name: "docs"
+    """
 
     __slots__ = ("directory", "name", "router", "_routers")
 
@@ -48,4 +45,5 @@ class StaticSite(AsgiApplication):
 
 
 if __name__ == "__main__":
-    pass
+    site = StaticSite(".")
+    print(site)

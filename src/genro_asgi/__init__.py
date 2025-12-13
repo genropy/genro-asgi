@@ -53,8 +53,7 @@ from .executors import (
     LocalExecutor,
 )
 from .servers import AsgiServer, AsgiPublisher
-from .static import StaticFiles
-from .static_router import StaticRouter
+from .routers import StaticRouter
 from .websocket import WebSocket, WebSocketState
 
 # Backwards compatibility alias
@@ -115,7 +114,6 @@ __all__ = [
     # WebSocket
     "WebSocket",
     "WebSocketState",
-    # Static files
-    "StaticFiles",
+    # Routers
     "StaticRouter",
 ]

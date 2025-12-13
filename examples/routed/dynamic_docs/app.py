@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING, Any
 
 from genro_routes import Router, RoutedClass, route
 
-from genro_asgi import AsgiServer, StaticFiles, HTMLResponse, RedirectResponse
+from genro_asgi import AsgiServer, StaticSite, HTMLResponse, RedirectResponse
 
 
 # -----------------------------------------------------------------------------
@@ -70,17 +70,17 @@ class ModuleSite(RoutedClass):
         self.router = Router(self, name="api")
 
     @route("api")
-    def docs(self) -> StaticFiles | dict[str, str]:
+    def docs(self) -> StaticSite | dict[str, str]:
         """Sphinx documentation for this module."""
         if self.has_docs:
-            return StaticFiles(directory=self.docs_path)
+            return StaticSite(directory=self.docs_path)
         return {"status": "not_available", "message": f"Docs not built for {self.name}"}
 
     @route("api")
-    def examples(self) -> StaticFiles | dict[str, str]:
+    def examples(self) -> StaticSite | dict[str, str]:
         """Examples for this module."""
         if self.has_examples:
-            return StaticFiles(directory=self.examples_path)
+            return StaticSite(directory=self.examples_path)
         return {"status": "not_available", "message": f"No examples for {self.name}"}
 
     @route("api")
