@@ -37,7 +37,7 @@ genro-asgi is a minimal ASGI foundation for building web services. It provides:
 │  ┌──────────────────────────────────────────────────────┐  │
 │  │                    Middleware Chain                   │  │
 │  │  ┌────────┐  ┌────────┐  ┌────────┐  ┌────────────┐  │  │
-│  │  │ CORS   │→ │ Errors │→ │ Static │→ │ Dispatcher │  │  │
+│  │  │ CORS   │→ │ Errors │→ │Logging │→ │ Dispatcher │  │  │
 │  │  └────────┘  └────────┘  └────────┘  └────────────┘  │  │
 │  └──────────────────────────────────────────────────────┘  │
 │                                                             │
@@ -54,11 +54,17 @@ genro-asgi is a minimal ASGI foundation for building web services. It provides:
 
 ## Components
 
+### Servers
+
+| Component | Module | Description |
+|-----------|--------|-------------|
+| **AsgiServer** | `servers/base.py` | Main entry point, loads config, mounts apps |
+| **Publisher** | `servers/publisher.py` | Event publishing for server lifecycle |
+
 ### Core
 
 | Component | Module | Description |
 |-----------|--------|-------------|
-| **AsgiServer** | `server.py` | Main entry point, loads config, mounts apps |
 | **Dispatcher** | `dispatcher.py` | Routes requests to apps via genro_routes |
 | **ServerLifespan** | `lifespan.py` | Manages startup/shutdown lifecycle |
 
@@ -73,22 +79,27 @@ genro-asgi is a minimal ASGI foundation for building web services. It provides:
 | **HTMLResponse** | `response.py` | HTML response |
 | **FileResponse** | `response.py` | File streaming response |
 
-### Static Files
+### Applications
 
 | Component | Module | Description |
 |-----------|--------|-------------|
-| **StaticSite** | `static_site.py` | RoutedClass for serving static files via router |
-| **StaticFiles** | `static.py` | Standalone ASGI app for static files |
-| **StaticFilesMiddleware** | `middleware/static.py` | Middleware for path-prefix static serving |
+| **AsgiApplication** | `applications/base.py` | Base class for apps mounted on server |
+| **StaticSite** | `applications/static_site.py` | App for serving static files |
+
+### Routers
+
+| Component | Module | Description |
+|-----------|--------|-------------|
+| **StaticRouter** | `routers/static_router.py` | Router for serving static files from directory |
 
 ### Middleware
 
 | Component | Module | Description |
 |-----------|--------|-------------|
-| **BaseMiddleware** | `middleware/base.py` | Base class for middleware |
 | **CORSMiddleware** | `middleware/cors.py` | Cross-Origin Resource Sharing |
 | **ErrorMiddleware** | `middleware/errors.py` | Exception handling |
-| **StaticFilesMiddleware** | `middleware/static.py` | Static file serving |
+| **LoggingMiddleware** | `middleware/logging.py` | Request/response logging |
+| **CompressionMiddleware** | `middleware/compression.py` | Gzip/deflate compression |
 
 ### WebSocket
 
@@ -97,13 +108,35 @@ genro-asgi is a minimal ASGI foundation for building web services. It provides:
 | **WebSocket** | `websocket.py` | WebSocket connection handler |
 | **WebSocketState** | `websocket.py` | Connection state enum |
 
+### WSX (WebSocket eXtended)
+
+| Component | Module | Description |
+|-----------|--------|-------------|
+| **WsxProtocol** | `wsx/protocol.py` | Transport-agnostic RPC protocol |
+
 ### Executors
 
 | Component | Module | Description |
 |-----------|--------|-------------|
-| **BaseExecutor** | `executors/` | Abstract executor interface |
-| **LocalExecutor** | `executors/` | Thread/process pool executor |
-| **ExecutorRegistry** | `executors/` | Manages named executors |
+| **BaseExecutor** | `executors/base.py` | Abstract executor interface |
+| **LocalExecutor** | `executors/local.py` | Thread/process pool executor |
+| **ExecutorRegistry** | `executors/registry.py` | Manages named executors |
+
+### Data Structures
+
+| Component | Module | Description |
+|-----------|--------|-------------|
+| **Headers** | `datastructures/headers.py` | HTTP headers container |
+| **QueryParams** | `datastructures/query_params.py` | URL query parameters |
+| **URL** | `datastructures/url.py` | URL parsing and manipulation |
+| **Address** | `datastructures/address.py` | Client address (host, port) |
+| **State** | `datastructures/state.py` | Request/app state container |
+
+### Utilities
+
+| Component | Module | Description |
+|-----------|--------|-------------|
+| **ServerBinder** | `utils/binder.py` | Binds apps to server context |
 
 ## Dependencies
 
@@ -126,33 +159,55 @@ genro-asgi is a minimal ASGI foundation for building web services. It provides:
 
 ```
 src/genro_asgi/
-├── __init__.py          # Public exports
-├── __main__.py          # CLI entry point
-├── server.py            # AsgiServer
-├── dispatcher.py        # Request dispatcher
-├── config.py            # Configuration loading
-├── lifespan.py          # Lifecycle management
-├── request.py           # Request classes
-├── response.py          # Response classes
-├── static.py            # StaticFiles ASGI app
-├── static_site.py       # StaticSite RoutedClass
-├── websocket.py         # WebSocket support
-├── types.py             # Type definitions
-├── exceptions.py        # Exception classes
-├── binder.py            # Server-app binding
-├── default_pages.py     # Default HTML pages
-├── middleware/          # Middleware components
+├── __init__.py              # Public exports
+├── __main__.py              # CLI entry point
+├── dispatcher.py            # Request dispatcher
+├── lifespan.py              # Lifecycle management
+├── request.py               # Request classes
+├── response.py              # Response classes
+├── websocket.py             # WebSocket support
+├── types.py                 # Type definitions
+├── exceptions.py            # Exception classes
+├── applications/            # Application classes
 │   ├── __init__.py
-│   ├── base.py
+│   ├── base.py              # AsgiApplication base class
+│   ├── static_site.py       # StaticSite (module-based)
+│   └── static_site/         # StaticSite (path-based)
+│       ├── __init__.py
+│       ├── app.py
+│       └── config.yaml
+├── servers/                 # Server implementations
+│   ├── __init__.py
+│   ├── base.py              # AsgiServer
+│   └── publisher.py         # Event publisher
+├── routers/                 # Router implementations
+│   ├── __init__.py
+│   └── static_router.py     # Static file router
+├── middleware/              # Middleware components
+│   ├── __init__.py
 │   ├── cors.py
 │   ├── errors.py
-│   └── static.py
-├── executors/           # Executor system
-│   └── ...
-├── datastructures/      # Data structures
-│   └── ...
-└── wsx/                 # WebSocket extensions
-    └── ...
+│   ├── logging.py
+│   └── compression.py
+├── executors/               # Executor system
+│   ├── __init__.py
+│   ├── base.py
+│   ├── local.py
+│   └── registry.py
+├── datastructures/          # Data structures
+│   ├── __init__.py
+│   ├── headers.py
+│   ├── query_params.py
+│   ├── url.py
+│   ├── address.py
+│   └── state.py
+├── utils/                   # Utilities
+│   ├── __init__.py
+│   └── binder.py
+└── wsx/                     # WebSocket extensions
+    ├── __init__.py
+    ├── protocol.py
+    └── registry.py
 ```
 
 ## Quick Start
@@ -181,25 +236,26 @@ python -m genro_asgi --app-dir /path/to/app
 
 ## Documentation Structure
 
-This specifications folder is organized as:
-
 ```
 specifications/
 ├── 01-overview.md           # This file
-├── architecture/            # How it's built, internal details
-│   ├── 01-server.md
-│   ├── 02-dispatcher.md
-│   ├── 03-request-response.md
-│   ├── 04-middleware.md
-│   ├── 05-static-files.md
-│   └── 06-lifespan.md
-├── guides/                  # How to use it
-│   ├── 01-configuration.md
-│   ├── 02-creating-apps.md
-│   ├── 03-middleware-usage.md
-│   └── 04-static-sites.md
-└── legacy/                  # Historical documents
-    └── ...
+├── architecture/            # Technical details
+│   ├── applications.md      # App system architecture
+│   └── wsx-protocol.md      # WSX protocol specification
+├── guides/                  # Developer guides
+│   └── applications.md      # How to create apps
+├── interview/               # Q&A format documentation
+│   ├── 01-questions.md      # Questions list
+│   ├── 02-knowledge-summary.md
+│   └── answers/             # Verified answers (A-N)
+├── dependencies/            # External dependencies docs
+│   ├── genro-routes.md
+│   ├── genro-toolbox.md
+│   └── genro-tytx.md
+├── executors.md             # Executor system analysis
+├── wsgi_support/            # WSGI backward compatibility
+└── legacy/                  # Historical/TODO items
+    └── TODO-to-document.md
 ```
 
 ---

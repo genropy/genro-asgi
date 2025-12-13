@@ -5,7 +5,7 @@
 ASGI Server - Root dispatcher for multi-app architecture.
 
 Two modes: flat (mount by path) or router (genro_routes).
-See docs/architecture/01-server.md for full documentation.
+See specifications/01-overview.md for architecture documentation.
 """
 
 from __future__ import annotations
