@@ -151,9 +151,10 @@ genro-asgi is a minimal ASGI foundation for building web services. It provides:
 
 ### Optional
 
-| Package | Purpose |
-|---------|---------|
-| `orjson` | Fast JSON serialization |
+| Package | Purpose | Install |
+|---------|---------|---------|
+| `orjson` | Fast JSON serialization | `pip install genro-asgi[json]` |
+| `genro-tytx` | Typed serialization (WebSocket, WSX) | `pip install genro-asgi[tytx]` |
 
 ## Directory Structure
 

@@ -29,6 +29,7 @@ classifiers = [
 
 dependencies = [
     "genro-toolbox>=0.2.0",
+    "genro-routes>=0.1.0",
     "uvicorn>=0.30.0",
     "pyyaml>=6.0",
 ]
@@ -36,6 +37,9 @@ dependencies = [
 [project.optional-dependencies]
 json = [
     "orjson>=3.9.0",
+]
+tytx = [
+    "genro-tytx>=0.1.0",
 ]
 dev = [
     "pytest>=7.0",
@@ -53,6 +57,7 @@ docs = [
 ]
 all = [
     "orjson>=3.9.0",
+    "genro-tytx>=0.1.0",
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "pytest-asyncio>=0.21.0",
