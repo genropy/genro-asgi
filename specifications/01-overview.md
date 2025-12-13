@@ -148,13 +148,13 @@ genro-asgi is a minimal ASGI foundation for building web services. It provides:
 | `pyyaml` | Configuration loading |
 | `genro-toolbox` | SmartOptions, utilities |
 | `genro-routes` | Router, RoutedClass |
+| `genro-tytx` | Typed serialization (WebSocket, WSX, Request) |
 
 ### Optional
 
 | Package | Purpose | Install |
 |---------|---------|---------|
 | `orjson` | Fast JSON serialization | `pip install genro-asgi[json]` |
-| `genro-tytx` | Typed serialization (WebSocket, WSX) | `pip install genro-asgi[tytx]` |
 
 ## Directory Structure
 
