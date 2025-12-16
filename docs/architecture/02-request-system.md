@@ -146,18 +146,32 @@ class HttpRequest(BaseRequest):
 
 ### TYTX Hydration
 
-If `genro-tytx` is available, query and data are automatically hydrated:
+If `genro-tytx` is available and content-type contains "tytx", full ASGI request
+parsing is delegated to `asgi_data()` which handles query, headers, cookies, and body:
 
 ```python
-def _hydrate_values(self) -> None:
-    try:
-        from genro_tytx import hydrate_dict
-        if self._query:
-            self._query = hydrate_dict(self._query)
-        if isinstance(self._data, dict):
-            self._data = hydrate_dict(self._data)
-    except ImportError:
-        pass
+@classmethod
+async def from_scope(cls, scope, receive, send=None, **kwargs) -> HttpRequest:
+    # Check for TYTX mode
+    content_type = headers.get("content-type", "")
+    is_tytx = "tytx" in content_type.lower()
+
+    if is_tytx:
+        try:
+            from genro_tytx import asgi_data
+            data = await asgi_data(dict(scope), receive)
+            # data = {"query": {...}, "headers": {...}, "cookies": {...}, "body": {...}}
+            # All values already hydrated
+            instance = cls(scope, b"")
+            instance._headers = data.get("headers", {})
+            instance._cookies = data.get("cookies", {})
+            instance._query = data.get("query", {})
+            instance._data = data.get("body")
+            instance._tytx_mode = True
+            return instance
+        except ImportError:
+            pass
+    # ... standard parsing
 ```
 
 ---

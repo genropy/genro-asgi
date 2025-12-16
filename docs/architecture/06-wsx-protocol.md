@@ -130,7 +130,7 @@ Values support TYTX type suffixes for type preservation:
 "active": "true::B"     → True (bool)
 ```
 
-WSX parsing automatically hydrates these values.
+WSX parsing automatically hydrates these values via `from_tytx()`.
 
 ---
 
@@ -140,22 +140,22 @@ WSX parsing automatically hydrates these values.
 
 ```
 1. WebSocket receive() → text message
-2. Detect WSX:// prefix
-3. Parse JSON, hydrate TYTX values
+2. Detect WSX:// prefix or ::JS marker
+3. Parse via from_tytx() → hydrates TYTX values automatically
 4. Create WsRequest(BaseRequest)
 5. Handler processes → result
-6. WsResponse.send() → serialize WSX:// → WebSocket send()
+6. WsResponse.send() → to_tytx() → WebSocket send()
 ```
 
 ### NATS (Future)
 
 ```
 1. NATS subscribe callback → msg
-2. msg.data contains WSX://...
-3. Parse JSON, hydrate TYTX values
+2. msg.data contains WSX://... or ::JS marker
+3. Parse via from_tytx() → hydrates TYTX values automatically
 4. Create NatsRequest(BaseRequest)
 5. Handler processes → result
-6. NatsResponse.send() → serialize WSX:// → nc.publish(msg.reply, ...)
+6. NatsResponse.send() → to_tytx() → nc.publish(msg.reply, ...)
 ```
 
 ---
@@ -178,16 +178,16 @@ src/genro_asgi/wsx/
 ## Protocol Parsing
 
 ```python
-# wsx/protocol.py
+# wsx/protocol.py - using genro-tytx API
 
 WSX_PREFIX = "WSX://"
 
-def parse_wsx_message(raw: str) -> dict[str, Any]:
+def parse_wsx_message(raw: str | bytes) -> dict[str, Any]:
     """
     Parse WSX message string.
 
     Args:
-        raw: Raw message starting with WSX://
+        raw: Raw message (WSX:// prefix or ::JS marker)
 
     Returns:
         Parsed message dict with hydrated TYTX values
@@ -195,19 +195,18 @@ def parse_wsx_message(raw: str) -> dict[str, Any]:
     Raises:
         ValueError: If not a valid WSX message
     """
-    if not raw.startswith(WSX_PREFIX):
-        raise ValueError(f"Not a WSX message: {raw[:20]}")
+    if isinstance(raw, bytes):
+        # Binary data - try msgpack via from_tytx
+        from genro_tytx import from_tytx
+        return dict(from_tytx(raw, transport="msgpack"))
 
-    json_str = raw[len(WSX_PREFIX):]
-    message = json.loads(json_str)
+    # String data
+    if raw.startswith(WSX_PREFIX):
+        raw = raw[len(WSX_PREFIX):]
 
-    # Hydrate TYTX values
-    if "query" in message:
-        message["query"] = hydrate_dict(message["query"])
-    if "data" in message and isinstance(message["data"], dict):
-        message["data"] = hydrate_dict(message["data"])
-
-    return message
+    # from_tytx handles ::JS marker and hydration automatically
+    from genro_tytx import from_tytx
+    return dict(from_tytx(raw))
 
 
 def serialize_wsx_response(
@@ -221,8 +220,10 @@ def serialize_wsx_response(
     Serialize response to WSX format.
 
     Returns:
-        WSX:// prefixed JSON string
+        JSON string with ::JS marker (handled by to_tytx)
     """
+    from genro_tytx import to_tytx
+
     response = {
         "id": request_id,
         "status": status,
@@ -233,7 +234,8 @@ def serialize_wsx_response(
     if cookies:
         response["cookies"] = cookies
 
-    return WSX_PREFIX + json.dumps(response)
+    # to_tytx includes ::JS marker automatically
+    return to_tytx(response)
 ```
 
 ---

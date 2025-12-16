@@ -134,9 +134,7 @@ class Headers:
         """
         self._headers: list[tuple[str, str]] = []
         for name, value in raw_headers:
-            self._headers.append(
-                (name.decode("latin-1").lower(), value.decode("latin-1"))
-            )
+            self._headers.append((name.decode("latin-1").lower(), value.decode("latin-1")))
 
     def get(self, key: str, default: str | None = None) -> str | None:
         """

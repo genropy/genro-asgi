@@ -18,6 +18,7 @@ def _normalize_list(value: str | list[str] | None, default: list[str] | None = N
         return [v.strip() for v in value.split(",") if v.strip()]
     return list(value)
 
+
 if TYPE_CHECKING:
     from ..types import ASGIApp, Receive, Scope, Send
 
@@ -61,8 +62,7 @@ class CORSMiddleware(BaseMiddleware):
         super().__init__(app, **kwargs)
         self.allow_origins = _normalize_list(allow_origins, ["*"])
         self.allow_methods = _normalize_list(
-            allow_methods,
-            ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"]
+            allow_methods, ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"]
         )
         self.allow_headers = _normalize_list(allow_headers, ["*"])
         self.allow_credentials = allow_credentials
@@ -168,11 +168,13 @@ class CORSMiddleware(BaseMiddleware):
 
         headers.extend(self._preflight_headers)
 
-        await send({
-            "type": "http.response.start",
-            "status": 200,
-            "headers": headers,
-        })
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": headers,
+            }
+        )
         await send({"type": "http.response.body", "body": b""})
 
 

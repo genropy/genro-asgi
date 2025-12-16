@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Callable
 
 from genro_routes import RouterInterface
@@ -89,6 +90,7 @@ class StaticRouter(RouterInterface):
 
     def _make_file_handler(self, path: Path) -> Callable:
         """Create handler that returns file info dict."""
+
         def handler(**kwargs: Any) -> dict[str, Any]:
             return {
                 "type": "file",
@@ -96,14 +98,23 @@ class StaticRouter(RouterInterface):
                 "name": path.name,
                 "suffix": path.suffix,
             }
+
         return handler
 
     def _on_attached_to_parent(self, parent: Any) -> None:
         """Called when attached to a parent router. No-op for static router."""
         pass
 
-    def members(
-        self, basepath: str | None = None, lazy: bool = False, **kwargs: Any
+    def values(self) -> Iterator[RouterInterface]:
+        """Return iterator of child routers. For static router, yields nothing."""
+        return iter(())
+
+    def nodes(
+        self,
+        basepath: str | None = None,
+        lazy: bool = False,
+        mode: str | None = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         """List files and directories as entries and routers."""
         if not self.directory.exists():
@@ -125,11 +136,11 @@ class StaticRouter(RouterInterface):
             elif item.is_dir():
                 child = StaticRouter(item, name=item.name, html_index=self._html_index)
                 if lazy:
-                    routers[item.name] = lambda c=child: c.members(lazy=True, **kwargs)
+                    routers[item.name] = lambda c=child: c.nodes(lazy=True, **kwargs)
                 else:
-                    child_members = child.members(**kwargs)
-                    if child_members:
-                        routers[item.name] = child_members
+                    child_nodes = child.nodes(**kwargs)
+                    if child_nodes:
+                        routers[item.name] = child_nodes
 
         if not entries and not routers:
             return {}

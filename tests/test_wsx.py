@@ -117,9 +117,11 @@ class TestWsxProtocol:
 class TestMsgRequest:
     """Tests for MsgRequest (message-based request)."""
 
-    def test_parse_minimal_request(self) -> None:
+    @pytest.mark.asyncio
+    async def test_parse_minimal_request(self) -> None:
         msg = 'WSX://{"id":"req1","method":"GET"}'
-        request = MsgRequest(msg)
+        request = MsgRequest()
+        await request.init({}, lambda: {}, message=msg)
         # external_id is the client's id from the message
         assert request.external_id == "req1"
         # internal id is server-generated UUID
@@ -133,9 +135,11 @@ class TestMsgRequest:
         assert request.data is None
         assert request.transport == "websocket"
 
-    def test_parse_full_request(self) -> None:
+    @pytest.mark.asyncio
+    async def test_parse_full_request(self) -> None:
         msg = 'WSX://{"id":"req2","method":"POST","path":"/api/users","headers":{"authorization":"Bearer xyz"},"cookies":{"lang":"it"},"query":{"limit":"10"},"data":{"name":"Luigi"}}'
-        request = MsgRequest(msg)
+        request = MsgRequest()
+        await request.init({}, lambda: {}, message=msg)
         assert request.external_id == "req2"
         assert request.method == "POST"
         assert request.path == "/api/users"
@@ -144,39 +148,53 @@ class TestMsgRequest:
         assert request.query == {"limit": "10"}
         assert request.data == {"name": "Luigi"}
 
-    def test_missing_id_raises(self) -> None:
+    @pytest.mark.asyncio
+    async def test_missing_id_raises(self) -> None:
         msg = 'WSX://{"method":"GET"}'
+        request = MsgRequest()
         with pytest.raises(ValueError, match="missing required 'id' field"):
-            MsgRequest(msg)
+            await request.init({}, lambda: {}, message=msg)
 
-    def test_missing_method_raises(self) -> None:
+    @pytest.mark.asyncio
+    async def test_missing_method_raises(self) -> None:
         msg = 'WSX://{"id":"123"}'
+        request = MsgRequest()
         with pytest.raises(ValueError, match="missing required 'method' field"):
-            MsgRequest(msg)
+            await request.init({}, lambda: {}, message=msg)
 
-    def test_method_uppercase(self) -> None:
+    @pytest.mark.asyncio
+    async def test_method_uppercase(self) -> None:
         msg = 'WSX://{"id":"123","method":"post"}'
-        request = MsgRequest(msg)
+        request = MsgRequest()
+        await request.init({}, lambda: {}, message=msg)
         assert request.method == "POST"
 
-    def test_transport_type_configurable(self) -> None:
+    @pytest.mark.asyncio
+    async def test_transport_type_configurable(self) -> None:
         msg = 'WSX://{"id":"test","method":"GET"}'
-        request = MsgRequest(msg, transport_type="nats")
+        request = MsgRequest()
+        await request.init({}, lambda: {}, message=msg, transport_type="nats")
         assert request.transport == "nats"
 
-    def test_tytx_mode_from_message(self) -> None:
+    @pytest.mark.asyncio
+    async def test_tytx_mode_from_message(self) -> None:
         msg = 'WSX://{"id":"tytx1","method":"GET","tytx":true}'
-        request = MsgRequest(msg)
+        request = MsgRequest()
+        await request.init({}, lambda: {}, message=msg)
         assert request.tytx_mode is True
 
-    def test_tytx_mode_from_header(self) -> None:
+    @pytest.mark.asyncio
+    async def test_tytx_mode_from_header(self) -> None:
         msg = 'WSX://{"id":"tytx2","method":"GET","headers":{"content-type":"application/json+tytx"}}'
-        request = MsgRequest(msg)
+        request = MsgRequest()
+        await request.init({}, lambda: {}, message=msg)
         assert request.tytx_mode is True
 
-    def test_base_request_properties(self) -> None:
+    @pytest.mark.asyncio
+    async def test_base_request_properties(self) -> None:
         msg = 'WSX://{"id":"base-test","method":"GET"}'
-        request = MsgRequest(msg)
+        request = MsgRequest()
+        await request.init({}, lambda: {}, message=msg)
         # From BaseRequest
         assert request.app_name is None
         assert request.created_at > 0
@@ -185,17 +203,19 @@ class TestMsgRequest:
         request.app_name = "shop"
         assert request.app_name == "shop"
 
-    def test_is_base_request(self) -> None:
+    @pytest.mark.asyncio
+    async def test_is_base_request(self) -> None:
         msg = 'WSX://{"id":"test","method":"GET"}'
-        request = MsgRequest(msg)
+        request = MsgRequest()
+        await request.init({}, lambda: {}, message=msg)
         assert isinstance(request, BaseRequest)
 
 
-class TestMsgRequestFromScope:
-    """Tests for MsgRequest.from_scope factory."""
+class TestMsgRequestInit:
+    """Tests for MsgRequest init via RequestRegistry."""
 
     @pytest.mark.asyncio
-    async def test_from_scope(self) -> None:
+    async def test_init_with_scope(self) -> None:
         scope = {"type": "websocket", "client": ("127.0.0.1", 12345)}
         message = 'WSX://{"id":"ws-test","method":"GET","path":"/chat"}'
 
@@ -205,21 +225,23 @@ class TestMsgRequestFromScope:
         async def send(msg):
             pass
 
-        request = await MsgRequest.from_scope(scope, receive, send, message=message)
+        request = MsgRequest()
+        await request.init(scope, receive, send, message=message)
         assert request.external_id == "ws-test"
         assert request.method == "GET"
         assert request.path == "/chat"
         assert request.transport == "websocket"
 
     @pytest.mark.asyncio
-    async def test_from_scope_missing_message(self) -> None:
+    async def test_init_missing_message(self) -> None:
         scope = {"type": "websocket"}
 
         async def receive():
             return {}
 
+        request = MsgRequest()
         with pytest.raises(ValueError, match="requires 'message' kwarg"):
-            await MsgRequest.from_scope(scope, receive)
+            await request.init(scope, receive)
 
 
 class TestRequestRegistryWithMsg:

@@ -518,6 +518,6 @@ class TestExports:
 
     def test_server_importable(self):
         """Verify server exports are importable."""
-        from genro_asgi.servers import AsgiServer
+        from genro_asgi.server import AsgiServer
 
         assert AsgiServer is not None

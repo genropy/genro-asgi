@@ -29,7 +29,7 @@ import sys
 
 def cmd_serve(argv: list[str]) -> int:
     """Run the ASGI server."""
-    from .servers import AsgiServer
+    from .server import AsgiServer
 
     # Create server - passes argv for SmartOptions parsing
     server = AsgiServer(argv=argv)
@@ -62,6 +62,7 @@ def main() -> int:
     # Handle --version
     if "--version" in sys.argv or "-v" in sys.argv:
         from . import __version__
+
         print(f"genro-asgi {__version__}")
         return 0
 

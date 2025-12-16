@@ -859,9 +859,7 @@ class FileResponse:
 
         # Add content-disposition for download
         if filename:
-            self._headers.append(
-                ("content-disposition", f'attachment; filename="{filename}"')
-            )
+            self._headers.append(("content-disposition", f'attachment; filename="{filename}"'))
 
         # Add content-length if file exists
         if self.path.exists():

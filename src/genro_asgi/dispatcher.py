@@ -13,7 +13,7 @@ from genro_routes import RouterInterface
 from .response import FileResponse, HTMLResponse, JSONResponse, Response
 
 if TYPE_CHECKING:
-    from .servers import AsgiServer
+    from .server import AsgiServer
     from .types import Receive, Scope, Send
 
 
@@ -40,17 +40,20 @@ class Dispatcher:
         """Proxy to server.logger."""
         return self.server.logger
 
-    def _render_members_html(self, path: str, router: RouterInterface) -> HTMLResponse:
-        """Render router members as HTML directory listing."""
+    def _render_nodes_html(self, path: str, router: RouterInterface) -> HTMLResponse:
+        """Render router nodes as HTML directory listing."""
         path = path.rstrip("/")
-        members = list(router.members())
+        nodes_data = router.nodes()
 
         items_html = []
-        for entry in members:
-            name = entry.name
+        # entries are handlers (📄)
+        for name in nodes_data.get("entries", {}):
             href = f"{path}/{name}"
-            icon = "📁" if entry.is_branch else "📄"
-            items_html.append(f'<li><a href="{href}">{icon} {name}</a></li>')
+            items_html.append(f'<li><a href="{href}">📄 {name}</a></li>')
+        # routers are children (📁)
+        for name in nodes_data.get("routers", {}):
+            href = f"{path}/{name}"
+            items_html.append(f'<li><a href="{href}">📁 {name}</a></li>')
 
         html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>Index of {path}</title>
@@ -80,7 +83,7 @@ a:hover {{ text-decoration: underline; }}
             handler = subrouter.get("index")
             if handler is None:
                 # No index - render members list as HTML
-                response = self._render_members_html(path, subrouter)
+                response = self._render_nodes_html(path, subrouter)
                 await response(scope, receive, send)
                 return
 
@@ -115,6 +118,8 @@ a:hover {{ text-decoration: underline; }}
 
             # Handle file responses from StaticRouter
             if isinstance(result, dict) and result.get("type") == "file":
+                # Store file path in scope for cache middleware
+                scope["_file_path"] = result["path"]
                 handler_response = FileResponse(result["path"])
             else:
                 handler_response = request.make_response(result)

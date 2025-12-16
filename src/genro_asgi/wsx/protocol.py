@@ -82,7 +82,7 @@ def parse_wsx_message(data: str | bytes) -> dict[str, Any]:
         data = data.decode("utf-8")
 
     if data.startswith(WSX_PREFIX):
-        data = data[len(WSX_PREFIX):]
+        data = data[len(WSX_PREFIX) :]
 
     return dict(json.loads(data))
 

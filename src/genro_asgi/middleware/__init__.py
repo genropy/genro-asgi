@@ -35,8 +35,7 @@ class BaseMiddleware(ABC):
         MIDDLEWARE_REGISTRY[name] = cls
 
     @abstractmethod
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        ...
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None: ...
 
 
 def _autodiscover() -> None:
@@ -57,7 +56,7 @@ def _extract_flattened_middleware(flat_config: dict[str, Any]) -> list[tuple[str
     for key, value in flat_config.items():
         if not key.startswith(prefix):
             continue
-        rest = key[len(prefix):]
+        rest = key[len(prefix) :]
         if "_" not in rest:
             continue
         mw_name, param = rest.split("_", 1)
@@ -69,37 +68,73 @@ def _extract_flattened_middleware(flat_config: dict[str, Any]) -> list[tuple[str
 
 
 def middleware_chain(
-    middlewares: list[tuple[type | str, dict[str, Any]] | dict[str, Any]] | dict[str, Any],
+    middlewares: dict[str, dict[str, Any]] | list[tuple[str, dict[str, Any]]],
     app: ASGIApp,
 ) -> ASGIApp:
     """Build middleware chain from config.
 
-    Accepts three formats:
-    - List of tuples: [(name, config), ...]
-    - List of dicts: [{"type": name, ...config}, ...]
-    - Flattened dict: {"middleware_static_directory": "...", ...}
+    Supports two YAML formats (both produce same result via SmartOptions):
+
+    Dict format (concise):
+        middleware:
+          logging:
+            level: INFO
+          cache: {}
+
+    List format (explicit order):
+        middleware:
+          - type: logging
+            level: INFO
+          - type: cache
+
+    Keys/type are middleware names (looked up in MIDDLEWARE_REGISTRY).
+    Values are config dicts passed to middleware __init__.
     """
-    items: list[tuple[str, dict[str, Any]] | dict[str, Any]]
+    # Convert SmartOptions to dict if needed
+    if hasattr(middlewares, "as_dict"):
+        middlewares = middlewares.as_dict()  # type: ignore[union-attr]
+
+    # Handle dict format: {name: config, ...}
     if isinstance(middlewares, dict):
-        items = _extract_flattened_middleware(middlewares)  # type: ignore[assignment]
+        items = list(middlewares.items())
     else:
-        items = middlewares  # type: ignore[assignment]
+        items = list(middlewares)
 
-    for item in reversed(items):
-        if isinstance(item, dict):
-            config = dict(item)
-            cls_or_name: type | str = config.pop("type")
+    # Build chain (reversed: last in config = innermost)
+    for name, config in reversed(items):
+        # Convert SmartOptions config to dict
+        if hasattr(config, "as_dict"):
+            config = config.as_dict()
+        elif config is None:
+            config = {}
         else:
-            cls_or_name, config = item
+            config = dict(config)  # Make a copy to avoid mutating original
 
-        if isinstance(cls_or_name, str):
-            if cls_or_name not in MIDDLEWARE_REGISTRY:
-                raise ValueError(f"Unknown middleware: {cls_or_name}")
-            cls_or_name = MIDDLEWARE_REGISTRY[cls_or_name]
-        app = cls_or_name(app, **config)
+        # Remove 'type' key if present (added by SmartOptions for list format)
+        config.pop("type", None)
+
+        # Resolve middleware class from registry
+        # Try exact name first, then capitalized versions
+        cls = MIDDLEWARE_REGISTRY.get(name)
+        if cls is None:
+            # Try CamelCase: "logging" -> "LoggingMiddleware"
+            camel_name = name.title().replace("_", "") + "Middleware"
+            cls = MIDDLEWARE_REGISTRY.get(camel_name)
+        if cls is None:
+            raise ValueError(
+                f"Unknown middleware: {name}. " f"Available: {list(MIDDLEWARE_REGISTRY.keys())}"
+            )
+
+        app = cls(app, **config)
     return app
 
 
 _autodiscover()
+globals().update(MIDDLEWARE_REGISTRY)
 
-__all__ = ["BaseMiddleware", "middleware_chain"]
+__all__ = [
+    "BaseMiddleware",
+    "MIDDLEWARE_REGISTRY",
+    "middleware_chain",
+    *MIDDLEWARE_REGISTRY.keys(),
+]

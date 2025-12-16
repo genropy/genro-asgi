@@ -5,10 +5,10 @@
 
 Exports:
     AsgiApplication: Base class for apps mounted on AsgiServer.
-    StaticSite: App for serving static files.
+    SwaggerApp: OpenAPI/Swagger documentation app.
 """
 
 from .base import AsgiApplication
-from .static_site import StaticSite
+from .swagger import SwaggerApp
 
-__all__ = ["AsgiApplication", "StaticSite"]
+__all__ = ["AsgiApplication", "SwaggerApp"]

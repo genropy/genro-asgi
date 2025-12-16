@@ -192,16 +192,15 @@ class BaseRequest(ABC):
         """Seconds since request was created."""
         return time.time() - self._created_at
 
-    @classmethod
     @abstractmethod
-    async def from_scope(
-        cls,
+    async def init(
+        self,
         scope: Scope,
         receive: Receive,
         send: Send | None = None,
         **kwargs: Any,
-    ) -> "BaseRequest":
-        """Factory method to create request from ASGI scope."""
+    ) -> None:
+        """Async initialization - subclasses must override."""
 
     def __repr__(self) -> str:
         return (
@@ -212,22 +211,11 @@ class BaseRequest(ABC):
 
 
 class HttpRequest(BaseRequest):
-    """
-    HTTP request adapter wrapping ASGI scope.
-
-    Provides BaseRequest interface for ASGI HTTP requests.
-
-    Example:
-        request = await HttpRequest.from_scope(scope, receive)
-        print(f"{request.method} {request.path}")
-        data = request.data
-    """
+    """HTTP request adapter wrapping ASGI scope."""
 
     __slots__ = (
         "_scope",
-        "_receive",
         "_body",
-        "_json",
         "_headers",
         "_headers_obj",
         "_cookies",
@@ -237,100 +225,98 @@ class HttpRequest(BaseRequest):
         "_id",
         "_url",
         "_state",
-        "_stream_consumed",
     )
 
-    def __init__(self, scope: Scope, body: bytes) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self._scope = scope
-        self._body = body
-        self._json: Any = None
+        # Slots initialized to None, populated by init()
+        self._scope: Scope = {}
+        self._body: bytes = b""
+        self._headers: dict[str, str] = {}
+        self._cookies: dict[str, str] = {}
+        self._query: dict[str, Any] = {}
+        self._data: Any = None
+        self._id: str = ""
         self._url: URL | None = None
         self._state: State | None = None
-        self._stream_consumed: bool = False
-        self._receive: Receive | None = None
         self._headers_obj: Headers | None = None
         self._query_obj: QueryParams | None = None
 
-        # Parse headers
-        self._headers: dict[str, str] = {}
-        for name, value in scope.get("headers", []):
-            self._headers[name.decode("latin-1").lower()] = value.decode("latin-1")
-
-        # Parse cookies from Cookie header
-        self._cookies: dict[str, str] = {}
-        if "cookie" in self._headers:
-            cookie = SimpleCookie()
-            cookie.load(self._headers["cookie"])
-            for key, morsel in cookie.items():
-                self._cookies[key] = morsel.value
-
-        # Parse query string
-        self._query: dict[str, Any] = {}
-        query_string = scope.get("query_string", b"")
-        if query_string:
-            parsed = parse_qs(query_string.decode("utf-8"), keep_blank_values=True)
-            for key, values in parsed.items():
-                self._query[key] = values[0] if len(values) == 1 else values
-
-        # Parse body as JSON if applicable
-        self._data: Any = None
-        content_type = self._headers.get("content-type", "")
-
-        # Detect TYTX mode from content-type
-        if "tytx" in content_type.lower():
-            self._tytx_mode = True
-
-        if body:
-            if "json" in content_type:
-                if HAS_ORJSON:
-                    self._data = orjson.loads(body)
-                else:
-                    self._data = stdlib_json.loads(body.decode("utf-8"))
-
-        # Hydrate TYTX values if TYTX mode
-        if self._tytx_mode:
-            self._hydrate_values()
-
-        # Generate or extract request ID
-        self._id = self._headers.get("x-request-id", str(uuid.uuid4()))
-
-        # Extract external_id from header if present
-        self._external_id = self._headers.get("x-external-id")
-
-    def _hydrate_values(self) -> None:
-        """Hydrate TYTX typed values in query and data."""
-        try:
-            from genro_tytx import hydrate_dict
-
-            if self._query:
-                self._query = hydrate_dict(self._query)
-            if isinstance(self._data, dict):
-                self._data = hydrate_dict(self._data)
-        except ImportError:
-            pass
-
-    @classmethod
-    async def from_scope(
-        cls,
-        scope: Scope,
-        receive: Receive,
-        send: Send | None = None,
-        **kwargs: Any,
-    ) -> "HttpRequest":
-        """Create HttpRequest from ASGI scope and receive callable."""
+    async def _read_body(self, receive: Receive) -> bytes:
+        """Read full request body from ASGI receive."""
         body_chunks: list[bytes] = []
         more_body = True
-
         while more_body:
             message = await receive()
             body_chunks.append(message.get("body", b""))
             more_body = message.get("more_body", False)
+        return b"".join(body_chunks)
 
-        body = b"".join(body_chunks)
-        instance = cls(scope, body)
-        instance._receive = receive
-        return instance
+    async def init(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Async initialization - reads body and parses request data."""
+        self._scope = scope
+
+        # Parse headers first (needed for TYTX detection)
+        self._headers = {}
+        for name, value in scope.get("headers", []):
+            self._headers[name.decode("latin-1").lower()] = value.decode("latin-1")
+
+        # Check for TYTX mode
+        content_type = self._headers.get("content-type", "")
+        is_tytx = "tytx" in content_type.lower()
+
+        if is_tytx:
+            try:
+                from genro_tytx import asgi_data
+
+                data = await asgi_data(dict(scope), receive)
+                self._body = b""
+                self._headers = data.get("headers", self._headers)
+                self._cookies = data.get("cookies", {})
+                self._query = data.get("query", {})
+                self._data = data.get("body")
+                self._tytx_mode = True
+            except ImportError:
+                is_tytx = False  # Fall through to normal parsing
+
+        if not is_tytx:
+            # Normal parsing
+            self._body = await self._read_body(receive)
+
+            # Parse cookies
+            self._cookies = {}
+            if "cookie" in self._headers:
+                cookie = SimpleCookie()
+                cookie.load(self._headers["cookie"])
+                for key, morsel in cookie.items():
+                    self._cookies[key] = morsel.value
+
+            # Parse query string
+            self._query = {}
+            query_string = scope.get("query_string", b"")
+            if query_string:
+                parsed = parse_qs(query_string.decode("utf-8"), keep_blank_values=True)
+                for key, values in parsed.items():
+                    self._query[key] = values[0] if len(values) == 1 else values
+
+            # Parse body as JSON if applicable
+            self._data = None
+            if self._body:
+                if "json" in content_type:
+                    if HAS_ORJSON:
+                        self._data = orjson.loads(self._body)
+                    else:
+                        self._data = stdlib_json.loads(self._body.decode("utf-8"))
+
+        # Generate or extract request ID
+        self._id = self._headers.get("x-request-id", str(uuid.uuid4()))
+        self._external_id = self._headers.get("x-external-id")
 
     @property
     def id(self) -> str:
@@ -461,13 +447,6 @@ class MsgRequest(BaseRequest):
 
     Parses WSX:// formatted messages into BaseRequest interface.
     Transport-agnostic: works with any message-based protocol.
-
-    Example:
-        request = await MsgRequest.from_scope(
-            scope, receive, send,
-            message='WSX://{"id":"123","method":"GET","path":"/users"}'
-        )
-        print(request.transport)  # "websocket" or "nats"
     """
 
     __slots__ = (
@@ -484,20 +463,38 @@ class MsgRequest(BaseRequest):
         "_websocket",
     )
 
-    def __init__(
-        self,
-        message: str | bytes,
-        *,
-        scope: Scope | None = None,
-        send: Send | None = None,
-        transport_type: str = "websocket",
-        websocket: "WebSocket | None" = None,
-    ) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self._scope = scope or {}
+        # Slots initialized to defaults, populated by init()
+        self._scope: Scope = {}
+        self._send: Send | None = None
+        self._id: str = ""
+        self._method: str = "GET"
+        self._path: str = "/"
+        self._headers: dict[str, str] = {}
+        self._cookies: dict[str, str] = {}
+        self._query: dict[str, Any] = {}
+        self._data: Any = None
+        self._transport_type: str = "websocket"
+        self._websocket: "WebSocket | None" = None
+
+    async def init(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Async initialization - parses WSX message."""
+        self._scope = scope
         self._send = send
-        self._transport_type = transport_type
-        self._websocket = websocket
+        self._transport_type = kwargs.get("transport_type", "websocket")
+        self._websocket = kwargs.get("websocket")
+
+        # Get message from kwargs
+        message = kwargs.get("message")
+        if message is None:
+            raise ValueError("MsgRequest requires 'message' kwarg")
 
         # Parse WSX message
         parsed = self._parse_wsx_message(message)
@@ -511,67 +508,45 @@ class MsgRequest(BaseRequest):
         # The WSX message 'id' is the client's external_id
         self._external_id = parsed["id"]
         # Generate internal server id
-        self._id: str = str(uuid.uuid4())
+        self._id = str(uuid.uuid4())
 
-        self._method: str = parsed["method"].upper()
-        self._path: str = parsed.get("path", "/")
-        self._headers: dict[str, str] = parsed.get("headers", {})
-        self._cookies: dict[str, str] = parsed.get("cookies", {})
-        self._query: dict[str, Any] = parsed.get("query", {})
-        self._data: Any = parsed.get("data")
+        self._method = parsed["method"].upper()
+        self._path = parsed.get("path", "/")
+        self._headers = parsed.get("headers", {})
+        self._cookies = parsed.get("cookies", {})
+        self._query = parsed.get("query", {})
+        self._data = parsed.get("data")
 
         # Detect TYTX mode from message marker or header
-        self._tytx_mode = parsed.get("tytx", False) or "tytx" in self._headers.get("content-type", "").lower()
-
-        # Hydrate TYTX values if TYTX mode
-        if self._tytx_mode:
-            self._hydrate_values()
+        self._tytx_mode = (
+            parsed.get("tytx", False) or "tytx" in self._headers.get("content-type", "").lower()
+        )
 
     def _parse_wsx_message(self, data: str | bytes) -> dict[str, Any]:
-        """Parse WSX:// message into dict."""
+        """Parse WSX:// message into dict, with TYTX hydration if applicable."""
         if isinstance(data, bytes):
-            data = data.decode("utf-8")
+            # Binary data - try msgpack via from_tytx
+            try:
+                from genro_tytx import from_tytx
 
+                return dict(from_tytx(data, transport="msgpack"))
+            except ImportError:
+                data = data.decode("utf-8")
+
+        # String data
         if data.startswith("WSX://"):
             data = data[6:]
 
+        # Check for TYTX JSON marker
+        if data.endswith("::JS"):
+            try:
+                from genro_tytx import from_tytx
+
+                return dict(from_tytx(data))
+            except ImportError:
+                data = data[:-4]  # Strip marker, parse as regular JSON
+
         return dict(stdlib_json.loads(data))
-
-    def _hydrate_values(self) -> None:
-        """Hydrate TYTX typed values in query and data."""
-        try:
-            from genro_tytx import hydrate_dict
-
-            if self._query:
-                self._query = hydrate_dict(self._query)
-            if isinstance(self._data, dict):
-                self._data = hydrate_dict(self._data)
-        except ImportError:
-            pass
-
-    @classmethod
-    async def from_scope(
-        cls,
-        scope: Scope,
-        receive: Receive,
-        send: Send | None = None,
-        **kwargs: Any,
-    ) -> "MsgRequest":
-        """Create MsgRequest from ASGI scope and WSX message."""
-        message = kwargs.get("message")
-        if message is None:
-            raise ValueError("MsgRequest.from_scope requires 'message' kwarg")
-
-        transport_type = kwargs.get("transport_type", "websocket")
-        websocket = kwargs.get("websocket")
-
-        return cls(
-            message,
-            scope=scope,
-            send=send,
-            transport_type=transport_type,
-            websocket=websocket,
-        )
 
     @property
     def id(self) -> str:
@@ -621,53 +596,31 @@ class MsgRequest(BaseRequest):
         return self._scope.get("client")
 
 
-# Default factory mapping
-REQUEST_FACTORIES: dict[str, type[BaseRequest]] = {
-    "http": HttpRequest,
-    "websocket": MsgRequest,
-}
-
-
 class RequestRegistry:
     """
     Registry for creating and tracking active requests.
 
     Responsibilities:
-    - Maps scope types to request factory classes
-    - Creates appropriate request based on scope["type"]
+    - Creates appropriate request based on scope["type"] using factories dict
+    - Calls async init() on the created request
     - Tracks active requests for monitoring and metrics
     - Provides iteration and lookup by request ID
 
     Example:
         registry = RequestRegistry()
-
-        # Create and track request
         request = await registry.create(scope, receive, send)
         print(f"Active: {len(registry)}")
-
-        # Find by ID
-        req = registry.get("abc-123")
-
-        # Iterate for monitoring
-        for req in registry:
-            if req.age > 30:
-                logger.warning(f"Slow request: {req.id}")
-
-        # Cleanup
         registry.unregister(request.id)
     """
+
+    __slots__ = ("_requests", "factories")
 
     def __init__(
         self,
         factories: dict[str, type[BaseRequest]] | None = None,
     ) -> None:
-        """Initialize registry with optional custom factories."""
-        self.factories = factories if factories is not None else REQUEST_FACTORIES.copy()
         self._requests: dict[str, BaseRequest] = {}
-
-    def register_factory(self, scope_type: str, factory: type[BaseRequest]) -> None:
-        """Register a factory for a scope type."""
-        self.factories[scope_type] = factory
+        self.factories = factories if factories is not None else REQUEST_FACTORIES.copy()
 
     async def create(
         self,
@@ -679,13 +632,17 @@ class RequestRegistry:
         """Create and register a request from ASGI scope."""
         scope_type = scope.get("type", "")
         factory = self.factories.get(scope_type)
-
         if factory is None:
-            raise ValueError(f"No factory registered for scope type: {scope_type!r}")
+            raise ValueError(f"No factory for scope type: {scope_type!r}")
 
-        request = await factory.from_scope(scope, receive, send, **kwargs)
+        request = factory()
+        await request.init(scope, receive, send, **kwargs)
         self._requests[request.id] = request
         return request
+
+    def register_factory(self, scope_type: str, factory: type[BaseRequest]) -> None:
+        """Register a factory for a scope type."""
+        self.factories[scope_type] = factory
 
     def unregister(self, request_id: str) -> BaseRequest | None:
         """Unregister and return a request."""
@@ -712,7 +669,14 @@ class RequestRegistry:
         return request_id in self._requests
 
     def __repr__(self) -> str:
-        return f"RequestRegistry(active={len(self._requests)}, factories={list(self.factories.keys())})"
+        return f"RequestRegistry(active={len(self._requests)})"
+
+
+# Default factories for request creation
+REQUEST_FACTORIES: dict[str, type[BaseRequest]] = {
+    "http": HttpRequest,
+    "websocket": MsgRequest,
+}
 
 
 if __name__ == "__main__":

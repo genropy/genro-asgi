@@ -1,5 +1,0 @@
-# StaticSite default configuration
-# Override these values in your app's config.yaml
-
-directory: "."
-name: "static"

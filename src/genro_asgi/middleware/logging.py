@@ -89,10 +89,7 @@ class LoggingMiddleware(BaseMiddleware):
             raise
 
         duration = (time.perf_counter() - start_time) * 1000
-        self.logger.log(
-            self.level,
-            f"-> {request_info} {status_code} ({duration:.1f}ms)"
-        )
+        self.logger.log(self.level, f"-> {request_info} {status_code} ({duration:.1f}ms)")
 
 
 if __name__ == "__main__":

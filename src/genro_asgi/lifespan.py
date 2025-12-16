@@ -60,7 +60,7 @@ from typing import TYPE_CHECKING, Callable, Awaitable
 from .types import Receive, Scope, Send
 
 if TYPE_CHECKING:
-    from .servers import AsgiServer
+    from .server import AsgiServer
 
 __all__ = ["ServerLifespan"]
 
@@ -94,9 +94,7 @@ class ServerLifespan:
         self._logger = logging.getLogger("genro_asgi.lifespan")
         self._started = False
 
-    async def __call__(
-        self, scope: Scope, receive: Receive, send: Send  # noqa: ARG002
-    ) -> None:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:  # noqa: ARG002
         """
         Handle ASGI lifespan protocol.
 
@@ -115,10 +113,12 @@ class ServerLifespan:
                     await send({"type": "lifespan.startup.complete"})
                 except Exception as e:
                     self._logger.exception("Startup failed")
-                    await send({
-                        "type": "lifespan.startup.failed",
-                        "message": str(e),
-                    })
+                    await send(
+                        {
+                            "type": "lifespan.startup.failed",
+                            "message": str(e),
+                        }
+                    )
                     return
 
             elif msg_type == "lifespan.shutdown":

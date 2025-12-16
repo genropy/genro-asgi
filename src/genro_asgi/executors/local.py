@@ -173,9 +173,7 @@ class LocalExecutor(BaseExecutor):
             "name": self.name,
             "mode": "bypass" if self.pool is None else "process",
             "pending": (
-                self._metrics["submitted"]
-                - self._metrics["completed"]
-                - self._metrics["failed"]
+                self._metrics["submitted"] - self._metrics["completed"] - self._metrics["failed"]
             ),
             "submitted": self._metrics["submitted"],
             "completed": completed,
@@ -232,9 +230,7 @@ class LocalExecutor(BaseExecutor):
         finally:
             self._metrics["total_duration_ms"] += (time.monotonic() - start) * 1000
 
-    async def _execute(
-        self, func: Callable[..., Any], *args: Any, **kwargs: Any
-    ) -> Any:
+    async def _execute(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Execute function in the process pool."""
         loop = asyncio.get_running_loop()
         call = partial(func, *args, **kwargs)

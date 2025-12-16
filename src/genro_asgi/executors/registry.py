@@ -159,8 +159,7 @@ class ExecutorRegistry:
         if executor_type not in self._factories:
             available = ", ".join(self._factories.keys())
             raise ValueError(
-                f"Unknown executor type: {executor_type!r}. "
-                f"Available types: {available}"
+                f"Unknown executor type: {executor_type!r}. " f"Available types: {available}"
             )
 
         factory = self._factories[executor_type]

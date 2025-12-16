@@ -18,12 +18,12 @@ from typing import Any
 
 from genro_toolbox import SmartOptions  # type: ignore[import-untyped]
 
-from ..dispatcher import Dispatcher
-from ..lifespan import ServerLifespan
-from ..middleware import middleware_chain
-from ..response import Response
-from ..request import RequestRegistry
-from ..types import Receive, Scope, Send
+from .dispatcher import Dispatcher
+from .lifespan import ServerLifespan
+from .middleware import middleware_chain
+from .response import Response
+from .request import RequestRegistry
+from .types import Receive, Scope, Send
 
 from genro_routes import RoutedClass, Router, route  # type: ignore[import-untyped]
 
@@ -62,7 +62,16 @@ class AsgiServer(RoutedClass):
         Override _configure_server() to replace self.dispatcher.
     """
 
-    __slots__ = ("apps", "router", "opts", "logger", "lifespan", "request_registry", "dispatcher", "__dict__")
+    __slots__ = (
+        "apps",
+        "router",
+        "opts",
+        "logger",
+        "lifespan",
+        "request_registry",
+        "dispatcher",
+        "__dict__",
+    )
 
     def __init__(
         self,
@@ -131,8 +140,9 @@ class AsgiServer(RoutedClass):
     @route("root")
     def index(self) -> Response:
         """Default index page for router mode."""
-        from ..response import HTMLResponse
-        html_path = Path(__file__).parent.parent / "resources" / "html" / "default_index.html"
+        from .response import HTMLResponse
+
+        html_path = Path(__file__).parent / "resources" / "html" / "default_index.html"
         return HTMLResponse(content=html_path.read_text())
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -147,7 +157,16 @@ class AsgiServer(RoutedClass):
         reload: bool | None,
         argv: list[str],
     ) -> SmartOptions:
-        """Build server configuration from multiple sources."""
+        """Build server configuration from multiple sources.
+
+        Config precedence (later overrides earlier):
+        1. Built-in DEFAULTS
+        2. Global config: ~/.genro-asgi/config.yaml
+        3. Project config: <app_dir>/config.yaml
+        4. Environment variables: GENRO_ASGI_*
+        5. Command line arguments
+        6. Explicit constructor parameters
+        """
         # Parse env + argv using _server_opts_spec for type conversion
         env_argv_opts = SmartOptions(_server_opts_spec, env="GENRO_ASGI", argv=argv)
 
@@ -158,20 +177,29 @@ class AsgiServer(RoutedClass):
         )
 
         # Resolve app_dir: caller > argv > env > default "."
-        resolved_app_dir = Path(
-            caller_opts.app_dir or env_argv_opts.app_dir or "."
-        ).resolve()
+        resolved_app_dir = Path(caller_opts.app_dir or env_argv_opts.app_dir or ".").resolve()
 
         if str(resolved_app_dir) not in sys.path:
             sys.path.insert(0, str(resolved_app_dir))
 
-        # Load config from file
-        config = SmartOptions(str(resolved_app_dir / "config.yaml"))
+        # Load global config from ~/.genro-asgi/config.yaml
+        global_config_path = Path.home() / ".genro-asgi" / "config.yaml"
+        if global_config_path.exists():
+            global_config = SmartOptions(str(global_config_path))
+        else:
+            global_config = SmartOptions({})
 
-        # Merge: DEFAULTS < config.server < env_argv_opts < caller_opts
+        # Load project config from file
+        project_config = SmartOptions(str(resolved_app_dir / "config.yaml"))
+
+        # Merge configs: global < project (project overrides global)
+        config = global_config + project_config
+
+        # Merge server opts: DEFAULTS < global.server < project.server < env < argv < caller
         server_opts = (
             SmartOptions(DEFAULTS)
-            + (config.server or SmartOptions({}))
+            + (global_config.server or SmartOptions({}))
+            + (project_config.server or SmartOptions({}))
             + env_argv_opts
             + caller_opts
         )
@@ -222,6 +250,7 @@ class AsgiServer(RoutedClass):
         cls = getattr(module, class_name)
         # Pass app_dir so apps can resolve relative paths
         kwargs["app_dir"] = self.opts.server.app_dir
+        kwargs["_server"] = self
         instance = cls(**kwargs)
         self.apps[name] = instance
 

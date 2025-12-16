@@ -14,7 +14,6 @@
 
 __version__ = "0.1.0"
 
-from .applications import AsgiApplication, StaticSite
 from .datastructures import (
     Address,
     Headers,
@@ -52,7 +51,8 @@ from .executors import (
     ExecutorRegistry,
     LocalExecutor,
 )
-from .servers import AsgiServer, AsgiPublisher
+from .server import AsgiServer
+from .applications import AsgiApplication, SwaggerApp
 from .routers import StaticRouter
 from .websocket import WebSocket, WebSocketState
 
@@ -60,9 +60,6 @@ from .websocket import WebSocket, WebSocketState
 Request = HttpRequest
 
 __all__ = [
-    # Application classes
-    "AsgiApplication",
-    "StaticSite",
     # Request classes
     "BaseRequest",
     "HttpRequest",
@@ -102,7 +99,9 @@ __all__ = [
     "Send",
     # Server integration
     "AsgiServer",
-    "AsgiPublisher",
+    # Applications
+    "AsgiApplication",
+    "SwaggerApp",
     "ServerBinder",
     "AsgiServerEnabler",
     # Executors

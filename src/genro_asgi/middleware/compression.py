@@ -98,9 +98,7 @@ class CompressionMiddleware(BaseMiddleware):
                 if not more_body:
                     # End of response - decide whether to compress
                     full_body = b"".join(body_parts)
-                    await self._send_response(
-                        send, initial_message, full_body, content_type
-                    )
+                    await self._send_response(send, initial_message, full_body, content_type)
 
         await self.app(scope, receive, send_buffered)
 
@@ -115,18 +113,13 @@ class CompressionMiddleware(BaseMiddleware):
         if initial_message is None:
             return
 
-        should_compress = (
-            len(body) >= self.minimum_size
-            and self._is_compressible(content_type)
-        )
+        should_compress = len(body) >= self.minimum_size and self._is_compressible(content_type)
 
         if should_compress:
             # Compress body
             buffer = io.BytesIO()
             with gzip.GzipFile(
-                mode="wb",
-                fileobj=buffer,
-                compresslevel=self.compression_level
+                mode="wb", fileobj=buffer, compresslevel=self.compression_level
             ) as gz:
                 gz.write(body)
             compressed_body = buffer.getvalue()

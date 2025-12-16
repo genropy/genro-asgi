@@ -885,19 +885,13 @@ except ImportError:
 
 # Optional dependency: genro-tytx for typed serialization
 try:
-    from genro_tytx import hydrate, serialize
+    from genro_tytx import from_tytx, to_tytx
 
     HAS_TYTX = True
 except ImportError:
     HAS_TYTX = False
-
-    def hydrate(data: Any) -> Any:  # type: ignore[misc]
-        """Placeholder when genro-tytx not installed."""
-        raise ImportError("genro-tytx required")
-
-    def serialize(data: Any) -> Any:  # type: ignore[misc]
-        """Placeholder when genro-tytx not installed."""
-        raise ImportError("genro-tytx required")
+    from_tytx = None  # type: ignore[assignment]
+    to_tytx = None  # type: ignore[assignment]
 
 
 if TYPE_CHECKING:
@@ -979,9 +973,7 @@ class WebSocket:
             ValueError: If scope type is not "websocket".
         """
         if scope.get("type") != "websocket":
-            raise ValueError(
-                f"Expected scope type 'websocket', got '{scope.get('type')}'"
-            )
+            raise ValueError(f"Expected scope type 'websocket', got '{scope.get('type')}'")
         self._scope = scope
         self._receive = receive
         self._send = send
@@ -1112,9 +1104,7 @@ class WebSocket:
             RuntimeError: If not in CONNECTING state or unexpected message.
         """
         if self._connection_state != WebSocketState.CONNECTING:
-            raise RuntimeError(
-                f"Cannot accept: connection in {self._connection_state.name} state"
-            )
+            raise RuntimeError(f"Cannot accept: connection in {self._connection_state.name} state")
 
         # Consume the websocket.connect message
         message = await self._receive()
@@ -1157,11 +1147,13 @@ class WebSocket:
         if self._connection_state == WebSocketState.CONNECTING:
             raise RuntimeError("Cannot close: connection not accepted yet")
 
-        await self._send({
-            "type": "websocket.close",
-            "code": code,
-            "reason": reason,
-        })
+        await self._send(
+            {
+                "type": "websocket.close",
+                "code": code,
+                "reason": reason,
+            }
+        )
         self._connection_state = WebSocketState.DISCONNECTED
 
     # =========================================================================
@@ -1180,9 +1172,7 @@ class WebSocket:
             WebSocketDisconnect: If client disconnected.
         """
         if self._connection_state != WebSocketState.CONNECTED:
-            raise RuntimeError(
-                f"Cannot receive: connection in {self._connection_state.name} state"
-            )
+            raise RuntimeError(f"Cannot receive: connection in {self._connection_state.name} state")
 
         message = await self._receive()
         if message["type"] == "websocket.disconnect":
@@ -1207,9 +1197,7 @@ class WebSocket:
         """
         message = await self._receive_message()
         if "bytes" in message and message["bytes"] is not None:
-            raise TypeError(
-                "Received binary message. Use receive_bytes() for binary data."
-            )
+            raise TypeError("Received binary message. Use receive_bytes() for binary data.")
         text: str = message.get("text", "")
         return text
 
@@ -1227,9 +1215,7 @@ class WebSocket:
         """
         message = await self._receive_message()
         if "text" in message and message["text"] is not None:
-            raise TypeError(
-                "Received text message. Use receive_text() for text data."
-            )
+            raise TypeError("Received text message. Use receive_text() for text data.")
         data: bytes = message.get("bytes", b"")
         return data
 
@@ -1266,9 +1252,7 @@ class WebSocket:
             RuntimeError: If not connected.
         """
         if self._connection_state != WebSocketState.CONNECTED:
-            raise RuntimeError(
-                f"Cannot send: connection in {self._connection_state.name} state"
-            )
+            raise RuntimeError(f"Cannot send: connection in {self._connection_state.name} state")
         await self._send(message)
 
     async def send_text(self, data: str) -> None:
@@ -1366,28 +1350,20 @@ class WebSocket:
         Receive JSON with optional TYTX hydration.
 
         Returns:
-            Parsed dict, hydrated if ::TYTX marker present.
+            Parsed dict, hydrated if TYTX marker present.
 
         Raises:
-            ImportError: If genro-tytx not installed and marker present.
+            ImportError: If genro-tytx not installed.
             RuntimeError: If not connected.
-            json.JSONDecodeError: If not valid JSON.
         """
+        if not HAS_TYTX:
+            raise ImportError(
+                "genro-tytx package required for receive_typed(). "
+                "Install with: pip install genro-tytx"
+            )
         text = await self.receive_text()
-
-        if text.endswith("::TYTX"):
-            if not HAS_TYTX:
-                raise ImportError(
-                    "genro-tytx package required for receive_typed(). "
-                    "Install with: pip install genro-tytx"
-                )
-            json_str = text[:-6]  # Remove "::TYTX" marker
-            parsed = json.loads(json_str)
-            hydrated: dict[str, Any] = hydrate(parsed)
-            return hydrated
-        else:
-            result: dict[str, Any] = json.loads(text)
-            return result
+        result: dict[str, Any] = from_tytx(text)  # Handles marker detection automatically
+        return result
 
     async def send_typed(self, data: dict[str, Any]) -> None:
         """
@@ -1405,8 +1381,8 @@ class WebSocket:
                 "genro-tytx package required for send_typed(). "
                 "Install with: pip install genro-tytx"
             )
-        serialized = serialize(data)
-        text = json.dumps(serialized) + "::TYTX"
+        encoded = to_tytx(data)  # Includes marker automatically
+        text = encoded if isinstance(encoded, str) else encoded.decode("utf-8")
         await self.send_text(text)
 
 
