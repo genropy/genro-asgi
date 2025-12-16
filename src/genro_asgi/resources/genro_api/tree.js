@@ -17,10 +17,19 @@ class ApiTree extends HTMLElement {
     super();
     this._data = null;
     this._baseUrl = "/_genro_api";
+    this._selectedItem = null;
   }
 
   setBaseUrl(url) {
     this._baseUrl = url;
+  }
+
+  _selectItem(spanElement) {
+    if (this._selectedItem) {
+      this._selectedItem.classList.remove("selected");
+    }
+    this._selectedItem = spanElement;
+    spanElement.classList.add("selected");
   }
 
   async loadNodes(app = "") {
@@ -56,14 +65,20 @@ class ApiTree extends HTMLElement {
       </span>
     `;
 
+    const endpointSpan = item.querySelector(".endpoint");
+    // Build path: handle cases where pathName already starts with /
+    const cleanPathName = pathName.startsWith("/") ? pathName.slice(1) : pathName;
+    const fullPath = parentPath ? `${parentPath}/${cleanPathName}` : cleanPathName;
+
     item.addEventListener("click", (e) => {
       e.stopPropagation();
-      this.dispatchEvent(new CustomEvent("endpoint-selected", {
+      this._selectItem(endpointSpan);
+      this.dispatchEvent(new CustomEvent("node-selected", {
         detail: {
-          path: parentPath + pathName,
+          type: "endpoint",
+          path: fullPath,
           method: method,
-          operation: opData,
-          fullPath: pathData
+          operation: opData
         },
         bubbles: true,
         composed: true
@@ -86,7 +101,25 @@ class ApiTree extends HTMLElement {
       </span>
     `;
 
-    const currentPath = parentPath + "/" + name;
+    // Build path without leading slash
+    const currentPath = parentPath ? `${parentPath}/${name}` : name;
+
+    // Click handler per router (folder)
+    const routerSpan = item.querySelector(".router");
+    routerSpan.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this._selectItem(routerSpan);
+      this.dispatchEvent(new CustomEvent("node-selected", {
+        detail: {
+          type: "router",
+          path: currentPath,
+          name: name,
+          doc: doc
+        },
+        bubbles: true,
+        composed: true
+      }));
+    });
 
     // Render paths (endpoints) di questo router
     if (routerData.paths) {
@@ -180,6 +213,12 @@ class ApiTree extends HTMLElement {
         font-size: 0.8rem;
         color: #666;
         font-style: italic;
+      }
+      .endpoint.selected,
+      .router.selected {
+        background: #bae6fd;
+        border-radius: 4px;
+        padding: 2px 6px;
       }
     `;
     this.appendChild(style);

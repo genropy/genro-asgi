@@ -7,6 +7,9 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.18/cdn/themes/light.css">
   <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.18/cdn/shoelace-autoloader.js"></script>
   <script type="module" src="/_genro_api/static?file=tree.js"></script>
+  <script type="module" src="/_genro_api/static?file=doc.js"></script>
+  <script type="module" src="/_genro_api/static?file=tester.js"></script>
+  <script type="module" src="/_genro_api/static?file=response.js"></script>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -74,11 +77,17 @@
       </div>
       <div slot="end">
         <sl-split-panel vertical position="40">
-          <div slot="start" class="panel panel-placeholder panel-doc">DOC</div>
+          <div slot="start" class="panel panel-doc">
+            <api-doc id="api-doc"></api-doc>
+          </div>
           <div slot="end">
             <sl-split-panel position="50">
-              <div slot="start" class="panel panel-placeholder panel-tester">TESTER</div>
-              <div slot="end" class="panel panel-placeholder panel-response">RESPONSE</div>
+              <div slot="start" class="panel panel-tester">
+                <api-tester id="api-tester"></api-tester>
+              </div>
+              <div slot="end" class="panel panel-response">
+                <api-response id="api-response"></api-response>
+              </div>
             </sl-split-panel>
           </div>
         </sl-split-panel>
@@ -88,21 +97,87 @@
 
   <script type="module">
     const tree = document.getElementById("api-tree");
+    const doc = document.getElementById("api-doc");
+    const tester = document.getElementById("api-tester");
+    const response = document.getElementById("api-response");
     const appSelect = document.getElementById("app-select");
 
-    // Load tree on page load
-    tree.loadNodes();
+    // Check if app is fixed via URL (e.g., /_genro_api/shop)
+    const fixedApp = window.GENRO_API_INITIAL_APP || "";
+
+    // Store current endpoint data for tester
+    let currentEndpointData = null;
+
+    async function init() {
+      if (fixedApp) {
+        // Fixed app mode: hide dropdown, use fixed app
+        appSelect.style.display = "none";
+        tree.loadNodes(fixedApp);
+        doc.setApp(fixedApp);
+        tester.setApp(fixedApp);
+      } else {
+        // Normal mode: populate dropdown and load server router
+        await populateApps();
+        tree.loadNodes();
+      }
+    }
+
+    async function populateApps() {
+      try {
+        const res = await fetch("/_genro_api/apps");
+        const data = await res.json();
+        for (const app of data.apps || []) {
+          const option = document.createElement("option");
+          option.value = app.name;
+          option.textContent = app.name;
+          appSelect.appendChild(option);
+        }
+      } catch (err) {
+        console.error("Failed to load apps:", err);
+      }
+    }
 
     // Reload tree when app selection changes
     appSelect.addEventListener("change", () => {
-      tree.loadNodes(appSelect.value);
+      const app = appSelect.value;
+      tree.loadNodes(app);
+      doc.setApp(app);
+      doc.showPlaceholder();
+      tester.setApp(app);
+      tester.showPlaceholder();
+      response.showPlaceholder();
     });
 
-    // Handle endpoint selection
-    tree.addEventListener("endpoint-selected", (e) => {
-      console.log("Selected endpoint:", e.detail);
-      // TODO: populate DOC panel
+    // Handle node selection (endpoints and routers)
+    tree.addEventListener("node-selected", async (e) => {
+      console.log("Selected node:", e.detail);
+      const currentApp = fixedApp || appSelect.value;
+      doc.setApp(currentApp);
+      tester.setApp(currentApp);
+
+      // Load doc and get endpoint data for tester
+      const params = new URLSearchParams({ path: e.detail.path });
+      if (currentApp) params.set("app", currentApp);
+      const url = `/_genro_api/getdoc?${params}`;
+
+      try {
+        const res = await fetch(url);
+        const data = await res.json();
+        doc.render(data);
+        tester.setEndpoint(data);
+        response.showPlaceholder();
+      } catch (err) {
+        console.error("Failed to load doc:", err);
+      }
     });
+
+    // Handle API response from tester
+    tester.addEventListener("api-response", (e) => {
+      console.log("API response:", e.detail);
+      response.setResponse(e.detail);
+    });
+
+    init();
   </script>
 </body>
 </html>

@@ -2,6 +2,7 @@
 
 from genro_routes import route
 from ..sql import Table, Integer, Timestamp
+from ..responses import IdResponse, RecordResponse, ListResponse, MessageResponse, StatsResponse
 
 
 class Purchase(Table):
@@ -20,7 +21,7 @@ class Purchase(Table):
         c.column("purchase_date", Timestamp)
 
     @route("table")
-    def add(self, article_id: int, quantity: int) -> dict:
+    def add(self, article_id: int, quantity: int) -> IdResponse:
         """Add a new purchase."""
         row_id = self.db.insert(
             self.name,
@@ -31,23 +32,23 @@ class Purchase(Table):
         self.db.commit()
         return self._success(id=row_id, message=f"Purchase created for article {article_id}")
 
-    @route("table")
-    def get(self, id: int) -> dict:
+    @route("table", openapi_method="get")
+    def get(self, id: int) -> RecordResponse:
         """Get purchase by id."""
         row = self.db.select_one(self.name, where={"id": id})
         if not row:
             return self._error(f"Purchase with id {id} not found")
         return self._success(record=row)
 
-    @route("table")
-    def list(self, format: str = "json") -> dict | str:
+    @route("table", openapi_method="get")
+    def list(self, format: str = "json") -> ListResponse | str:
         """List all purchases."""
         records = self.db.select(self.name)
         cols = ["id", "article_id", "quantity", "purchase_date"]
         return self._apply_format(records, cols, format)
 
     @route("table")
-    def remove(self, id: int) -> dict:
+    def remove(self, id: int) -> MessageResponse:
         """Remove purchase by id."""
         if not self.db.exists(self.name, where={"id": id}):
             return self._error(f"Purchase with id {id} not found")
@@ -56,7 +57,7 @@ class Purchase(Table):
         return self._success(message=f"Purchase id={id} removed")
 
     @route("table")
-    def statistics(self) -> dict:
+    def statistics(self) -> StatsResponse:
         """Get purchase statistics."""
         cursor = self.db.cursor()
         cursor.execute("SELECT COUNT(*) FROM purchase")

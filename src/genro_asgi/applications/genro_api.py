@@ -34,11 +34,45 @@ class GenroApiApp(AsgiApplication):
     @route("api")
     def index(self) -> Response:
         """Serve the main explorer page."""
+        return self._serve_explorer()
+
+    @route("api")
+    def app(self, name: str = "") -> Response:
+        """Serve explorer with specific app preselected.
+
+        Usage: /_genro_api/app?name=shop or /_genro_api/shop (via catch-all)
+        """
+        return self._serve_explorer(app=name)
+
+    def _serve_explorer(self, app: str = "") -> Response:
+        """Serve the explorer HTML, optionally with app preselected."""
         from ..response import HTMLResponse
 
         html_path = Path(__file__).parents[1] / "resources" / "genro_api" / "index.html"
         html = html_path.read_text()
+
+        if app:
+            # Inject script to preselect app on load
+            init_script = f"""
+    <script type="module">
+      window.GENRO_API_INITIAL_APP = "{app}";
+    </script>
+  </head>"""
+            html = html.replace("</head>", init_script)
+
         return HTMLResponse(content=html)
+
+    @route("api", openapi_method="get")
+    def apps(self) -> dict:
+        """Return list of available apps with API routers."""
+        if not self.server:
+            return {"apps": []}
+
+        app_list = []
+        for name, instance in self.server.apps.items():
+            if hasattr(instance, "api"):
+                app_list.append({"name": name, "has_api": True})
+        return {"apps": app_list}
 
     @route("api")
     def nodes(self, app: str = "", basepath: str = "", lazy: bool = False) -> dict:
@@ -61,6 +95,33 @@ class GenroApiApp(AsgiApplication):
 
         result = self.server.router.nodes(mode="h_openapi", basepath=basepath, lazy=lazy)
         return dict(result)
+
+    @route("api", openapi_method="get")
+    def getdoc(self, path: str, app: str = "") -> dict:
+        """Get documentation for a single node (router or endpoint).
+
+        Args:
+            path: The path to the node (e.g., "/table/article/get")
+            app: App name (empty = server router)
+        """
+        if not self.server:
+            return {"error": "No server available"}
+
+        router = None
+        if app and app in self.server.apps:
+            instance = self.server.apps[app]
+            if hasattr(instance, "api"):
+                router = instance.api
+        else:
+            router = self.server.router
+
+        if not router:
+            return {"error": f"Router not found for app '{app}'"}
+
+        # Remove leading slash - router.get() expects path without it
+        clean_path = path.lstrip("/")
+        result: dict = router.node(clean_path, mode="openapi")
+        return result
 
     @route("api")
     def static(self, file: str = "") -> Response:

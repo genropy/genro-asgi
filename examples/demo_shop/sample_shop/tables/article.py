@@ -4,6 +4,7 @@ from typing import Annotated
 from pydantic import Field
 from genro_routes import route
 from ..sql import Table, Integer, String, Float
+from ..responses import IdResponse, RecordResponse, ListResponse, MessageResponse
 
 
 class Article(Table):
@@ -29,7 +30,7 @@ class Article(Table):
         code: str,
         description: str,
         price: float,
-    ) -> dict:
+    ) -> IdResponse:
         """Add or update article."""
         row_id = self.db.upsert(
             self.name, "code",
@@ -41,23 +42,23 @@ class Article(Table):
         self.db.commit()
         return self._success(id=row_id, message=f"Article '{code}' saved")
 
-    @route("table")
-    def get(self, id: int) -> dict:
+    @route("table", openapi_method="get")
+    def get(self, id: int) -> RecordResponse:
         """Get article by id."""
         row = self.db.select_one(self.name, where={"id": id})
         if not row:
             return self._error(f"Article with id {id} not found")
         return self._success(record=row)
 
-    @route("table")
-    def list(self, format: str = "json") -> dict | str:
+    @route("table", openapi_method="get")
+    def list(self, format: str = "json") -> ListResponse | str:
         """List all articles."""
         records = self.db.select(self.name)
         cols = ["id", "article_type_id", "code", "description", "price"]
         return self._apply_format(records, cols, format)
 
     @route("table")
-    def remove(self, id: int) -> dict:
+    def remove(self, id: int) -> MessageResponse:
         """Remove article by id."""
         if not self.db.exists(self.name, where={"id": id}):
             return self._error(f"Article with id {id} not found")
@@ -70,7 +71,7 @@ class Article(Table):
         self,
         id: int,
         new_price: Annotated[float, Field(gt=0, description="Price must be greater than zero")],
-    ) -> dict:
+    ) -> MessageResponse:
         """Update article price."""
         row = self.db.select_one(self.name, columns=["code", "price"], where={"id": id})
         if not row:
