@@ -1,0 +1,18 @@
+# Demo Shop - Example using Shop as RoutedClass
+# Run: python -m genro_asgi serve examples/demo_shop
+
+server:
+  host: "127.0.0.1"
+  port: 8000
+
+plugins:
+  openapi: {}
+
+apps:
+  _swagger:
+    module: "genro_asgi.applications:SwaggerApp"
+  _genro_api:
+    module: "genro_asgi.applications:GenroApiApp"
+  shop:
+    module: "sample_shop.shop:Shop"
+    connection_string: "sqlite:shop.db"

@@ -1,0 +1,21 @@
+type,code,description,price
+electronics,LAPTOP001,MacBook Pro 16",2499.00
+electronics,PHONE001,iPhone 15 Pro,1199.00
+electronics,TABLET001,iPad Air,599.00
+electronics,MOUSE001,Wireless Mouse,29.99
+electronics,KEYB001,Mechanical Keyboard,149.00
+clothing,SHIRT001,Cotton T-Shirt,19.99
+clothing,JEANS001,Denim Jeans,59.99
+clothing,JACKET001,Winter Jacket,129.00
+clothing,SHOES001,Running Shoes,89.99
+clothing,HAT001,Baseball Cap,24.99
+books,BOOK001,Python Programming,49.99
+books,BOOK002,Data Science Handbook,39.99
+books,BOOK003,Machine Learning Basics,44.99
+books,BOOK004,Web Development Guide,34.99
+books,BOOK005,Database Design,42.99
+home,COFFEE001,Coffee Maker,79.99
+home,BLENDER001,High-Speed Blender,99.99
+home,LAMP001,LED Desk Lamp,45.00
+home,CHAIR001,Office Chair,249.00
+home,DESK001,Standing Desk,399.00

@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Genro API Explorer</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.18/cdn/themes/light.css">
+  <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.18/cdn/shoelace-autoloader.js"></script>
+  <script type="module" src="/_genro_api/static?file=tree.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 0.75rem 1rem;
+      background: #1e293b;
+      color: white;
+      font-size: 1.1rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    header select {
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      border: none;
+    }
+    main {
+      flex: 1;
+      min-height: 0;
+    }
+    sl-split-panel {
+      --divider-width: 4px;
+      height: 100%;
+    }
+    .panel {
+      height: 100%;
+      overflow: auto;
+    }
+    .panel-placeholder {
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+      font-weight: bold;
+      color: #64748b;
+      background: #f8fafc;
+      border: 1px dashed #cbd5e1;
+    }
+    .panel-tree { background: #f0fdf4; }
+    .panel-doc { background: #eff6ff; border-color: #93c5fd; color: #1e40af; }
+    .panel-tester { background: #fef3c7; border-color: #fcd34d; color: #92400e; }
+    .panel-response { background: #fce7f3; border-color: #f9a8d4; color: #9d174d; }
+  </style>
+</head>
+<body>
+  <header>
+    <span>Genro API Explorer</span>
+    <select id="app-select">
+      <option value="">-- Server Router --</option>
+    </select>
+  </header>
+  <main>
+    <sl-split-panel position="25">
+      <div slot="start" class="panel panel-tree">
+        <api-tree id="api-tree"></api-tree>
+      </div>
+      <div slot="end">
+        <sl-split-panel vertical position="40">
+          <div slot="start" class="panel panel-placeholder panel-doc">DOC</div>
+          <div slot="end">
+            <sl-split-panel position="50">
+              <div slot="start" class="panel panel-placeholder panel-tester">TESTER</div>
+              <div slot="end" class="panel panel-placeholder panel-response">RESPONSE</div>
+            </sl-split-panel>
+          </div>
+        </sl-split-panel>
+      </div>
+    </sl-split-panel>
+  </main>
+
+  <script type="module">
+    const tree = document.getElementById("api-tree");
+    const appSelect = document.getElementById("app-select");
+
+    // Load tree on page load
+    tree.loadNodes();
+
+    // Reload tree when app selection changes
+    appSelect.addEventListener("change", () => {
+      tree.loadNodes(appSelect.value);
+    });
+
+    // Handle endpoint selection
+    tree.addEventListener("endpoint-selected", (e) => {
+      console.log("Selected endpoint:", e.detail);
+      // TODO: populate DOC panel
+    });
+  </script>
+</body>
+</html>

@@ -91,6 +91,7 @@ class AsgiServer(RoutedClass):
         )
         self.apps: dict[str, RoutedClass] = {}
         self.router = Router(self, name="root")
+        self._apply_plugins(self.router)
         self.logger = logging.getLogger("genro_asgi")
         self.lifespan = ServerLifespan(self)
         self.request_registry = RequestRegistry()
@@ -208,6 +209,24 @@ class AsgiServer(RoutedClass):
         # Update config with merged server options
         config.server = server_opts
         return config
+
+    def _apply_plugins(self, router: Router) -> None:
+        """Apply plugins from config to router.
+
+        Config format (config.yaml):
+            plugins:
+              openapi: {}        # plugin name: config dict
+              custom:
+                opt1: value1
+        """
+        plugins_config = self.opts.plugins
+        if not plugins_config:
+            return
+        for plugin_name in plugins_config.as_dict():
+            plugin_opts = plugins_config[plugin_name]
+            if hasattr(plugin_opts, "as_dict"):
+                plugin_opts = plugin_opts.as_dict()
+            router.plug(plugin_name, **(plugin_opts or {}))
 
     def on_init(self) -> None:
         """Hook for subclasses after init completes. Default: attach apps from config."""

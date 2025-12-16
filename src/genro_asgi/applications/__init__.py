@@ -6,9 +6,11 @@
 Exports:
     AsgiApplication: Base class for apps mounted on AsgiServer.
     SwaggerApp: OpenAPI/Swagger documentation app.
+    GenroApiApp: Custom API Explorer app.
 """
 
 from .base import AsgiApplication
+from .genro_api import GenroApiApp
 from .swagger import SwaggerApp
 
-__all__ = ["AsgiApplication", "SwaggerApp"]
+__all__ = ["AsgiApplication", "GenroApiApp", "SwaggerApp"]
