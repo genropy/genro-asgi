@@ -73,19 +73,15 @@ a:hover {{ text-decoration: underline; }}
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """ASGI interface - dispatch request to handler via router."""
         path = scope.get("path", "/")
-        selector = path.strip("/") or "index"
+        selector = path.strip("/")
 
-        handler = self.router.get(selector)
+        handler = self.router.get(selector, partial=True)
 
-        # If we got a router (not a handler), try index or show members
+        # If we got a router (not a handler), show members
         if isinstance(handler, RouterInterface):
-            subrouter = handler
-            handler = subrouter.get("index")
-            if handler is None:
-                # No index - render members list as HTML
-                response = self._render_nodes_html(path, subrouter)
-                await response(scope, receive, send)
-                return
+            response = self._render_nodes_html(path, handler)
+            await response(scope, receive, send)
+            return
 
         if handler is None:
             err_response: Response = JSONResponse(

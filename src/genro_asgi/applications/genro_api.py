@@ -32,17 +32,13 @@ class GenroApiApp(AsgiApplication):
         self.api = Router(self, name="api")
 
     @route("api")
-    def index(self) -> Response:
-        """Serve the main explorer page."""
-        return self._serve_explorer()
+    def index(self, *args: str) -> Response:
+        """Serve the main explorer page.
 
-    @route("api")
-    def app(self, name: str = "") -> Response:
-        """Serve explorer with specific app preselected.
-
-        Usage: /_genro_api/app?name=shop or /_genro_api/shop (via catch-all)
+        With path consumption: /_genro_api/shop calls index('shop')
         """
-        return self._serve_explorer(app=name)
+        app_name = args[0] if args else ""
+        return self._serve_explorer(app=app_name)
 
     def _serve_explorer(self, app: str = "") -> Response:
         """Serve the explorer HTML, optionally with app preselected."""

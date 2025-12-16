@@ -6,7 +6,7 @@
 Exports:
     AsgiApplication: Base class for apps mounted on AsgiServer.
     SwaggerApp: OpenAPI/Swagger documentation app.
-    GenroApiApp: Custom API Explorer app.
+    GenroApiApp: Custom API Explorer app (Shoelace).
 """
 
 from .base import AsgiApplication
