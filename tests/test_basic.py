@@ -25,7 +25,4 @@ def test_exports() -> None:
     assert hasattr(genro_asgi, "AsgiApplication")
     assert hasattr(genro_asgi, "Request")
     assert hasattr(genro_asgi, "Response")
-    assert hasattr(genro_asgi, "RedirectResponse")
-    assert hasattr(genro_asgi, "StreamingResponse")
-    assert hasattr(genro_asgi, "FileResponse")
     assert hasattr(genro_asgi, "Lifespan")

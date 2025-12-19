@@ -33,10 +33,7 @@ from .request import (
     REQUEST_FACTORIES,
 )
 from .response import (
-    FileResponse,
-    RedirectResponse,
     Response,
-    StreamingResponse,
     make_cookie,
 )
 from .types import ASGIApp, Message, Receive, Scope, Send
@@ -66,9 +63,6 @@ __all__ = [
     "REQUEST_FACTORIES",
     # Response classes
     "Response",
-    "RedirectResponse",
-    "StreamingResponse",
-    "FileResponse",
     "Lifespan",
     "ServerLifespan",
     # Helper functions

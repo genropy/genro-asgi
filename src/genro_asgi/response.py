@@ -37,13 +37,7 @@ If request has X-TYTX-Transport header, set_result() automatically:
 Classes
 =======
 Response
-    Base class. Has request reference, set_result(), set_header(), set_error().
-RedirectResponse
-    Sets Location header (default status 307).
-StreamingResponse
-    Streams from async iterator. No Content-Length.
-FileResponse
-    Streams file from disk with auto-detected media type.
+    Single response class. Has request reference, set_result(), set_header(), set_error().
 
 Response Methods
 ================
@@ -72,7 +66,7 @@ from __future__ import annotations
 
 import json as stdlib_json
 import mimetypes
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -83,9 +77,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "Response",
-    "RedirectResponse",
-    "StreamingResponse",
-    "FileResponse",
     "make_cookie",
 ]
 
@@ -358,251 +349,6 @@ class Response:
         if self.status_code == 500:
             logging.getLogger("genro_asgi").exception(f"Handler error: {error}")
         self.set_result({"error": str(error)})
-
-
-class RedirectResponse(Response):
-    """
-    HTTP redirect response with Location header.
-
-    Example:
-        >>> response = RedirectResponse("/new-location")
-        >>> await response(scope, receive, send)
-    """
-
-    def __init__(
-        self,
-        url: str,
-        status_code: int = 307,
-        headers: HeadersInput = None,
-    ) -> None:
-        """
-        Initialize redirect response.
-
-        Args:
-            url: Redirect target URL (absolute or relative).
-            status_code: HTTP status code (default 307 Temporary Redirect).
-            headers: Additional response headers.
-        """
-        # Normalize headers and add Location
-        headers_list = _normalize_headers(headers)
-        headers_list.append(("location", url))
-
-        super().__init__(
-            content=b"",
-            status_code=status_code,
-            headers=headers_list,
-        )
-
-
-class StreamingResponse:
-    """
-    Streaming response from an async iterator.
-
-    Use for large responses or server-sent events where body size is unknown.
-    Content-Length is NOT added since size is unknown.
-
-    Attributes:
-        body_iterator: Async iterator yielding bytes chunks.
-        status_code: HTTP status code.
-        media_type: Content-Type media type.
-
-    Example:
-        >>> async def generate():
-        ...     yield b"chunk1"
-        ...     yield b"chunk2"
-        >>> response = StreamingResponse(generate())
-        >>> await response(scope, receive, send)
-    """
-
-    __slots__ = ("body_iterator", "status_code", "media_type", "_headers")
-
-    charset: str = "utf-8"
-
-    def __init__(
-        self,
-        content: AsyncIterator[bytes],
-        status_code: int = 200,
-        headers: HeadersInput = None,
-        media_type: str | None = None,
-    ) -> None:
-        """
-        Initialize streaming response.
-
-        Args:
-            content: Async iterator yielding bytes chunks.
-            status_code: HTTP status code (default 200).
-            headers: Response headers.
-            media_type: Content-Type media type.
-        """
-        self.body_iterator = content
-        self.status_code = status_code
-        self.media_type = media_type
-        self._headers: list[tuple[str, str]] = _normalize_headers(headers)
-
-        # Add content-type if media_type provided and not already set
-        if self.media_type is not None:
-            header_names = {name.lower() for name, _ in self._headers}
-            if "content-type" not in header_names:
-                content_type = self.media_type
-                # Auto-append charset for text/* types (same behavior as Response)
-                if content_type.startswith("text/") and "charset" not in content_type:
-                    content_type = f"{content_type}; charset={self.charset}"
-                self._headers.append(("content-type", content_type))
-
-    def _build_headers(self) -> list[tuple[bytes, bytes]]:
-        """Build ASGI headers list."""
-        return [
-            (name.lower().encode("latin-1"), value.encode("latin-1"))
-            for name, value in self._headers
-        ]
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """
-        ASGI application interface.
-
-        Streams body chunks with more_body=True until exhausted.
-
-        Args:
-            scope: ASGI scope dict.
-            receive: ASGI receive callable.
-            send: ASGI send callable.
-        """
-        await send(
-            {
-                "type": "http.response.start",
-                "status": self.status_code,
-                "headers": self._build_headers(),
-            }
-        )
-
-        async for chunk in self.body_iterator:
-            await send(
-                {
-                    "type": "http.response.body",
-                    "body": chunk,
-                    "more_body": True,
-                }
-            )
-
-        await send(
-            {
-                "type": "http.response.body",
-                "body": b"",
-                "more_body": False,
-            }
-        )
-
-
-class FileResponse:
-    """
-    Response that streams a file from disk.
-
-    Supports automatic media type detection and Content-Disposition for downloads.
-    File reading is performed in a thread pool to avoid blocking the event loop.
-
-    Attributes:
-        path: Path object for the file.
-        chunk_size: Size of chunks to read.
-        status_code: HTTP status code.
-        media_type: Content-Type media type.
-
-    Example:
-        >>> response = FileResponse("/path/to/file.pdf", filename="doc.pdf")
-        >>> await response(scope, receive, send)
-    """
-
-    __slots__ = ("path", "chunk_size", "status_code", "media_type", "_headers")
-
-    def __init__(
-        self,
-        path: str | Path,
-        status_code: int = 200,
-        headers: HeadersInput = None,
-        media_type: str | None = None,
-        filename: str | None = None,
-        chunk_size: int = 64 * 1024,
-    ) -> None:
-        """
-        Initialize file response.
-
-        Args:
-            path: Path to file on disk.
-            status_code: HTTP status code (default 200).
-            headers: Response headers.
-            media_type: Content-Type (auto-detected if None).
-            filename: Download filename for Content-Disposition.
-            chunk_size: Size of chunks to read (default 64KB).
-        """
-        self.path = Path(path)
-        self.chunk_size = chunk_size
-        self.status_code = status_code
-        self._headers: list[tuple[str, str]] = _normalize_headers(headers)
-
-        # Auto-detect media type if not provided
-        if media_type is None:
-            media_type, _ = mimetypes.guess_type(str(self.path))
-        self.media_type = media_type or "application/octet-stream"
-
-        # Add content-type if not already set
-        header_names = {name.lower() for name, _ in self._headers}
-        if "content-type" not in header_names:
-            self._headers.append(("content-type", self.media_type))
-
-        # Add content-disposition for download
-        if filename:
-            self._headers.append(("content-disposition", f'attachment; filename="{filename}"'))
-
-        # Add content-length if file exists
-        if self.path.exists():
-            self._headers.append(("content-length", str(self.path.stat().st_size)))
-
-    def _build_headers(self) -> list[tuple[bytes, bytes]]:
-        """Build ASGI headers list."""
-        return [
-            (name.lower().encode("latin-1"), value.encode("latin-1"))
-            for name, value in self._headers
-        ]
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """
-        ASGI application interface.
-
-        Streams file content in chunks using thread pool for non-blocking I/O.
-
-        Args:
-            scope: ASGI scope dict.
-            receive: ASGI receive callable.
-            send: ASGI send callable.
-
-        Raises:
-            FileNotFoundError: If file does not exist.
-        """
-        import asyncio
-
-        await send(
-            {
-                "type": "http.response.start",
-                "status": self.status_code,
-                "headers": self._build_headers(),
-            }
-        )
-
-        loop = asyncio.get_running_loop()
-
-        # Stream file in chunks using thread pool to avoid blocking event loop
-        with open(self.path, "rb") as f:
-            while True:
-                chunk = await loop.run_in_executor(None, f.read, self.chunk_size)
-                more_body = len(chunk) == self.chunk_size
-                await send(
-                    {
-                        "type": "http.response.body",
-                        "body": chunk,
-                        "more_body": more_body,
-                    }
-                )
-                if not more_body:
-                    break
 
 
 def make_cookie(
