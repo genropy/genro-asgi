@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
-from genro_routes import Router, RoutedClass
+from pydantic import Field
+from genro_routes import Router, RoutedClass, route
 from .column import Columns
+
+# Type annotation for format parameter - enum loaded from endpoint at runtime
+FormatParam = Annotated[str, Field(json_schema_extra={"x-enum-endpoint": "list_formats"})]
 
 
 class Table(RoutedClass):
@@ -56,21 +60,43 @@ class Table(RoutedClass):
 
     # --- Formatting ---
 
+    @route("table", openapi_method="get")
+    def list_formats(self) -> list[str]:
+        """Ritorna i formati disponibili dai metodi _format_*."""
+        return [name[8:] for name in dir(self) if name.startswith("_format_")]
+
     def _apply_format(
         self,
         records: list[dict[str, Any]],
         columns: list[str],
         format: str = "json",
     ) -> dict[str, Any] | str:
-        if format == "json":
-            return self._success(count=len(records), records=records)
-        elif format == "markdown":
-            return self._format_markdown(records, columns)
-        elif format == "table":
-            return self._format_table(records, columns)
-        elif format == "html":
-            return self._format_html(records, columns)
+        # Set content_type based on format via ContextVar
+        content_type_map = {
+            "html": "text/html",
+            "csv": "text/csv",
+            "markdown": "text/plain",
+            "table": "text/plain",
+        }
+        if format in content_type_map:
+            response = self.db.app.response
+            if response:
+                response.content_type = content_type_map[format]
+
+        formatter = getattr(self, f"_format_{format}", None)
+        if formatter:
+            return formatter(records, columns)
+        return self._format_json(records, columns)
+
+    def _format_json(self, records: list[dict[str, Any]], columns: list[str]) -> dict[str, Any]:
         return self._success(count=len(records), records=records)
+
+    def _format_csv(self, records: list[dict[str, Any]], columns: list[str]) -> str:
+        if not records:
+            return ""
+        header = ",".join(columns)
+        rows = [",".join(str(r.get(c, "")) for c in columns) for r in records]
+        return "\n".join([header] + rows)
 
     def _format_markdown(self, records: list[dict[str, Any]], columns: list[str]) -> str:
         if not records:
@@ -102,4 +128,4 @@ class Table(RoutedClass):
         return f"<table>\n  <thead>\n{header}\n  </thead>\n  <tbody>\n{rows}\n  </tbody>\n</table>"
 
 
-__all__ = ["Table"]
+__all__ = ["Table", "FormatParam"]

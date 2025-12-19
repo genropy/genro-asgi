@@ -73,7 +73,9 @@ class ApiTester extends HTMLElement {
           required: p.required || false,
           description: p.description || "",
           in: p.in || "query",
-          default: p.schema?.default
+          default: p.schema?.default,
+          enum: p.schema?.enum,
+          enumEndpoint: p.schema?.["x-enum-endpoint"]
         });
       }
     }
@@ -89,7 +91,9 @@ class ApiTester extends HTMLElement {
           required: required.includes(name),
           description: schema.description || "",
           in: "body",
-          default: schema.default
+          default: schema.default,
+          enum: schema.enum,
+          enumEndpoint: schema["x-enum-endpoint"]
         });
       }
     }
@@ -120,6 +124,19 @@ class ApiTester extends HTMLElement {
   }
 
   _renderInput(param, inputType, defaultValue) {
+    if (param.enum) {
+      const options = param.enum.map(v =>
+        `<sl-option value="${v}"${v === defaultValue ? ' selected' : ''}>${v}</sl-option>`
+      ).join("");
+      return `<sl-select name="${param.name}" class="tester-select" value="${defaultValue}">${options}</sl-select>`;
+    }
+    if (param.enumEndpoint) {
+      // Dynamic enum - sl-select with popup, loaded async
+      return `<sl-select name="${param.name}" class="tester-select" value="${defaultValue}"
+              data-enum-endpoint="${param.enumEndpoint}" hoist>
+              <sl-option value="">Loading...</sl-option>
+              </sl-select>`;
+    }
     if (param.type === "boolean") {
       const checked = defaultValue === true ? "checked" : "";
       return `<input type="checkbox" name="${param.name}" class="tester-checkbox" ${checked}>`;
@@ -144,6 +161,27 @@ class ApiTester extends HTMLElement {
     const btn = this.querySelector("#execute-btn");
     if (btn) {
       btn.addEventListener("click", () => this._execute());
+    }
+    this._loadDynamicEnums();
+  }
+
+  async _loadDynamicEnums() {
+    const selects = this.querySelectorAll("[data-enum-endpoint]");
+    for (const select of selects) {
+      const endpoint = select.dataset.enumEndpoint;
+      // Build URL: replace last path segment with endpoint name
+      const pathParts = this._endpoint.path.split("/");
+      pathParts[pathParts.length - 1] = endpoint;
+      const relativePath = pathParts.join("/");
+      const url = this._app ? `/${this._app}/${relativePath}` : `/${relativePath}`;
+      try {
+        const response = await fetch(url);
+        const values = await response.json();
+        select.innerHTML = values.map(v => `<sl-option value="${v}">${v}</sl-option>`).join("");
+      } catch (e) {
+        console.error(`Failed to load enum from ${url}:`, e);
+        select.innerHTML = `<sl-option value="">Error loading options</sl-option>`;
+      }
     }
   }
 
@@ -170,7 +208,15 @@ class ApiTester extends HTMLElement {
       const response = await fetch(fullUrl);
       const endTime = performance.now();
       const duration = Math.round(endTime - startTime);
-      const data = await response.json();
+      const contentType = response.headers.get("content-type") || "";
+
+      let data;
+      if (contentType.includes("application/json")) {
+        data = await response.json();
+      } else {
+        // Non-JSON response (CSV, markdown, HTML, etc.)
+        data = await response.text();
+      }
 
       // Emit response event
       this.dispatchEvent(new CustomEvent("api-response", {
@@ -180,7 +226,8 @@ class ApiTester extends HTMLElement {
           statusText: response.statusText,
           headers: Object.fromEntries(response.headers.entries()),
           data,
-          duration
+          duration,
+          isText: !contentType.includes("application/json")
         }
       }));
 
@@ -201,7 +248,7 @@ class ApiTester extends HTMLElement {
 
   _collectParams() {
     const params = {};
-    const inputs = this.querySelectorAll(".tester-input, .tester-checkbox");
+    const inputs = this.querySelectorAll(".tester-input, .tester-checkbox, .tester-select");
     for (const input of inputs) {
       const name = input.name;
       if (input.type === "checkbox") {
@@ -305,6 +352,9 @@ class ApiTester extends HTMLElement {
           width: 1.25rem;
           height: 1.25rem;
           accent-color: #f59e0b;
+        }
+        .tester-select {
+          width: 100%;
         }
         .tester-field-desc {
           font-size: 0.8rem;

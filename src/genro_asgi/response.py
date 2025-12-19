@@ -481,6 +481,8 @@ class Response:
     Sends bytes or string content with headers through the ASGI interface.
     Implements ``__call__`` to be usable as an ASGI application.
 
+    Can be created empty and configured via set_header/set_result before sending.
+
     Attributes:
         body: Encoded response body as bytes.
         status_code: HTTP status code.
@@ -489,9 +491,15 @@ class Response:
     Example:
         >>> response = Response(content="Hello", media_type="text/plain")
         >>> await response(scope, receive, send)
+
+        # Or create empty and configure:
+        >>> response = Response()
+        >>> response.set_header("X-Custom", "value")
+        >>> response.set_result({"data": 123})  # auto-detects JSON
+        >>> await response(scope, receive, send)
     """
 
-    __slots__ = ("body", "status_code", "_media_type", "_headers")
+    __slots__ = ("body", "status_code", "_media_type", "_headers", "request")
 
     media_type: str | None = None
     charset: str = "utf-8"
@@ -502,6 +510,7 @@ class Response:
         status_code: int = 200,
         headers: HeadersInput = None,
         media_type: str | None = None,
+        request: Any = None,
     ) -> None:
         """
         Initialize response.
@@ -517,6 +526,7 @@ class Response:
             have body content per RFC 7230. If you provide content with these
             status codes, the ASGI server may reject or truncate the response.
         """
+        self.request = request
         self.status_code = status_code
         self._headers: list[tuple[str, str]] = _normalize_headers(headers)
 
@@ -599,6 +609,107 @@ class Response:
                 "body": self.body,
             }
         )
+
+    def set_header(self, name: str, value: str) -> None:
+        """Set a response header. Can be called before set_result."""
+        self._headers.append((name, value))
+
+    def set_result(self, result: Any, mime_type: str | None = None) -> None:
+        """Set response body from result.
+
+        If mime_type is provided, uses it directly. Otherwise auto-detects
+        content type based on result:
+        - dict/list: JSON or TYTX (if request.tytx_mode)
+        - Path: file content with mime from extension
+        - bytes: application/octet-stream
+        - str: text/plain
+        - None: empty body
+        - other: str() conversion as text/plain
+
+        Args:
+            result: The handler result to set as response body.
+            mime_type: Explicit MIME type. If None, auto-detected from result.
+        """
+        if isinstance(result, (dict, list)):
+            # Use TYTX serialization if request is in TYTX mode
+            if self.request and self.request.tytx_mode:
+                from genro_tytx import to_tytx
+                from typing import cast, Literal
+                transport = cast(
+                    Literal["json", "xml", "msgpack"],
+                    self.request.tytx_transport or "json"
+                )
+                encoded = to_tytx(result, transport)
+                self.body = encoded if isinstance(encoded, bytes) else encoded.encode("utf-8")
+                self._media_type = mime_type or f"application/vnd.tytx+{transport}"
+            else:
+                if HAS_ORJSON:
+                    self.body = orjson.dumps(result)
+                else:
+                    self.body = stdlib_json.dumps(result, ensure_ascii=False).encode("utf-8")
+                self._media_type = mime_type or "application/json"
+        elif isinstance(result, Path):
+            self.body = result.read_bytes()
+            if mime_type:
+                self._media_type = mime_type
+            else:
+                guessed, _ = mimetypes.guess_type(str(result))
+                self._media_type = guessed or "application/octet-stream"
+        elif isinstance(result, bytes):
+            self.body = result
+            self._media_type = mime_type or "application/octet-stream"
+        elif isinstance(result, str):
+            self.body = result.encode(self.charset)
+            self._media_type = mime_type or "text/plain"
+        elif result is None:
+            self.body = b""
+            self._media_type = mime_type or "text/plain"
+        else:
+            self.body = str(result).encode(self.charset)
+            self._media_type = mime_type or "text/plain"
+
+        # Update content-type and content-length headers
+        self._update_content_headers()
+
+    def _update_content_headers(self) -> None:
+        """Update content-type and content-length headers after set_result."""
+        # Remove existing content-type and content-length
+        self._headers = [
+            (name, value) for name, value in self._headers
+            if name.lower() not in ("content-type", "content-length")
+        ]
+        # Add new ones
+        content_type = self._get_content_type()
+        if content_type:
+            self._headers.append(("content-type", content_type))
+        self._headers.append(("content-length", str(len(self.body))))
+
+    # Error type to HTTP status code mapping
+    ERROR_MAP: dict[str, int] = {
+        "NotFound": 404,
+        "NotAuthorized": 403,
+        "ValueError": 400,
+        "TypeError": 400,
+        "PermissionError": 403,
+        "FileNotFoundError": 404,
+    }
+
+    def set_error(self, error: Exception) -> None:
+        """Set response as error from exception.
+
+        Maps exception type to HTTP status code using ERROR_MAP.
+        Unknown exceptions default to 500 and are logged.
+
+        Args:
+            error: The exception to convert to error response.
+        """
+        import logging
+
+        error_name = type(error).__name__
+        self.status_code = self.ERROR_MAP.get(error_name, 500)
+        if self.status_code == 500:
+            logging.getLogger("genro_asgi").exception(f"Handler error: {error}")
+        self.set_result({"error": str(error)})
 
 
 class JSONResponse(Response):

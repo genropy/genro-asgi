@@ -1,7 +1,7 @@
 """ArticleType table with Columns definitions."""
 
 from genro_routes import route
-from ..sql import Table, Integer, String
+from ..sql import Table, Integer, String, FormatParam
 from ..responses import IdResponse, RecordResponse, ListResponse, MessageResponse
 
 
@@ -35,7 +35,7 @@ class ArticleType(Table):
         return self._success(record=row)
 
     @route("table", openapi_method="get")
-    def list(self, format: str = "json") -> ListResponse | str:
+    def list(self, format: FormatParam = "json") -> ListResponse | str:
         """List all article types."""
         records = self.db.select(self.name)
         return self._apply_format(records, ["id", "name", "description"], format)

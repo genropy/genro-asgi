@@ -9,10 +9,14 @@ import csv
 import importlib
 import random
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from genro_routes import RoutedClass, Router, route
 
 from .sql import Table, SqlDb
+
+if TYPE_CHECKING:
+    from genro_asgi.request import BaseRequest, ResponseBuilder
 
 
 class Shop(RoutedClass):
@@ -22,6 +26,7 @@ class Shop(RoutedClass):
     version = "1.0.0"
 
     def __init__(self, connection_string: str = "sqlite:shop.db", **kwargs):
+        self.server = kwargs.pop("_server", None)
         self.connection_string = connection_string
         self.app_dir = kwargs.get("app_dir", Path(__file__).parent.parent)
         self.api = Router(self, name="api")
@@ -40,6 +45,18 @@ class Shop(RoutedClass):
             self.api.attach_instance(instance, name=name)
 
         self.db.adapter.check_structure()
+
+    @property
+    def request(self) -> "BaseRequest | None":
+        """Current request from ContextVar (available during request handling)."""
+        from genro_asgi.request import get_current_request
+        return get_current_request()
+
+    @property
+    def response(self) -> "ResponseBuilder | None":
+        """Current response builder from ContextVar (available during request handling)."""
+        from genro_asgi.request import get_current_response
+        return get_current_response()
 
     def _configure_tables(self) -> list[type[Table]]:
         """Auto-discover Table subclasses from tables/ folder."""

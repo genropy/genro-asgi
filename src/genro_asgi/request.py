@@ -49,9 +49,8 @@ import time
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from http.cookies import SimpleCookie
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qs
 
 from .datastructures import (
     Address,
@@ -62,7 +61,7 @@ from .datastructures import (
     headers_from_scope,
     query_params_from_scope,
 )
-from .types import Message, Receive, Scope, Send
+from .types import Receive, Scope, Send
 
 if TYPE_CHECKING:
     from .websocket import WebSocket
@@ -73,16 +72,22 @@ __all__ = [
     "MsgRequest",
     "RequestRegistry",
     "REQUEST_FACTORIES",
+    "get_current_request",
+    "set_current_request",
 ]
 
-# Optional fast JSON parsing
-try:
-    import orjson
+# ContextVar for current request - allows any code to access the current request
+_current_request: ContextVar["BaseRequest | None"] = ContextVar("current_request", default=None)
 
-    HAS_ORJSON = True
-except ImportError:
-    orjson = None  # type: ignore[assignment]
-    HAS_ORJSON = False
+
+def get_current_request() -> "BaseRequest | None":
+    """Get the current request from context. Returns None if not in request context."""
+    return _current_request.get()
+
+
+def set_current_request(request: "BaseRequest | None") -> Any:
+    """Set the current request in context. Returns token for reset."""
+    return _current_request.set(request)
 
 
 class BaseRequest(ABC):
@@ -105,15 +110,19 @@ class BaseRequest(ABC):
         app_name: Name of the app handling this request (for metrics)
         created_at: Timestamp when request was created (for age tracking)
         tytx_mode: True if request uses TYTX serialization
+        tytx_transport: TYTX transport type ('json', 'msgpack') or None
     """
 
-    __slots__ = ("_app_name", "_created_at", "_external_id", "_tytx_mode")
+    __slots__ = ("_app_name", "_created_at", "_external_id", "_tytx_mode", "_tytx_transport", "response")
 
     def __init__(self) -> None:
+        from .response import Response
         self._app_name: str | None = None
         self._created_at: float = time.time()
         self._external_id: str | None = None
         self._tytx_mode: bool = False
+        self._tytx_transport: str | None = None
+        self.response: Response = Response(request=self)
 
     @property
     @abstractmethod
@@ -172,6 +181,15 @@ class BaseRequest(ABC):
     @tytx_mode.setter
     def tytx_mode(self, value: bool) -> None:
         self._tytx_mode = value
+
+    @property
+    def tytx_transport(self) -> str | None:
+        """TYTX transport type ('json', 'msgpack') or None."""
+        return self._tytx_transport
+
+    @tytx_transport.setter
+    def tytx_transport(self, value: str | None) -> None:
+        self._tytx_transport = value
 
     @property
     def app_name(self) -> str | None:
@@ -242,16 +260,6 @@ class HttpRequest(BaseRequest):
         self._headers_obj: Headers | None = None
         self._query_obj: QueryParams | None = None
 
-    async def _read_body(self, receive: Receive) -> bytes:
-        """Read full request body from ASGI receive."""
-        body_chunks: list[bytes] = []
-        more_body = True
-        while more_body:
-            message = await receive()
-            body_chunks.append(message.get("body", b""))
-            more_body = message.get("more_body", False)
-        return b"".join(body_chunks)
-
     async def init(
         self,
         scope: Scope,
@@ -260,6 +268,8 @@ class HttpRequest(BaseRequest):
         **kwargs: Any,
     ) -> None:
         """Async initialization - reads body and parses request data."""
+        from genro_tytx import asgi_data
+
         self._scope = scope
 
         # Parse headers first (needed for TYTX detection)
@@ -267,52 +277,19 @@ class HttpRequest(BaseRequest):
         for name, value in scope.get("headers", []):
             self._headers[name.decode("latin-1").lower()] = value.decode("latin-1")
 
-        # Check for TYTX mode
-        content_type = self._headers.get("content-type", "")
-        is_tytx = "tytx" in content_type.lower()
+        # Check for TYTX mode via X-TYTX-Transport header
+        tytx_transport = self._headers.get("x-tytx-transport")
+        if tytx_transport:
+            self._tytx_mode = True
+            self._tytx_transport = tytx_transport.lower()
 
-        if is_tytx:
-            try:
-                from genro_tytx import asgi_data
-
-                data = await asgi_data(dict(scope), receive)
-                self._body = b""
-                self._headers = data.get("headers", self._headers)
-                self._cookies = data.get("cookies", {})
-                self._query = data.get("query", {})
-                self._data = data.get("body")
-                self._tytx_mode = True
-            except ImportError:
-                is_tytx = False  # Fall through to normal parsing
-
-        if not is_tytx:
-            # Normal parsing
-            self._body = await self._read_body(receive)
-
-            # Parse cookies
-            self._cookies = {}
-            if "cookie" in self._headers:
-                cookie = SimpleCookie()
-                cookie.load(self._headers["cookie"])
-                for key, morsel in cookie.items():
-                    self._cookies[key] = morsel.value
-
-            # Parse query string
-            self._query = {}
-            query_string = scope.get("query_string", b"")
-            if query_string:
-                parsed = parse_qs(query_string.decode("utf-8"), keep_blank_values=True)
-                for key, values in parsed.items():
-                    self._query[key] = values[0] if len(values) == 1 else values
-
-            # Parse body as JSON if applicable
-            self._data = None
-            if self._body:
-                if "json" in content_type:
-                    if HAS_ORJSON:
-                        self._data = orjson.loads(self._body)
-                    else:
-                        self._data = stdlib_json.loads(self._body.decode("utf-8"))
+        # Use asgi_data for parsing (handles both TYTX and normal requests)
+        data = await asgi_data(dict(scope), receive)
+        self._body = b""
+        self._headers = data.get("headers", self._headers)
+        self._cookies = data.get("cookies", {})
+        self._query = data.get("query", {})
+        self._data = data.get("body")
 
         # Generate or extract request ID
         self._id = self._headers.get("x-request-id", str(uuid.uuid4()))
@@ -426,7 +403,7 @@ class HttpRequest(BaseRequest):
 
     def make_response(self, result: Any) -> Any:
         """Convert handler result to Response object."""
-        from .response import JSONResponse, PlainTextResponse, Response
+        from .response import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
         if isinstance(result, Response):
             return result
@@ -435,6 +412,10 @@ class HttpRequest(BaseRequest):
         if isinstance(result, list):
             return JSONResponse(result)
         if isinstance(result, str):
+            # Auto-detect HTML content by checking for HTML-like structure
+            stripped = result.strip()
+            if stripped.startswith("<") and stripped.endswith(">"):
+                return HTMLResponse(result)
             return PlainTextResponse(result)
         if result is None:
             return PlainTextResponse("")
@@ -610,10 +591,10 @@ class RequestRegistry:
         registry = RequestRegistry()
         request = await registry.create(scope, receive, send)
         print(f"Active: {len(registry)}")
-        registry.unregister(request.id)
+        registry.unregister()
     """
 
-    __slots__ = ("_requests", "factories")
+    __slots__ = ("_requests", "factories", "_ctx_request")
 
     def __init__(
         self,
@@ -621,6 +602,12 @@ class RequestRegistry:
     ) -> None:
         self._requests: dict[str, BaseRequest] = {}
         self.factories = factories if factories is not None else REQUEST_FACTORIES.copy()
+        self._ctx_request: ContextVar[BaseRequest | None] = ContextVar('current_request', default=None)
+
+    @property
+    def current(self) -> BaseRequest | None:
+        """Current request from ContextVar."""
+        return self._ctx_request.get()
 
     async def create(
         self,
@@ -638,15 +625,20 @@ class RequestRegistry:
         request = factory()
         await request.init(scope, receive, send, **kwargs)
         self._requests[request.id] = request
+        self._ctx_request.set(request)
         return request
 
     def register_factory(self, scope_type: str, factory: type[BaseRequest]) -> None:
         """Register a factory for a scope type."""
         self.factories[scope_type] = factory
 
-    def unregister(self, request_id: str) -> BaseRequest | None:
-        """Unregister and return a request."""
-        return self._requests.pop(request_id, None)
+    def unregister(self) -> BaseRequest | None:
+        """Unregister current request."""
+        request = self._ctx_request.get()
+        if request is not None:
+            self._requests.pop(request.id, None)
+            self._ctx_request.set(None)
+        return request
 
     def get(self, request_id: str) -> BaseRequest | None:
         """Get a request by id."""
@@ -677,40 +669,3 @@ REQUEST_FACTORIES: dict[str, type[BaseRequest]] = {
     "http": HttpRequest,
     "websocket": MsgRequest,
 }
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    async def demo() -> None:
-        # Demo HTTP request
-        demo_scope: Scope = {
-            "type": "http",
-            "method": "GET",
-            "path": "/test",
-            "query_string": b"name=world",
-            "headers": [(b"host", b"localhost:8000")],
-            "scheme": "http",
-            "server": ("localhost", 8000),
-            "client": ("127.0.0.1", 50000),
-            "root_path": "",
-        }
-
-        async def demo_receive() -> Message:
-            return {"type": "http.request", "body": b"", "more_body": False}
-
-        registry = RequestRegistry()
-        request = await registry.create(demo_scope, demo_receive)
-
-        print(f"Request: {request}")
-        print(f"ID: {request.id}")
-        print(f"Method: {request.method}")
-        print(f"Path: {request.path}")
-        print(f"Transport: {request.transport}")
-        print(f"Age: {request.age:.3f}s")
-        print(f"Active requests: {len(registry)}")
-
-        registry.unregister(request.id)
-        print(f"After unregister: {len(registry)}")
-
-    asyncio.run(demo())

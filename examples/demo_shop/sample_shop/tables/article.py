@@ -3,7 +3,7 @@
 from typing import Annotated
 from pydantic import Field
 from genro_routes import route
-from ..sql import Table, Integer, String, Float
+from ..sql import Table, Integer, String, Float, FormatParam
 from ..responses import IdResponse, RecordResponse, ListResponse, MessageResponse
 
 
@@ -51,7 +51,7 @@ class Article(Table):
         return self._success(record=row)
 
     @route("table", openapi_method="get")
-    def list(self, format: str = "json") -> ListResponse | str:
+    def list(self, format: FormatParam = "json") -> ListResponse | str:
         """List all articles."""
         records = self.db.select(self.name)
         cols = ["id", "article_type_id", "code", "description", "price"]

@@ -282,10 +282,10 @@ class TestRequestRegistryWithMsg:
             return {}
 
         request = await registry.create(scope, receive, message=message)
-        request_id = request.id
         assert len(registry) == 1
 
-        removed = registry.unregister(request_id)
+        # unregister() uses context to find current request
+        removed = registry.unregister()
         assert removed is request
         assert len(registry) == 0
 

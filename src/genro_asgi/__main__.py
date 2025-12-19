@@ -34,17 +34,17 @@ def cmd_serve(argv: list[str]) -> int:
     # Create server - passes argv for SmartOptions parsing
     server = AsgiServer(argv=argv)
 
-    # Verify app_dir exists
-    app_dir = server.opts.server.app_dir
-    if not app_dir.is_dir():
-        print(f"Error: '{app_dir}' is not a directory.", file=sys.stderr)
+    # Verify server_dir exists
+    server_dir = server.config.server.server_dir
+    if not server_dir.is_dir():
+        print(f"Error: '{server_dir}' is not a directory.", file=sys.stderr)
         return 1
 
     # Show startup info
     print("genro-asgi starting...", flush=True)
-    print(f"App dir: {app_dir}", flush=True)
-    print(f"Server: http://{server.opts.server.host}:{server.opts.server.port}", flush=True)
-    if server.opts.server.reload:
+    print(f"Server dir: {server_dir}", flush=True)
+    print(f"Server: http://{server.config.server.host}:{server.config.server.port}", flush=True)
+    if server.config.server.reload:
         print("Mode: development (auto-reload enabled)", flush=True)
     print(flush=True)
 

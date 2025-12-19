@@ -1,7 +1,7 @@
 """Purchase table with Columns definitions and custom methods."""
 
 from genro_routes import route
-from ..sql import Table, Integer, Timestamp
+from ..sql import Table, Integer, Timestamp, FormatParam
 from ..responses import IdResponse, RecordResponse, ListResponse, MessageResponse, StatsResponse
 
 
@@ -41,7 +41,7 @@ class Purchase(Table):
         return self._success(record=row)
 
     @route("table", openapi_method="get")
-    def list(self, format: str = "json") -> ListResponse | str:
+    def list(self, format: FormatParam = "json") -> ListResponse | str:
         """List all purchases."""
         records = self.db.select(self.name)
         cols = ["id", "article_id", "quantity", "purchase_date"]

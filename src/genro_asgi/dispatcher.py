@@ -10,7 +10,12 @@ from typing import TYPE_CHECKING, Any
 
 from genro_routes import RouterInterface
 
-from .response import FileResponse, HTMLResponse, JSONResponse, Response
+from .request import (
+    ResponseBuilder,
+    set_current_request,
+    set_current_response,
+)
+from .response import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 
 if TYPE_CHECKING:
     from .server import AsgiServer
@@ -39,6 +44,37 @@ class Dispatcher:
     def logger(self) -> Any:
         """Proxy to server.logger."""
         return self.server.logger
+
+    def _make_response(self, result: Any, response_builder: ResponseBuilder) -> Response:
+        """Convert handler result to Response, respecting ResponseBuilder settings."""
+        # If handler explicitly set content_type, honor it
+        if response_builder.content_type:
+            content_type = response_builder.content_type
+            if content_type == "text/html":
+                return HTMLResponse(str(result))
+            if content_type == "text/plain":
+                return PlainTextResponse(str(result))
+            if content_type == "application/json":
+                return JSONResponse(result)
+            # For other content types, use PlainTextResponse with custom media_type
+            return PlainTextResponse(str(result), media_type=content_type)
+
+        # Default: auto-detect from result type
+        if isinstance(result, Response):
+            return result
+        if isinstance(result, dict):
+            return JSONResponse(result)
+        if isinstance(result, list):
+            return JSONResponse(result)
+        if isinstance(result, str):
+            # Auto-detect HTML by checking structure
+            stripped = result.strip()
+            if stripped.startswith("<") and stripped.endswith(">"):
+                return HTMLResponse(result)
+            return PlainTextResponse(result)
+        if result is None:
+            return PlainTextResponse("")
+        return PlainTextResponse(str(result))
 
     def _render_nodes_html(self, path: str, router: RouterInterface) -> HTMLResponse:
         """Render router nodes as HTML directory listing."""
@@ -98,6 +134,13 @@ a:hover {{ text-decoration: underline; }}
         if parts and parts[0]:
             request.app_name = parts[0]
 
+        # Create response builder BEFORE calling handler
+        response_builder = ResponseBuilder()
+
+        # Set ContextVars so handler code can access request/response via app properties
+        set_current_request(request)
+        set_current_response(response_builder)
+
         try:
             kwargs = dict(request.query)
 
@@ -118,7 +161,7 @@ a:hover {{ text-decoration: underline; }}
                 scope["_file_path"] = result["path"]
                 handler_response = FileResponse(result["path"])
             else:
-                handler_response = request.make_response(result)
+                handler_response = self._make_response(result, response_builder)
 
             await handler_response(scope, receive, send)
 
@@ -130,6 +173,9 @@ a:hover {{ text-decoration: underline; }}
             )
             await exc_response(scope, receive, send)
         finally:
+            # Clear ContextVars
+            set_current_request(None)
+            set_current_response(None)
             self.request_registry.unregister(request.id)
 
 

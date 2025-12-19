@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 
 from .sqldb import SqlDb
-from .table import Table
+from .table import Table, FormatParam
 from .column import Column, Integer, String, Float, Boolean, Timestamp, Blob
 from .adapters import DbAdapter, SqliteAdapter, PostgresAdapter
 
@@ -24,6 +24,7 @@ DB_PATH = Path(os.environ.get("SHOP_DB_PATH", Path(__file__).parent.parent / "sh
 __all__ = [
     "SqlDb",
     "Table",
+    "FormatParam",
     "Column",
     "Integer",
     "String",

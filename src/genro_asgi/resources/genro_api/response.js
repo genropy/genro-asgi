@@ -9,6 +9,10 @@ class ApiResponse extends HTMLElement {
 
   setResponse(response) {
     this._response = response;
+    // Detect if response is HTML from content-type header
+    const headers = response.headers || {};
+    const contentType = headers["content-type"] || headers["Content-Type"] || "";
+    this._isHtml = contentType.includes("text/html");
     this.render();
   }
 
@@ -27,8 +31,18 @@ class ApiResponse extends HTMLElement {
       return;
     }
 
-    const { status, statusText, headers, data, duration } = this._response;
+    const { status, statusText, headers, data, duration, isText } = this._response;
     const statusClass = this._getStatusClass(status);
+
+    // Render HTML content directly, escape other text, format JSON
+    let bodyContent;
+    if (this._isHtml) {
+      bodyContent = `<div class="response-html">${data}</div>`;
+    } else if (isText) {
+      bodyContent = `<pre class="response-json">${this._escapeHtml(data)}</pre>`;
+    } else {
+      bodyContent = `<pre class="response-json">${this._formatJson(data)}</pre>`;
+    }
 
     this.innerHTML = `
       <div class="response-container">
@@ -39,7 +53,7 @@ class ApiResponse extends HTMLElement {
           <button class="response-copy" id="copy-btn" title="Copy response">📋</button>
         </div>
         <div class="response-body">
-          <pre class="response-json">${this._formatJson(data)}</pre>
+          ${bodyContent}
         </div>
         ${Object.keys(headers).length > 0 ? this._renderHeaders(headers) : ""}
       </div>
@@ -55,6 +69,13 @@ class ApiResponse extends HTMLElement {
     if (status >= 400 && status < 500) return "response-status-client-error";
     if (status >= 500) return "response-status-server-error";
     return "";
+  }
+
+  _escapeHtml(text) {
+    return String(text)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
   }
 
   _formatJson(data) {
@@ -107,7 +128,10 @@ class ApiResponse extends HTMLElement {
   async _copyResponse() {
     if (!this._response?.data) return;
     try {
-      await navigator.clipboard.writeText(JSON.stringify(this._response.data, null, 2));
+      const text = this._response.isText
+        ? this._response.data
+        : JSON.stringify(this._response.data, null, 2);
+      await navigator.clipboard.writeText(text);
       const btn = this.querySelector("#copy-btn");
       if (btn) {
         btn.textContent = "✓";
@@ -186,6 +210,26 @@ class ApiResponse extends HTMLElement {
           border-radius: 4px;
           overflow: auto;
           max-height: 400px;
+        }
+        .response-html {
+          padding: 0.75rem;
+        }
+        .response-html table {
+          border-collapse: collapse;
+          width: 100%;
+          font-size: 0.85rem;
+        }
+        .response-html th, .response-html td {
+          border: 1px solid #e5e7eb;
+          padding: 0.5rem;
+          text-align: left;
+        }
+        .response-html th {
+          background: #f9fafb;
+          font-weight: 600;
+        }
+        .response-html tr:nth-child(even) {
+          background: #f9fafb;
         }
         .response-json {
           margin: 0;
