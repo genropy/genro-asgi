@@ -37,7 +37,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from genro_routes import Router, RoutedClass, route
+from genro_routes import Router, RoutingClass, route
 
 from genro_asgi import AsgiServer, StaticSite, HTMLResponse, RedirectResponse
 
@@ -46,7 +46,7 @@ from genro_asgi import AsgiServer, StaticSite, HTMLResponse, RedirectResponse
 # ModuleSite: represents a single genro module with its resources
 # -----------------------------------------------------------------------------
 
-class ModuleSite(RoutedClass):
+class ModuleSite(RoutingClass):
     """
     A genro module site with docs and examples.
 
@@ -98,7 +98,7 @@ class ModuleSite(RoutedClass):
 # SysApi: live server management (attached to server, not to Docs)
 # -----------------------------------------------------------------------------
 
-class SysApi(RoutedClass):
+class SysApi(RoutingClass):
     """
     API for managing the live ASGI server.
 
@@ -177,7 +177,7 @@ class SysApi(RoutedClass):
 # Docs: documentation hub (contains ModuleSite instances)
 # -----------------------------------------------------------------------------
 
-class Docs(RoutedClass):
+class Docs(RoutingClass):
     """
     Documentation hub for genro modules.
 

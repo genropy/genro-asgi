@@ -43,7 +43,7 @@ AsgiServer (genro-asgi)
     │
     └── router (genro-routes Router)
             │
-            └── shop (Shop come RoutedClass)
+            └── shop (Shop come RoutingClass)
                     │
                     └── router
                             ├── types (ArticleTypes table)
@@ -111,7 +111,7 @@ class DbopPlugin(BasePlugin):
 ### 2. sample_shop/sql/table.py (MODIFICARE IMPORT)
 
 **Cambiamenti:**
-- `from smartroute import Router, RoutedClass` → `from genro_routes import Router, RoutedClass`
+- `from smartroute import Router, RoutingClass` → `from genro_routes import Router, RoutingClass`
 - `from smartroute.plugins.pydantic import PydanticPlugin` → `from genro_routes.plugins.pydantic import PydanticPlugin`
 - Aggiornare `PydanticExtrasPlugin` con `plugin_code` e `plugin_description`
 
@@ -289,7 +289,7 @@ Ogni oggetto mantiene riferimento semantico al parent:
 
 ### DbopPlugin - Funzionamento
 
-1. Handler ha `self.db` (Table eredita da RoutedClass, ha `self.db`)
+1. Handler ha `self.db` (Table eredita da RoutingClass, ha `self.db`)
 2. Plugin intercetta chiamata
 3. Inietta `cursor = self.db.cursor()` nei kwargs
 4. Esegue handler

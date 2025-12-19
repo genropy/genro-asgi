@@ -16,7 +16,7 @@
 
 1. **Instance-scoped routers** - `Router(self, ...)` crea router con stato isolato per istanza
 2. **@route decorator** - Registra metodi con nomi espliciti e metadata
-3. **Gerarchie semplici** - `attach_instance(child, name="alias")` connette RoutedClass
+3. **Gerarchie semplici** - `attach_instance(child, name="alias")` connette RoutingClass
 4. **Plugin pipeline** - `BasePlugin` con hook `on_decore`/`wrap_handler`, ereditati dai parent
 5. **Configurazione runtime** - `routedclass.configure()` per override globali o per-handler
 6. **Extra opzionali** - Plugin logging, pydantic; core con dipendenze minime
@@ -29,7 +29,7 @@
 |----------|-------------|
 | **Router** | Runtime router bound a un oggetto: `Router(self, name="api")` |
 | **@route("name")** | Decorator che marca metodi per un router specifico |
-| **RoutedClass** | Mixin che traccia router per istanza |
+| **RoutingClass** | Mixin che traccia router per istanza |
 | **BasePlugin** | Base per plugin con hook `on_decore` e `wrap_handler` |
 | **routedclass** | Proxy per gestire router/plugin senza inquinare il namespace |
 
@@ -38,9 +38,9 @@
 ## Esempio Base
 
 ```python
-from genro_routes import RoutedClass, Router, route
+from genro_routes import RoutingClass, Router, route
 
-class OrdersAPI(RoutedClass):
+class OrdersAPI(RoutingClass):
     def __init__(self, label: str):
         self.label = label
         self.api = Router(self, name="orders")
@@ -63,7 +63,7 @@ orders.api.get("retrieve")("42")  # "acme:42"
 ## Routing Gerarchico
 
 ```python
-class UsersAPI(RoutedClass):
+class UsersAPI(RoutingClass):
     def __init__(self):
         self.api = Router(self, name="api")
 
@@ -71,7 +71,7 @@ class UsersAPI(RoutedClass):
     def list(self):
         return ["alice", "bob"]
 
-class Application(RoutedClass):
+class Application(RoutingClass):
     def __init__(self):
         self.api = Router(self, name="api")
         self.users = UsersAPI()
@@ -192,7 +192,7 @@ cfg = svc.api.logging.configuration("handler_name")
 ## Uso in genro-asgi
 
 ```python
-class AsgiServer(RoutedClass):
+class AsgiServer(RoutingClass):
     def __init__(self):
         self.router = Router(self, name="root")
 
@@ -213,7 +213,7 @@ Le app montate con `attach_instance(app, name="shop")` diventano sotto-alberi de
 ```
 genro-routes/
 ├── src/genro_routes/
-│   ├── core/               # Router, decorators, RoutedClass
+│   ├── core/               # Router, decorators, RoutingClass
 │   │   ├── router.py
 │   │   ├── decorators.py
 │   │   └── routed.py

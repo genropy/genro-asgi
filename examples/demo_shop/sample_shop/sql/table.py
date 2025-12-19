@@ -5,14 +5,14 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from pydantic import Field
-from genro_routes import Router, RoutedClass, route
+from genro_routes import Router, RoutingClass, route
 from .column import Columns
 
 # Type annotation for format parameter - enum loaded from endpoint at runtime
 FormatParam = Annotated[str, Field(json_schema_extra={"x-enum-endpoint": "list_formats"})]
 
 
-class Table(RoutedClass):
+class Table(RoutingClass):
     """Base class for table managers. Subclasses define columns via configure() hook.
 
     Naming convention:

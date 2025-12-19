@@ -118,4 +118,4 @@ class AsgiServerEnabler:
 - `AsgiServerEnabler` is **optional** - only for apps needing server resources
 - Mixin pattern preserves framework's behavior
 - `binder` is `None` when running standalone
-- `AsgiApplication` (for native apps) inherits from `RoutedClass`, not `AsgiServerEnabler`
+- `AsgiApplication` (for native apps) inherits from `RoutingClass`, not `AsgiServerEnabler`

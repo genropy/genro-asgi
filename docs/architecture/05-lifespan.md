@@ -194,7 +194,7 @@ lifespan.shutdown.complete -->
 `ServerLifespan` is automatically created by `AsgiServer`:
 
 ```python
-class AsgiServer(RoutedClass):
+class AsgiServer(RoutingClass):
     def __init__(self, ...):
         self.lifespan = ServerLifespan(self)
 

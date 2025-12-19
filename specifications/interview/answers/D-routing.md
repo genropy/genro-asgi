@@ -20,7 +20,7 @@ Selector: "shop/products/list"  (path.strip("/"))
        ↓
 router.get(selector)
        ↓
-Handler (RoutedClass method)
+Handler (RoutingClass method)
 ```
 
 ## Dispatcher Behavior (verified in code)

@@ -208,11 +208,11 @@ Fasi: 0 → 3 → 4 → 5 → 6 → 7 (1-2 deferred)
 
 ```python
 from genro_toolbox import SmartOptions
-from genro_routes import RoutedClass, Router, route
+from genro_routes import RoutingClass, Router, route
 ```
 
 - **genro-toolbox**: SmartOptions per configurazione
-- **genro-routes**: Router, RoutedClass per routing
+- **genro-routes**: Router, RoutingClass per routing
 - **uvicorn**: ASGI server
 - **pyyaml**: Config loading
 

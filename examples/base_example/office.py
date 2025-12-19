@@ -1,9 +1,9 @@
 # Office App
 
-from genro_routes import RoutedClass, Router, route
+from genro_routes import RoutingClass, Router, route
 
 
-class OfficeApp(RoutedClass):
+class OfficeApp(RoutingClass):
     """Office application."""
 
     def __init__(self):

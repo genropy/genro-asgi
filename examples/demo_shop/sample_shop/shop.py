@@ -1,5 +1,5 @@
 """
-Shop - RoutedClass aggregate for demo_shop.
+Shop - RoutingClass aggregate for demo_shop.
 
 Mounts table managers (types, articles, purchases) as child routers.
 Can be mounted via config.yaml as an app in AsgiServer.
@@ -11,7 +11,7 @@ import random
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from genro_routes import RoutedClass, Router, route
+from genro_routes import RoutingClass, Router, route
 
 from .sql import Table, SqlDb
 
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from genro_asgi.request import BaseRequest, ResponseBuilder
 
 
-class Shop(RoutedClass):
+class Shop(RoutingClass):
     """Shop aggregate - exposes tables via router."""
 
     title = "Shop API"

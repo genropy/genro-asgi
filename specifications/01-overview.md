@@ -147,7 +147,7 @@ genro-asgi is a minimal ASGI foundation for building web services. It provides:
 | `uvicorn` | ASGI server |
 | `pyyaml` | Configuration loading |
 | `genro-toolbox` | SmartOptions, utilities |
-| `genro-routes` | Router, RoutedClass |
+| `genro-routes` | Router, RoutingClass |
 | `genro-tytx` | Typed serialization (WebSocket, WSX, Request) |
 
 ### Optional

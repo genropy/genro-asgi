@@ -30,14 +30,14 @@ src/genro_asgi/
 ## Base Class: AsgiApplication
 
 ```python
-from genro_routes import RoutedClass
+from genro_routes import RoutingClass
 
-class AsgiApplication(RoutedClass):
+class AsgiApplication(RoutingClass):
     """Base class for apps mounted on AsgiServer."""
     pass
 ```
 
-Tutte le app ereditano da `AsgiApplication`, che a sua volta eredita da `RoutedClass` (genro_routes). Questo fornisce:
+Tutte le app ereditano da `AsgiApplication`, che a sua volta eredita da `RoutingClass` (genro_routes). Questo fornisce:
 
 - Sistema di routing via decoratore `@route`
 - Metodi `get()` e `members()` per interrogare routes
@@ -171,7 +171,7 @@ class StaticSite(AsgiApplication):
 
 ```
 ┌─────────────────┐
-│   RoutedClass   │  (from genro_routes)
+│   RoutingClass   │  (from genro_routes)
 │   (abstract)    │
 └────────┬────────┘
          │

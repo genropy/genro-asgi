@@ -1,9 +1,9 @@
 # Shop App
 
-from genro_routes import RoutedClass, Router, route
+from genro_routes import RoutingClass, Router, route
 
 
-class ShopApp(RoutedClass):
+class ShopApp(RoutingClass):
     """Shop application."""
 
     def __init__(self):

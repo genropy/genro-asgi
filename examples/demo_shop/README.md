@@ -1,7 +1,7 @@
 # Demo Shop
 
 Esempio di applicazione genro-asgi che dimostra:
-- RoutedClass con Router aggregato
+- RoutingClass con Router aggregato
 - Gestione tabelle SQL con pattern `configure()`
 - Auto-discovery delle tabelle
 - Integrazione Swagger/OpenAPI
@@ -52,7 +52,7 @@ Ogni tabella espone operazioni CRUD:
 demo_shop/
 ├── config.yaml              # Configurazione server
 ├── sample_shop/
-│   ├── shop.py              # Shop - RoutedClass principale
+│   ├── shop.py              # Shop - RoutingClass principale
 │   ├── sql/
 │   │   ├── __init__.py      # Esporta Table, SqlDb, tipi colonna
 │   │   ├── column.py        # Column e Columns (definizione schema)
@@ -132,10 +132,10 @@ def _configure_tables(self) -> list[type[Table]]:
 
 ### 5. OpenAPI automatico
 
-Ogni RoutedClass con `title` e `version` espone schema OpenAPI:
+Ogni RoutingClass con `title` e `version` espone schema OpenAPI:
 
 ```python
-class Shop(RoutedClass):
+class Shop(RoutingClass):
     title = "Shop API"
     version = "1.0.0"
 ```

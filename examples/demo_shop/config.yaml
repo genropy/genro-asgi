@@ -1,4 +1,4 @@
-# Demo Shop - Example using Shop as RoutedClass
+# Demo Shop - Example using Shop as RoutingClass
 # Run: python -m genro_asgi serve examples/demo_shop
 
 server:

@@ -11,7 +11,7 @@
    - Le vecchie spec parlano di "minimal ASGI layer", "Multi-App Dispatcher", "foundation of Genro ecosystem". Qual è la definizione corretta attuale?
 
 2. **Qual è il rapporto con genro_routes?**
-   - Il codice attuale usa `genro_routes.Router` e `RoutedClass`. AsgiServer eredita da `RoutedClass`. È corretto? Questo significa che genro-asgi dipende fortemente da genro_routes?
+   - Il codice attuale usa `genro_routes.Router` e `RoutingClass`. AsgiServer eredita da `RoutingClass`. È corretto? Questo significa che genro-asgi dipende fortemente da genro_routes?
 
 3. **Qual è il rapporto con genro-toolbox?**
    - Il codice usa `SmartOptions` per la configurazione. È una dipendenza obbligatoria?
@@ -35,7 +35,7 @@
 
 7. **Cosa sono le "apps" oggi?**
    - Config: `apps: {shop: "shop:ShopApp"}`
-   - Sono `RoutedClass` attaccate al router? O ASGI apps montate per path?
+   - Sono `RoutingClass` attaccate al router? O ASGI apps montate per path?
 
 ---
 
@@ -77,7 +77,7 @@
 ## E. STATIC FILES
 
 13. **Tre modi per servire static files: quali sono attivi?**
-    - `StaticSite` (RoutedClass con genro_routes)
+    - `StaticSite` (RoutingClass con genro_routes)
     - `StaticFiles` (ASGI app standalone)
     - `StaticFilesMiddleware` (middleware per prefisso)
     - Tutti e tre sono supportati? Quando usare quale?

@@ -1,14 +1,14 @@
 # AsgiServer
 
-**Version**: 1.0.0
+**Version**: 1.1.0
 **Status**: SOURCE OF TRUTH
-**Last Updated**: 2025-12-03
+**Last Updated**: 2025-12-14
 
 ---
 
 ## Overview
 
-`AsgiServer` is the root ASGI dispatcher. It inherits from `RoutedClass` (genro-routes)
+`AsgiServer` is the root ASGI dispatcher. It inherits from `RoutingClass` (genro-routes)
 and can operate in two modes:
 
 1. **Flat mode** (default): Mount apps at paths, dispatch by first segment
@@ -19,23 +19,31 @@ and can operate in two modes:
 ## Inheritance
 
 ```python
-from genro_routes import RoutedClass, Router, route
+from genro_routes import RoutingClass, Router, route
 
-class AsgiServer(RoutedClass):
+class AsgiServer(RoutingClass):
     """Root ASGI dispatcher."""
 ```
 
-`RoutedClass` provides:
-- Instance-based routing via `Router`
-- `@route` decorator for handler registration
-- Hierarchical path resolution (dotted selectors)
+---
+
+## Routing
+
+`AsgiServer` delegates all routing to **genro-routes**.
+
+See [08-routing.md](08-routing.md) for full documentation on:
+- `Router`, `RoutingClass`, `@route` decorator
+- Path resolution (uses `/` separator)
+- `nodes()` for introspection
+- `openapi()` for schema generation
+- `FilterPlugin` for tag-based filtering
 
 ---
 
 ## Class Definition
 
 ```python
-class AsgiServer(RoutedClass):
+class AsgiServer(RoutingClass):
     __slots__ = ("apps", "router", "config", "logger", "lifespan", "_started", "__dict__")
 
     def __init__(
@@ -108,7 +116,7 @@ server.router.attach_instance(server.docs, name="docs")
 ```
 
 Dispatch logic:
-1. Convert path to selector: `/docs/info` → `docs.info`
+1. Convert path to selector: `/docs/info` → `docs/info`
 2. Call `router.get(selector)` to find handler
 3. Execute handler, convert result to Response
 
@@ -299,21 +307,15 @@ def get_app_handler(self, scope: Scope) -> dict[str, Any]:
     return app_handler
 ```
 
-### Router Mode: _path_to_selector
+### Router Mode: Path as Selector
+
+genro-routes now uses `/` as path separator (same as URL), so no conversion needed:
 
 ```python
-def _path_to_selector(self, path: str) -> str:
-    """
-    Convert URL path to genro-routes selector.
-
-    "/" -> "index"
-    "/sites" -> "sites"
-    "/_sys/sites" -> "_sys.sites"
-    """
-    path = path.strip("/")
-    if not path:
-        return "index"
-    return path.replace("/", ".")
+# URL path is used directly as selector
+"/" → "index"
+"/sites" → "sites"
+"/_sys/sites" → "_sys/sites"
 ```
 
 ---
@@ -338,7 +340,7 @@ await send({"type": "websocket.close", "code": 4404})
 
 ```
 ┌─────────────┐         ┌─────────────────────────────────────────────────────────┐
-│   Uvicorn   │         │  AsgiServer (RoutedClass)                               │
+│   Uvicorn   │         │  AsgiServer (RoutingClass)                               │
 │   :8000     │ ──────► │                                                         │
 │             │         │  Flat Mode:                                             │
 │             │         │    /api/*     → apps["/api"] + RequestRegistry          │
@@ -346,7 +348,7 @@ await send({"type": "websocket.close", "code": 4404})
 │             │         │                                                         │
 │             │         │  Router Mode:                                           │
 │             │         │    /           → router.get("index")                    │
-│             │         │    /docs/info  → router.get("docs.info")                │
+│             │         │    /docs/info  → router.get("docs/info")                │
 └─────────────┘         └─────────────────────────────────────────────────────────┘
 ```
 

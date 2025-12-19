@@ -44,7 +44,7 @@ import inspect
 from typing import get_type_hints
 
 from pydantic import create_model
-from smartroute import Router, RoutedClass
+from smartroute import Router, RoutingClass
 from smartroute.plugins.pydantic import PydanticPlugin
 
 
@@ -87,7 +87,7 @@ class PydanticExtrasPlugin(PydanticPlugin):
 Router.register_plugin("pydantic_extras", PydanticExtrasPlugin)
 
 
-class Table(RoutedClass):
+class Table(RoutingClass):
     """
     Base class for table managers.
 

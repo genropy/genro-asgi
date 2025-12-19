@@ -5,7 +5,7 @@
 """
 Minimal example: AsgiServer with router mode.
 
-Demonstrates AsgiServer as a RoutedClass with built-in test endpoints.
+Demonstrates AsgiServer as a RoutingClass with built-in test endpoints.
 
 Run with:
     python main.py
