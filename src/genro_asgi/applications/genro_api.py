@@ -6,14 +6,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from genro_routes import Router, route  # type: ignore[import-untyped]
 
 from .base import AsgiApplication
-
-if TYPE_CHECKING:
-    from ..response import Response
 
 __all__ = ["GenroApiApp"]
 
@@ -31,8 +28,8 @@ class GenroApiApp(AsgiApplication):
         self.server = kwargs.pop("_server", None)
         self.api = Router(self, name="api")
 
-    @route("api")
-    def index(self, *args: str) -> Response:
+    @route("api", mime_type="text/html")
+    def index(self, *args: str) -> str:
         """Serve the main explorer page.
 
         With path consumption: /_genro_api/shop calls index('shop')
@@ -40,10 +37,8 @@ class GenroApiApp(AsgiApplication):
         app_name = args[0] if args else ""
         return self._serve_explorer(app=app_name)
 
-    def _serve_explorer(self, app: str = "") -> Response:
+    def _serve_explorer(self, app: str = "") -> str:
         """Serve the explorer HTML, optionally with app preselected."""
-        from ..response import HTMLResponse
-
         html_path = Path(__file__).parents[1] / "resources" / "genro_api" / "index.html"
         html = html_path.read_text()
 
@@ -56,7 +51,7 @@ class GenroApiApp(AsgiApplication):
   </head>"""
             html = html.replace("</head>", init_script)
 
-        return HTMLResponse(content=html)
+        return html
 
     @route("api", openapi_method="get")
     def apps(self) -> dict:
@@ -120,7 +115,7 @@ class GenroApiApp(AsgiApplication):
         return result
 
     @route("api")
-    def static(self, file: str = "") -> Response:
+    def static(self, file: str = "") -> Any:
         """Serve static resources (JS, CSS) from resources folder."""
         from ..response import Response
 

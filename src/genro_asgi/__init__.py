@@ -34,9 +34,6 @@ from .request import (
 )
 from .response import (
     FileResponse,
-    HTMLResponse,
-    JSONResponse,
-    PlainTextResponse,
     RedirectResponse,
     Response,
     StreamingResponse,
@@ -69,9 +66,6 @@ __all__ = [
     "REQUEST_FACTORIES",
     # Response classes
     "Response",
-    "JSONResponse",
-    "HTMLResponse",
-    "PlainTextResponse",
     "RedirectResponse",
     "StreamingResponse",
     "FileResponse",

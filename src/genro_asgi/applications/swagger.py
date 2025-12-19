@@ -6,14 +6,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from genro_routes import Router, route  # type: ignore[import-untyped]
 
 from .base import AsgiApplication
-
-if TYPE_CHECKING:
-    from ..response import Response
 
 __all__ = ["SwaggerApp"]
 
@@ -31,11 +28,9 @@ class SwaggerApp(AsgiApplication):
         self.server = kwargs.pop("_server", None)
         self.api = Router(self, name="api")
 
-    @route("api")
-    def index(self, app: str = "") -> Response:
+    @route("api", mime_type="text/html")
+    def index(self, app: str = "") -> str:
         """Swagger UI page."""
-        from ..response import HTMLResponse
-
         html_path = Path(__file__).parents[1] / "resources" / "swagger.html"
         html = html_path.read_text()
         # Adjust openapi URL to be relative to swagger mount point
@@ -43,7 +38,7 @@ class SwaggerApp(AsgiApplication):
         html = html.replace(
             "/_openapi_json", f"{base_path}/openapi?app={app}" if app else f"{base_path}/openapi"
         )
-        return HTMLResponse(content=html)
+        return html
 
     @route("api")
     def openapi(self, app: str = "") -> dict:

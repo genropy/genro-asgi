@@ -401,25 +401,6 @@ class HttpRequest(BaseRequest):
         """Content-Type header value."""
         return self._headers.get("content-type")
 
-    def make_response(self, result: Any) -> Any:
-        """Convert handler result to Response object."""
-        from .response import HTMLResponse, JSONResponse, PlainTextResponse, Response
-
-        if isinstance(result, Response):
-            return result
-        if isinstance(result, dict):
-            return JSONResponse(result)
-        if isinstance(result, list):
-            return JSONResponse(result)
-        if isinstance(result, str):
-            # Auto-detect HTML content by checking for HTML-like structure
-            stripped = result.strip()
-            if stripped.startswith("<") and stripped.endswith(">"):
-                return HTMLResponse(result)
-            return PlainTextResponse(result)
-        if result is None:
-            return PlainTextResponse("")
-        return PlainTextResponse(str(result))
 
 
 class MsgRequest(BaseRequest):

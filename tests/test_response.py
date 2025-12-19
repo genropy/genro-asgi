@@ -301,169 +301,6 @@ class TestResponse:
 
 
 # =============================================================================
-# Test JSONResponse
-# =============================================================================
-
-
-class TestJSONResponse:
-    """Tests for JSONResponse class."""
-
-    @pytest.mark.asyncio
-    async def test_dict_serialization(self, scope: dict, send: MockSend) -> None:
-        """Dict is serialized to JSON."""
-        from genro_asgi.response import JSONResponse
-
-        response = JSONResponse({"key": "value", "number": 42})
-        await response(scope, mock_receive, send)
-
-        body = send.body
-        assert b'"key"' in body
-        assert b'"value"' in body
-        assert b"42" in body
-
-    @pytest.mark.asyncio
-    async def test_list_serialization(self, scope: dict, send: MockSend) -> None:
-        """List is serialized to JSON."""
-        from genro_asgi.response import JSONResponse
-
-        response = JSONResponse([1, 2, 3])
-        await response(scope, mock_receive, send)
-
-        # Allow for different spacing in JSON output
-        body = send.body
-        assert b"1" in body and b"2" in body and b"3" in body
-
-    @pytest.mark.asyncio
-    async def test_content_type_is_json(self, scope: dict, send: MockSend) -> None:
-        """Content-Type is application/json."""
-        from genro_asgi.response import JSONResponse
-
-        response = JSONResponse({})
-        await response(scope, mock_receive, send)
-
-        assert send.headers[b"content-type"] == b"application/json"
-
-    @pytest.mark.asyncio
-    async def test_custom_status_code(self, scope: dict, send: MockSend) -> None:
-        """Custom status code is respected."""
-        from genro_asgi.response import JSONResponse
-
-        response = JSONResponse({"error": "not found"}, status_code=404)
-        await response(scope, mock_receive, send)
-
-        assert send.status == 404
-
-    @pytest.mark.asyncio
-    async def test_custom_headers(self, scope: dict, send: MockSend) -> None:
-        """Custom headers are included."""
-        from genro_asgi.response import JSONResponse
-
-        response = JSONResponse({}, headers={"X-Request-Id": "123"})
-        await response(scope, mock_receive, send)
-
-        assert send.headers[b"x-request-id"] == b"123"
-
-    @pytest.mark.asyncio
-    async def test_unicode_serialization(self, scope: dict, send: MockSend) -> None:
-        """Unicode characters are preserved (ensure_ascii=False)."""
-        from genro_asgi.response import JSONResponse
-
-        response = JSONResponse({"message": "Ciao 🌍"})
-        await response(scope, mock_receive, send)
-
-        # Body should contain actual UTF-8 bytes, not escaped
-        assert "🌍".encode("utf-8") in send.body
-
-    @pytest.mark.asyncio
-    async def test_none_content(self, scope: dict, send: MockSend) -> None:
-        """None is serialized as JSON null."""
-        from genro_asgi.response import JSONResponse
-
-        response = JSONResponse(None)
-        await response(scope, mock_receive, send)
-
-        assert send.body == b"null"
-
-    @pytest.mark.asyncio
-    async def test_content_length_added(self, scope: dict, send: MockSend) -> None:
-        """Content-Length is added automatically."""
-        from genro_asgi.response import JSONResponse
-
-        response = JSONResponse({"a": 1})
-        await response(scope, mock_receive, send)
-
-        assert b"content-length" in send.headers
-
-
-# =============================================================================
-# Test HTMLResponse
-# =============================================================================
-
-
-class TestHTMLResponse:
-    """Tests for HTMLResponse class."""
-
-    @pytest.mark.asyncio
-    async def test_html_content(self, scope: dict, send: MockSend) -> None:
-        """HTML content is sent correctly."""
-        from genro_asgi.response import HTMLResponse
-
-        response = HTMLResponse("<h1>Hello, World!</h1>")
-        await response(scope, mock_receive, send)
-
-        assert send.body == b"<h1>Hello, World!</h1>"
-
-    @pytest.mark.asyncio
-    async def test_content_type_is_html(self, scope: dict, send: MockSend) -> None:
-        """Content-Type is text/html with charset."""
-        from genro_asgi.response import HTMLResponse
-
-        response = HTMLResponse("<p>Test</p>")
-        await response(scope, mock_receive, send)
-
-        assert send.headers[b"content-type"] == b"text/html; charset=utf-8"
-
-    @pytest.mark.asyncio
-    async def test_bytes_content(self, scope: dict, send: MockSend) -> None:
-        """Bytes content is sent as-is."""
-        from genro_asgi.response import HTMLResponse
-
-        response = HTMLResponse(b"<p>Raw bytes</p>")
-        await response(scope, mock_receive, send)
-
-        assert send.body == b"<p>Raw bytes</p>"
-
-
-# =============================================================================
-# Test PlainTextResponse
-# =============================================================================
-
-
-class TestPlainTextResponse:
-    """Tests for PlainTextResponse class."""
-
-    @pytest.mark.asyncio
-    async def test_plain_text_content(self, scope: dict, send: MockSend) -> None:
-        """Plain text content is sent correctly."""
-        from genro_asgi.response import PlainTextResponse
-
-        response = PlainTextResponse("Hello, World!")
-        await response(scope, mock_receive, send)
-
-        assert send.body == b"Hello, World!"
-
-    @pytest.mark.asyncio
-    async def test_content_type_is_plain(self, scope: dict, send: MockSend) -> None:
-        """Content-Type is text/plain with charset."""
-        from genro_asgi.response import PlainTextResponse
-
-        response = PlainTextResponse("Test")
-        await response(scope, mock_receive, send)
-
-        assert send.headers[b"content-type"] == b"text/plain; charset=utf-8"
-
-
-# =============================================================================
 # Test RedirectResponse
 # =============================================================================
 
@@ -829,9 +666,6 @@ class TestModuleLevel:
         """All expected classes are exported."""
         from genro_asgi.response import (
             FileResponse,
-            HTMLResponse,
-            JSONResponse,
-            PlainTextResponse,
             RedirectResponse,
             Response,
             StreamingResponse,
@@ -839,9 +673,6 @@ class TestModuleLevel:
 
         # Just verify they're importable
         assert Response is not None
-        assert JSONResponse is not None
-        assert HTMLResponse is not None
-        assert PlainTextResponse is not None
         assert RedirectResponse is not None
         assert StreamingResponse is not None
         assert FileResponse is not None
@@ -850,9 +681,6 @@ class TestModuleLevel:
         """Response classes are exported from main package."""
         from genro_asgi import (
             FileResponse,
-            HTMLResponse,
-            JSONResponse,
-            PlainTextResponse,
             RedirectResponse,
             Response,
             StreamingResponse,
@@ -860,9 +688,6 @@ class TestModuleLevel:
         )
 
         assert Response is not None
-        assert JSONResponse is not None
-        assert HTMLResponse is not None
-        assert PlainTextResponse is not None
         assert RedirectResponse is not None
         assert StreamingResponse is not None
         assert FileResponse is not None
