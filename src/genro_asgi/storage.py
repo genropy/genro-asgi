@@ -18,9 +18,69 @@ from __future__ import annotations
 
 import mimetypes
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
-__all__ = ["LocalStorage", "LocalStorageNode"]
+__all__ = ["LocalStorage", "LocalStorageNode", "StorageNode"]
+
+
+@runtime_checkable
+class StorageNode(Protocol):
+    """Abstract interface for storage nodes.
+
+    Any storage backend (local, S3, HTTP) must implement this protocol.
+    LocalStorageNode is the filesystem implementation.
+    """
+
+    @property
+    def fullpath(self) -> str:
+        """Return "mount:path" complete."""
+        ...
+
+    @property
+    def path(self) -> str:
+        """Return path without mount."""
+        ...
+
+    @property
+    def exists(self) -> bool:
+        """True if file/directory exists."""
+        ...
+
+    @property
+    def isfile(self) -> bool:
+        """True if it's a file."""
+        ...
+
+    @property
+    def isdir(self) -> bool:
+        """True if it's a directory."""
+        ...
+
+    @property
+    def basename(self) -> str:
+        """Filename with extension."""
+        ...
+
+    @property
+    def mimetype(self) -> str:
+        """MIME type based on extension."""
+        ...
+
+    def read_bytes(self) -> bytes:
+        """Read content as bytes."""
+        ...
+
+    def read_text(self, encoding: str = "utf-8") -> str:
+        """Read content as text."""
+        ...
+
+    def child(self, *parts: str) -> StorageNode:
+        """Return a child node."""
+        ...
+
+    def children(self) -> list[StorageNode]:
+        """List children if it's a directory."""
+        ...
 
 
 class LocalStorageNode:

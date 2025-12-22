@@ -1,101 +1,105 @@
 # Copyright 2025 Softwell S.r.l.
 # Licensed under the Apache License, Version 2.0
 
-"""StaticRouter - Filesystem-backed router for serving static files.
+"""StaticRouter - Storage-backed router for serving static files.
 
-Maps URL paths to filesystem paths. Implements RouterInterface
+Maps URL paths to storage nodes. Implements RouterInterface
 so it can be used wherever a router is expected (introspection, hierarchy).
 
-The router returns RouterNode with file handler. The handler returns file path,
-and the caller (typically Dispatcher) is responsible for reading the file
-and building the HTTP response.
+The router returns RouterNode with callable that returns StorageNode.
+The caller (typically Dispatcher) uses the StorageNode to read content
+and build the HTTP response.
 
 Usage:
-    router = StaticRouter(directory="./public")
-    node = router.node("css/style.css")
-    if node:
-        file_path = node()  # Returns Path object
+    # Create router from storage node
+    router = StaticRouter(storage.node("site:static"))
+
+    # Resolve a file
+    router_node = router.node("css/style.css")
+    if router_node:
+        storage_node = router_node()  # Returns StorageNode
+        content = storage_node.read_bytes()
+        mime = storage_node.mimetype
 """
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
 from genro_routes import RouterInterface, RouterNode
 
 if TYPE_CHECKING:
-    pass
+    from genro_asgi.storage import StorageNode
 
 __all__ = ["StaticRouter"]
 
 
 class StaticRouter(RouterInterface):
-    """Router that maps paths to filesystem files.
+    """Router backed by StorageNode. Returns RouterNode wrapping StorageNode.
 
-    Instead of method entries, resolves paths to files on disk.
-    Subdirectories become child routers lazily.
+    Dispatcher sees RouterInterface. The callable returns StorageNode
+    which can be local filesystem, S3, HTTP, etc.
     """
 
-    __slots__ = ("directory", "name", "_html_index")
+    __slots__ = ("_root", "name", "_html_index")
 
     def __init__(
         self,
-        directory: str | Path,
+        root: StorageNode,
         name: str | None = None,
         *,
         html_index: bool = True,
     ) -> None:
-        self.directory = Path(directory)
+        """Create a static file router from a StorageNode.
+
+        Args:
+            root: StorageNode pointing to directory to serve
+            name: Router name for introspection
+            html_index: If True, "index" resolves to "index.html"
+        """
+        self._root = root
         self.name = name
         self._html_index = html_index
 
     def node(self, path: str, **kwargs: Any) -> RouterNode:
-        """Resolve path to file RouterNode.
+        """Resolve path to RouterNode wrapping StorageNode.
 
         Args:
-            path: Path relative to directory (e.g., "index.html", "css/style.css")
+            path: Path relative to root (e.g., "index.html", "css/style.css")
 
         Returns:
-            RouterNode with callable that returns file Path.
-            Empty RouterNode if file not found or not accessible.
+            RouterNode with callable that returns StorageNode.
+            Empty RouterNode if file not found.
         """
         selector = path
         if not selector or selector == "index":
             selector = "index.html" if self._html_index else ""
 
         if not selector:
-            return RouterNode({})  # Empty node
+            return RouterNode({})
 
-        file_path = (self.directory / selector).resolve()
+        # Get child storage node
+        storage_node = self._root.child(selector)
 
-        # Security: ensure path is within directory
-        if not str(file_path).startswith(str(self.directory.resolve())):
-            return RouterNode({})  # Path traversal - return empty
+        if not storage_node.exists or not storage_node.isfile:
+            return RouterNode({})
 
-        if not file_path.exists() or not file_path.is_file():
-            return RouterNode({})  # Not found - return empty
+        return self._make_file_node(storage_node, selector)
 
-        if not os.access(file_path, os.R_OK):
-            return RouterNode({})  # Not readable - return empty
+    def _make_file_node(self, storage_node: StorageNode, selector: str) -> RouterNode:
+        """Create RouterNode wrapping a StorageNode."""
 
-        return self._make_file_node(file_path, selector)
-
-    def _make_file_node(self, file_path: Path, selector: str) -> RouterNode:
-        """Create RouterNode for a file."""
-
-        def handler(**kwargs: Any) -> Path:
-            return file_path
+        def handler(**kwargs: Any) -> StorageNode:
+            return storage_node
 
         return RouterNode({
             "type": "entry",
-            "name": file_path.name,
+            "name": storage_node.basename,
             "path": selector,
             "callable": handler,
-            "doc": f"Static file: {file_path.name}",
-            "metadata": {},
+            "doc": f"Static file: {storage_node.basename}",
+            "metadata": {"mimetype": storage_node.mimetype},
         }, router=self)  # type: ignore[arg-type]
 
     def _on_attached_to_parent(self, parent: Any) -> None:
@@ -114,30 +118,29 @@ class StaticRouter(RouterInterface):
         **kwargs: Any,
     ) -> dict[str, Any]:
         """List files and directories as entries and routers."""
-        if not self.directory.exists():
+        if not self._root.exists or not self._root.isdir:
             return {}
 
         entries: dict[str, Any] = {}
         routers: dict[str, Any] = {}
 
-        for item in self.directory.iterdir():
-            if item.name.startswith("."):
+        for child in self._root.children():
+            if child.basename.startswith("."):
                 continue
-            if item.is_file():
-                entries[item.name] = {
-                    "name": item.name,
+            if child.isfile:
+                entries[child.basename] = {
+                    "name": child.basename,
                     "type": "file",
-                    "suffix": item.suffix,
-                    "size": item.stat().st_size,
+                    "mimetype": child.mimetype,
                 }
-            elif item.is_dir():
-                child = StaticRouter(item, name=item.name, html_index=self._html_index)
+            elif child.isdir:
+                child_router = StaticRouter(child, name=child.basename, html_index=self._html_index)
                 if lazy:
-                    routers[item.name] = lambda c=child: c.nodes(lazy=True, **kwargs)
+                    routers[child.basename] = lambda c=child_router: c.nodes(lazy=True, **kwargs)
                 else:
-                    child_nodes = child.nodes(**kwargs)
+                    child_nodes = child_router.nodes(**kwargs)
                     if child_nodes:
-                        routers[item.name] = child_nodes
+                        routers[child.basename] = child_nodes
 
         if not entries and not routers:
             return {}
@@ -145,7 +148,7 @@ class StaticRouter(RouterInterface):
         result: dict[str, Any] = {
             "name": self.name,
             "router": self,
-            "directory": str(self.directory),
+            "root": self._root.fullpath,
         }
         if entries:
             result["entries"] = entries
