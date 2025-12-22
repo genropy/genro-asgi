@@ -14,6 +14,7 @@ import logging
 from pathlib import Path
 
 from .dispatcher import Dispatcher
+from .exceptions import Redirect
 from .lifespan import ServerLifespan
 from .middleware import middleware_chain
 from .response import Response
@@ -21,12 +22,12 @@ from .request import RequestRegistry, BaseRequest
 from .server_config import ServerConfig
 from .types import Receive, Scope, Send
 
-from genro_routes import RoutedClass, Router, route  # type: ignore[import-untyped]
+from genro_routes import RoutingClass, Router, route  # type: ignore[import-untyped]
 
 __all__ = ["AsgiServer"]
 
 
-class AsgiServer(RoutedClass):
+class AsgiServer(RoutingClass):
     """
     Base ASGI server with routing via genro_routes.
 
@@ -63,7 +64,7 @@ class AsgiServer(RoutedClass):
     ) -> None:
         """Initialize AsgiServer."""
         self.config = ServerConfig(server_dir, host, port, reload, argv)
-        self.apps: dict[str, RoutedClass] = {}
+        self.apps: dict[str, RoutingClass] = {}
         self.router = Router(self, name="root")
         for name, opts in self.config.get_plugin_specs().items():
             self.router.plug(name, **opts)
@@ -75,6 +76,9 @@ class AsgiServer(RoutedClass):
             instance = cls(self, **kwargs)
             self.apps[name] = instance
             self.router.attach_instance(instance, name=name)
+
+        # Set index as default_entry - it will redirect to main_app if configured
+        self.router.default_entry = "index"
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """
@@ -115,11 +119,25 @@ class AsgiServer(RoutedClass):
     # Router mode methods
     # ─────────────────────────────────────────────────────────────────────────
 
-    @route("root", mime_type="text/html")
+    @route("root", meta_mime_type="text/html")
     def index(self) -> str:
-        """Default index page for router mode."""
+        """Default index page for router mode. Redirects to main_app if configured."""
+        if self.config.main_app:
+            raise Redirect(f"/{self.config.main_app}/")
         html_path = Path(__file__).parent / "resources" / "html" / "default_index.html"
         return html_path.read_text()
+
+    @route("root", meta_mime_type="application/json")
+    def _openapi(self, *args: str) -> dict:
+        """OpenAPI schema endpoint."""
+        basepath = "/".join(args) if args else None
+        return self.router.nodes(basepath=basepath, mode="openapi")
+
+    @route("root")
+    def _resource(self, *args: str) -> dict:
+        """Resource endpoint with hierarchical fallback. TODO: implement."""
+        basepath = "/".join(args) if args else None
+        return {"resource": basepath, "status": "not_implemented"}
 
     @property
     def request(self) -> BaseRequest | None:

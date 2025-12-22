@@ -3,18 +3,18 @@
 
 """StaticRouter - Filesystem-backed router for serving static files.
 
-Maps URL path selectors to filesystem paths. Implements RouterInterface
+Maps URL paths to filesystem paths. Implements RouterInterface
 so it can be used wherever a router is expected (introspection, hierarchy).
 
-The router returns file info dicts, not actual file content. The caller
-(typically StaticSite or Dispatcher) is responsible for reading the file
+The router returns RouterNode with file handler. The handler returns file path,
+and the caller (typically Dispatcher) is responsible for reading the file
 and building the HTTP response.
 
 Usage:
     router = StaticRouter(directory="./public")
-    handler = router.get("css/style.css")
-    if handler:
-        file_info = handler()  # {"type": "file", "path": Path(...), ...}
+    node = router.node("css/style.css")
+    if node:
+        file_path = node()  # Returns Path object
 """
 
 from __future__ import annotations
@@ -22,9 +22,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
-from genro_routes import RouterInterface
+from genro_routes import RouterInterface, RouterNode
 
 if TYPE_CHECKING:
     pass
@@ -33,7 +33,7 @@ __all__ = ["StaticRouter"]
 
 
 class StaticRouter(RouterInterface):
-    """Router that maps selectors to filesystem paths.
+    """Router that maps paths to filesystem files.
 
     Instead of method entries, resolves paths to files on disk.
     Subdirectories become child routers lazily.
@@ -52,54 +52,51 @@ class StaticRouter(RouterInterface):
         self.name = name
         self._html_index = html_index
 
-    def get(self, selector: str, **options: Any) -> Callable:
-        """Resolve selector to file handler.
+    def node(self, path: str, **kwargs: Any) -> RouterNode:
+        """Resolve path to file RouterNode.
 
         Args:
-            selector: Path relative to directory (e.g., "index.html", "css/style.css")
+            path: Path relative to directory (e.g., "index.html", "css/style.css")
 
         Returns:
-            Callable handler that returns file info dict.
-
-        Raises:
-            FileNotFoundError: If file does not exist (404)
-            PermissionError: If file is not readable (403)
+            RouterNode with callable that returns file Path.
+            Empty RouterNode if file not found or not accessible.
         """
+        selector = path
         if not selector or selector == "index":
             selector = "index.html" if self._html_index else ""
 
         if not selector:
-            raise FileNotFoundError("No index file")
+            return RouterNode({})  # Empty node
 
-        path = (self.directory / selector).resolve()
+        file_path = (self.directory / selector).resolve()
 
         # Security: ensure path is within directory
-        if not str(path).startswith(str(self.directory.resolve())):
-            raise PermissionError("Path traversal not allowed")
+        if not str(file_path).startswith(str(self.directory.resolve())):
+            return RouterNode({})  # Path traversal - return empty
 
-        if not path.exists():
-            raise FileNotFoundError(f"File not found: {selector}")
+        if not file_path.exists() or not file_path.is_file():
+            return RouterNode({})  # Not found - return empty
 
-        if not path.is_file():
-            raise FileNotFoundError(f"Not a file: {selector}")
+        if not os.access(file_path, os.R_OK):
+            return RouterNode({})  # Not readable - return empty
 
-        if not os.access(path, os.R_OK):
-            raise PermissionError(f"Cannot read: {selector}")
+        return self._make_file_node(file_path, selector)
 
-        return self._make_file_handler(path)
+    def _make_file_node(self, file_path: Path, selector: str) -> RouterNode:
+        """Create RouterNode for a file."""
 
-    def _make_file_handler(self, path: Path) -> Callable:
-        """Create handler that returns file info dict."""
+        def handler(**kwargs: Any) -> Path:
+            return file_path
 
-        def handler(**kwargs: Any) -> dict[str, Any]:
-            return {
-                "type": "file",
-                "path": path,
-                "name": path.name,
-                "suffix": path.suffix,
-            }
-
-        return handler
+        return RouterNode({
+            "type": "entry",
+            "name": file_path.name,
+            "path": selector,
+            "callable": handler,
+            "doc": f"Static file: {file_path.name}",
+            "metadata": {},
+        }, router=self)  # type: ignore[arg-type]
 
     def _on_attached_to_parent(self, parent: Any) -> None:
         """Called when attached to a parent router. No-op for static router."""
