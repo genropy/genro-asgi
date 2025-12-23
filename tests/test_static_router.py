@@ -201,8 +201,8 @@ class TestStaticRouterNodes:
         root = temp_storage_with_files.node("site")
         router = StaticRouter(root)
         result = router.nodes(lazy=True)
-        # In lazy mode, routers are callables
-        assert callable(result["routers"]["images"])
+        # In lazy mode, routers are StaticRouter instances (router references)
+        assert isinstance(result["routers"]["images"], StaticRouter)
 
     def test_nodes_root_info(self, temp_storage_with_files: LocalStorage) -> None:
         root = temp_storage_with_files.node("site")
@@ -210,7 +210,24 @@ class TestStaticRouterNodes:
         result = router.nodes()
         assert result["name"] == "static"
         assert result["router"] is router
-        assert result["root"] == "site"
+        assert "description" in result  # Has description instead of root
+
+    def test_nodes_with_pattern(self, temp_storage_with_files: LocalStorage) -> None:
+        """Pattern filters entries by regex."""
+        root = temp_storage_with_files.node("site")
+        router = StaticRouter(root)
+        # Only match .css files
+        result = router.nodes(pattern=r"\.css$")
+        assert "style.css" in result.get("entries", {})
+        assert "index.html" not in result.get("entries", {})
+
+    def test_nodes_with_basepath(self, temp_storage_with_files: LocalStorage) -> None:
+        """Basepath navigates to subdirectory."""
+        root = temp_storage_with_files.node("site")
+        router = StaticRouter(root)
+        result = router.nodes(basepath="images")
+        # Should return contents of images/ directory
+        assert "logo.png" in result.get("entries", {})
 
 
 class TestStaticRouterInterface:

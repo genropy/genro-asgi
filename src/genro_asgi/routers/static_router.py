@@ -56,6 +56,7 @@ RouterNode Attributes:
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
@@ -248,24 +249,41 @@ class StaticRouter(RouterInterface):
         basepath: str | None = None,
         lazy: bool = False,
         mode: str | None = None,
+        pattern: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """List contents of the storage root for introspection.
-
-        Returns a dict describing files (entries) and subdirectories (routers).
-        Used for discovery, documentation, or building navigation.
+        """Return a tree of files/directories respecting filters.
 
         Args:
-            basepath: Reserved for compatibility (unused).
-            lazy: If True, subdirectory contents are returned as callables.
-            mode: Reserved for compatibility (unused).
+            basepath: Path to start from (e.g., "images/icons").
+                      If provided, returns nodes starting from that point.
+            lazy: If True, child directories are returned as callables
+                  instead of recursively expanded.
+            mode: Output format mode (reserved for compatibility).
+            pattern: Regex pattern to filter entry names.
+                     Only files whose name matches are included.
 
         Returns:
-            Dict with keys: name, router, root, entries (files), routers (dirs).
+            Dict with keys: name, description, router, entries, routers.
             Empty dict if root doesn't exist or is empty.
         """
+        # Handle basepath navigation
+        if basepath:
+            target_node = self.node(basepath)
+            if not target_node or target_node.type != "router":
+                return {}
+            # Get the storage node and create a new router for it
+            storage_node = target_node()
+            target_router = StaticRouter(
+                storage_node, name=storage_node.basename, html_index=self._html_index
+            )
+            return target_router.nodes(lazy=lazy, mode=mode, pattern=pattern, **kwargs)
+
         if not self._root.exists or not self._root.isdir:
             return {}
+
+        # Compile pattern once if provided
+        pattern_re = re.compile(pattern) if pattern else None
 
         entries: dict[str, Any] = {}
         routers: dict[str, Any] = {}
@@ -274,17 +292,18 @@ class StaticRouter(RouterInterface):
             if child.basename.startswith("."):
                 continue
             if child.isfile:
-                entries[child.basename] = {
-                    "name": child.basename,
-                    "type": "file",
-                    "mimetype": child.mimetype,
-                }
+                # Apply pattern filter to files
+                if pattern_re is None or pattern_re.search(child.basename):
+                    entries[child.basename] = self._entry_info(child)
             elif child.isdir:
-                child_router = StaticRouter(child, name=child.basename, html_index=self._html_index)
+                child_router = StaticRouter(
+                    child, name=child.basename, html_index=self._html_index
+                )
                 if lazy:
-                    routers[child.basename] = lambda c=child_router: c.nodes(lazy=True, **kwargs)
+                    # In lazy mode, return router reference
+                    routers[child.basename] = child_router
                 else:
-                    child_nodes = child_router.nodes(**kwargs)
+                    child_nodes = child_router.nodes(pattern=pattern, **kwargs)
                     if child_nodes:
                         routers[child.basename] = child_nodes
 
@@ -293,14 +312,26 @@ class StaticRouter(RouterInterface):
 
         result: dict[str, Any] = {
             "name": self.name,
+            "description": f"Static files from {self._root.fullpath}",
             "router": self,
-            "root": self._root.fullpath,
         }
         if entries:
             result["entries"] = entries
         if routers:
             result["routers"] = routers
         return result
+
+    def _entry_info(self, storage_node: StorageNode) -> dict[str, Any]:
+        """Return entry info dict for a file."""
+        return {
+            "name": storage_node.basename,
+            "type": "entry",
+            "mimetype": storage_node.mimetype,
+            "metadata": {
+                "size": getattr(storage_node, "size", None),
+                "fullpath": storage_node.fullpath,
+            },
+        }
 
 
 if __name__ == "__main__":
