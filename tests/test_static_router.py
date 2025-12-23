@@ -63,11 +63,18 @@ class TestStaticRouterNode:
         assert storage_node.basename == "style.css"
         assert storage_node.mimetype == "text/css"
 
-    def test_node_nonexistent_file(self, temp_storage_with_files: LocalStorage) -> None:
+    def test_node_nonexistent_file_fallback_to_root(
+        self, temp_storage_with_files: LocalStorage
+    ) -> None:
+        """Best-match: nonexistent file falls back to root with extra_args."""
         root = temp_storage_with_files.node("site")
         router = StaticRouter(root)
         router_node = router.node("nonexistent.txt")
-        assert router_node.callable is None  # Empty RouterNode
+        # Best-match: falls back to root directory
+        assert router_node.callable is not None
+        assert router_node.extra_args == ["nonexistent.txt"]
+        storage_node = router_node()
+        assert storage_node.isdir  # Root is a directory
 
     def test_node_nested_file(self, temp_storage_with_files: LocalStorage) -> None:
         root = temp_storage_with_files.node("site")
@@ -78,35 +85,55 @@ class TestStaticRouterNode:
         assert storage_node.basename == "logo.png"
         assert storage_node.mimetype == "image/png"
 
-    def test_node_index_html_default(self, temp_storage_with_files: LocalStorage) -> None:
+    def test_node_empty_path_returns_root(
+        self, temp_storage_with_files: LocalStorage
+    ) -> None:
+        """Empty path returns root directory node."""
         root = temp_storage_with_files.node("site")
         router = StaticRouter(root)
-        # Empty path should resolve to index.html
         router_node = router.node("")
         assert router_node.callable is not None
         storage_node = router_node()
-        assert storage_node.basename == "index.html"
+        assert storage_node.isdir
+        assert router_node.extra_args == []
 
-    def test_node_index_keyword(self, temp_storage_with_files: LocalStorage) -> None:
+    def test_node_directory_returns_directory_node(
+        self, temp_storage_with_files: LocalStorage
+    ) -> None:
+        """Best-match: directory path returns directory node."""
         root = temp_storage_with_files.node("site")
         router = StaticRouter(root)
-        router_node = router.node("index")
-        assert router_node.callable is not None
-        storage_node = router_node()
-        assert storage_node.basename == "index.html"
-
-    def test_node_no_html_index(self, temp_storage_with_files: LocalStorage) -> None:
-        root = temp_storage_with_files.node("site")
-        router = StaticRouter(root, html_index=False)
-        router_node = router.node("")
-        assert router_node.callable is None  # No default index
-
-    def test_node_directory_returns_empty(self, temp_storage_with_files: LocalStorage) -> None:
-        root = temp_storage_with_files.node("site")
-        router = StaticRouter(root)
-        # Directory should not be returned as file
         router_node = router.node("images")
-        assert router_node.callable is None
+        assert router_node.callable is not None
+        assert router_node.type == "router"  # Directory = router type
+        storage_node = router_node()
+        assert storage_node.isdir
+        assert storage_node.basename == "images"
+
+    def test_node_partial_path_with_extra_args(
+        self, temp_storage_with_files: LocalStorage
+    ) -> None:
+        """Best-match: partial path returns deepest valid node with extra_args."""
+        root = temp_storage_with_files.node("site")
+        router = StaticRouter(root)
+        # images exists, but gamma/123 don't
+        router_node = router.node("images/gamma/123")
+        assert router_node.callable is not None
+        assert router_node.extra_args == ["gamma", "123"]
+        storage_node = router_node()
+        assert storage_node.basename == "images"
+
+    def test_node_with_query_string(
+        self, temp_storage_with_files: LocalStorage
+    ) -> None:
+        """Query string is parsed into partial_kwargs."""
+        root = temp_storage_with_files.node("site")
+        router = StaticRouter(root)
+        router_node = router.node("images/logo.png?size=large&format=webp")
+        assert router_node.callable is not None
+        assert router_node.partial_kwargs == {"size": "large", "format": "webp"}
+        storage_node = router_node()
+        assert storage_node.basename == "logo.png"
 
     def test_node_returns_storage_node(self, temp_storage_with_files: LocalStorage) -> None:
         root = temp_storage_with_files.node("site")
