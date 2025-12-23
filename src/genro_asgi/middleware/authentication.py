@@ -7,8 +7,7 @@ YAML Configuration:
     middleware: cors, auth
 
     auth_middleware:
-      api_tokens:
-        type: bearer
+      bearer:
         reader_token:
           token: "tk_abc123"
           tags: "read"
@@ -16,8 +15,7 @@ YAML Configuration:
           token: "tk_xyz789"
           tags: "read,write"
 
-      staff:
-        type: basic
+      basic:
         mrossi:
           password: "secret123"
           tags: "read,write"
@@ -25,16 +23,20 @@ YAML Configuration:
           password: "supersecret"
           tags: "admin"
 
-      jwt_internal:
-        type: jwt
-        secret: "my-secret"
-        algorithm: "HS256"
+      jwt:
+        internal:
+          secret: "my-secret"
+          algorithm: "HS256"
+          tags: "read,write"
+          exp: 3600
 
 scope["auth"] format (if authenticated):
-    Bearer: {"tags": ["read"], "token_name": "reader_token", "entry": "api_tokens", "backend": "bearer"}
-    Basic:  {"tags": ["read"], "username": "mrossi", "entry": "staff", "backend": "basic"}
+    Bearer: {"tags": ["read"], "identity": "reader_token", "backend": "bearer"}
+    Basic:  {"tags": ["read"], "identity": "mrossi", "backend": "basic"}
+    JWT:    {"tags": ["read"], "identity": "sub_from_token", "backend": "jwt:internal"}
 
-scope["auth"] = None if no entry matches.
+scope["auth"] = None if no auth header present.
+Raises HTTPException(401) if credentials are present but invalid.
 """
 
 from __future__ import annotations
@@ -46,6 +48,13 @@ from typing import TYPE_CHECKING, Any
 from . import BaseMiddleware, headers_dict
 from ..exceptions import HTTPException
 from ..utils import normalize_list
+
+try:
+    import jwt
+    HAS_JWT = True
+except ImportError:
+    jwt = None  # type: ignore[assignment]
+    HAS_JWT = False
 
 if TYPE_CHECKING:
     from ..types import ASGIApp, Receive, Scope, Send
@@ -66,46 +75,48 @@ class AuthMiddleware(BaseMiddleware):
         super().__init__(app)
         self._auth_config: defaultdict[str, dict[str, Any]] = defaultdict(dict)
 
-        for entry_name, config in entries.items():
-            auth_type = config.pop("type", "")
+        for auth_type, credentials in entries.items():
             method = getattr(self, f"_configure_{auth_type}", self._configure_default)
-            method(entry_name=entry_name, config=config)
+            method(credentials=credentials)
 
-    def _configure_bearer(self, *, entry_name: str, config: Any, **kw: Any) -> None:
-        """Configure bearer tokens. All keys are token names."""
-        for token_name, token_config in config.items():
-            token_value = token_config.get("token")
+    def _configure_bearer(self, *, credentials: dict[str, Any]) -> None:
+        """Configure bearer tokens. Each entry: {token: "...", tags: "..."}"""
+        for cred_name, config in credentials.items():
+            token_value = config.get("token")
             if not token_value:
-                raise ValueError(f"Bearer token '{token_name}' missing 'token' value")
+                raise ValueError(f"Bearer token '{cred_name}' missing 'token' value")
             self._auth_config["bearer"][token_value] = {
-                "tags": normalize_list(token_config.get("tags", [])),
-                "token_name": token_name,
-                "entry": entry_name,
+                "tags": normalize_list(config.get("tags", [])),
+                "identity": cred_name,
             }
 
-    def _configure_basic(self, *, entry_name: str, config: Any, **kw: Any) -> None:
-        """Configure basic auth. All keys are usernames."""
-        for username, user_config in config.items():
-            password = user_config.get("password")
+    def _configure_basic(self, *, credentials: dict[str, Any]) -> None:
+        """Configure basic auth. Each entry: {password: "...", tags: "..."}"""
+        for username, config in credentials.items():
+            password = config.get("password")
             if not password:
                 raise ValueError(f"Basic auth user '{username}' missing 'password'")
             b64_key = base64.b64encode(f"{username}:{password}".encode()).decode()
             self._auth_config["basic"][b64_key] = {
-                "tags": normalize_list(user_config.get("tags", [])),
-                "username": username,
-                "entry": entry_name,
+                "tags": normalize_list(config.get("tags", [])),
+                "identity": username,
             }
 
-    def _configure_jwt(self, *, entry_name: str, config: Any, **kw: Any) -> None:
-        """Configure JWT verifier."""
-        self._auth_config["jwt"][entry_name] = {
-            "secret": config.get("secret"),
-            "public_key": config.get("public_key"),
-            "algorithm": config.get("algorithm", "HS256"),
-        }
+    def _configure_jwt(self, *, credentials: dict[str, Any]) -> None:
+        """Configure JWT verifiers. Each entry: {secret/public_key, algorithm, tags, exp}"""
+        if not HAS_JWT:
+            raise ImportError("JWT config requires pyjwt. Install: pip install pyjwt")
+        for config_name, config in credentials.items():
+            self._auth_config["jwt"][config_name] = {
+                "secret": config.get("secret"),
+                "public_key": config.get("public_key"),
+                "algorithm": config.get("algorithm", "HS256"),
+                "default_tags": normalize_list(config.get("tags", [])),
+                "default_exp": config.get("exp", 3600),
+            }
 
-    def _configure_default(self, *, entry_name: str, **kw: Any) -> None:
-        """Fallback for unknown auth types."""
+    def _configure_default(self, *, credentials: dict[str, Any]) -> None:
+        """Fallback for unknown auth types - ignored."""
         pass
 
     def _get_auth(self, scope: Scope) -> tuple[str | None, str | None]:
@@ -117,9 +128,23 @@ class AuthMiddleware(BaseMiddleware):
         return None, None
 
     def _verify_jwt(self, credentials: str, jwt_config: dict[str, Any]) -> dict[str, Any] | None:
-        """Verify JWT token. Stub for future implementation."""
-        # TODO: implement with pyjwt
-        return None
+        """Verify JWT token and extract payload."""
+        if not HAS_JWT or jwt is None:
+            return None
+        secret: str | bytes | None = jwt_config.get("secret") or jwt_config.get("public_key")
+        if not secret:
+            return None
+        algorithm: str = jwt_config.get("algorithm", "HS256")
+        try:
+            payload = jwt.decode(credentials, secret, algorithms=[algorithm])
+            return {
+                "identity": payload.get("sub"),
+                "tags": payload.get("tags", []),
+            }
+        except jwt.ExpiredSignatureError:
+            return None
+        except jwt.InvalidTokenError:
+            return None
 
     def _authenticate(self, scope: Scope) -> dict[str, Any] | None:
         """Authenticate request via dynamic dispatch.
@@ -144,14 +169,14 @@ class AuthMiddleware(BaseMiddleware):
         """Authenticate bearer token. Falls back to JWT if not found."""
         entry = self._auth_config.get("bearer", {}).get(credentials)
         if entry:
-            return {**entry, "backend": "bearer"}
+            return {"tags": entry["tags"], "identity": entry["identity"], "backend": "bearer"}
         return self._auth_jwt(credentials=credentials)
 
     def _auth_basic(self, *, credentials: str, **kw: Any) -> dict[str, Any] | None:
         """Authenticate basic auth credentials."""
         entry = self._auth_config.get("basic", {}).get(credentials)
         if entry:
-            return {**entry, "backend": "basic"}
+            return {"tags": entry["tags"], "identity": entry["identity"], "backend": "basic"}
         return None
 
     def _auth_jwt(self, *, credentials: str, **kw: Any) -> dict[str, Any] | None:
@@ -165,6 +190,25 @@ class AuthMiddleware(BaseMiddleware):
 
     def _auth_default(self, *, auth_type: str, **kw: Any) -> dict[str, Any] | None:
         """Fallback for unknown auth types."""
+        return None
+
+    def verify_credentials(self, username: str, password: str) -> dict[str, Any] | None:
+        """Verify username/password against basic auth config.
+
+        Useful for login endpoints that need to verify credentials
+        before issuing a JWT token.
+
+        Args:
+            username: The username to verify.
+            password: The password to verify.
+
+        Returns:
+            Dict with tags and identity if valid, None otherwise.
+        """
+        b64_key = base64.b64encode(f"{username}:{password}".encode()).decode()
+        entry = self._auth_config.get("basic", {}).get(b64_key)
+        if entry:
+            return {"tags": entry["tags"], "identity": username}
         return None
 
     @headers_dict

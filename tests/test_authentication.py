@@ -259,8 +259,7 @@ class TestAuthMiddleware:
         """Middleware authenticates bearer token."""
         middleware = AuthMiddleware(
             dummy_app,
-            tokens={
-                "type": "bearer",
+            bearer={
                 "test_token": {"token": "tk_test", "tags": "read"},
             },
         )
@@ -271,7 +270,7 @@ class TestAuthMiddleware:
         await middleware(scope, None, None)
 
         assert "auth" in captured_scope
-        assert captured_scope["auth"]["token_name"] == "test_token"
+        assert captured_scope["auth"]["identity"] == "test_token"
         assert captured_scope["auth"]["tags"] == ["read"]
         assert captured_scope["auth"]["backend"] == "bearer"
 
@@ -281,8 +280,7 @@ class TestAuthMiddleware:
         credentials = base64.b64encode(b"mrossi:secret123").decode()
         middleware = AuthMiddleware(
             dummy_app,
-            users={
-                "type": "basic",
+            basic={
                 "mrossi": {"password": "secret123", "tags": "read,write"},
             },
         )
@@ -293,7 +291,7 @@ class TestAuthMiddleware:
         await middleware(scope, None, None)
 
         assert "auth" in captured_scope
-        assert captured_scope["auth"]["username"] == "mrossi"
+        assert captured_scope["auth"]["identity"] == "mrossi"
         assert captured_scope["auth"]["tags"] == ["read", "write"]
         assert captured_scope["auth"]["backend"] == "basic"
 
@@ -302,8 +300,7 @@ class TestAuthMiddleware:
         """Middleware sets auth to None when no header present."""
         middleware = AuthMiddleware(
             dummy_app,
-            tokens={
-                "type": "bearer",
+            bearer={
                 "test_token": {"token": "tk_test", "tags": "read"},
             },
         )
@@ -318,8 +315,7 @@ class TestAuthMiddleware:
         """Middleware raises 401 when token is invalid."""
         middleware = AuthMiddleware(
             dummy_app,
-            tokens={
-                "type": "bearer",
+            bearer={
                 "test_token": {"token": "tk_test", "tags": "read"},
             },
         )
@@ -339,12 +335,10 @@ class TestAuthMiddleware:
         credentials = base64.b64encode(b"admin:supersecret").decode()
         middleware = AuthMiddleware(
             dummy_app,
-            tokens={
-                "type": "bearer",
+            bearer={
                 "api_token": {"token": "tk_api", "tags": "api"},
             },
-            users={
-                "type": "basic",
+            basic={
                 "admin": {"password": "supersecret", "tags": "admin"},
             },
         )
@@ -354,7 +348,7 @@ class TestAuthMiddleware:
         }
         await middleware(scope, None, None)
 
-        assert captured_scope["auth"]["username"] == "admin"
+        assert captured_scope["auth"]["identity"] == "admin"
         assert captured_scope["auth"]["tags"] == ["admin"]
         assert captured_scope["auth"]["backend"] == "basic"
 
@@ -363,12 +357,10 @@ class TestAuthMiddleware:
         """Bearer token is matched when header uses Bearer scheme."""
         middleware = AuthMiddleware(
             dummy_app,
-            tokens={
-                "type": "bearer",
+            bearer={
                 "api_token": {"token": "tk_api", "tags": "api"},
             },
-            users={
-                "type": "basic",
+            basic={
                 "admin": {"password": "supersecret", "tags": "admin"},
             },
         )
@@ -378,7 +370,7 @@ class TestAuthMiddleware:
         }
         await middleware(scope, None, None)
 
-        assert captured_scope["auth"]["token_name"] == "api_token"
+        assert captured_scope["auth"]["identity"] == "api_token"
         assert captured_scope["auth"]["backend"] == "bearer"
 
     @pytest.mark.asyncio

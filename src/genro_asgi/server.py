@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 from .dispatcher import Dispatcher
 from .exceptions import Redirect
@@ -23,6 +24,13 @@ from .server_config import ServerConfig
 from .types import Receive, Scope, Send
 
 from genro_routes import RoutingClass, Router, route  # type: ignore[import-untyped]
+
+try:
+    import jwt
+    HAS_JWT = True
+except ImportError:
+    jwt = None  # type: ignore[assignment]
+    HAS_JWT = False
 
 __all__ = ["AsgiServer"]
 
@@ -71,7 +79,9 @@ class AsgiServer(RoutingClass):
         self.logger = logging.getLogger("genro_asgi")
         self.lifespan = ServerLifespan(self)
         self.request_registry = RequestRegistry()
-        self.dispatcher = middleware_chain(self.config.middleware, Dispatcher(self))
+        self.dispatcher = middleware_chain(
+            self.config.middleware, Dispatcher(self), full_config=self.config._opts
+        )
         for name, (cls, kwargs) in self.config.get_app_specs().items():
             instance = cls(self, **kwargs)
             self.apps[name] = instance
@@ -101,9 +111,9 @@ class AsgiServer(RoutingClass):
         """Run the server using Uvicorn."""
         import uvicorn
 
-        host = self.config.server.host
-        port = self.config.server.port
-        reload = self.config.server.reload or False
+        host = self.config.server["host"]
+        port = self.config.server["port"]
+        reload = self.config.server["reload"] or False
 
         self.logger.info(f"Starting server on {host}:{port}")
         uvicorn.run(self, host=host, port=port, reload=reload)
@@ -138,6 +148,26 @@ class AsgiServer(RoutingClass):
         """Resource endpoint with hierarchical fallback. TODO: implement."""
         basepath = "/".join(args) if args else None
         return {"resource": basepath, "status": "not_implemented"}
+
+    @route("root", auth_tags="superadmin&has_jwt")
+    def _create_jwt(
+        self,
+        jwt_config: str | None = None,
+        sub: str | None = None,
+        tags: str | None = None,
+        exp: int | None = None,
+        **extra_kwargs: Any,
+    ) -> dict[str, Any]:
+        """Create JWT token via HTTP endpoint. Requires superadmin auth tag."""
+        if not jwt_config or not sub:
+            return {"error": "jwt_config and sub are required"}
+        # TODO: import create_jwt from genro-toolbox
+        # tags_list = tags.split(",") if tags else None
+        # extra = extra_kwargs if extra_kwargs else None
+        # token = create_jwt(jwt_config, sub, tags_list, exp, extra)
+        # return {"token": token}
+        _ = (tags, exp, extra_kwargs)  # unused until genro-toolbox is ready
+        return {"error": "not implemented - waiting for genro-toolbox"}
 
     @property
     def request(self) -> BaseRequest | None:
