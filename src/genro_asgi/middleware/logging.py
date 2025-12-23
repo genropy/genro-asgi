@@ -25,6 +25,10 @@ class LoggingMiddleware(BaseMiddleware):
         include_query: Include query string in log. Default: True
     """
 
+    middleware_name = "logging"
+    middleware_order = 200
+    middleware_default = False
+
     __slots__ = ("logger", "level", "include_headers", "include_query")
 
     def __init__(

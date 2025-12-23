@@ -8,16 +8,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, MutableMapping
 
 from . import BaseMiddleware
-
-
-def _normalize_list(value: str | list[str] | None, default: list[str] | None = None) -> list[str]:
-    """Normalize a value to a list of strings."""
-    if value is None:
-        return default or []
-    if isinstance(value, str):
-        return [v.strip() for v in value.split(",") if v.strip()]
-    return list(value)
-
+from ..utils import normalize_list
 
 if TYPE_CHECKING:
     from ..types import ASGIApp, Receive, Scope, Send
@@ -36,6 +27,10 @@ class CORSMiddleware(BaseMiddleware):
         expose_headers: Headers to expose. Default: []
         max_age: Preflight cache time in seconds. Default: 600
     """
+
+    middleware_name = "cors"
+    middleware_order = 300
+    middleware_default = False
 
     __slots__ = (
         "allow_origins",
@@ -60,13 +55,13 @@ class CORSMiddleware(BaseMiddleware):
         **kwargs: Any,
     ) -> None:
         super().__init__(app, **kwargs)
-        self.allow_origins = _normalize_list(allow_origins, ["*"])
-        self.allow_methods = _normalize_list(
+        self.allow_origins = normalize_list(allow_origins, ["*"])
+        self.allow_methods = normalize_list(
             allow_methods, ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"]
         )
-        self.allow_headers = _normalize_list(allow_headers, ["*"])
+        self.allow_headers = normalize_list(allow_headers, ["*"])
         self.allow_credentials = allow_credentials
-        self.expose_headers = _normalize_list(expose_headers)
+        self.expose_headers = normalize_list(expose_headers)
         self.max_age = max_age
 
         self._allow_all_origins = "*" in self.allow_origins

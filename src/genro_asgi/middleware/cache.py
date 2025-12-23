@@ -40,6 +40,10 @@ class CacheMiddleware(BaseMiddleware):
         public: Add public directive. Default: True
     """
 
+    middleware_name = "cache"
+    middleware_order = 900
+    middleware_default = False
+
     __slots__ = ("max_age", "immutable", "public")
 
     def __init__(

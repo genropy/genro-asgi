@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+import functools
 import importlib
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -16,11 +18,45 @@ if TYPE_CHECKING:
 MIDDLEWARE_REGISTRY: dict[str, type["BaseMiddleware"]] = {}
 
 
+def headers_dict(
+    func: Callable[..., Coroutine[Any, Any, None]],
+) -> Callable[..., Coroutine[Any, Any, None]]:
+    """Decorator that parses headers into scope["_headers"] dict if not present."""
+
+    @functools.wraps(func)
+    async def wrapper(
+        self: "BaseMiddleware", scope: "Scope", receive: "Receive", send: "Send"
+    ) -> None:
+        if "_headers" not in scope:
+            scope["_headers"] = {
+                name.decode("latin-1").lower(): value.decode("latin-1")
+                for name, value in scope.get("headers", [])
+            }
+        await func(self, scope, receive, send)
+
+    return wrapper
+
+
 class BaseMiddleware(ABC):
     """Base class for all middleware. Subclasses auto-register via __init_subclass__.
 
-    Optional: define `middleware_name` class attribute to use custom registry key.
+    Class attributes:
+        middleware_name: Registry key (default: class name).
+        middleware_order: Order in chain (lower = earlier). Ranges:
+            100: Core (errors)
+            200: Logging/Tracing
+            300: Security (cors, csrf)
+            400: Authentication (auth)
+            500-800: Business logic (custom)
+            900: Transformation (compression, caching)
+        middleware_default: Default on/off state. Default: False.
+
+    Use @headers_dict decorator on __call__ to access scope["_headers"].
     """
+
+    middleware_name: str = ""
+    middleware_order: int = 500
+    middleware_default: bool = False
 
     __slots__ = ("app",)
 
@@ -29,9 +65,11 @@ class BaseMiddleware(ABC):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        name = getattr(cls, "middleware_name", cls.__name__)
+        # Use middleware_name if set, otherwise derive from class name
+        name = cls.middleware_name or cls.__name__
         if name in MIDDLEWARE_REGISTRY:
             raise ValueError(f"Middleware name '{name}' already registered")
+        cls.middleware_name = name
         MIDDLEWARE_REGISTRY[name] = cls
 
     @abstractmethod
@@ -68,65 +106,99 @@ def _extract_flattened_middleware(flat_config: dict[str, Any]) -> list[tuple[str
 
 
 def middleware_chain(
-    middlewares: dict[str, dict[str, Any]] | list[tuple[str, dict[str, Any]]],
+    middleware_config: str | list[str] | dict[str, Any],
     app: ASGIApp,
+    full_config: Any = None,
 ) -> ASGIApp:
-    """Build middleware chain from config.
+    """Build middleware chain from config with automatic ordering.
 
-    Supports two YAML formats (both produce same result via SmartOptions):
+    Uses middleware_order class attribute for sorting (lower = earlier in chain).
+    Uses middleware_default class attribute for default on/off state.
 
-    Dict format (concise):
+    YAML format:
         middleware:
-          logging:
-            level: INFO
-          cache: {}
+          cors: on
+          auth: on
+          errors: on  # default=True, so usually omitted
 
-    List format (explicit order):
-        middleware:
-          - type: logging
-            level: INFO
-          - type: cache
+        cors_middleware:
+          allow_origins: "*"
 
-    Keys/type are middleware names (looked up in MIDDLEWARE_REGISTRY).
-    Values are config dicts passed to middleware __init__.
+        auth_middleware:
+          tokens:
+            type: bearer
+            reader_token:
+              token: "tk_abc123"
+              tags: "read"
+
+    Args:
+        middleware_config: Dict {name: on/off}, comma-separated string, or list.
+        app: The innermost ASGI app (usually Dispatcher).
+        full_config: Full config object to lookup {name}_middleware sections.
+
+    Returns:
+        Wrapped ASGI app with middleware chain.
     """
-    # Convert SmartOptions to dict if needed
-    if hasattr(middlewares, "as_dict"):
-        middlewares = middlewares.as_dict()  # type: ignore[union-attr]
+    # Parse config into {name: enabled} dict
+    config_dict: dict[str, bool] = {}
 
-    # Handle dict format: {name: config, ...}
-    if isinstance(middlewares, dict):
-        items = list(middlewares.items())
-    else:
-        items = list(middlewares)
+    if isinstance(middleware_config, str):
+        # "cors, auth" -> all enabled
+        for name in middleware_config.split(","):
+            name = name.strip()
+            if name:
+                config_dict[name] = True
+    elif hasattr(middleware_config, "as_dict"):
+        # SmartOptions
+        for name, value in middleware_config.as_dict().items():  # type: ignore[union-attr]
+            config_dict[name] = _parse_enabled(value)
+    elif isinstance(middleware_config, dict):
+        for name, value in middleware_config.items():
+            config_dict[name] = _parse_enabled(value)
+    elif middleware_config:
+        # List of names
+        for name in middleware_config:
+            config_dict[name] = True
 
-    # Build chain (reversed: last in config = innermost)
-    for name, config in reversed(items):
-        # Convert SmartOptions config to dict
-        if hasattr(config, "as_dict"):
-            config = config.as_dict()
-        elif config is None:
-            config = {}
+    # Collect enabled middleware with their order
+    enabled: list[tuple[int, str, type[BaseMiddleware]]] = []
+
+    for name, cls in MIDDLEWARE_REGISTRY.items():
+        # Check if enabled: config override or class default
+        if name in config_dict:
+            is_enabled = config_dict[name]
         else:
-            config = dict(config)  # Make a copy to avoid mutating original
+            is_enabled = cls.middleware_default
 
-        # Remove 'type' key if present (added by SmartOptions for list format)
-        config.pop("type", None)
+        if is_enabled:
+            enabled.append((cls.middleware_order, name, cls))
 
-        # Resolve middleware class from registry
-        # Try exact name first, then capitalized versions
-        cls = MIDDLEWARE_REGISTRY.get(name)
-        if cls is None:
-            # Try CamelCase: "logging" -> "LoggingMiddleware"
-            camel_name = name.title().replace("_", "") + "Middleware"
-            cls = MIDDLEWARE_REGISTRY.get(camel_name)
-        if cls is None:
-            raise ValueError(
-                f"Unknown middleware: {name}. " f"Available: {list(MIDDLEWARE_REGISTRY.keys())}"
-            )
+    # Sort by order (lower first)
+    enabled.sort(key=lambda x: x[0])
 
+    # Build chain (reversed: first in order = outermost wrapper)
+    for order, name, cls in reversed(enabled):
+        config: Any = {}
+        if full_config is not None:
+            config_key = f"{name}_middleware"
+            mw_config = full_config[config_key]
+            if mw_config is not None:
+                if hasattr(mw_config, "as_dict"):
+                    config = mw_config.as_dict()
+                else:
+                    config = mw_config
         app = cls(app, **config)
+
     return app
+
+
+def _parse_enabled(value: Any) -> bool:
+    """Parse on/off/true/false value to bool."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ("on", "true", "yes", "1")
+    return bool(value)
 
 
 _autodiscover()
@@ -135,6 +207,7 @@ globals().update(MIDDLEWARE_REGISTRY)
 __all__ = [
     "BaseMiddleware",
     "MIDDLEWARE_REGISTRY",
+    "headers_dict",
     "middleware_chain",
     *MIDDLEWARE_REGISTRY.keys(),
 ]

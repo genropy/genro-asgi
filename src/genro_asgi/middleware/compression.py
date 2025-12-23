@@ -28,6 +28,10 @@ class CompressionMiddleware(BaseMiddleware):
         compression_level: Gzip level 1-9 (1=fast, 9=best). Default: 6
     """
 
+    middleware_name = "compression"
+    middleware_order = 900
+    middleware_default = False
+
     __slots__ = ("minimum_size", "compression_level", "_compressible_types")
 
     def __init__(
