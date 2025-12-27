@@ -70,7 +70,7 @@ class Dispatcher:
 
         finally:
             set_current_request(None)
-            self.request_registry.unregister(request.id)
+            self.request_registry.unregister()
 
 
 if __name__ == "__main__":
