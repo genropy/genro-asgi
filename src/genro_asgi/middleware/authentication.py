@@ -47,7 +47,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import BaseMiddleware, headers_dict
 from ..exceptions import HTTPException
-from ..utils import normalize_list
+from ..utils import split_and_strip
 
 try:
     import jwt
@@ -86,7 +86,7 @@ class AuthMiddleware(BaseMiddleware):
             if not token_value:
                 raise ValueError(f"Bearer token '{cred_name}' missing 'token' value")
             self._auth_config["bearer"][token_value] = {
-                "tags": normalize_list(config.get("tags", [])),
+                "tags": split_and_strip(config.get("tags", [])),
                 "identity": cred_name,
             }
 
@@ -98,7 +98,7 @@ class AuthMiddleware(BaseMiddleware):
                 raise ValueError(f"Basic auth user '{username}' missing 'password'")
             b64_key = base64.b64encode(f"{username}:{password}".encode()).decode()
             self._auth_config["basic"][b64_key] = {
-                "tags": normalize_list(config.get("tags", [])),
+                "tags": split_and_strip(config.get("tags", [])),
                 "identity": username,
             }
 
@@ -111,7 +111,7 @@ class AuthMiddleware(BaseMiddleware):
                 "secret": config.get("secret"),
                 "public_key": config.get("public_key"),
                 "algorithm": config.get("algorithm", "HS256"),
-                "default_tags": normalize_list(config.get("tags", [])),
+                "default_tags": split_and_strip(config.get("tags", [])),
                 "default_exp": config.get("exp", 3600),
             }
 

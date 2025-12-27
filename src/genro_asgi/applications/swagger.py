@@ -6,11 +6,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
-from genro_routes import Router, route  # type: ignore[import-untyped]
+from genro_routes import route  # type: ignore[import-untyped]
 
-from .base import AsgiApplication
+from ..application import AsgiApplication
 
 __all__ = ["SwaggerApp"]
 
@@ -24,11 +23,7 @@ class SwaggerApp(AsgiApplication):
             module: "genro_asgi.applications:SwaggerApp"
     """
 
-    def __init__(self, **kwargs: Any) -> None:
-        self.server = kwargs.pop("_server", None)
-        self.api = Router(self, name="api")
-
-    @route("api", mime_type="text/html")
+    @route(mime_type="text/html")
     def index(self, app: str = "") -> str:
         """Swagger UI page."""
         html_path = Path(__file__).parents[1] / "resources" / "swagger.html"
@@ -40,7 +35,7 @@ class SwaggerApp(AsgiApplication):
         )
         return html
 
-    @route("api")
+    @route()
     def openapi(self, app: str = "") -> dict:
         """OpenAPI schema."""
         if not self.server:

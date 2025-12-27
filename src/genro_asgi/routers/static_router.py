@@ -13,7 +13,7 @@ Best-Match Resolution:
     Given path "alfa/beta/gamma/123?xx=3" and filesystem with only alfa/beta/:
 
     1. Walk: alfa (exists) → beta (exists) → gamma (not found) → STOP
-    2. Return: RouterNode pointing to alfa/beta/
+    2. Return: StaticRouterNode pointing to alfa/beta/
     3. extra_args: ["gamma", "123"]
     4. partial_kwargs: {"xx": "3"}
 
@@ -44,11 +44,11 @@ Usage:
         # Directory - caller decides (list, index.html, pass to handler)
         pass
 
-RouterNode Attributes:
+StaticRouterNode Attributes:
     - type: "entry" (file) or "router" (directory)
     - name: basename of the storage node
     - path: resolved path (consumed segments)
-    - callable: function returning StorageNode
+    - callable: the node itself (for compatibility)
     - extra_args: list of unconsumed path segments
     - partial_kwargs: dict from parsed query string
     - metadata: {"mimetype": str, "isdir": bool, "isfile": bool}
@@ -60,12 +60,67 @@ import re
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
-from genro_routes import RouterInterface, RouterNode
+from genro_routes import RouterInterface
 
 if TYPE_CHECKING:
     from genro_asgi.storage import StorageNode
 
-__all__ = ["StaticRouter"]
+__all__ = ["StaticRouter", "StaticRouterNode"]
+
+
+class StaticRouterNode:
+    """Minimal RouterNode for StaticRouter. Returns StorageNode on __call__.
+
+    Attributes:
+        type: "entry" (file) or "router" (directory)
+        name: basename of the storage node
+        path: resolved path (consumed segments)
+        callable: self (for compatibility with tests expecting .callable)
+        extra_args: list of unconsumed path segments
+        partial_kwargs: dict from parsed query string
+        metadata: {"mimetype": str, "isdir": bool, "isfile": bool}
+    """
+
+    __slots__ = (
+        "_storage_node",
+        "type",
+        "name",
+        "path",
+        "extra_args",
+        "partial_kwargs",
+        "metadata",
+    )
+
+    def __init__(
+        self,
+        storage_node: StorageNode,
+        node_type: str,
+        name: str,
+        path: str,
+        extra_args: list[str],
+        partial_kwargs: dict[str, str],
+        metadata: dict[str, Any],
+    ) -> None:
+        self._storage_node = storage_node
+        self.type = node_type
+        self.name = name
+        self.path = path
+        self.extra_args = extra_args
+        self.partial_kwargs = partial_kwargs
+        self.metadata = metadata
+
+    @property
+    def callable(self) -> StaticRouterNode:
+        """Return self for compatibility with code expecting .callable attribute."""
+        return self
+
+    def __call__(self, *args: Any, **kwargs: Any) -> StorageNode:
+        """Return the underlying StorageNode."""
+        return self._storage_node
+
+    def __bool__(self) -> bool:
+        """Return True if this node has a storage node."""
+        return self._storage_node is not None
 
 
 class StaticRouter(RouterInterface):
@@ -99,7 +154,7 @@ class StaticRouter(RouterInterface):
         self.name = name
         self._html_index = html_index
 
-    def node(self, path: str, **kwargs: Any) -> RouterNode:
+    def node(self, path: str, **kwargs: Any) -> StaticRouterNode | None:  # type: ignore[override]
         """Resolve path using best-match strategy.
 
         Walks path segment by segment until a non-existent node is found.
@@ -110,14 +165,14 @@ class StaticRouter(RouterInterface):
                   Examples: "css/style.css", "api/v2/users?limit=10"
 
         Returns:
-            RouterNode with:
+            StaticRouterNode with:
             - callable() → StorageNode (the resolved file or directory)
             - extra_args: list of path segments after the resolved node
             - partial_kwargs: dict parsed from query string
             - type: "entry" (file) or "router" (directory)
             - metadata: {"mimetype", "isdir", "isfile"}
 
-            Empty RouterNode (callable=None) if root doesn't exist.
+            None if root doesn't exist.
 
         Examples:
             # Exact file match
@@ -147,7 +202,7 @@ class StaticRouter(RouterInterface):
             # Root requested
             if self._root.exists:
                 return self._make_node(self._root, "", [], query_kwargs)
-            return RouterNode({})
+            return None
 
         # Split into segments
         segments = path.split("/")
@@ -168,7 +223,7 @@ class StaticRouter(RouterInterface):
                 break
 
         if last_valid_node is None:
-            return RouterNode({})
+            return None
 
         # Calculate extra_args (unconsumed segments)
         if last_valid_index == -1:
@@ -197,8 +252,8 @@ class StaticRouter(RouterInterface):
         resolved_path: str,
         extra_args: list[str],
         query_kwargs: dict[str, str],
-    ) -> RouterNode:
-        """Create RouterNode wrapping a StorageNode.
+    ) -> StaticRouterNode:
+        """Create StaticRouterNode wrapping a StorageNode.
 
         Args:
             storage_node: The resolved StorageNode (file or directory).
@@ -207,32 +262,24 @@ class StaticRouter(RouterInterface):
             query_kwargs: Parsed query string parameters.
 
         Returns:
-            RouterNode with type="entry" for files, "router" for directories.
-            The callable returns the storage_node unchanged.
+            StaticRouterNode with type="entry" for files, "router" for directories.
         """
         node_type = "entry" if storage_node.isfile else "router"
+        name = storage_node.basename or self.name or "root"
+        metadata = {
+            "mimetype": storage_node.mimetype,
+            "isdir": storage_node.isdir,
+            "isfile": storage_node.isfile,
+        }
 
-        def handler(*args: Any, **kw: Any) -> StorageNode:
-            # RouterNode.__call__ prepends extra_args to args.
-            # We ignore them here - caller reads extra_args directly.
-            return storage_node
-
-        return RouterNode(
-            {
-                "type": node_type,
-                "name": storage_node.basename or self.name or "root",
-                "path": resolved_path,
-                "callable": handler,
-                "extra_args": extra_args,
-                "partial_kwargs": query_kwargs,
-                "doc": f"Storage: {storage_node.basename}",
-                "metadata": {
-                    "mimetype": storage_node.mimetype,
-                    "isdir": storage_node.isdir,
-                    "isfile": storage_node.isfile,
-                },
-            },
-            router=self,
+        return StaticRouterNode(
+            storage_node=storage_node,
+            node_type=node_type,
+            name=name,
+            path=resolved_path,
+            extra_args=extra_args,
+            partial_kwargs=query_kwargs,
+            metadata=metadata,
         )
 
 
@@ -244,7 +291,7 @@ class StaticRouter(RouterInterface):
         """Return iterator of child routers. For static router, yields nothing."""
         return iter(())
 
-    def nodes(
+    def nodes(  # type: ignore[override]
         self,
         basepath: str | None = None,
         lazy: bool = False,

@@ -35,7 +35,7 @@ def cmd_serve(argv: list[str]) -> int:
     server = AsgiServer(argv=argv)
 
     # Verify server_dir exists
-    server_dir = server.config.server.server_dir
+    server_dir = server.config.server["server_dir"]
     if not server_dir.is_dir():
         print(f"Error: '{server_dir}' is not a directory.", file=sys.stderr)
         return 1
@@ -43,8 +43,8 @@ def cmd_serve(argv: list[str]) -> int:
     # Show startup info
     print("genro-asgi starting...", flush=True)
     print(f"Server dir: {server_dir}", flush=True)
-    print(f"Server: http://{server.config.server.host}:{server.config.server.port}", flush=True)
-    if server.config.server.reload:
+    print(f"Server: http://{server.config.server['host']}:{server.config.server['port']}", flush=True)
+    if server.config.server["reload"]:
         print("Mode: development (auto-reload enabled)", flush=True)
     print(flush=True)
 

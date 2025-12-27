@@ -113,12 +113,23 @@ class BaseRequest(ABC):
         tytx_transport: TYTX transport type ('json', 'msgpack') or None
     """
 
-    __slots__ = ("_app_name", "_created_at", "_external_id", "_tytx_mode", "_tytx_transport", "response")
+    __slots__ = (
+        "_app_name",
+        "_auth_tags",
+        "_created_at",
+        "_env_capabilities",
+        "_external_id",
+        "_tytx_mode",
+        "_tytx_transport",
+        "response",
+    )
 
     def __init__(self) -> None:
         from .response import Response
         self._app_name: str | None = None
+        self._auth_tags: list[str] = []
         self._created_at: float = time.time()
+        self._env_capabilities: list[str] = []
         self._external_id: str | None = None
         self._tytx_mode: bool = False
         self._tytx_transport: str | None = None
@@ -163,6 +174,16 @@ class BaseRequest(ABC):
     @abstractmethod
     def transport(self) -> str:
         """Transport type: 'http', 'websocket', 'nats'."""
+
+    @property
+    def auth_tags(self) -> list[str]:
+        """Auth tags (set from scope during init by AuthMiddleware)."""
+        return self._auth_tags
+
+    @property
+    def env_capabilities(self) -> list[str]:
+        """Environment capabilities (set from scope during init)."""
+        return self._env_capabilities
 
     @property
     def external_id(self) -> str | None:
@@ -294,6 +315,10 @@ class HttpRequest(BaseRequest):
         # Generate or extract request ID
         self._id = self._headers.get("x-request-id", str(uuid.uuid4()))
         self._external_id = self._headers.get("x-external-id")
+
+        # Set auth_tags and env_capabilities from scope (set by middleware)
+        self._auth_tags = list(scope.get("auth_tags", []))
+        self._env_capabilities = list(scope.get("env_capabilities", []))
 
     @property
     def id(self) -> str:
@@ -483,6 +508,10 @@ class MsgRequest(BaseRequest):
         self._tytx_mode = (
             parsed.get("tytx", False) or "tytx" in self._headers.get("content-type", "").lower()
         )
+
+        # Set auth_tags and env_capabilities from scope (set by middleware)
+        self._auth_tags = list(scope.get("auth_tags", []))
+        self._env_capabilities = list(scope.get("env_capabilities", []))
 
     def _parse_wsx_message(self, data: str | bytes) -> dict[str, Any]:
         """Parse WSX:// message into dict, with TYTX hydration if applicable."""

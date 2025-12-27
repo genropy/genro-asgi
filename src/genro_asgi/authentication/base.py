@@ -51,7 +51,7 @@ import base64
 from abc import ABC, abstractmethod
 from typing import Any
 
-from ..utils import normalize_list
+from ..utils import split_and_strip
 
 __all__ = ["AuthBackend", "BearerBackend", "BasicBackend"]
 
@@ -120,7 +120,7 @@ class BearerBackend(AuthBackend):
             expected = token_config.get("token")
             if expected and credentials == expected:
                 return {
-                    "tags": normalize_list(token_config.get("tags", [])),
+                    "tags": split_and_strip(token_config.get("tags", [])),
                     "identity": token_name,
                     "backend": self.auth_type,
                 }
@@ -193,7 +193,7 @@ class BasicBackend(AuthBackend):
         expected_pass = user_config.get("password")
         if expected_pass and password == expected_pass:
             return {
-                "tags": normalize_list(user_config.get("tags", [])),
+                "tags": split_and_strip(user_config.get("tags", [])),
                 "identity": username,
                 "backend": self.auth_type,
             }

@@ -72,7 +72,7 @@ class ServerConfig:
             ignore_none=True,
         )
 
-        resolved_server_dir = Path(caller_opts.server_dir or env_argv_opts.server_dir or ".").resolve()
+        resolved_server_dir = Path(caller_opts["server_dir"] or env_argv_opts["server_dir"] or ".").resolve()
 
         if str(resolved_server_dir) not in sys.path:
             sys.path.insert(0, str(resolved_server_dir))
@@ -89,37 +89,37 @@ class ServerConfig:
 
         server_opts = (
             SmartOptions(DEFAULTS)
-            + (global_config.server or SmartOptions({}))
-            + (project_config.server or SmartOptions({}))
+            + (global_config["server"] or SmartOptions({}))
+            + (project_config["server"] or SmartOptions({}))
             + env_argv_opts
             + caller_opts
         )
-        server_opts.server_dir = resolved_server_dir
+        server_opts["server_dir"] = resolved_server_dir
 
-        config.server = server_opts
+        config["server"] = server_opts
         return config
 
     @property
     def server(self) -> SmartOptions:
         """Server options (host, port, reload, server_dir)."""
-        result: SmartOptions = self._opts.server
+        result: SmartOptions = self._opts["server"]
         return result
 
     @property
     def middleware(self) -> list[Any]:
         """Middleware configuration list."""
-        return self._opts.middleware or []
+        return self._opts["middleware"] or []
 
     @property
     def plugins(self) -> SmartOptions | None:
         """Plugins configuration."""
-        result: SmartOptions | None = self._opts.plugins
+        result: SmartOptions | None = self._opts["plugins"]
         return result
 
     @property
     def apps(self) -> SmartOptions | None:
         """Apps configuration."""
-        result: SmartOptions | None = self._opts.apps
+        result: SmartOptions | None = self._opts["apps"]
         return result
 
     def get_plugin_specs(self) -> dict[str, dict[str, Any]]:
@@ -158,19 +158,19 @@ class ServerConfig:
             kwargs = {k: v for k, v in app_opts.items() if k != "module"}
             return module_path, kwargs
         # SmartOptions
-        module_path = app_opts.module
+        module_path = app_opts["module"]
         if not module_path:
             raise ValueError(f"App '{name}' missing 'module' in config")
         kwargs = {k: v for k, v in app_opts.as_dict().items() if k != "module"}
         return module_path, kwargs
 
-    def __getattr__(self, name: str) -> Any:
-        """Proxy attribute access to underlying opts."""
-        return getattr(self._opts, name)
+    def __getitem__(self, name: str) -> Any:
+        """Proxy bracket access to underlying opts."""
+        return self._opts[name]
 
 
 if __name__ == "__main__":
     config = ServerConfig()
-    print(f"Server: {config.server.host}:{config.server.port}")
+    print(f"Server: {config.server['host']}:{config.server['port']}")
     print(f"Middleware: {config.middleware}")
     print(f"Plugins: {config.plugins}")

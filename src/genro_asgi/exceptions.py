@@ -245,3 +245,49 @@ class WebSocketDisconnect(Exception):
     def __repr__(self) -> str:
         """Return detailed string representation."""
         return f"WebSocketDisconnect(code={self.code}, reason={self.reason!r})"
+
+
+class Redirect(HTTPException):
+    """HTTP redirect exception. Raises 302 redirect by default."""
+
+    def __init__(self, url: str, status_code: int = 302) -> None:
+        super().__init__(status_code, headers={"Location": url})
+        self.url = url
+
+    def __repr__(self) -> str:
+        return f"Redirect(url={self.url!r}, status_code={self.status_code})"
+
+
+class HTTPNotFound(HTTPException):
+    """HTTP 404 Not Found exception."""
+
+    def __init__(self, detail: str = "Not found") -> None:
+        super().__init__(404, detail=detail)
+
+
+class HTTPUnauthorized(HTTPException):
+    """HTTP 401 Unauthorized exception."""
+
+    def __init__(self, detail: str = "Unauthorized") -> None:
+        super().__init__(401, detail=detail)
+
+
+class HTTPForbidden(HTTPException):
+    """HTTP 403 Forbidden exception."""
+
+    def __init__(self, detail: str = "Forbidden") -> None:
+        super().__init__(403, detail=detail)
+
+
+class HTTPBadRequest(HTTPException):
+    """HTTP 400 Bad Request exception."""
+
+    def __init__(self, detail: str = "Bad request") -> None:
+        super().__init__(400, detail=detail)
+
+
+class HTTPServiceUnavailable(HTTPException):
+    """HTTP 503 Service Unavailable exception."""
+
+    def __init__(self, detail: str = "Service unavailable") -> None:
+        super().__init__(503, detail=detail)

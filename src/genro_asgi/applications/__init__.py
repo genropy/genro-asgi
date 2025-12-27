@@ -9,7 +9,7 @@ Exports:
     GenroApiApp: Custom API Explorer app (Shoelace).
 """
 
-from .base import AsgiApplication
+from ..application import AsgiApplication
 from .genro_api import GenroApiApp
 from .swagger import SwaggerApp
 

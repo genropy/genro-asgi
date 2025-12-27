@@ -83,7 +83,7 @@ class AsgiServer(RoutingClass):
             self.config.middleware, Dispatcher(self), full_config=self.config._opts
         )
         for name, (cls, kwargs) in self.config.get_app_specs().items():
-            instance = cls(self, **kwargs)
+            instance = cls(**kwargs)
             self.apps[name] = instance
             self.router.attach_instance(instance, name=name)
 
@@ -132,8 +132,8 @@ class AsgiServer(RoutingClass):
     @route("root", meta_mime_type="text/html")
     def index(self) -> str:
         """Default index page for router mode. Redirects to main_app if configured."""
-        if self.config.main_app:
-            raise Redirect(f"/{self.config.main_app}/")
+        if self.config["main_app"]:
+            raise Redirect(f"/{self.config['main_app']}/")
         html_path = Path(__file__).parent / "resources" / "html" / "default_index.html"
         return html_path.read_text()
 

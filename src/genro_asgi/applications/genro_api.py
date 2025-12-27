@@ -8,9 +8,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from genro_routes import Router, route  # type: ignore[import-untyped]
+from genro_routes import route  # type: ignore[import-untyped]
 
-from .base import AsgiApplication
+from ..application import AsgiApplication
 
 __all__ = ["GenroApiApp"]
 
@@ -24,11 +24,7 @@ class GenroApiApp(AsgiApplication):
             module: "genro_asgi.applications:GenroApiApp"
     """
 
-    def __init__(self, **kwargs: Any) -> None:
-        self.server = kwargs.pop("_server", None)
-        self.api = Router(self, name="api")
-
-    @route("api", mime_type="text/html")
+    @route(mime_type="text/html")
     def index(self, *args: str) -> str:
         """Serve the main explorer page.
 
@@ -53,7 +49,7 @@ class GenroApiApp(AsgiApplication):
 
         return html
 
-    @route("api", openapi_method="get")
+    @route(openapi_method="get")
     def apps(self) -> dict:
         """Return list of available apps with API routers."""
         if not self.server:
@@ -65,7 +61,7 @@ class GenroApiApp(AsgiApplication):
                 app_list.append({"name": name, "has_api": True})
         return {"apps": app_list}
 
-    @route("api")
+    @route()
     def nodes(self, app: str = "", basepath: str = "", lazy: bool = False) -> dict:
         """Return hierarchical OpenAPI schema for tree view.
 
@@ -87,7 +83,7 @@ class GenroApiApp(AsgiApplication):
         result = self.server.router.nodes(mode="h_openapi", basepath=basepath, lazy=lazy)
         return dict(result)
 
-    @route("api", openapi_method="get")
+    @route(openapi_method="get")
     def getdoc(self, path: str, app: str = "") -> dict:
         """Get documentation for a single node (router or endpoint).
 
@@ -114,7 +110,7 @@ class GenroApiApp(AsgiApplication):
         result: dict = router.node(clean_path, mode="openapi")
         return result
 
-    @route("api")
+    @route()
     def static(self, file: str = "") -> Any:
         """Serve static resources (JS, CSS) from resources folder."""
         from ..response import Response

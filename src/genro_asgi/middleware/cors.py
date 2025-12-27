@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, MutableMapping
 
 from . import BaseMiddleware
-from ..utils import normalize_list
+from ..utils import split_and_strip
 
 if TYPE_CHECKING:
     from ..types import ASGIApp, Receive, Scope, Send
@@ -55,13 +55,13 @@ class CORSMiddleware(BaseMiddleware):
         **kwargs: Any,
     ) -> None:
         super().__init__(app, **kwargs)
-        self.allow_origins = normalize_list(allow_origins, ["*"])
-        self.allow_methods = normalize_list(
+        self.allow_origins = split_and_strip(allow_origins, ["*"])
+        self.allow_methods = split_and_strip(
             allow_methods, ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"]
         )
-        self.allow_headers = normalize_list(allow_headers, ["*"])
+        self.allow_headers = split_and_strip(allow_headers, ["*"])
         self.allow_credentials = allow_credentials
-        self.expose_headers = normalize_list(expose_headers)
+        self.expose_headers = split_and_strip(expose_headers)
         self.max_age = max_age
 
         self._allow_all_origins = "*" in self.allow_origins

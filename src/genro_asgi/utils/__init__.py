@@ -6,8 +6,24 @@
 Exports:
     ServerBinder: Controlled interface to server resources.
     AsgiServerEnabler: Mixin for external apps that need server access.
+    split_and_strip: Split comma-separated string and strip whitespace.
 """
 
 from .binder import AsgiServerEnabler, ServerBinder
 
-__all__ = ["AsgiServerEnabler", "ServerBinder"]
+
+def split_and_strip(
+    value: str | list[str] | None, default: list[str] | None = None
+) -> list[str]:
+    """Split comma-separated string and strip whitespace from each item.
+
+    If value is already a list, returns a copy. If None, returns default.
+    """
+    if value is None:
+        return default if default is not None else []
+    if isinstance(value, str):
+        return [v.strip() for v in value.split(",")]
+    return list(value)
+
+
+__all__ = ["AsgiServerEnabler", "ServerBinder", "split_and_strip"]
