@@ -31,6 +31,7 @@ dependencies = [
     "genro-toolbox>=0.2.0",
     "genro-routes>=0.1.0",
     "genro-tytx>=0.1.0",
+    "smartasync>=0.5.0",
     "uvicorn>=0.30.0",
     "pyyaml>=6.0",
 ]

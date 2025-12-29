@@ -18,6 +18,11 @@ def split_and_strip(
     """Split comma-separated string and strip whitespace from each item.
 
     If value is already a list, returns a copy. If None, returns default.
+
+    Examples:
+        split_and_strip("a, b, c")  # ["a", "b", "c"]
+        split_and_strip(["x", "y"])  # ["x", "y"]
+        split_and_strip(None, ["default"])  # ["default"]
     """
     if value is None:
         return default if default is not None else []

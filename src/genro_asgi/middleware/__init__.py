@@ -61,6 +61,12 @@ class BaseMiddleware(ABC):
     __slots__ = ("app",)
 
     def __init__(self, app: ASGIApp, **kwargs: Any) -> None:
+        """Initialize middleware with wrapped app.
+
+        Args:
+            app: The ASGI app to wrap (next in chain).
+            **kwargs: Middleware-specific configuration from YAML.
+        """
         self.app = app
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -125,11 +131,14 @@ def middleware_chain(
           allow_origins: "*"
 
         auth_middleware:
-          tokens:
-            type: bearer
+          bearer:
             reader_token:
               token: "tk_abc123"
               tags: "read"
+          basic:
+            admin:
+              password: "secret"
+              tags: "admin"
 
     Args:
         middleware_config: Dict {name: on/off}, comma-separated string, or list.

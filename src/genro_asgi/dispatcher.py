@@ -1,7 +1,30 @@
 # Copyright 2025 Softwell S.r.l.
 # Licensed under the Apache License, Version 2.0
 
-"""Dispatcher - Routes requests to handlers via genro_routes Router."""
+"""Dispatcher - Routes ASGI requests to handlers via genro-routes.
+
+The Dispatcher is the innermost layer of the middleware chain. It:
+1. Creates Request from ASGI scope via RequestRegistry
+2. Resolves the handler via router.node() with auth filtering
+3. Calls the handler with query parameters
+4. Sets the result on Response via set_result()
+5. Sends the ASGI response
+
+Request flow:
+    scope → RequestRegistry.create() → Request
+         → router.node(path, auth_tags, env_capabilities, errors)
+         → handler(**query)
+         → response.set_result(result, metadata)
+         → response(scope, receive, send)
+
+Error mapping (ROUTER_ERRORS):
+    Router errors are mapped to HTTP exceptions:
+    - not_found → HTTPNotFound (404)
+    - not_authorized → HTTPForbidden (403)
+    - not_authenticated → HTTPUnauthorized (401)
+    - not_available → HTTPServiceUnavailable (503)
+    - validation_error → HTTPBadRequest (400)
+"""
 
 from __future__ import annotations
 

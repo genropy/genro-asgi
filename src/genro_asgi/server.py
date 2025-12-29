@@ -1,11 +1,54 @@
 # Copyright 2025 Softwell S.r.l.
 # Licensed under the Apache License, Version 2.0
 
-"""
-ASGI Server - Root dispatcher for multi-app architecture.
+"""ASGI Server - main entry point for genro-asgi applications.
 
-Two modes: flat (mount by path) or router (genro_routes).
-See specifications/01-overview.md for architecture documentation.
+AsgiServer is the central coordinator that:
+- Loads configuration from YAML files (config.yaml)
+- Mounts applications (AsgiApplication subclasses)
+- Builds the middleware chain (auth, cors, errors)
+- Handles ASGI lifespan protocol (startup/shutdown)
+- Routes requests via genro-routes Router
+
+Usage:
+    from genro_asgi import AsgiServer
+
+    server = AsgiServer(server_dir=".")
+    server.run()  # Starts uvicorn
+
+Configuration (config.yaml):
+    server:
+      host: "127.0.0.1"
+      port: 8000
+      reload: true
+
+    middleware:
+      cors: on
+      auth: on
+
+    apps:
+      shop:
+        module: "main:ShopApp"
+
+    openapi:
+      title: "My API"
+      version: "1.0.0"
+
+Architecture:
+    AsgiServer(RoutingClass)
+        ├── config: ServerConfig
+        ├── router: Router (genro-routes)
+        ├── dispatcher: Middleware chain → Dispatcher
+        ├── lifespan: ServerLifespan
+        ├── apps: dict[str, AsgiApplication]
+        ├── storage: LocalStorage
+        └── resource_loader: ResourceLoader
+
+Request flow:
+    ASGI Server (uvicorn) → AsgiServer.__call__
+        → Middleware chain (errors → cors → auth)
+        → Dispatcher → router.node(path, auth_tags)
+        → handler(**query) → response.set_result()
 """
 
 from __future__ import annotations
@@ -65,7 +108,7 @@ class AsgiServer(RoutingClass):
         "dispatcher",
         "storage",
         "resource_loader",
-        "__dict__",
+        "openapi_info",
     )
 
     def __init__(

@@ -20,6 +20,8 @@ import mimetypes
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from smartasync import smartasync
+
 __all__ = ["LocalStorage", "LocalStorageNode", "StorageNode"]
 
 
@@ -160,20 +162,24 @@ class LocalStorageNode:
             parent_path = ""
         return LocalStorageNode(self._storage, self._mount, parent_path)
 
+    @smartasync
     def read_bytes(self) -> bytes:
         """Read content as bytes."""
         return self._absolute_path.read_bytes()
 
+    @smartasync
     def read_text(self, encoding: str = "utf-8") -> str:
         """Read content as text."""
         return self._absolute_path.read_text(encoding=encoding)
 
+    @smartasync
     def read(self, mode: str = "r", encoding: str = "utf-8") -> str | bytes:
         """Read content. mode='r' for text, mode='rb' for binary."""
         if "b" in mode:
-            return self.read_bytes()
-        return self.read_text(encoding=encoding)
+            return self._absolute_path.read_bytes()
+        return self._absolute_path.read_text(encoding=encoding)
 
+    @smartasync
     def write_bytes(self, data: bytes) -> bool:
         """Write bytes. Returns True if written."""
         path = self._absolute_path
@@ -181,6 +187,7 @@ class LocalStorageNode:
         path.write_bytes(data)
         return True
 
+    @smartasync
     def write_text(self, text: str, encoding: str = "utf-8") -> bool:
         """Write text. Returns True if written."""
         path = self._absolute_path
@@ -188,6 +195,7 @@ class LocalStorageNode:
         path.write_text(text, encoding=encoding)
         return True
 
+    @smartasync
     def write(
         self, data: str | bytes, mode: str = "w", encoding: str = "utf-8"
     ) -> bool:
@@ -195,10 +203,16 @@ class LocalStorageNode:
         if "b" in mode:
             if isinstance(data, str):
                 data = data.encode(encoding)
-            return self.write_bytes(data)
+            path = self._absolute_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            return True
         if isinstance(data, bytes):
             data = data.decode(encoding)
-        return self.write_text(data, encoding=encoding)
+        path = self._absolute_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(data, encoding=encoding)
+        return True
 
     def child(self, *parts: str) -> LocalStorageNode:
         """Return a child node."""
@@ -243,7 +257,7 @@ class LocalStorage:
     # ─────────────────────────────────────────────────────────────────
 
     def mount_site(self) -> Path:
-        """Volume predefinito: directory base del server."""
+        """Predefined mount: server base directory."""
         return self._base_dir
 
     # ─────────────────────────────────────────────────────────────────

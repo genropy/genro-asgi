@@ -12,6 +12,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""genro-asgi - Minimal ASGI framework with routing via genro-routes.
+
+Main components:
+    AsgiServer: ASGI entry point, loads config, mounts apps
+    AsgiApplication: Base class for mountable applications
+    Response: HTTP response with auto content-type detection
+    HttpRequest: HTTP request wrapper with headers, query, body
+
+Middleware:
+    AuthMiddleware: O(1) authentication (bearer, basic, JWT)
+    CORSMiddleware: Cross-Origin Resource Sharing headers
+    ErrorMiddleware: Exception handling and error responses
+
+Storage:
+    LocalStorage: Filesystem storage with mount system
+    ResourceLoader: Hierarchical resource loading with fallback
+
+Usage:
+    from genro_asgi import AsgiServer
+
+    server = AsgiServer(server_dir=".")
+    server.run()  # Starts uvicorn
+
+See config.yaml for configuration options.
+"""
+
 __version__ = "0.1.0"
 
 from .datastructures import (

@@ -30,8 +30,8 @@ class AsgiApplication(RoutingClass):
             def hello(self):
                 return "Hello!"
 
-            def __init__(self):
-                super().__init__()
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)  # Required: creates self.main
                 self.backoffice = Router(self, name="backoffice")
 
             @route("backoffice")  # Must specify when multiple routers
