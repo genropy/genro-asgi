@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-import importlib
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +31,7 @@ class ServerConfig:
 
     def __init__(
         self,
-        server_dir: str | None = None,
+        server_dir: str | Path | None = None,
         host: str | None = None,
         port: int | None = None,
         reload: bool | None = None,
@@ -57,7 +55,7 @@ class ServerConfig:
 
     def _build_config(
         self,
-        server_dir: str | None,
+        server_dir: str | Path | None,
         host: str | None,
         port: int | None,
         reload: bool | None,
@@ -82,8 +80,7 @@ class ServerConfig:
 
         resolved_server_dir = Path(caller_opts["server_dir"] or env_argv_opts["server_dir"] or ".").resolve()
 
-        if str(resolved_server_dir) not in sys.path:
-            sys.path.insert(0, str(resolved_server_dir))
+        # Note: sys.path modification removed - AppLoader handles isolated module loading
 
         global_config_path = Path.home() / ".genro-asgi" / "config.yaml"
         if global_config_path.exists():
@@ -147,20 +144,25 @@ class ServerConfig:
             result[plugin_name] = plugin_opts or {}
         return result
 
-    def get_app_specs(self) -> dict[str, tuple[type, dict[str, Any]]]:
-        """Return {name: (cls, kwargs)} for all configured apps."""
+    def get_app_specs_raw(self) -> dict[str, tuple[str, str, dict[str, Any]]]:
+        """Return {name: (module_name, class_name, kwargs)} for all configured apps.
+
+        Returns raw config data without importing. Server uses AppLoader to import.
+        """
         if not self.apps:
             return {}
-        result: dict[str, tuple[type, dict[str, Any]]] = {}
+        result: dict[str, tuple[str, str, dict[str, Any]]] = {}
         for name, app_opts in self.apps.as_dict().items():
             module_path, kwargs = self._parse_app_opts(name, app_opts)
             module_name, class_name = module_path.split(":")
-            module = importlib.import_module(module_name)
-            cls = getattr(module, class_name)
-            # Add base_dir from module's file location
-            if hasattr(module, "__file__") and module.__file__:
-                kwargs["base_dir"] = Path(module.__file__).parent
-            result[name] = (cls, kwargs)
+            result[name] = (module_name, class_name, kwargs)
+        return result
+
+    @property
+    def server_dir(self) -> Path:
+        """Return resolved server directory path."""
+        # server_dir is always set as Path at line 102
+        result: Path = self.server["server_dir"]
         return result
 
     def _parse_app_opts(self, name: str, app_opts: SmartOptions | dict | str) -> tuple[str, dict[str, Any]]:

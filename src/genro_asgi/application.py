@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from genro_routes import Router, RoutingClass, route  # type: ignore[import-untyped]
@@ -74,12 +75,34 @@ class AsgiApplication(RoutingClass):
         """
         pass
 
-    def load_resource(self, *args: str, name: str) -> Any:
-        """Load resource via server's ResourceLoader, prepending this app's mount name."""
-        if not self.server:
+    @property
+    def resources_dir(self) -> Path | None:
+        """Return path to app's resources directory.
+
+        Works both when mounted on server and standalone.
+        """
+        if self.base_dir:
+            return Path(self.base_dir) / "resources"
+        return None
+
+    def load_resource(self, *args: str, name: str) -> str | None:
+        """Load resource file content.
+
+        When mounted on server: uses server's ResourceLoader.
+        Standalone: reads directly from resources_dir.
+        """
+        if self.server:
+            mount_name = getattr(self, "_mount_name", "")
+            result: str | None = self.server.load_resource(mount_name, *args, name=name)
+            return result
+
+        # Standalone mode: read from resources_dir
+        if not self.resources_dir:
             return None
-        mount_name = getattr(self, "_mount_name", "")
-        return self.server.load_resource(mount_name, *args, name=name)
+        resource_path = self.resources_dir / "/".join(args) / name if args else self.resources_dir / name
+        if resource_path.exists():
+            return resource_path.read_text()
+        return None
 
     @route(meta_mime_type="text/html")
     def index(self) -> str:

@@ -3,24 +3,19 @@ Shop - Demo e-commerce application.
 
 Mounts table managers (article_type, article, purchase) as child routers.
 Can be mounted via config.yaml as an app in AsgiServer.
+
+Note: Uses relative imports - loaded via AppLoader into server.apps.demo_shop namespace.
 """
 
 import csv
-import importlib
 import random
-import sys
 from pathlib import Path
-
-# Add base_dir to sys.path for submodule imports (when run directly)
-_base_dir = Path(__file__).parent
-if str(_base_dir) not in sys.path:
-    sys.path.insert(0, str(_base_dir))
 
 from genro_routes import route
 
 from genro_asgi import AsgiApplication
 
-from sql import Table, SqlDb
+from .sql import Table, SqlDb
 
 
 class Shop(AsgiApplication):
@@ -42,22 +37,25 @@ class Shop(AsgiApplication):
         self.db.adapter.check_structure()
 
     def _configure_tables(self) -> list[type[Table]]:
-        """Auto-discover Table subclasses from tables/ folder."""
-        tables_dir = self.base_dir / "tables"
+        """Auto-discover Table subclasses from tables/ folder.
+
+        Tables are pre-loaded by AppLoader into the virtual namespace.
+        We find them via sys.modules using our package's __name__.
+        """
+        import sys
+
+        # Our module is e.g. "server.apps.shop.main", package is "server.apps.shop"
+        package_name = self.__class__.__module__.rsplit(".", 1)[0]
+        tables_prefix = f"{package_name}.tables."
+
         result = []
-
-        for py_file in tables_dir.glob("*.py"):
-            if py_file.name.startswith("_"):
-                continue
-            module_name = f"tables.{py_file.stem}"
-            spec = importlib.util.spec_from_file_location(module_name, py_file)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-
-            for name in dir(module):
-                cls = getattr(module, name)
-                if isinstance(cls, type) and issubclass(cls, Table) and cls is not Table:
-                    result.append(cls)
+        for mod_name, module in list(sys.modules.items()):
+            if mod_name.startswith(tables_prefix) and not mod_name[len(tables_prefix):].count("."):
+                # Direct child of tables/ (not sub-submodule)
+                for name in dir(module):
+                    cls = getattr(module, name)
+                    if isinstance(cls, type) and issubclass(cls, Table) and cls is not Table:
+                        result.append(cls)
 
         return result
 

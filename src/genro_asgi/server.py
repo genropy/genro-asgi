@@ -54,13 +54,13 @@ Request flow:
 from __future__ import annotations
 
 import logging
-import sys
 from pathlib import Path
 from typing import Any
 
 from .dispatcher import Dispatcher
 from .exceptions import Redirect, HTTPNotFound
 from .lifespan import ServerLifespan
+from .loader import AppLoader
 from .middleware import middleware_chain
 from .resources import ResourceLoader
 from .response import Response
@@ -109,11 +109,12 @@ class AsgiServer(RoutingClass):
         "storage",
         "resource_loader",
         "openapi_info",
+        "app_loader",
     )
 
     def __init__(
         self,
-        server_dir: str | None = None,
+        server_dir: str | Path | None = None,
         host: str | None = None,
         port: int | None = None,
         reload: bool | None = None,
@@ -134,11 +135,33 @@ class AsgiServer(RoutingClass):
         self.dispatcher = middleware_chain(
             self.config.middleware, Dispatcher(self), full_config=self.config._opts
         )
-        for name, (cls, kwargs) in self.config.get_app_specs().items():
-            # Add app's base_dir to sys.path for imports
-            base_dir = kwargs.get("base_dir")
-            if base_dir and str(base_dir) not in sys.path:
-                sys.path.insert(0, str(base_dir))
+        # AppLoader for isolated module loading (avoids sys.path pollution)
+        self.app_loader = AppLoader()  # default prefix: "genro_root"
+        server_dir = self.config.server_dir
+
+        for name, (module_name, class_name, kwargs) in self.config.get_app_specs_raw().items():
+            # Load app package into virtual namespace: genro_root.apps.<name>
+            # module_name can be "main" (file) or "myapp.core" (subpackage)
+            module_path = module_name.replace(".", "/")
+            module_as_file = server_dir / f"{module_path}.py"
+
+            if module_as_file.exists():
+                # module_name is a file like "main" -> app_dir is server_dir
+                app_dir = server_dir
+            else:
+                # module_name is a package path
+                app_dir = server_dir / module_path
+
+            self.app_loader.load_package(name, app_dir)
+
+            # Get class from loaded module
+            app_module = self.app_loader.get_module(name, module_name)
+            if app_module is None:
+                raise ImportError(f"Cannot load module '{module_name}' for app '{name}'")
+            cls = getattr(app_module, class_name)
+
+            # Add base_dir for app to locate its resources
+            kwargs["base_dir"] = app_dir
             instance = cls(**kwargs)
             instance._mount_name = name
             self.apps[name] = instance
