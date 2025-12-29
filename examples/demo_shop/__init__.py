@@ -1,7 +1,5 @@
-"""
-Demo Shop - Example application for smpub.
+"""Demo Shop - Example e-commerce application for genro-asgi."""
 
-Contains:
-- sample_shop: Standalone Python library for managing a shop
-- published_shop: smpub-published version with CLI/HTTP API
-"""
+from .main import Shop
+
+__all__ = ["Shop"]

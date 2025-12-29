@@ -51,7 +51,7 @@ StaticRouterNode Attributes:
     - callable: the node itself (for compatibility)
     - extra_args: list of unconsumed path segments
     - partial_kwargs: dict from parsed query string
-    - metadata: {"mimetype": str, "isdir": bool, "isfile": bool}
+    - metadata: {"mime_type": str, "isdir": bool, "isfile": bool}
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ class StaticRouterNode:
         callable: self (for compatibility with tests expecting .callable)
         extra_args: list of unconsumed path segments
         partial_kwargs: dict from parsed query string
-        metadata: {"mimetype": str, "isdir": bool, "isfile": bool}
+        metadata: {"mime_type": str, "isdir": bool, "isfile": bool}
     """
 
     __slots__ = (
@@ -170,7 +170,7 @@ class StaticRouter(RouterInterface):
             - extra_args: list of path segments after the resolved node
             - partial_kwargs: dict parsed from query string
             - type: "entry" (file) or "router" (directory)
-            - metadata: {"mimetype", "isdir", "isfile"}
+            - metadata: {"mime_type", "isdir", "isfile"}
 
             None if root doesn't exist.
 
@@ -267,7 +267,7 @@ class StaticRouter(RouterInterface):
         node_type = "entry" if storage_node.isfile else "router"
         name = storage_node.basename or self.name or "root"
         metadata = {
-            "mimetype": storage_node.mimetype,
+            "mime_type": storage_node.mimetype,
             "isdir": storage_node.isdir,
             "isfile": storage_node.isfile,
         }

@@ -1,8 +1,8 @@
 """Purchase table with Columns definitions and custom methods."""
 
 from genro_routes import route
-from ..sql import Table, Integer, Timestamp, FormatParam
-from ..responses import IdResponse, RecordResponse, ListResponse, MessageResponse, StatsResponse
+from sql import Table, Integer, Timestamp, FormatParam
+from responses import IdResponse, RecordResponse, ListResponse, MessageResponse, StatsResponse
 
 
 class Purchase(Table):

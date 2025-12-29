@@ -1,0 +1,79 @@
+# Copyright 2025 Softwell S.r.l.
+# Licensed under the Apache License, Version 2.0
+
+"""SwaggerApp - OpenAPI/Swagger documentation app."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from genro_routes import route  # type: ignore[import-untyped]
+
+from genro_asgi import AsgiApplication
+
+__all__ = ["SwaggerApp"]
+
+
+class SwaggerApp(AsgiApplication):
+    """Swagger UI and OpenAPI schema app.
+
+    Mount in config.yaml:
+        apps:
+          _swagger:
+            module: "applications.swagger:SwaggerApp"
+    """
+
+    openapi_info = {
+        "title": "Swagger UI",
+        "version": "1.0.0",
+        "description": "OpenAPI/Swagger documentation interface",
+    }
+
+    @route()
+    def index(self):
+        """Swagger UI page with toolbar."""
+        return self.load_resource(name="index.html")
+
+    @route()
+    def openapi(self, app: str = "") -> dict:
+        """OpenAPI schema."""
+        if not self.server:
+            return {"openapi": "3.0.3", "info": {"title": "API", "version": "1.0.0"}, "paths": {}}
+
+        # Get auth_tags and capabilities from current request
+        request = self.server.request
+        auth_tags = request.auth_tags if request else ""
+        capabilities = request.capabilities if request else ""
+
+        if app and app in self.server.apps:
+            instance = self.server.apps[app]
+            if hasattr(instance, "api"):
+                paths = instance.api.nodes(
+                    mode="openapi",
+                    auth_tags=auth_tags,
+                    env_capabilities=capabilities,
+                ).get("paths", {})
+                title = getattr(instance, "title", app)
+                version = getattr(instance, "version", "1.0.0")
+            else:
+                paths = {}
+                title = app
+                version = "1.0.0"
+        else:
+            paths = self.server.router.nodes(
+                mode="openapi",
+                auth_tags=auth_tags,
+                env_capabilities=capabilities,
+            ).get("paths", {})
+            title = "GenroASGI API"
+            version = "1.0.0"
+
+        return {
+            "openapi": "3.0.3",
+            "info": {"title": title, "version": version},
+            "paths": paths,
+        }
+
+
+if __name__ == "__main__":
+    pass

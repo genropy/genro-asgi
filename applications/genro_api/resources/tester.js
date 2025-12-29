@@ -231,7 +231,7 @@ class ApiTester extends HTMLElement {
   async _execute() {
     if (!this._endpoint) return;
 
-    const path = this._path || "";
+    const path = this._path || this._endpoint.path || "";
     const params = this._collectParams();
 
     let url;
@@ -239,6 +239,7 @@ class ApiTester extends HTMLElement {
 
     if (this._remoteMode && this._remoteUrl) {
       // Remote mode: use the base URL from OpenAPI spec
+      // Extract server URL from remote OpenAPI URL
       const remoteUrlObj = new URL(this._remoteUrl);
       const serverBase = `${remoteUrlObj.protocol}//${remoteUrlObj.host}`;
       url = serverBase + (path.startsWith("/") ? path : "/" + path);

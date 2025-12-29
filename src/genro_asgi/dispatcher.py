@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from genro_routes import is_result_wrapper
 from smartasync import smartasync
 
 from .exceptions import (
@@ -65,7 +66,11 @@ class Dispatcher:
 
             result = await smartasync(node)(**dict(request.query))
 
-            request.response.set_result(result)
+            if is_result_wrapper(result):
+                metadata = {**node.metadata, **result.metadata}
+                request.response.set_result(result.value, metadata)
+            else:
+                request.response.set_result(result, node.metadata)
             await request.response(scope, receive, send)
 
         finally:

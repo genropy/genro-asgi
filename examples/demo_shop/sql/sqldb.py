@@ -133,6 +133,11 @@ class SqlDb:
         except KeyError:
             raise ValueError(f"Table '{name}' not registered. Use add_table() first.")
 
+    def attach_tables(self):
+        """Attach all registered tables to app's routing."""
+        for name, instance in self.tables.items():
+            self.app.routing.attach_instance(instance, name=name)
+
     @property
     def connection(self):
         """

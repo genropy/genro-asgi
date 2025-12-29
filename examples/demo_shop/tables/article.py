@@ -3,8 +3,8 @@
 from typing import Annotated
 from pydantic import Field
 from genro_routes import route
-from ..sql import Table, Integer, String, Float, FormatParam
-from ..responses import IdResponse, RecordResponse, ListResponse, MessageResponse
+from sql import Table, Integer, String, Float, FormatParam
+from responses import IdResponse, RecordResponse, ListResponse, MessageResponse
 
 
 class Article(Table):

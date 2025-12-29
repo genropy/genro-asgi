@@ -1,9 +1,15 @@
 # Swagger standalone config
 # Run: python -m genro_asgi serve applications/swagger
 
+openapi:
+  title: "Swagger Test API"
+  version: "1.0.0"
+  description: "API for testing Swagger UI integration"
+
 server:
   host: "127.0.0.1"
   port: 8001
+  reload: true
 
 middleware:
   auth: on

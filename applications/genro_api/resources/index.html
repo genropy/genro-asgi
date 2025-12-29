@@ -161,7 +161,7 @@
         urlPresets.style.display = "none";
         urlInput.style.display = "none";
         loadBtn.style.display = "none";
-        loadLocalOpenApi(fixedApp);
+        tree.loadNodes(fixedApp, fixedBasepath);
         doc.setApp(fixedApp);
         tester.setApp(fixedApp);
       }
@@ -212,8 +212,8 @@
           option.textContent = app.name;
           appSelect.appendChild(option);
         }
-        // Load server router OpenAPI by default
-        loadLocalOpenApi("");
+        // Load server router by default
+        tree.loadNodes();
         doc.setApp("");
         tester.setApp("");
         doc.showPlaceholder();
@@ -221,23 +221,6 @@
         response.showPlaceholder();
       } catch (err) {
         console.error("Failed to load apps:", err);
-      }
-    }
-
-    async function loadLocalOpenApi(app) {
-      // Fetch OpenAPI from local server (standard format like swagger)
-      const url = app ? `/_genro_api/openapi?app=${app}` : "/_genro_api/openapi";
-      try {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        // Use the same loadOpenApi method as remote - it handles standard OpenAPI format
-        tree.loadOpenApi(data, "");
-        tree._localMode = true;
-        tree._localApp = app;
-      } catch (err) {
-        console.error("Failed to load local OpenAPI:", err);
-        alert(`Failed to load OpenAPI: ${err.message}`);
       }
     }
 
@@ -277,7 +260,7 @@
     appSelect.addEventListener("change", () => {
       if (currentMode !== "local") return;
       const app = appSelect.value;
-      loadLocalOpenApi(app);
+      tree.loadNodes(app);
       doc.setApp(app);
       doc.showPlaceholder();
       tester.setApp(app);
@@ -289,24 +272,34 @@
     tree.addEventListener("node-selected", async (e) => {
       console.log("Selected node:", e.detail);
 
-      if (currentMode === "remote" || !tree._localMode) {
-        // Remote mode: data is already in the event from OpenAPI transform
-        const nodeData = e.detail.data || e.detail;
+      if (currentMode === "remote") {
+        // Remote mode: data is already in the event
+        const nodeData = e.detail.data;
         doc.render(nodeData);
         tester.setEndpoint(nodeData, e.detail.path);
         response.showPlaceholder();
         return;
       }
 
-      // Local mode: we can use the data from tree selection directly
-      // The OpenAPI data is already parsed and available
-      const nodeData = e.detail.data || e.detail;
+      // Local mode: fetch doc from server
       const currentApp = fixedApp || appSelect.value;
+      const selectedPath = e.detail.path;
       doc.setApp(currentApp);
       tester.setApp(currentApp);
-      doc.render(nodeData);
-      tester.setEndpoint(nodeData, e.detail.path);
-      response.showPlaceholder();
+
+      const params = new URLSearchParams({ path: selectedPath });
+      if (currentApp) params.set("app", currentApp);
+      const url = `/_genro_api/getdoc?${params}`;
+
+      try {
+        const res = await fetch(url);
+        const data = await res.json();
+        doc.render(data);
+        tester.setEndpoint(data, selectedPath);
+        response.showPlaceholder();
+      } catch (err) {
+        console.error("Failed to load doc:", err);
+      }
     });
 
     // Handle API response from tester

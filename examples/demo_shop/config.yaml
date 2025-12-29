@@ -1,18 +1,22 @@
-# Demo Shop - Example using Shop as RoutingClass
+# Demo Shop - Example e-commerce application
 # Run: python -m genro_asgi serve examples/demo_shop
+
+openapi:
+  title: "Demo Shop API"
+  version: "1.0.0"
+  description: "Demo e-commerce API with articles, types and purchases"
 
 server:
   host: "127.0.0.1"
   port: 8000
+  reload: true
 
-plugins:
-  openapi: {}
+middleware:
+  cors: on
+
+main_app: shop
 
 apps:
-  _swagger:
-    module: "genro_asgi.applications:SwaggerApp"
-  _genro_api:
-    module: "genro_asgi.applications:GenroApiApp"
   shop:
-    module: "sample_shop.shop:Shop"
+    module: "main:Shop"
     connection_string: "sqlite:shop.db"

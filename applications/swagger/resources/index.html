@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Swagger UI - genro-asgi</title>
+    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+    <style>
+        body { margin: 0; padding: 0; font-family: sans-serif; }
+        #toolbar {
+            padding: 10px 20px;
+            background: #1b1b1b;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            color: white;
+            font-size: 14px;
+        }
+        #toolbar input[type="text"] {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #444;
+            border-radius: 4px;
+            background: #2d2d2d;
+            color: white;
+            font-size: 14px;
+        }
+        #toolbar select {
+            padding: 8px;
+            border-radius: 4px;
+            background: #2d2d2d;
+            color: white;
+            border: 1px solid #444;
+        }
+        #toolbar label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            cursor: pointer;
+        }
+        #toolbar button {
+            padding: 8px 20px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        #toolbar button:hover { background: #45a049; }
+        #welcome {
+            max-width: 800px;
+            margin: 60px auto;
+            padding: 40px;
+            text-align: center;
+            color: #3b4151;
+        }
+        #welcome h1 { font-size: 2.5em; margin-bottom: 10px; }
+        #welcome .subtitle { color: #6b7280; font-size: 1.2em; margin-bottom: 30px; }
+        #welcome p { line-height: 1.6; }
+    </style>
+</head>
+<body>
+    <div id="toolbar">
+        <select id="url-presets" onchange="document.getElementById('url-input').value=this.value">
+            <option value="">-- Select API --</option>
+            <option value="/_openapi">This server (/_openapi)</option>
+            <option value="https://petstore.swagger.io/v2/swagger.json">Petstore v2</option>
+            <option value="https://petstore3.swagger.io/api/v3/openapi.json">Petstore v3</option>
+            <option value="https://api.apis.guru/v2/openapi.yaml">APIs.guru</option>
+        </select>
+        <input id="url-input" type="text" placeholder="Enter OpenAPI URL or select from menu">
+        <label><input id="deep-linking" type="checkbox" checked> Deep Linking</label>
+        <select id="doc-expansion">
+            <option value="list" selected>List</option>
+            <option value="none">None</option>
+            <option value="full">Full</option>
+        </select>
+        <button onclick="loadSwagger()">Load</button>
+    </div>
+
+    <div id="swagger-ui">
+        <div id="welcome">
+            <h1>Swagger UI</h1>
+            <div class="subtitle">genro-asgi API Explorer</div>
+            <p>
+                Select an API from the dropdown menu or enter an OpenAPI URL,<br>
+                then click <strong>Load</strong> to explore the API documentation.
+            </p>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <script>
+        function loadSwagger() {
+            const url = document.getElementById('url-input').value.trim();
+            if (!url) {
+                alert('Please enter an OpenAPI URL or select from the menu');
+                return;
+            }
+
+            document.getElementById('swagger-ui').innerHTML = '';
+
+            SwaggerUIBundle({
+                url: url,
+                dom_id: '#swagger-ui',
+                deepLinking: document.getElementById('deep-linking').checked,
+                docExpansion: document.getElementById('doc-expansion').value,
+                presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
+                layout: "BaseLayout"
+            });
+        }
+
+        // Auto-load only if URL param is present
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('url')) {
+            document.getElementById('url-input').value = params.get('url');
+            loadSwagger();
+        }
+    </script>
+</body>
+</html>

@@ -1,73 +1,58 @@
 """
-Shop - RoutingClass aggregate for demo_shop.
+Shop - Demo e-commerce application.
 
-Mounts table managers (types, articles, purchases) as child routers.
+Mounts table managers (article_type, article, purchase) as child routers.
 Can be mounted via config.yaml as an app in AsgiServer.
 """
 
 import csv
 import importlib
 import random
+import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-from genro_routes import RoutingClass, Router, route
+# Add base_dir to sys.path for submodule imports (when run directly)
+_base_dir = Path(__file__).parent
+if str(_base_dir) not in sys.path:
+    sys.path.insert(0, str(_base_dir))
 
-from .sql import Table, SqlDb
+from genro_routes import route
 
-if TYPE_CHECKING:
-    from genro_asgi.request import BaseRequest, ResponseBuilder
+from genro_asgi import AsgiApplication
+
+from sql import Table, SqlDb
 
 
-class Shop(RoutingClass):
-    """Shop aggregate - exposes tables via router."""
+class Shop(AsgiApplication):
+    """Shop application - exposes tables via router."""
 
-    title = "Shop API"
-    version = "1.0.0"
+    openapi_info = {
+        "title": "Shop API",
+        "version": "1.0.0",
+        "description": "Demo e-commerce API",
+    }
 
-    def __init__(self, connection_string: str = "sqlite:shop.db", **kwargs):
-        self.server = kwargs.pop("_server", None)
+    def on_init(self, connection_string: str = "sqlite:shop.db", **kwargs):
         self.connection_string = connection_string
-        self.app_dir = kwargs.get("app_dir", Path(__file__).parent.parent)
-        self.api = Router(self, name="api")
-
-        # Auto-discover table classes
         self.tables = self._configure_tables()
-
-        # Create database and register tables
         self.db = SqlDb(connection_string, self)
         for table_cls in self.tables:
             self.db.add_table(table_cls)
-
-        # Mount tables as child routers
-        for name, instance in self.db.tables.items():
-            setattr(self, f"{name}_table", instance)
-            self.api.attach_instance(instance, name=name)
-
+        self.db.attach_tables()
         self.db.adapter.check_structure()
-
-    @property
-    def request(self) -> "BaseRequest | None":
-        """Current request from ContextVar (available during request handling)."""
-        from genro_asgi.request import get_current_request
-        return get_current_request()
-
-    @property
-    def response(self) -> "ResponseBuilder | None":
-        """Current response builder from ContextVar (available during request handling)."""
-        from genro_asgi.request import get_current_response
-        return get_current_response()
 
     def _configure_tables(self) -> list[type[Table]]:
         """Auto-discover Table subclasses from tables/ folder."""
-        tables_dir = Path(__file__).parent / "tables"
+        tables_dir = self.base_dir / "tables"
         result = []
 
         for py_file in tables_dir.glob("*.py"):
             if py_file.name.startswith("_"):
                 continue
-            module_name = f".tables.{py_file.stem}"
-            module = importlib.import_module(module_name, package=__package__)
+            module_name = f"tables.{py_file.stem}"
+            spec = importlib.util.spec_from_file_location(module_name, py_file)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
 
             for name in dir(module):
                 cls = getattr(module, name)
@@ -76,7 +61,7 @@ class Shop(RoutingClass):
 
         return result
 
-    @route("api")
+    @route()
     def info(self):
         """Return shop info."""
         table_names = [t.name for t in self.tables]
@@ -86,10 +71,10 @@ class Shop(RoutingClass):
             "tables": table_names,
         }
 
-    @route("api")
+    @route()
     def populate(self):
         """Populate database with sample data from CSV files."""
-        resources_dir = Path(__file__).parent / "resources"
+        resources_dir = self.resources_path
         type_ids = {}
         article_ids = []
         types_count = 0
@@ -144,6 +129,4 @@ class Shop(RoutingClass):
 
 
 if __name__ == "__main__":
-    shop = Shop("sqlite:test.db")
-    result = shop.api.call("info")
-    print(result)
+    pass

@@ -1,0 +1,19 @@
+# Genro API Explorer standalone config
+# Run: python -m genro_asgi serve applications/genro_api
+
+openapi:
+  title: "Genro API Explorer"
+  version: "1.0.0"
+  description: "Interactive API documentation and testing interface"
+
+server:
+  host: "127.0.0.1"
+  port: 8002
+  reload: true
+
+middleware:
+  cors: on
+
+apps:
+  _genro_api:
+    module: "main:GenroApiApp"

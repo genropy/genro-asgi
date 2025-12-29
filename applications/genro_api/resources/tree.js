@@ -32,14 +32,40 @@ class ApiTree extends HTMLElement {
     spanElement.classList.add("selected");
   }
 
+  async loadNodes(app = "", basepath = "") {
+    const params = new URLSearchParams();
+    if (app) params.set("app", app);
+    if (basepath) params.set("basepath", basepath);
+
+    const queryString = params.toString();
+    const url = queryString
+      ? `${this._baseUrl}/nodes?${queryString}`
+      : `${this._baseUrl}/nodes`;
+
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      this._data = await res.json();
+      this._basepath = basepath;  // Store for path building
+      this._remoteMode = false;
+      this._openApiSchema = null;
+      await this.render();
+    } catch (err) {
+      console.error("Failed to load nodes:", err);
+      this.innerHTML = `<div style="color:red;padding:1rem;">Error: ${err.message}</div>`;
+    }
+  }
+
   loadOpenApi(schema, sourceUrl = "") {
     // Convert standard OpenAPI schema to tree structure
     this._openApiSchema = schema;
-    this._remoteMode = !!sourceUrl;
+    this._remoteMode = true;
     this._remoteUrl = sourceUrl;
     this._basepath = "";
 
     // Transform OpenAPI paths to our tree structure
+    // OpenAPI has { paths: { "/pet/{id}": { get: {...}, post: {...} } } }
+    // We need { paths: { "/pet/{id}": { get: {...} } }, routers: {} }
     this._data = this._transformOpenApi(schema);
     this.render();
   }
@@ -53,9 +79,12 @@ class ApiTree extends HTMLElement {
     };
 
     const paths = schema.paths || {};
+
+    // Group paths by their first segment to create router hierarchy
     const pathGroups = {};
 
     for (const [pathStr, pathData] of Object.entries(paths)) {
+      // pathStr is like "/pet/{petId}" or "/store/order"
       const segments = pathStr.split("/").filter(Boolean);
 
       if (segments.length === 0) {
@@ -79,6 +108,7 @@ class ApiTree extends HTMLElement {
         // Multiple segments - group by first segment as router
         const routerName = segments[0];
         const remainingPath = "/" + segments.slice(1).join("/");
+
         if (!pathGroups[routerName]) {
           pathGroups[routerName] = {};
         }
@@ -108,6 +138,7 @@ class ApiTree extends HTMLElement {
       const segments = pathStr.split("/").filter(Boolean);
 
       if (segments.length === 0 || segments.length === 1) {
+        // Direct path in this router
         const pathName = pathStr || "/";
         for (const [method, opData] of Object.entries(pathData)) {
           if (["get", "post", "put", "delete", "patch"].includes(method)) {
@@ -116,6 +147,7 @@ class ApiTree extends HTMLElement {
           }
         }
       } else {
+        // Need sub-router
         const subRouterName = segments[0];
         const remainingPath = "/" + segments.slice(1).join("/");
         if (!subGroups[subRouterName]) {
@@ -125,6 +157,7 @@ class ApiTree extends HTMLElement {
       }
     }
 
+    // Recursively build sub-routers
     for (const [subName, subPaths] of Object.entries(subGroups)) {
       router.routers[subName] = this._buildRouter(subName, subPaths);
     }
@@ -152,9 +185,8 @@ class ApiTree extends HTMLElement {
 
   renderPath(pathName, pathData, parentPath = "") {
     const item = document.createElement("sl-tree-item");
-    const methodKey = Object.keys(pathData)[0];
-    const method = methodKey?.toUpperCase() || "GET";
-    const opData = pathData[methodKey] || {};
+    const method = Object.keys(pathData)[0]?.toUpperCase() || "GET";
+    const opData = pathData[Object.keys(pathData)[0]] || {};
 
     item.innerHTML = `
       <span class="endpoint">
@@ -166,22 +198,30 @@ class ApiTree extends HTMLElement {
     const endpointSpan = item.querySelector(".endpoint");
     // Build path: handle cases where pathName already starts with /
     const cleanPathName = pathName.startsWith("/") ? pathName.slice(1) : pathName;
-    const fullPath = parentPath ? `${parentPath}/${cleanPathName}` : cleanPathName;
-
-    // Build data object for doc/tester (OpenAPI format)
-    const nodeData = { [methodKey]: opData };
+    // relativePath is for building tree hierarchy
+    const relativePath = parentPath ? `${parentPath}/${cleanPathName}` : cleanPathName;
+    // fullPath includes basepath for API calls (getdoc)
+    const fullPath = this._basepath ? `${this._basepath}/${relativePath}` : relativePath;
 
     item.addEventListener("click", (e) => {
       e.stopPropagation();
       this._selectItem(endpointSpan);
+
+      const detail = {
+        type: "endpoint",
+        path: fullPath,
+        method: method,
+        operation: opData
+      };
+
+      // In remote mode, include the full operation data for doc/tester
+      if (this._remoteMode) {
+        detail.data = opData;
+        detail.remoteUrl = this._remoteUrl;
+      }
+
       this.dispatchEvent(new CustomEvent("node-selected", {
-        detail: {
-          type: "endpoint",
-          path: "/" + fullPath,
-          method: method,
-          operation: opData,
-          data: nodeData  // Include full data for doc/tester
-        },
+        detail,
         bubbles: true,
         composed: true
       }));
@@ -203,15 +243,10 @@ class ApiTree extends HTMLElement {
       </span>
     `;
 
-    // Build path without leading slash
-    const currentPath = parentPath ? `${parentPath}/${name}` : name;
-
-    // Build data for doc panel
-    const nodeData = {
-      type: "router",
-      description: routerData.description || "",
-      owner_doc: routerData.owner_doc || ""
-    };
+    // relativePath is for building tree hierarchy (without basepath)
+    const relativePath = parentPath ? `${parentPath}/${name}` : name;
+    // fullPath includes basepath for API calls (getdoc)
+    const fullPath = this._basepath ? `${this._basepath}/${relativePath}` : relativePath;
 
     // Click handler per router (folder)
     const routerSpan = item.querySelector(".router");
@@ -221,27 +256,26 @@ class ApiTree extends HTMLElement {
       this.dispatchEvent(new CustomEvent("node-selected", {
         detail: {
           type: "router",
-          path: "/" + currentPath,
+          path: fullPath,
           name: name,
-          doc: doc,
-          data: nodeData
+          doc: doc
         },
         bubbles: true,
         composed: true
       }));
     });
 
-    // Render paths (endpoints) di questo router
+    // Render paths (endpoints) di questo router - pass relativePath for hierarchy
     if (routerData.paths) {
       for (const [pathName, pathData] of Object.entries(routerData.paths)) {
-        item.appendChild(this.renderPath(pathName, pathData, currentPath));
+        item.appendChild(this.renderPath(pathName, pathData, relativePath));
       }
     }
 
-    // Render sub-routers ricorsivamente
+    // Render sub-routers ricorsivamente - pass relativePath for hierarchy
     if (routerData.routers) {
       for (const [subName, subData] of Object.entries(routerData.routers)) {
-        item.appendChild(this.renderRouter(subName, subData, currentPath));
+        item.appendChild(this.renderRouter(subName, subData, relativePath));
       }
     }
 

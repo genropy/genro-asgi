@@ -1,8 +1,9 @@
 """ArticleType table with Columns definitions."""
 
 from genro_routes import route
-from ..sql import Table, Integer, String, FormatParam
-from ..responses import IdResponse, RecordResponse, ListResponse, MessageResponse
+
+from sql import Table, Integer, String, FormatParam
+from responses import IdResponse, RecordResponse, ListResponse, MessageResponse
 
 
 class ArticleType(Table):

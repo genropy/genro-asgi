@@ -19,17 +19,17 @@ DEFAULTS = {"host": "127.0.0.1", "port": 8000, "reload": False}
 
 def _server_opts_spec(
     server_dir: str,
-    host: str = "127.0.0.1",
-    port: int = 8000,
-    reload: bool = False,
+    host: str,
+    port: int,
+    reload: bool,
 ) -> None:
-    """Reference function for SmartOptions type extraction."""
+    """Reference function for SmartOptions type extraction (no defaults)."""
 
 
 class ServerConfig:
     """Handles server configuration loading and app instantiation."""
 
-    __slots__ = ("_opts",)
+    __slots__ = ("_opts", "_openapi")
 
     def __init__(
         self,
@@ -46,6 +46,14 @@ class ServerConfig:
             reload=reload,
             argv=argv or [],
         )
+        # Convert openapi to plain dict once (SmartOptions auto-converts on assignment)
+        openapi_cfg = self._opts["openapi"]
+        if openapi_cfg and hasattr(openapi_cfg, "as_dict"):
+            self._openapi: dict[str, Any] = openapi_cfg.as_dict()
+        elif openapi_cfg:
+            self._openapi = dict(openapi_cfg)
+        else:
+            self._openapi = {"title": "genro-asgi API", "version": "0.1.0"}
 
     def _build_config(
         self,
@@ -122,6 +130,11 @@ class ServerConfig:
         result: SmartOptions | None = self._opts["apps"]
         return result
 
+    @property
+    def openapi(self) -> dict[str, Any]:
+        """OpenAPI info as plain dict."""
+        return self._openapi
+
     def get_plugin_specs(self) -> dict[str, dict[str, Any]]:
         """Return {plugin_name: opts_dict} for all configured plugins."""
         if not self.plugins:
@@ -144,6 +157,9 @@ class ServerConfig:
             module_name, class_name = module_path.split(":")
             module = importlib.import_module(module_name)
             cls = getattr(module, class_name)
+            # Add base_dir from module's file location
+            if hasattr(module, "__file__") and module.__file__:
+                kwargs["base_dir"] = Path(module.__file__).parent
             result[name] = (cls, kwargs)
         return result
 
