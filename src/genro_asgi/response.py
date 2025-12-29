@@ -253,22 +253,43 @@ class Response:
         """Set a response header. Can be called before set_result."""
         self._headers.append((name, value))
 
-    def set_result(self, result: Any, mime_type: str | None = None) -> None:
+    def _guess_mime_type(self, result: Any, metadata: dict[str, Any] | None) -> str | None:
+        """Guess MIME type from metadata or result type.
+
+        Priority:
+        1. self._media_type if already set (by handler)
+        2. metadata["mime_type"] if present
+        3. For Path: guess from file extension
+        4. None (let set_result use type-based defaults)
+        """
+        # Handler may have set _media_type directly (e.g., _resource endpoint)
+        if self._media_type is not None:
+            return self._media_type
+        if metadata and "mime_type" in metadata:
+            mime: str = metadata["mime_type"]
+            return mime
+        if isinstance(result, Path):
+            guessed, _ = mimetypes.guess_type(str(result))
+            return guessed
+        return None
+
+    def set_result(self, result: Any, metadata: dict[str, Any] | None = None) -> None:
         """Set response body from result.
 
-        If mime_type is provided, uses it directly. Otherwise auto-detects
-        content type based on result:
-        - dict/list: JSON or TYTX (if request.tytx_mode)
-        - Path: file content with mime from extension
+        Uses _guess_mime_type() to determine content type. Falls back to
+        type-based defaults:
+        - dict/list: application/json (or TYTX if request.tytx_mode)
+        - Path: from extension
         - bytes: application/octet-stream
         - str: text/plain
-        - None: empty body
-        - other: str() conversion as text/plain
+        - None: text/plain (empty body)
+        - other: text/plain (str conversion)
 
         Args:
             result: The handler result to set as response body.
-            mime_type: Explicit MIME type. If None, auto-detected from result.
+            metadata: Route metadata dict. Uses mime_type if present.
         """
+        mime_type = self._guess_mime_type(result, metadata)
         if isinstance(result, (dict, list)):
             # Use TYTX serialization if request is in TYTX mode
             if self.request and self.request.tytx_mode:
@@ -289,11 +310,7 @@ class Response:
                 self._media_type = mime_type or "application/json"
         elif isinstance(result, Path):
             self.body = result.read_bytes()
-            if mime_type:
-                self._media_type = mime_type
-            else:
-                guessed, _ = mimetypes.guess_type(str(result))
-                self._media_type = guessed or "application/octet-stream"
+            self._media_type = mime_type or "application/octet-stream"
         elif isinstance(result, bytes):
             self.body = result
             self._media_type = mime_type or "application/octet-stream"

@@ -11,16 +11,19 @@ See specifications/01-overview.md for architecture documentation.
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
 from .dispatcher import Dispatcher
-from .exceptions import Redirect
+from .exceptions import Redirect, HTTPNotFound
 from .lifespan import ServerLifespan
 from .middleware import middleware_chain
+from .resources import ResourceLoader
 from .response import Response
 from .request import RequestRegistry, BaseRequest
 from .server_config import ServerConfig
+from .storage import LocalStorage
 from .types import Receive, Scope, Send
 
 from genro_routes import RoutingClass, Router, route  # type: ignore[import-untyped]
@@ -55,10 +58,13 @@ class AsgiServer(RoutingClass):
         "apps",
         "router",
         "config",
+        "base_dir",
         "logger",
         "lifespan",
         "request_registry",
         "dispatcher",
+        "storage",
+        "resource_loader",
         "__dict__",
     )
 
@@ -72,8 +78,11 @@ class AsgiServer(RoutingClass):
     ) -> None:
         """Initialize AsgiServer."""
         self.config = ServerConfig(server_dir, host, port, reload, argv)
+        self.base_dir: Path = self.config.server["server_dir"]
         self.apps: dict[str, RoutingClass] = {}
         self.router = Router(self, name="root")
+        self.storage = LocalStorage(self.base_dir)
+        self.resource_loader = ResourceLoader(self)
         for name, opts in self.config.get_plugin_specs().items():
             self.router.plug(name, **opts)
         self.logger = logging.getLogger("genro_asgi")
@@ -83,12 +92,20 @@ class AsgiServer(RoutingClass):
             self.config.middleware, Dispatcher(self), full_config=self.config._opts
         )
         for name, (cls, kwargs) in self.config.get_app_specs().items():
+            # Add app's base_dir to sys.path for imports
+            base_dir = kwargs.get("base_dir")
+            if base_dir and str(base_dir) not in sys.path:
+                sys.path.insert(0, str(base_dir))
             instance = cls(**kwargs)
+            instance._mount_name = name
             self.apps[name] = instance
             self.router.attach_instance(instance, name=name)
 
         # Set index as default_entry - it will redirect to main_app if configured
         self.router.default_entry = "index"
+
+        # OpenAPI info from config (plain dict via property)
+        self.openapi_info: dict[str, Any] = self.config.openapi
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """
@@ -109,6 +126,7 @@ class AsgiServer(RoutingClass):
 
     def run(self) -> None:
         """Run the server using Uvicorn."""
+        import os
         import uvicorn
 
         host = self.config.server["host"]
@@ -116,7 +134,20 @@ class AsgiServer(RoutingClass):
         reload = self.config.server["reload"] or False
 
         self.logger.info(f"Starting server on {host}:{port}")
-        uvicorn.run(self, host=host, port=port, reload=reload)
+        if reload:
+            # Uvicorn requires import string for reload mode
+            # Pass server_dir via env var for the factory
+            os.environ["GENRO_ASGI_SERVER_DIR"] = str(self.base_dir)
+            uvicorn.run(
+                "genro_asgi:AsgiServer",
+                host=host,
+                port=port,
+                reload=True,
+                reload_dirs=[str(self.base_dir)],
+                factory=True,
+            )
+        else:
+            uvicorn.run(self, host=host, port=port)
 
     def __repr__(self) -> str:
         """Return string representation."""
@@ -129,25 +160,62 @@ class AsgiServer(RoutingClass):
     # Router mode methods
     # ─────────────────────────────────────────────────────────────────────────
 
+    @property
+    def main_app(self) -> str | None:
+        """Return main app name: configured or single app."""
+        configured: str | None = self.config["main_app"]
+        if configured:
+            return configured
+        apps: dict[str, Any] = self.config["apps"]
+        return next(iter(apps)) if len(apps) == 1 else None
+
     @route("root", meta_mime_type="text/html")
     def index(self) -> str:
-        """Default index page for router mode. Redirects to main_app if configured."""
-        if self.config["main_app"]:
-            raise Redirect(f"/{self.config['main_app']}/")
+        """Default index page for router mode. Redirects to main_app if configured or single."""
+        if self.main_app:
+            raise Redirect(f"/{self.main_app}/")
         html_path = Path(__file__).parent / "resources" / "html" / "default_index.html"
         return html_path.read_text()
 
     @route("root", meta_mime_type="application/json")
-    def _openapi(self, *args: str) -> dict:
+    def _openapi(self, *args: str) -> dict[str, Any]:
         """OpenAPI schema endpoint."""
         basepath = "/".join(args) if args else None
-        return self.router.nodes(basepath=basepath, mode="openapi")
+        paths = self.router.nodes(basepath=basepath, mode="openapi")
+        return {
+            "openapi": "3.1.0",
+            "info": self.openapi_info,
+            **paths,
+        }
 
-    @route("root")
-    def _resource(self, *args: str) -> dict:
-        """Resource endpoint with hierarchical fallback. TODO: implement."""
-        basepath = "/".join(args) if args else None
-        return {"resource": basepath, "status": "not_implemented"}
+    @property
+    def resources_path(self) -> Path | None:
+        """Path to server's resources directory."""
+        resources = self.base_dir / "resources"
+        return resources if resources.is_dir() else None
+
+    @route(name="_resource")
+    def load_resource(self, *args: str, name: str) -> Any:
+        """Load resource with hierarchical fallback.
+
+        Callable directly by apps or via HTTP at /_resource?name=...
+
+        Args:
+            *args: Path segments in routing tree (e.g., "shop", "tables")
+            name: Resource name to load
+
+        Returns:
+            Wrapped result with content and mime_type metadata
+
+        Raises:
+            HTTPNotFound: If resource not found
+        """
+        result = self.resource_loader.load(*args, name=name)
+        if result is None:
+            raise HTTPNotFound(f"Resource not found: {name}")
+
+        content, mime_type = result
+        return self.result_wrapper(content, mime_type=mime_type)
 
     @route("root", auth_tags="superadmin&has_jwt")
     def _create_jwt(

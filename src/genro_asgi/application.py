@@ -41,9 +41,19 @@ class AsgiApplication(RoutingClass):
 
     openapi_info: ClassVar[dict[str, Any]] = {}
 
-    def __init__(self) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize app with default main router."""
+        self.base_dir = kwargs.pop("base_dir", None)
         self.main = Router(self, name="main")
+        self.on_init(**kwargs)
+
+    def on_init(self, **kwargs: Any) -> None:
+        """Called after base initialization. Override for custom setup.
+
+        Args:
+            **kwargs: Parameters from config.yaml app definition.
+        """
+        pass
 
     @property
     def server(self) -> AsgiServer | None:
@@ -63,6 +73,13 @@ class AsgiApplication(RoutingClass):
         Can be sync or async. Called in reverse order of startup.
         """
         pass
+
+    def load_resource(self, *args: str, name: str) -> Any:
+        """Load resource via server's ResourceLoader, prepending this app's mount name."""
+        if not self.server:
+            return None
+        mount_name = getattr(self, "_mount_name", "")
+        return self.server.load_resource(mount_name, *args, name=name)
 
     @route(meta_mime_type="text/html")
     def index(self) -> str:
