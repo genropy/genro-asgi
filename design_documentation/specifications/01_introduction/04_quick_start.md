@@ -15,16 +15,17 @@ pip install genro-asgi
 Create a file named `myapp.py`:
 
 ```python
-from genro_asgi import AsgiApplication, route
+from genro_asgi import AsgiApplication
+from genro_routes import route
 
 class MyFirstApp(AsgiApplication):
-    @route("/")
+    @route()
     def index(self):
-        return {"message": "Welcome to Genro-ASGI!"}
+        return "Welcome to Genro-ASGI!"
 
-    @route("/hello/{name}")
-    def greet(self, name):
-        return {"greeting": f"Hello, {name}!"}
+    @route()
+    def hello(self, name=None):
+        return f"Hello, {name or 'World'}!"
 ```
 
 ## 3. Create the Configuration

@@ -14,12 +14,16 @@ Applications can implement specific hooks to manage their state:
 - `on_shutdown()`: Triggered before the server stops. Used for cleaning up resources.
 
 ## Example Usage
+
 ```python
+from genro_asgi import AsgiApplication
+from genro_routes import route
+
 class MyService(AsgiApplication):
     def on_init(self, db_uri=None):
         self.db_uri = db_uri
 
-    @route("/hello")
-    def say_hello(self):
-        return {"message": "Hello from Genro-ASGI!"}
+    @route()
+    def hello(self):
+        return "Hello from Genro-ASGI!"
 ```
