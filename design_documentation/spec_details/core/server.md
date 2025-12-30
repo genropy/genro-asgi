@@ -1,24 +1,37 @@
 # AsgiServer
 
-Orchestratore ASGI principale.
+> **STATUS**: ~~Tutto integrato in `specifications/02_server_foundation/`~~
+>
+> - ~~Principio Architetturale~~ → `01_asgi_server.md`
+> - ~~Classe e Attributi~~ → `01_asgi_server.md`
+> - ~~Flusso Request~~ → `04_dispatcher.md`
+> - ~~Endpoint di Sistema~~ → `01_asgi_server.md`
+> - ~~Come Monta le App~~ → `01_asgi_server.md`
+> - ~~Config YAML~~ → `02_configuration.md`
+> - ~~Avvio~~ → `01_asgi_server.md`
+> - ~~Decisioni Architetturali~~ → `01_asgi_server.md`
+>
+> **Può essere eliminato dopo revisione finale.**
 
-## Principio Architetturale
+---
 
-**Server come istanza isolata, non funzione globale.**
+~~## Principio Architetturale~~
 
-```python
+~~**Server come istanza isolata, non funzione globale.**~~
+
+~~```python
 server = AsgiServer()      # istanza con proprio stato
 del server                 # → tutto garbage collected, zero residui
-```
+```~~
 
-**Pattern Dual Parent-Child**: ogni oggetto creato dal parent mantiene riferimento semantico:
-```python
+~~**Pattern Dual Parent-Child**: ogni oggetto creato dal parent mantiene riferimento semantico:~~
+~~```python
 self.dispatcher = Dispatcher(self)  # Dispatcher.server = self
-```
+```~~
 
-## Classe
+~~## Classe~~
 
-```python
+~~```python
 class AsgiServer(RoutingClass):
     def __init__(self, server_dir=None, host=None, port=None, reload=None, argv=None):
         self.config = ServerConfig(server_dir, host, port, reload, argv)
@@ -29,11 +42,11 @@ class AsgiServer(RoutingClass):
         self.resource_loader = ResourceLoader(self)
         self.lifespan = ServerLifespan(self)
         self.dispatcher = middleware_chain(...)
-```
+```~~
 
-## Attributi
+~~## Attributi~~
 
-| Nome | Tipo | Descrizione |
+~~| Nome | Tipo | Descrizione |
 |------|------|-------------|
 | `config` | `ServerConfig` | Configurazione YAML + CLI |
 | `router` | `Router` | Router root |
@@ -42,11 +55,11 @@ class AsgiServer(RoutingClass):
 | `storage` | `LocalStorage` | File system asincrono |
 | `resource_loader` | `ResourceLoader` | Loader risorse gerarchico |
 | `lifespan` | `ServerLifespan` | Gestione startup/shutdown |
-| `dispatcher` | `Middleware` | Chain middleware + dispatcher |
+| `dispatcher` | `Middleware` | Chain middleware + dispatcher |~~
 
-## Flusso Request
+~~## Flusso Request~~
 
-```
+~~```
 Browser
   │
   ▼
@@ -64,30 +77,30 @@ AsgiServer.__call__(scope, receive, send)
                           ├── node = router.node(path, auth_tags=...)
                           ├── result = await smartasync(node)(**query)
                           └── response.set_result(result)
-```
+```~~
 
-## Endpoint di Sistema
+~~## Endpoint di Sistema~~
 
-| Endpoint | Descrizione |
+~~| Endpoint | Descrizione |
 |----------|-------------|
 | `index()` | Default page, redirect a main_app |
 | `_openapi(*args)` | Schema OpenAPI |
 | `load_resource(*args, name=)` | Caricamento risorse |
-| `_create_jwt(...)` | Creazione JWT (richiede superadmin) |
+| `_create_jwt(...)` | Creazione JWT (richiede superadmin) |~~
 
-## Come Monta le App
+~~## Come Monta le App~~
 
-```python
+~~```python
 for name, (cls, kwargs) in config.get_app_specs().items():
     instance = cls(**kwargs)
     instance._mount_name = name
     self.apps[name] = instance
     self.router.attach_instance(instance, name=name)  # _routing_parent = server
-```
+```~~
 
-## Config YAML
+~~## Config YAML~~
 
-```yaml
+~~```yaml
 server:
   host: "0.0.0.0"
   port: 8000
@@ -98,21 +111,21 @@ apps:
   shop:
     module: "main:ShopApp"
     connection_string: "sqlite:shop.db"
-```
+```~~
 
-## Avvio
+~~## Avvio~~
 
-```python
+~~```python
 server = AsgiServer(server_dir="./myapp")
 server.run()  # → uvicorn.run(self, host=..., port=...)
-```
+```~~
 
-## Decisioni Architetturali
+~~## Decisioni Architetturali~~
 
-1. **Istanza isolata** - no stato globale, `del server` pulisce tutto
-2. **RoutingClass** - usa genro-routes per routing
-3. **Router "root"** - nome del router principale (vs "main" nelle app)
-4. **Middleware chain** - ordine: Errors → CORS → Auth → Dispatcher
+~~1. **Istanza isolata** - no stato globale, `del server` pulisce tutto~~
+~~2. **RoutingClass** - usa genro-routes per routing~~
+~~3. **Router "root"** - nome del router principale (vs "main" nelle app)~~
+~~4. **Middleware chain** - ordine: Errors → CORS → Auth → Dispatcher~~
 
 ## Proposta Futura: Separazione Server/ServerApp
 
@@ -121,3 +134,5 @@ Proposta non implementata per separare:
 - `ServerApp` → root application con endpoint sistema
 
 Vedi decisioni architetturali per dettagli.
+
+> **NOTA**: Questa proposta futura NON è stata integrata - va valutata se includerla in un capitolo futuro o scartarla.
