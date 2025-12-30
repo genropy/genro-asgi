@@ -81,7 +81,7 @@ from .executors import (
 )
 from .server import AsgiServer
 from .context import AsgiContext
-from .application import AsgiApplication
+from .applications import AsgiApplication
 from .routers import StaticRouter
 from .storage import LocalStorage, LocalStorageNode, StorageNode
 from .websocket import WebSocket, WebSocketState

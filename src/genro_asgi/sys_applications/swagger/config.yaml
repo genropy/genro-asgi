@@ -1,0 +1,10 @@
+# Swagger standalone config
+# Run: python -m genro_asgi serve --server-dir src/genro_asgi/sys_applications/swagger
+
+server:
+  host: "127.0.0.1"
+  port: 8001
+
+apps:
+  swagger:
+    module: "main:SwaggerApp"

@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import Any
 
 from genro_routes import route  # type: ignore[import-untyped]
 
@@ -17,10 +17,10 @@ __all__ = ["SwaggerApp"]
 class SwaggerApp(AsgiApplication):
     """Swagger UI and OpenAPI schema app.
 
-    Mount in config.yaml:
-        apps:
-          _swagger:
-            module: "applications.swagger:SwaggerApp"
+    Mount in config.yaml as sys_app:
+        sys_apps:
+          swagger:
+            module: "genro_asgi.sys_applications.swagger:SwaggerApp"
     """
 
     openapi_info = {
@@ -30,20 +30,20 @@ class SwaggerApp(AsgiApplication):
     }
 
     @route()
-    def index(self):
+    def index(self) -> Any:
         """Swagger UI page with toolbar."""
         return self.load_resource(name="index.html")
 
     @route()
-    def openapi(self, app: str = "") -> dict:
+    def openapi(self, app: str = "") -> dict[str, Any]:
         """OpenAPI schema."""
         if not self.server:
             return {"openapi": "3.0.3", "info": {"title": "API", "version": "1.0.0"}, "paths": {}}
 
-        # Get auth_tags and capabilities from current request
+        # Get auth_tags and env_capabilities from current request
         request = self.server.request
         auth_tags = request.auth_tags if request else ""
-        capabilities = request.capabilities if request else ""
+        capabilities = request.env_capabilities if request else ""
 
         if app and app in self.server.apps:
             instance = self.server.apps[app]

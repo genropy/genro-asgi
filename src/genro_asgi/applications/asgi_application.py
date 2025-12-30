@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from genro_routes import Router, RoutingClass, route  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from .server import AsgiServer
+    from ..server import AsgiServer
 
 __all__ = ["AsgiApplication"]
 
@@ -85,23 +85,35 @@ class AsgiApplication(RoutingClass):
             return Path(self.base_dir) / "resources"
         return None
 
-    def load_resource(self, *args: str, name: str) -> str | None:
-        """Load resource file content.
+    def load_resource(self, *args: str, name: str) -> tuple[bytes, str] | None:
+        """Load resource file content with mime type.
 
         When mounted on server: uses server's ResourceLoader.
         Standalone: reads directly from resources_dir.
+
+        Returns:
+            Tuple of (content_bytes, mime_type) or None if not found.
         """
         if self.server:
             mount_name = getattr(self, "_mount_name", "")
-            result: str | None = self.server.load_resource(mount_name, *args, name=name)
-            return result
+            return self.server.resource_loader.load(mount_name, *args, name=name)
 
         # Standalone mode: read from resources_dir
         if not self.resources_dir:
             return None
         resource_path = self.resources_dir / "/".join(args) / name if args else self.resources_dir / name
         if resource_path.exists():
-            return resource_path.read_text()
+            # Simple mime type detection
+            suffix = resource_path.suffix.lower()
+            mime_types = {
+                ".html": "text/html",
+                ".css": "text/css",
+                ".js": "application/javascript",
+                ".json": "application/json",
+                ".txt": "text/plain",
+            }
+            mime_type = mime_types.get(suffix, "application/octet-stream")
+            return resource_path.read_bytes(), mime_type
         return None
 
     @route(meta_mime_type="text/html")
@@ -129,9 +141,3 @@ h1 {{ color: #333; }}
 {desc_html}
 </body>
 </html>"""
-
-
-if __name__ == "__main__":
-    app = AsgiApplication()
-    print(f"Router: {app.main}")
-    print(f"Routes: {app.routing}")
