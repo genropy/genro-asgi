@@ -28,11 +28,16 @@ Configuration (config.yaml):
 
     apps:
       shop:
-        module: "main:ShopApp"
+        module: "shop_app:Application"
 
     openapi:
       title: "My API"
       version: "1.0.0"
+
+App naming convention:
+    - File: {name}_app.py (e.g., shop_app.py)
+    - Class: Application
+    - If convention is followed, module can be omitted in config
 
 Architecture:
     AsgiServer(RoutingClass)
@@ -264,8 +269,8 @@ class AsgiServer(RoutingClass):
         """Load apps from specs into target dict and mount on router.
 
         Supports two module formats:
-        1. Local modules (relative to server_dir): "main:Shop", "myapp.core:MyApp"
-        2. Installed packages (absolute): "genro_asgi.sys_applications.swagger:SwaggerApp"
+        1. Local modules (relative to server_dir): "shop_app:Application", "myapp.core:MyApp"
+        2. Installed packages (absolute): "genro_asgi.sys_applications.swagger.swagger_app:Application"
 
         Args:
             specs: Dict of {name: (module_name, class_name, kwargs)} from config.

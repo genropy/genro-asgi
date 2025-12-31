@@ -31,7 +31,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from genro_routes import is_result_wrapper
-from smartasync import smartasync
+from genro_toolbox.smartasync import smartasync
 
 from ..exceptions import (
     HTTPBadRequest,

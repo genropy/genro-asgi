@@ -86,15 +86,11 @@ from .routers import StaticRouter
 from .storage import LocalStorage, LocalStorageNode, StorageNode
 from .websocket import WebSocket, WebSocketState
 
-# Backwards compatibility alias
-Request = HttpRequest
-
 __all__ = [
     # Request classes
     "BaseRequest",
     "HttpRequest",
     "MsgRequest",
-    "Request",  # alias for HttpRequest
     "RequestRegistry",
     "REQUEST_FACTORIES",
     # Response classes

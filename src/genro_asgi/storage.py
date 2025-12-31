@@ -20,7 +20,7 @@ import mimetypes
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from smartasync import smartasync
+from genro_toolbox.smartasync import smartasync
 
 __all__ = ["LocalStorage", "LocalStorageNode", "StorageNode"]
 

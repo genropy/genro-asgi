@@ -55,14 +55,14 @@ Design Notes
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Callable, Awaitable
+from typing import TYPE_CHECKING
 
 from .types import Receive, Scope, Send
 
 if TYPE_CHECKING:
     from .server import AsgiServer
 
-__all__ = ["ServerLifespan"]
+__all__ = ["ServerLifespan", "Lifespan"]
 
 
 class ServerLifespan:
@@ -185,49 +185,5 @@ class ServerLifespan:
                 await result
 
 
-# Keep old Lifespan class for backwards compatibility
-class Lifespan:
-    """ASGI Lifespan event manager (standalone version).
-
-    Manages application startup and shutdown events via decorators.
-    For use in standalone applications, not AsgiServer.
-    """
-
-    def __init__(self) -> None:
-        """Initialize lifespan manager."""
-        self.startup_handlers: list[Callable[[], Awaitable[None]]] = []
-        self.shutdown_handlers: list[Callable[[], Awaitable[None]]] = []
-
-    def on_startup(self, func: Callable[[], Awaitable[None]]) -> Callable[[], Awaitable[None]]:
-        """Register a startup handler.
-
-        Args:
-            func: Async function to call on startup
-
-        Returns:
-            The registered function (for use as decorator)
-        """
-        self.startup_handlers.append(func)
-        return func
-
-    def on_shutdown(self, func: Callable[[], Awaitable[None]]) -> Callable[[], Awaitable[None]]:
-        """Register a shutdown handler.
-
-        Args:
-            func: Async function to call on shutdown
-
-        Returns:
-            The registered function (for use as decorator)
-        """
-        self.shutdown_handlers.append(func)
-        return func
-
-    async def run_startup(self) -> None:
-        """Run all startup handlers."""
-        for handler in self.startup_handlers:
-            await handler()
-
-    async def run_shutdown(self) -> None:
-        """Run all shutdown handlers."""
-        for handler in self.shutdown_handlers:
-            await handler()
+# Lifespan is an alias for ServerLifespan
+Lifespan = ServerLifespan

@@ -7,9 +7,9 @@ These apps can be mounted via sys_apps config section.
 They are loaded at /_sys/<name>/ paths.
 
 Convention: each sys_app has {name}_app.py with class Application.
+Access via subpackage: swagger.Application, genro_api.Application.
 """
 
-from .genro_api import Application as GenroApiApp
-from .swagger import Application as SwaggerApp
+from . import genro_api, swagger
 
-__all__ = ["GenroApiApp", "SwaggerApp"]
+__all__ = ["genro_api", "swagger"]

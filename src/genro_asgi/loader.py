@@ -269,46 +269,46 @@ class AppLoader:
         return list(self._loaded_modules)
 
 
-if __name__ == "__main__":
-    # Simple test
-    import tempfile
-
-    # Create a temp app structure
-    with tempfile.TemporaryDirectory() as tmpdir:
-        app_dir = Path(tmpdir) / "test_app"
-        app_dir.mkdir()
-
-        # Create __init__.py
-        (app_dir / "__init__.py").write_text('APP_NAME = "test"')
-
-        # Create utils.py
-        (app_dir / "utils.py").write_text('def helper(): return "hello"')
-
-        # Create subpackage
-        sub_dir = app_dir / "models"
-        sub_dir.mkdir()
-        (sub_dir / "__init__.py").write_text('from .user import User')
-        (sub_dir / "user.py").write_text('class User: pass')
-
-        # Test loader with default prefix
-        loader = AppLoader()  # uses "genro_root"
-        loader.load_package("test_app", app_dir)
-
-        print("Loaded modules:")
-        for name in loader.list_loaded():
-            print(f"  {name}")
-
-        # Test imports work
-        import genro_root.apps.test_app as app
-        print(f"\nAPP_NAME: {app.APP_NAME}")
-
-        import genro_root.apps.test_app.utils as utils
-        print(f"helper(): {utils.helper()}")
-
-        import genro_root.apps.test_app.models as models
-        print(f"User class: {models.User}")
-
-        # Cleanup
-        loader.unload_all()
-        print("\nAfter unload, modules remaining:",
-              [k for k in sys.modules if k.startswith("genro_root")])
+# if __name__ == "__main__":
+#     # Simple test
+#     import tempfile
+#
+#     # Create a temp app structure
+#     with tempfile.TemporaryDirectory() as tmpdir:
+#         app_dir = Path(tmpdir) / "test_app"
+#         app_dir.mkdir()
+#
+#         # Create __init__.py
+#         (app_dir / "__init__.py").write_text('APP_NAME = "test"')
+#
+#         # Create utils.py
+#         (app_dir / "utils.py").write_text('def helper(): return "hello"')
+#
+#         # Create subpackage
+#         sub_dir = app_dir / "models"
+#         sub_dir.mkdir()
+#         (sub_dir / "__init__.py").write_text('from .user import User')
+#         (sub_dir / "user.py").write_text('class User: pass')
+#
+#         # Test loader with default prefix
+#         loader = AppLoader()  # uses "genro_root"
+#         loader.load_package("test_app", app_dir)
+#
+#         print("Loaded modules:")
+#         for name in loader.list_loaded():
+#             print(f"  {name}")
+#
+#         # Test imports work
+#         import genro_root.apps.test_app as app
+#         print(f"\nAPP_NAME: {app.APP_NAME}")
+#
+#         import genro_root.apps.test_app.utils as utils
+#         print(f"helper(): {utils.helper()}")
+#
+#         import genro_root.apps.test_app.models as models
+#         print(f"User class: {models.User}")
+#
+#         # Cleanup
+#         loader.unload_all()
+#         print("\nAfter unload, modules remaining:",
+#               [k for k in sys.modules if k.startswith("genro_root")])
