@@ -1,9 +1,10 @@
-# Base Example Configuration
+# Base Example - Minimal smoke test
+# Run: python -m genro_asgi serve examples/base_example
 
 server:
   host: "127.0.0.1"
   port: 8000
 
 apps:
-  shop: "shop:ShopApp"
-  office: "office:OfficeApp"
+  app:
+    module: "main:App"

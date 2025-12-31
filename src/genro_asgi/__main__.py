@@ -74,6 +74,7 @@ def main() -> int:
         print("  app_dir           Path to app directory")
         print()
         print("Options:")
+        print("  --config FILE     Config file (default: config.yaml)")
         print("  --host HOST       Server host (default: 127.0.0.1)")
         print("  --port PORT       Server port (default: 8000)")
         print("  --reload          Enable auto-reload")

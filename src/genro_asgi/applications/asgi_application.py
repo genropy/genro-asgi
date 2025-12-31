@@ -88,7 +88,7 @@ class AsgiApplication(RoutingClass):
     def load_resource(self, *args: str, name: str) -> tuple[bytes, str] | None:
         """Load resource file content with mime type.
 
-        When mounted on server: uses server's ResourceLoader.
+        When mounted on server: uses server's ResourceLoader with fallback to local.
         Standalone: reads directly from resources_dir.
 
         Returns:
@@ -96,9 +96,12 @@ class AsgiApplication(RoutingClass):
         """
         if self.server:
             mount_name = getattr(self, "_mount_name", "")
-            return self.server.resource_loader.load(mount_name, *args, name=name)
+            result = self.server.resource_loader.load(mount_name, *args, name=name)
+            if result:
+                return result
+            # Fallback to local resources_dir (for sys_apps under _sys/)
 
-        # Standalone mode: read from resources_dir
+        # Local mode: read from resources_dir
         if not self.resources_dir:
             return None
         resource_path = self.resources_dir / "/".join(args) / name if args else self.resources_dir / name

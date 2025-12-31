@@ -20,6 +20,7 @@ def _server_opts_spec(
     host: str,
     port: int,
     reload: bool,
+    config: str,
 ) -> None:
     """Reference function for SmartOptions type extraction (no defaults)."""
 
@@ -88,7 +89,9 @@ class ServerConfig:
         else:
             global_config = SmartOptions({})
 
-        project_config = SmartOptions(str(resolved_server_dir / "config.yaml"))
+        # Use --config if specified, otherwise default to config.yaml
+        config_file = env_argv_opts["config"] or "config.yaml"
+        project_config = SmartOptions(str(resolved_server_dir / config_file))
 
         config = global_config + project_config
 
