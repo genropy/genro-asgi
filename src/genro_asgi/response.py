@@ -188,7 +188,19 @@ class Response:
         self._add_content_length()
 
     def _encode_content(self, content: bytes | str | None) -> bytes:
-        """Encode content to bytes."""
+        """Encode response content to bytes.
+
+        Args:
+            content: Content to encode. Accepts bytes, str, or None.
+
+        Returns:
+            Encoded content as bytes.
+
+        Note:
+            - None: Returns empty bytes (b"")
+            - bytes: Returns as-is, no encoding
+            - str: Encoded using self.charset (default: utf-8)
+        """
         if content is None:
             return b""
         if isinstance(content, bytes):

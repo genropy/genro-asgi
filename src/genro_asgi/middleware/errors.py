@@ -1,7 +1,30 @@
 # Copyright 2025 Softwell S.r.l.
 # Licensed under the Apache License, Version 2.0
 
-"""Error Handling Middleware."""
+"""Error handling middleware for ASGI applications.
+
+Catches exceptions raised during request processing and converts them
+to appropriate HTTP responses.
+
+Exception handling:
+    - Redirect: Returns 3xx redirect with Location header
+    - HTTPException: Returns status code with detail message
+    - Exception: Returns 500 Internal Server Error
+
+Config:
+    debug (bool): If True, include traceback in 500 responses. Default: False.
+
+Note:
+    This middleware is enabled by default (middleware_default=True) and
+    runs early in the chain (middleware_order=100) to catch all errors.
+
+Example:
+    Middleware is auto-enabled, but can be configured::
+
+        middleware:
+          errors:
+            debug: true  # Show tracebacks in development
+"""
 
 from __future__ import annotations
 
@@ -16,13 +39,18 @@ if TYPE_CHECKING:
 
 
 class ErrorMiddleware(BaseMiddleware):
-    """Error handling middleware - catches exceptions and returns error responses.
+    """Error handling middleware for HTTP requests.
 
-    Handles HTTPException (returns status/detail), Redirect (302), and generic
-    exceptions (500). Always on by default (middleware_default=True).
+    Wraps the application and catches exceptions, converting them to
+    appropriate HTTP error responses. Non-HTTP requests pass through unchanged.
 
-    Config options:
-        debug: Show detailed error messages and tracebacks. Default: False
+    Attributes:
+        debug: If True, include stack traces in 500 error responses.
+
+    Class Attributes:
+        middleware_name: "errors" - identifier for config.
+        middleware_order: 100 - runs early to catch all errors.
+        middleware_default: True - enabled by default.
     """
 
     middleware_name = "errors"
@@ -37,11 +65,31 @@ class ErrorMiddleware(BaseMiddleware):
         debug: bool = False,
         **kwargs: Any,
     ) -> None:
+        """Initialize error middleware.
+
+        Args:
+            app: Next ASGI application in the middleware chain.
+            debug: Show tracebacks in 500 responses. Defaults to False.
+            **kwargs: Additional arguments passed to BaseMiddleware.
+        """
         super().__init__(app, **kwargs)
         self.debug = debug
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """ASGI interface - catch errors and return error response."""
+        """Process request with error handling.
+
+        For HTTP requests, wraps the downstream app in try/except to catch
+        and handle exceptions. Non-HTTP requests (WebSocket, lifespan) pass
+        through without error handling.
+
+        Args:
+            scope: ASGI scope dictionary.
+            receive: ASGI receive callable.
+            send: ASGI send callable.
+
+        Note:
+            Exception priority: Redirect > HTTPException > generic Exception
+        """
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
@@ -56,7 +104,16 @@ class ErrorMiddleware(BaseMiddleware):
             await self._send_server_error(send, e)
 
     async def _send_redirect(self, send: Send, exc: Redirect) -> None:
-        """Send redirect response."""
+        """Send HTTP redirect response.
+
+        Args:
+            send: ASGI send callable for response transmission.
+            exc: Redirect exception with target URL and status code.
+
+        Note:
+            Uses exc.status_code (default 307) and sets Location header.
+            Response body is empty.
+        """
         await send(
             {
                 "type": "http.response.start",
@@ -67,7 +124,17 @@ class ErrorMiddleware(BaseMiddleware):
         await send({"type": "http.response.body", "body": b""})
 
     async def _send_http_error(self, send: Send, exc: HTTPException) -> None:
-        """Send HTTP error response from HTTPException."""
+        """Send HTTP error response from HTTPException.
+
+        Args:
+            send: ASGI send callable for response transmission.
+            exc: HTTPException with status_code, detail, and optional headers.
+
+        Note:
+            Content-Type: text/plain; charset=utf-8
+            Body contains exc.detail message.
+            Additional headers from exc.headers are appended.
+        """
         body = exc.detail or ""
         body_bytes = body.encode("utf-8")
 
@@ -84,7 +151,17 @@ class ErrorMiddleware(BaseMiddleware):
         await send({"type": "http.response.body", "body": body_bytes})
 
     async def _send_server_error(self, send: Send, error: Exception) -> None:
-        """Send 500 error response for unhandled exceptions."""
+        """Send 500 Internal Server Error response.
+
+        Args:
+            send: ASGI send callable for response transmission.
+            error: The unhandled exception that was caught.
+
+        Note:
+            If self.debug is True, includes full traceback in response body.
+            Otherwise, returns generic "Internal Server Error" message.
+            Content-Type: text/plain; charset=utf-8
+        """
         if self.debug:
             body = f"Internal Server Error\n\n{traceback.format_exc()}"
         else:

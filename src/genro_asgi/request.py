@@ -514,7 +514,27 @@ class MsgRequest(BaseRequest):
         self._env_capabilities = list(scope.get("env_capabilities", []))
 
     def _parse_wsx_message(self, data: str | bytes) -> dict[str, Any]:
-        """Parse WSX:// message into dict, with TYTX hydration if applicable."""
+        """Parse WSX protocol message into request dict.
+
+        Handles both text (JSON) and binary (msgpack) WSX messages.
+        Supports TYTX hydration for type-aware data reconstruction.
+
+        Args:
+            data: Raw message data, either str (JSON) or bytes (msgpack).
+
+        Returns:
+            Parsed message dict with keys: id, method, path, headers,
+            cookies, query, data.
+
+        Note:
+            Format detection:
+            - bytes: Attempts msgpack parsing via genro_tytx
+            - str starting with "WSX://": Protocol prefix stripped
+            - str ending with "::JS": TYTX JSON with type markers
+            - Other str: Standard JSON parsing
+
+            If genro_tytx is not installed, falls back to stdlib json.
+        """
         if isinstance(data, bytes):
             # Binary data - try msgpack via from_tytx
             try:

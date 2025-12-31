@@ -1,7 +1,32 @@
 # Copyright 2025 Softwell S.r.l.
 # Licensed under the Apache License, Version 2.0
 
-"""CORS (Cross-Origin Resource Sharing) Middleware."""
+"""CORS (Cross-Origin Resource Sharing) middleware for ASGI applications.
+
+Adds CORS headers to HTTP responses, enabling cross-origin requests from
+browsers. Handles preflight OPTIONS requests automatically.
+
+Config:
+    allow_origins (list|str): Origins allowed. Default: ["*"]
+    allow_methods (list|str): HTTP methods allowed. Default: common methods
+    allow_headers (list|str): Request headers allowed. Default: ["*"]
+    allow_credentials (bool): Allow credentials (cookies). Default: False
+    expose_headers (list|str): Response headers to expose. Default: []
+    max_age (int): Preflight cache time in seconds. Default: 600
+
+Note:
+    When allow_credentials is True, cannot use "*" for origins - the
+    actual origin is echoed back instead.
+
+Example:
+    Enable CORS in config.yaml::
+
+        middleware:
+          cors:
+            allow_origins: ["https://example.com", "https://app.example.com"]
+            allow_credentials: true
+            max_age: 3600
+"""
 
 from __future__ import annotations
 
@@ -15,17 +40,23 @@ if TYPE_CHECKING:
 
 
 class CORSMiddleware(BaseMiddleware):
-    """CORS middleware - adds Cross-Origin Resource Sharing headers.
+    """CORS middleware for HTTP requests.
 
     Handles preflight OPTIONS requests and adds CORS headers to responses.
+    Non-HTTP requests pass through unchanged.
 
-    Config options:
-        allow_origins: Origins allowed (list or comma-separated string). Default: ["*"]
-        allow_methods: Methods allowed. Default: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"]
-        allow_headers: Headers allowed. Default: ["*"]
-        allow_credentials: Allow credentials. Default: False
-        expose_headers: Headers to expose. Default: []
-        max_age: Preflight cache time in seconds. Default: 600
+    Attributes:
+        allow_origins: List of allowed origins.
+        allow_methods: List of allowed HTTP methods.
+        allow_headers: List of allowed request headers.
+        allow_credentials: Whether to allow credentials.
+        expose_headers: List of headers to expose to browser.
+        max_age: Preflight response cache time in seconds.
+
+    Class Attributes:
+        middleware_name: "cors" - identifier for config.
+        middleware_order: 300 - runs after auth middleware.
+        middleware_default: False - disabled by default.
     """
 
     middleware_name = "cors"
@@ -54,6 +85,19 @@ class CORSMiddleware(BaseMiddleware):
         max_age: int = 600,
         **kwargs: Any,
     ) -> None:
+        """Initialize CORS middleware.
+
+        Args:
+            app: Next ASGI application in the middleware chain.
+            allow_origins: Origins to allow. Accepts list or comma-separated string.
+                Use "*" to allow all origins. Defaults to ["*"].
+            allow_methods: HTTP methods to allow. Defaults to common methods.
+            allow_headers: Request headers to allow. Defaults to ["*"].
+            allow_credentials: Allow cookies/auth headers. Defaults to False.
+            expose_headers: Response headers to expose to browser. Defaults to [].
+            max_age: Preflight cache time in seconds. Defaults to 600.
+            **kwargs: Additional arguments passed to BaseMiddleware.
+        """
         super().__init__(app, **kwargs)
         self.allow_origins = split_and_strip(allow_origins, ["*"])
         self.allow_methods = split_and_strip(
@@ -68,7 +112,16 @@ class CORSMiddleware(BaseMiddleware):
         self._preflight_headers = self._build_preflight_headers()
 
     def _build_preflight_headers(self) -> list[tuple[bytes, bytes]]:
-        """Build headers for preflight response."""
+        """Build static headers for preflight OPTIONS response.
+
+        Returns:
+            List of ASGI header tuples for preflight response.
+
+        Note:
+            Called once during __init__ and cached in _preflight_headers.
+            Includes: Access-Control-Allow-Methods, Max-Age, Allow-Headers,
+            and Allow-Credentials if enabled.
+        """
         headers = [
             (b"access-control-allow-methods", ", ".join(self.allow_methods).encode()),
             (b"access-control-max-age", str(self.max_age).encode()),
@@ -88,7 +141,19 @@ class CORSMiddleware(BaseMiddleware):
         return headers
 
     def _get_cors_headers(self, origin: str | None) -> list[tuple[bytes, bytes]]:
-        """Get CORS headers for a response based on origin."""
+        """Get CORS headers for a response based on request origin.
+
+        Args:
+            origin: Origin header value from request, or None if not present.
+
+        Returns:
+            List of ASGI header tuples to add to response.
+            Empty list if origin is not allowed or not present.
+
+        Note:
+            When allow_credentials is True and allow_all_origins is True,
+            echoes the actual origin instead of "*" (per CORS spec).
+        """
         headers: list[tuple[bytes, bytes]] = []
 
         if not origin:
@@ -119,7 +184,20 @@ class CORSMiddleware(BaseMiddleware):
         return headers
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """ASGI interface - handle CORS."""
+        """Process request with CORS handling.
+
+        For HTTP requests:
+        - Preflight OPTIONS: Returns 200 with CORS headers
+        - Other requests: Wraps send to add CORS headers to response
+
+        Args:
+            scope: ASGI scope dictionary.
+            receive: ASGI receive callable.
+            send: ASGI send callable.
+
+        Note:
+            Non-HTTP requests pass through without CORS processing.
+        """
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
@@ -153,7 +231,18 @@ class CORSMiddleware(BaseMiddleware):
     async def _handle_preflight(
         self, scope: Scope, receive: Receive, send: Send, origin: str
     ) -> None:
-        """Handle preflight OPTIONS request."""
+        """Handle preflight OPTIONS request.
+
+        Args:
+            scope: ASGI scope dictionary (unused but kept for consistency).
+            receive: ASGI receive callable (unused).
+            send: ASGI send callable for response.
+            origin: Origin header value from request.
+
+        Note:
+            Returns 400 if origin is not allowed.
+            Returns 200 with full CORS preflight headers if allowed.
+        """
         headers = self._get_cors_headers(origin)
         if not headers:
             # Origin not allowed

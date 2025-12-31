@@ -1,7 +1,33 @@
 # Copyright 2025 Softwell S.r.l.
 # Licensed under the Apache License, Version 2.0
 
-"""Compression Middleware - gzip response compression."""
+"""Compression middleware for ASGI applications.
+
+Compresses HTTP responses using gzip when beneficial. Buffers the response
+to determine if compression is worthwhile before sending.
+
+Compression criteria:
+    - Client accepts gzip (Accept-Encoding header contains "gzip")
+    - Response size >= minimum_size
+    - Content-Type is compressible (text/*, application/json, etc.)
+    - Compressed size < original size
+
+Config:
+    minimum_size (int): Minimum bytes before compressing. Default: 500.
+    compression_level (int): Gzip level 1-9. Default: 6.
+
+Note:
+    Adds Content-Encoding: gzip and Vary: Accept-Encoding headers.
+    Updates Content-Length to compressed size.
+
+Example:
+    Enable in config.yaml::
+
+        middleware:
+          compression:
+            minimum_size: 1000
+            compression_level: 6
+"""
 
 from __future__ import annotations
 
@@ -16,16 +42,19 @@ if TYPE_CHECKING:
 
 
 class CompressionMiddleware(BaseMiddleware):
-    """Compression middleware - compresses responses with gzip.
+    """Gzip compression middleware for HTTP responses.
 
-    Only compresses when:
-    - Client accepts gzip (Accept-Encoding header)
-    - Response is larger than minimum_size
-    - Content-Type is compressible (text/*, application/json, etc.)
+    Buffers responses and applies gzip compression when all criteria are met.
+    Non-HTTP requests pass through unchanged.
 
-    Config options:
-        minimum_size: Minimum response size to compress (bytes). Default: 500
-        compression_level: Gzip level 1-9 (1=fast, 9=best). Default: 6
+    Attributes:
+        minimum_size: Minimum response size in bytes to consider compression.
+        compression_level: Gzip compression level (1=fast, 9=best).
+
+    Class Attributes:
+        middleware_name: "compression" - identifier for config.
+        middleware_order: 900 - runs late to compress final response.
+        middleware_default: False - disabled by default.
     """
 
     middleware_name = "compression"
@@ -41,6 +70,14 @@ class CompressionMiddleware(BaseMiddleware):
         compression_level: int = 6,
         **kwargs: Any,
     ) -> None:
+        """Initialize compression middleware.
+
+        Args:
+            app: Next ASGI application in the middleware chain.
+            minimum_size: Minimum response size to compress. Defaults to 500.
+            compression_level: Gzip level 1-9. Clamped to valid range. Defaults to 6.
+            **kwargs: Additional arguments passed to BaseMiddleware.
+        """
         super().__init__(app, **kwargs)
         self.minimum_size = minimum_size
         self.compression_level = min(9, max(1, compression_level))
@@ -53,21 +90,52 @@ class CompressionMiddleware(BaseMiddleware):
         )
 
     def _accepts_gzip(self, scope: Scope) -> bool:
-        """Check if client accepts gzip encoding."""
+        """Check if client accepts gzip encoding.
+
+        Args:
+            scope: ASGI scope with headers.
+
+        Returns:
+            True if Accept-Encoding header contains "gzip".
+        """
         for name, value in scope.get("headers", []):
             if name == b"accept-encoding":
                 return b"gzip" in value.lower()
         return False
 
     def _is_compressible(self, content_type: bytes | None) -> bool:
-        """Check if content type is compressible."""
+        """Check if content type should be compressed.
+
+        Args:
+            content_type: Content-Type header value or None.
+
+        Returns:
+            True if content type starts with a compressible prefix.
+
+        Note:
+            Compressible types: text/*, application/json, application/javascript,
+            application/xml, application/xhtml+xml.
+        """
         if not content_type:
             return False
         content_type = content_type.lower()
         return any(content_type.startswith(ct) for ct in self._compressible_types)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """ASGI interface - handle compression."""
+        """Process request with response compression.
+
+        For HTTP requests where client accepts gzip, buffers the response
+        and compresses if beneficial. Otherwise passes through unchanged.
+
+        Args:
+            scope: ASGI scope dictionary.
+            receive: ASGI receive callable.
+            send: ASGI send callable.
+
+        Note:
+            Buffering is required to determine response size before deciding
+            whether to compress. Streaming responses are fully buffered.
+        """
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
@@ -113,7 +181,20 @@ class CompressionMiddleware(BaseMiddleware):
         body: bytes,
         content_type: bytes | None,
     ) -> None:
-        """Send response, compressing if appropriate."""
+        """Send buffered response, applying compression if beneficial.
+
+        Args:
+            send: ASGI send callable.
+            initial_message: Buffered http.response.start message.
+            body: Complete response body bytes.
+            content_type: Content-Type header value or None.
+
+        Note:
+            Compression is skipped if:
+            - Body size < minimum_size
+            - Content-Type is not compressible
+            - Compressed size >= original size
+        """
         if initial_message is None:
             return
 

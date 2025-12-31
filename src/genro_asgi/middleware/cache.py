@@ -11,6 +11,24 @@ Adds cache-related headers to responses:
 Handles conditional requests:
 - If-None-Match: Returns 304 if ETag matches
 - If-Modified-Since: Returns 304 if file not modified
+
+Config:
+    max_age (int): Cache-Control max-age in seconds. Default: 3600 (1 hour).
+    immutable (bool): Add immutable directive for hashed filenames. Default: False.
+    public (bool): Add public directive. Default: True.
+
+Note:
+    Requires scope["_file_path"] to be set by the dispatcher for file responses.
+    Only applies to GET/HEAD requests. Other methods pass through unchanged.
+
+Example:
+    Enable in config.yaml::
+
+        middleware:
+          cache:
+            max_age: 86400
+            immutable: true
+            public: true
 """
 
 from __future__ import annotations
@@ -29,15 +47,20 @@ __all__ = ["CacheMiddleware"]
 
 
 class CacheMiddleware(BaseMiddleware):
-    """Cache middleware - adds caching headers to static file responses.
+    """Cache middleware for static file responses.
 
-    Intercepts responses and adds ETag, Last-Modified, Cache-Control headers.
-    Handles conditional requests (If-None-Match, If-Modified-Since) for 304 responses.
+    Intercepts HTTP responses and adds caching headers (ETag, Last-Modified,
+    Cache-Control). Handles conditional requests for 304 Not Modified responses.
 
-    Config options:
-        max_age: Cache-Control max-age in seconds. Default: 3600 (1 hour)
-        immutable: Add immutable directive for hashed filenames. Default: False
-        public: Add public directive. Default: True
+    Attributes:
+        max_age: Cache-Control max-age value in seconds.
+        immutable: Whether to add immutable directive.
+        public: Whether to add public directive.
+
+    Class Attributes:
+        middleware_name: "cache" - identifier for config.
+        middleware_order: 900 - runs late to add headers to final response.
+        middleware_default: False - disabled by default.
     """
 
     middleware_name = "cache"
@@ -54,13 +77,29 @@ class CacheMiddleware(BaseMiddleware):
         public: bool = True,
         **kwargs: Any,
     ) -> None:
+        """Initialize cache middleware.
+
+        Args:
+            app: Next ASGI application in the middleware chain.
+            max_age: Cache-Control max-age in seconds. Defaults to 3600.
+            immutable: Add immutable directive for versioned assets. Defaults to False.
+            public: Add public directive allowing proxy caching. Defaults to True.
+            **kwargs: Additional arguments passed to BaseMiddleware.
+        """
         super().__init__(app, **kwargs)
         self.max_age = max_age
         self.immutable = immutable
         self.public = public
 
     def _get_request_headers(self, scope: Scope) -> dict[str, str]:
-        """Extract relevant cache headers from request."""
+        """Extract conditional request headers.
+
+        Args:
+            scope: ASGI scope with headers.
+
+        Returns:
+            Dict with if-none-match and/or if-modified-since values.
+        """
         headers: dict[str, str] = {}
         for name, value in scope.get("headers", []):
             name_str = name.decode("latin-1").lower()
@@ -69,13 +108,30 @@ class CacheMiddleware(BaseMiddleware):
         return headers
 
     def _compute_etag(self, path: Path) -> str:
-        """Compute ETag from file mtime and size."""
+        """Compute ETag from file mtime and size.
+
+        Args:
+            path: Path to the file.
+
+        Returns:
+            Quoted ETag string (e.g., '"abc123"').
+
+        Note:
+            Uses MD5 hash of mtime-size string. Fast but not cryptographic.
+        """
         stat = path.stat()
         data = f"{stat.st_mtime}-{stat.st_size}".encode()
         return f'"{hashlib.md5(data).hexdigest()}"'
 
     def _format_http_date(self, timestamp: float) -> str:
-        """Format timestamp as HTTP date."""
+        """Format timestamp as RFC 7231 HTTP date.
+
+        Args:
+            timestamp: Unix timestamp.
+
+        Returns:
+            HTTP date string (e.g., "Sun, 06 Nov 1994 08:49:37 GMT").
+        """
         return formatdate(timestamp, usegmt=True)
 
     def _check_not_modified(
@@ -84,7 +140,20 @@ class CacheMiddleware(BaseMiddleware):
         etag: str,
         mtime: float,
     ) -> bool:
-        """Check if client cache is still valid."""
+        """Check if client cache is still valid.
+
+        Args:
+            request_headers: Dict with conditional headers from request.
+            etag: Current ETag of the resource.
+            mtime: Current modification time of the resource.
+
+        Returns:
+            True if client cache is valid (304 should be returned).
+
+        Note:
+            Checks If-None-Match first (ETag), then If-Modified-Since.
+            Supports multiple ETags in If-None-Match (comma-separated).
+        """
         # Check If-None-Match (ETag)
         if_none_match = request_headers.get("if-none-match")
         if if_none_match:
@@ -107,7 +176,11 @@ class CacheMiddleware(BaseMiddleware):
         return False
 
     def _build_cache_control(self) -> str:
-        """Build Cache-Control header value."""
+        """Build Cache-Control header value from configuration.
+
+        Returns:
+            Cache-Control directive string (e.g., "public, max-age=3600").
+        """
         parts = []
         if self.public:
             parts.append("public")
@@ -117,7 +190,20 @@ class CacheMiddleware(BaseMiddleware):
         return ", ".join(parts)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """ASGI interface - handle cache headers."""
+        """Process request with cache header handling.
+
+        For HTTP GET/HEAD requests with file responses, adds caching headers
+        and handles conditional requests (304 Not Modified).
+
+        Args:
+            scope: ASGI scope dictionary.
+            receive: ASGI receive callable.
+            send: ASGI send callable.
+
+        Note:
+            Requires scope["_file_path"] to be set for file responses.
+            Non-file responses pass through without cache headers.
+        """
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return

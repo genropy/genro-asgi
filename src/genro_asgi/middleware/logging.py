@@ -1,7 +1,31 @@
 # Copyright 2025 Softwell S.r.l.
 # Licensed under the Apache License, Version 2.0
 
-"""Logging Middleware - request/response logging."""
+"""Logging Middleware - HTTP request/response access logging.
+
+Logs incoming requests and outgoing responses with timing information.
+Uses Python's standard logging module for output.
+
+Log format:
+    Request:  "<- GET /api/users from 192.168.1.1"
+    Response: "-> GET /api/users 200 (12.5ms)"
+    Error:    "-> GET /api/users ERROR: ... (12.5ms)"
+
+Config:
+    logger_name (str): Logger name. Default: "genro_asgi.access".
+    level (str): Log level (DEBUG, INFO, WARNING, ERROR). Default: "INFO".
+    include_headers (bool): Include request headers in DEBUG log. Default: False.
+    include_query (bool): Include query string in request log. Default: True.
+
+Example:
+    Enable in config.yaml::
+
+        middleware:
+          logging:
+            logger_name: "myapp.access"
+            level: "DEBUG"
+            include_headers: true
+"""
 
 from __future__ import annotations
 
@@ -16,13 +40,21 @@ if TYPE_CHECKING:
 
 
 class LoggingMiddleware(BaseMiddleware):
-    """Logging middleware - logs requests and responses.
+    """Access logging middleware for HTTP requests.
 
-    Config options:
-        logger_name: Logger name. Default: "genro_asgi.access"
-        level: Log level (DEBUG, INFO, WARNING, ERROR). Default: "INFO"
-        include_headers: Include request headers in log. Default: False
-        include_query: Include query string in log. Default: True
+    Logs request arrival and response completion with timing. Uses Python's
+    logging module, allowing integration with existing logging configuration.
+
+    Attributes:
+        logger: Python Logger instance for access logs.
+        level: Numeric log level (from logging module).
+        include_headers: Whether to log request headers (at DEBUG level).
+        include_query: Whether to include query string in request path.
+
+    Class Attributes:
+        middleware_name: "logging" - identifier for config.
+        middleware_order: 200 - runs early to capture full request timing.
+        middleware_default: False - disabled by default.
     """
 
     middleware_name = "logging"
@@ -40,6 +72,16 @@ class LoggingMiddleware(BaseMiddleware):
         include_query: bool = True,
         **kwargs: Any,
     ) -> None:
+        """Initialize logging middleware.
+
+        Args:
+            app: Next ASGI application in the middleware chain.
+            logger_name: Name for the Python logger. Defaults to "genro_asgi.access".
+            level: Log level string (DEBUG, INFO, etc.). Defaults to "INFO".
+            include_headers: Log headers at DEBUG level. Defaults to False.
+            include_query: Include query string in path log. Defaults to True.
+            **kwargs: Additional arguments passed to BaseMiddleware.
+        """
         super().__init__(app, **kwargs)
         self.logger = logging.getLogger(logger_name)
         self.level = getattr(logging, level.upper(), logging.INFO)
@@ -47,7 +89,20 @@ class LoggingMiddleware(BaseMiddleware):
         self.include_query = include_query
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """ASGI interface - log requests and responses."""
+        """Process request with access logging.
+
+        Logs request arrival, optionally headers, and response with timing.
+        Exceptions are logged with ERROR level before re-raising.
+
+        Args:
+            scope: ASGI scope dictionary.
+            receive: ASGI receive callable.
+            send: ASGI send callable.
+
+        Note:
+            Non-HTTP requests pass through without logging.
+            Duration is measured in milliseconds using perf_counter.
+        """
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
