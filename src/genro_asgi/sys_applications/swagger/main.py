@@ -32,7 +32,11 @@ class SwaggerApp(AsgiApplication):
     @route()
     def index(self) -> Any:
         """Swagger UI page with toolbar."""
-        return self.load_resource(name="index.html")
+        result = self.load_resource(name="index.html")
+        if result is None:
+            return "Resource not found: index.html"
+        content, mime_type = result
+        return self.result_wrapper(content, mime_type=mime_type)
 
     @route()
     def openapi(self, app: str = "") -> dict[str, Any]:

@@ -6,10 +6,10 @@
   <title>Genro API Explorer</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.18/cdn/themes/light.css">
   <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.18/cdn/shoelace-autoloader.js"></script>
-  <script type="module" src="/_genro_api/static?file=tree.js"></script>
-  <script type="module" src="/_genro_api/static?file=doc.js"></script>
-  <script type="module" src="/_genro_api/static?file=tester.js"></script>
-  <script type="module" src="/_genro_api/static?file=response.js"></script>
+  <script type="module" src="static?file=tree.js"></script>
+  <script type="module" src="static?file=doc.js"></script>
+  <script type="module" src="static?file=tester.js"></script>
+  <script type="module" src="static?file=response.js"></script>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -147,7 +147,7 @@
     const urlInput = document.getElementById("url-input");
     const loadBtn = document.getElementById("load-btn");
 
-    // Check if app/basepath are fixed via URL (e.g., /_genro_api/shop/article)
+    // Check if app/basepath are fixed via URL
     const fixedApp = window.GENRO_API_INITIAL_APP || "";
     const fixedBasepath = window.GENRO_API_INITIAL_BASEPATH || "";
 
@@ -204,7 +204,7 @@
       // Clear and repopulate app dropdown
       appSelect.innerHTML = '<option value="">-- Server Router --</option>';
       try {
-        const res = await fetch("/_genro_api/apps");
+        const res = await fetch("apps");
         const data = await res.json();
         for (const app of data.apps || []) {
           const option = document.createElement("option");
@@ -289,7 +289,7 @@
 
       const params = new URLSearchParams({ path: selectedPath });
       if (currentApp) params.set("app", currentApp);
-      const url = `/_genro_api/getdoc?${params}`;
+      const url = `getdoc?${params}`;
 
       try {
         const res = await fetch(url);

@@ -98,6 +98,7 @@ class AsgiServer(RoutingClass):
         "config",
         "base_dir",
         "router",
+        "_sys_router",
         "storage",
         "resource_loader",
         "logger",
@@ -147,7 +148,10 @@ class AsgiServer(RoutingClass):
         self.sys_apps: dict[str, RoutingClass] = {}
         self.apps: dict[str, RoutingClass] = {}
 
-        self._load_apps(self.config.get_sys_app_specs_raw(), self.sys_apps, "_sys")
+        # Create _sys router as child of root router for system apps
+        self._sys_router = Router(self, name="_sys", parent_router=self.router)
+
+        self._load_apps(self.config.get_sys_app_specs_raw(), self.sys_apps, self._sys_router)
         self._load_apps(self.config.get_app_specs_raw(), self.apps)
 
         # Default entry points to server_application.index
@@ -206,7 +210,7 @@ class AsgiServer(RoutingClass):
         self,
         specs: dict[str, tuple[str, str, dict[str, Any]]],
         target: dict[str, RoutingClass],
-        mount_prefix: str | None = None,
+        target_router: Router | None = None,
     ) -> None:
         """Load apps from specs into target dict and mount on router.
 
@@ -217,11 +221,12 @@ class AsgiServer(RoutingClass):
         Args:
             specs: Dict of {name: (module_name, class_name, kwargs)} from config.
             target: Dict to store loaded app instances (apps or sys_apps).
-            mount_prefix: Optional prefix for mounting (e.g. "_sys" → "/_sys/name").
+            target_router: Router to mount apps on. If None, uses self.router.
         """
         import importlib
 
         server_dir_path = self.config.server_dir
+        router = target_router if target_router is not None else self.router
 
         for name, (module_name, class_name, kwargs) in specs.items():
             module_path = module_name.replace(".", "/")
@@ -248,9 +253,8 @@ class AsgiServer(RoutingClass):
             instance._mount_name = name
             target[name] = instance
 
-            # Mount with prefix if specified (sys_apps → /_sys/name)
-            mount_name = f"{mount_prefix}/{name}" if mount_prefix else name
-            self.router.attach_instance(instance, name=mount_name)
+            # Mount on target router
+            router.attach_instance(instance, name=name)
 
     @property
     def request(self) -> BaseRequest | None:

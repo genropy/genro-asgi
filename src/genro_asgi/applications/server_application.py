@@ -5,9 +5,9 @@
 
 Endpoint di sistema:
 - index: pagina default con redirect a main_app
-- _openapi: schema OpenAPI del server
-- _resource: loader risorse con fallback gerarchico
-- _create_jwt: creazione JWT (richiede superadmin)
+- openapi: schema OpenAPI del server
+- resource: loader risorse con fallback gerarchico
+- create_jwt: creazione JWT (richiede superadmin)
 
 Montato automaticamente come /_server/ dal server.
 Modulo interno - non esportato in __init__.py.
@@ -62,7 +62,7 @@ class ServerApplication(RoutingClass):
         return html_path.read_text()
 
     @route(meta_mime_type="application/json")
-    def _openapi(self, *args: str) -> dict[str, Any]:
+    def openapi(self, *args: str) -> dict[str, Any]:
         """OpenAPI schema endpoint."""
         basepath = "/".join(args) if args else None
         paths = self._server.router.nodes(basepath=basepath, mode="openapi")
@@ -72,7 +72,7 @@ class ServerApplication(RoutingClass):
             **paths,
         }
 
-    @route(name="_resource")
+    @route(name="resource")
     def load_resource(self, *args: str, name: str) -> Any:
         """Load resource with hierarchical fallback."""
         result = self._server.resource_loader.load(*args, name=name)
@@ -82,7 +82,7 @@ class ServerApplication(RoutingClass):
         return self.result_wrapper(content, mime_type=mime_type)
 
     @route(auth_tags="superadmin&has_jwt")
-    def _create_jwt(
+    def create_jwt(
         self,
         jwt_config: str | None = None,
         sub: str | None = None,

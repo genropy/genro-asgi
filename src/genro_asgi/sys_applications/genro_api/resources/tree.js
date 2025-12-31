@@ -16,7 +16,7 @@ class ApiTree extends HTMLElement {
   constructor() {
     super();
     this._data = null;
-    this._baseUrl = "/_genro_api";
+    this._baseUrl = "";
     this._selectedItem = null;
   }
 
@@ -38,9 +38,8 @@ class ApiTree extends HTMLElement {
     if (basepath) params.set("basepath", basepath);
 
     const queryString = params.toString();
-    const url = queryString
-      ? `${this._baseUrl}/nodes?${queryString}`
-      : `${this._baseUrl}/nodes`;
+    const endpoint = this._baseUrl ? `${this._baseUrl}/nodes` : "nodes";
+    const url = queryString ? `${endpoint}?${queryString}` : endpoint;
 
     try {
       const res = await fetch(url);

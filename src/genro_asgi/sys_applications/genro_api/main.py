@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from genro_routes import route  # type: ignore[import-untyped]
+from genro_routes.core import BaseRouter  # type: ignore[import-untyped]
 
 from genro_asgi import AsgiApplication
 
@@ -64,14 +65,11 @@ class GenroApiApp(AsgiApplication):
 
     @route(openapi_method="get")
     def apps(self) -> dict[str, Any]:
-        """Return list of available apps with API routers."""
+        """Return list of available apps."""
         if not self.server:
             return {"apps": []}
 
-        app_list = []
-        for name, instance in self.server.apps.items():
-            if hasattr(instance, "api"):
-                app_list.append({"name": name, "has_api": True})
+        app_list = [{"name": name} for name in self.server.apps]
         return {"apps": app_list}
 
     @route()
@@ -91,20 +89,15 @@ class GenroApiApp(AsgiApplication):
         auth_tags = request.auth_tags if request else ""
         capabilities = request.env_capabilities if request else ""
 
-        if app and app in self.server.apps:
-            instance = self.server.apps[app]
-            if hasattr(instance, "api"):
-                result: dict = instance.api.nodes(
-                    mode="h_openapi",
-                    basepath=basepath,
-                    lazy=lazy,
-                    auth_tags=auth_tags,
-                    env_capabilities=capabilities,
-                )
-                return result
-            return {"description": None, "owner_doc": None, "paths": {}, "routers": {}}
+        # Get router: app-specific or server root
+        router: BaseRouter = self.server.router
+        if app:
+            app_router = self.server.router.router_at_path(app)
+            if not app_router:
+                return {"description": None, "owner_doc": None, "paths": {}, "routers": {}}
+            router = app_router
 
-        result = self.server.router.nodes(
+        result = router.nodes(
             mode="h_openapi",
             basepath=basepath,
             lazy=lazy,
@@ -124,16 +117,13 @@ class GenroApiApp(AsgiApplication):
         if not self.server:
             return {"error": "No server available"}
 
-        router = None
-        if app and app in self.server.apps:
-            instance = self.server.apps[app]
-            if hasattr(instance, "api"):
-                router = instance.api
-        else:
-            router = self.server.router
-
-        if not router:
-            return {"error": f"Router not found for app '{app}'"}
+        # Get router: app-specific or server root
+        router: BaseRouter = self.server.router
+        if app:
+            app_router = self.server.router.router_at_path(app)
+            if not app_router:
+                return {"error": f"Router not found for app '{app}'"}
+            router = app_router
 
         # Get auth_tags and env_capabilities from current request
         request = self.server.request
@@ -144,7 +134,7 @@ class GenroApiApp(AsgiApplication):
         clean_path = path.lstrip("/")
         node = router.node(
             clean_path,
-            mode="openapi",
+            openapi=True,
             auth_tags=auth_tags,
             env_capabilities=capabilities,
         )
