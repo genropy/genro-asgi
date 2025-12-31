@@ -40,7 +40,9 @@ Architecture:
         ├── router: Router (genro-routes)
         ├── dispatcher: Middleware chain → Dispatcher
         ├── lifespan: ServerLifespan
-        ├── apps: dict[str, AsgiApplication]
+        ├── server_application: ServerApplication (system endpoints)
+        ├── sys_apps: dict[str, RoutingClass] (system apps)
+        ├── apps: dict[str, AsgiApplication] (user apps)
         ├── storage: LocalStorage
         └── resource_loader: ResourceLoader
 
@@ -58,25 +60,18 @@ from pathlib import Path
 from typing import Any
 
 from .dispatcher import Dispatcher
-from .exceptions import Redirect, HTTPNotFound
 from .lifespan import ServerLifespan
 from .loader import AppLoader
 from .middleware import middleware_chain
 from .resources import ResourceLoader
 from .response import Response
 from .request import RequestRegistry, BaseRequest
+from .applications.server_application import ServerApplication
 from .server_config import ServerConfig
 from .storage import LocalStorage
 from .types import Receive, Scope, Send
 
-from genro_routes import RoutingClass, Router, route  # type: ignore[import-untyped]
-
-try:
-    import jwt
-    HAS_JWT = True
-except ImportError:
-    jwt = None  # type: ignore[assignment]
-    HAS_JWT = False
+from genro_routes import RoutingClass, Router  # type: ignore[import-untyped]
 
 __all__ = ["AsgiServer"]
 
@@ -86,30 +81,35 @@ class AsgiServer(RoutingClass):
     Base ASGI server with routing via genro_routes.
 
     Attributes:
-        apps: Dict for mounted apps.
-        router: genro_routes Router for dispatch.
         config: ServerConfig for configuration.
+        router: genro_routes Router for dispatch.
         dispatcher: Dispatcher handling request routing.
-        logger: Server logger instance.
         lifespan: ServerLifespan for startup/shutdown.
+        server_application: ServerApplication with system endpoints.
+        sys_apps: Dict for system apps (mounted at /_sys/).
+        apps: Dict for user apps.
+        logger: Server logger instance.
         request_registry: RequestRegistry for tracking requests.
         request: Current request (from ContextVar).
         response: Current response builder.
     """
 
     __slots__ = (
-        "apps",
-        "router",
         "config",
         "base_dir",
+        "router",
+        "_sys_router",
+        "storage",
+        "resource_loader",
         "logger",
         "lifespan",
         "request_registry",
         "dispatcher",
-        "storage",
-        "resource_loader",
         "openapi_info",
         "app_loader",
+        "server_application",
+        "sys_apps",
+        "apps",
     )
 
     def __init__(
@@ -123,7 +123,6 @@ class AsgiServer(RoutingClass):
         """Initialize AsgiServer."""
         self.config = ServerConfig(server_dir, host, port, reload, argv)
         self.base_dir: Path = self.config.server["server_dir"]
-        self.apps: dict[str, RoutingClass] = {}
         self.router = Router(self, name="root")
         self.storage = LocalStorage(self.base_dir)
         self.resource_loader = ResourceLoader(self)
@@ -135,43 +134,28 @@ class AsgiServer(RoutingClass):
         self.dispatcher = middleware_chain(
             self.config.middleware, Dispatcher(self), full_config=self.config._opts
         )
-        # AppLoader for isolated module loading (avoids sys.path pollution)
-        self.app_loader = AppLoader()  # default prefix: "genro_root"
-        server_dir = self.config.server_dir
-
-        for name, (module_name, class_name, kwargs) in self.config.get_app_specs_raw().items():
-            # Load app package into virtual namespace: genro_root.apps.<name>
-            # module_name can be "main" (file) or "myapp.core" (subpackage)
-            module_path = module_name.replace(".", "/")
-            module_as_file = server_dir / f"{module_path}.py"
-
-            if module_as_file.exists():
-                # module_name is a file like "main" -> app_dir is server_dir
-                app_dir = server_dir
-            else:
-                # module_name is a package path
-                app_dir = server_dir / module_path
-
-            self.app_loader.load_package(name, app_dir)
-
-            # Get class from loaded module
-            app_module = self.app_loader.get_module(name, module_name)
-            if app_module is None:
-                raise ImportError(f"Cannot load module '{module_name}' for app '{name}'")
-            cls = getattr(app_module, class_name)
-
-            # Add base_dir for app to locate its resources
-            kwargs["base_dir"] = app_dir
-            instance = cls(**kwargs)
-            instance._mount_name = name
-            self.apps[name] = instance
-            self.router.attach_instance(instance, name=name)
-
-        # Set index as default_entry - it will redirect to main_app if configured
-        self.router.default_entry = "index"
-
         # OpenAPI info from config (plain dict via property)
         self.openapi_info: dict[str, Any] = self.config.openapi
+
+        # Server application - system endpoints (/_server/)
+        self.server_application = ServerApplication(server=self)
+        self.router.attach_instance(self.server_application, name="_server")
+
+        # AppLoader for isolated module loading (avoids sys.path pollution)
+        self.app_loader = AppLoader()  # default prefix: "genro_root"
+
+        # System apps (/_sys/) and user apps - loaded with same logic
+        self.sys_apps: dict[str, RoutingClass] = {}
+        self.apps: dict[str, RoutingClass] = {}
+
+        # Create _sys router as child of root router for system apps
+        self._sys_router = Router(self, name="_sys", parent_router=self.router)
+
+        self._load_apps(self.config.get_sys_app_specs_raw(), self.sys_apps, self._sys_router)
+        self._load_apps(self.config.get_app_specs_raw(), self.apps)
+
+        # Default entry points to server_application.index
+        self.router.default_entry = "_server/index"
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """
@@ -222,86 +206,55 @@ class AsgiServer(RoutingClass):
         apps_str = ", ".join(f"{path!r}" for path in self.apps)
         return f"AsgiServer(apps=[{apps_str}])"
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Router mode methods
-    # ─────────────────────────────────────────────────────────────────────────
+    def _load_apps(
+        self,
+        specs: dict[str, tuple[str, str, dict[str, Any]]],
+        target: dict[str, RoutingClass],
+        target_router: Router | None = None,
+    ) -> None:
+        """Load apps from specs into target dict and mount on router.
 
-    @property
-    def main_app(self) -> str | None:
-        """Return main app name: configured or single app."""
-        configured: str | None = self.config["main_app"]
-        if configured:
-            return configured
-        apps: dict[str, Any] = self.config["apps"]
-        return next(iter(apps)) if len(apps) == 1 else None
-
-    @route("root", meta_mime_type="text/html")
-    def index(self) -> str:
-        """Default index page for router mode. Redirects to main_app if configured or single."""
-        if self.main_app:
-            raise Redirect(f"/{self.main_app}/")
-        html_path = Path(__file__).parent / "resources" / "html" / "default_index.html"
-        return html_path.read_text()
-
-    @route("root", meta_mime_type="application/json")
-    def _openapi(self, *args: str) -> dict[str, Any]:
-        """OpenAPI schema endpoint."""
-        basepath = "/".join(args) if args else None
-        paths = self.router.nodes(basepath=basepath, mode="openapi")
-        return {
-            "openapi": "3.1.0",
-            "info": self.openapi_info,
-            **paths,
-        }
-
-    @property
-    def resources_path(self) -> Path | None:
-        """Path to server's resources directory."""
-        resources = self.base_dir / "resources"
-        return resources if resources.is_dir() else None
-
-    @route(name="_resource")
-    def load_resource(self, *args: str, name: str) -> Any:
-        """Load resource with hierarchical fallback.
-
-        Callable directly by apps or via HTTP at /_resource?name=...
+        Supports two module formats:
+        1. Local modules (relative to server_dir): "main:Shop", "myapp.core:MyApp"
+        2. Installed packages (absolute): "genro_asgi.sys_applications.swagger:SwaggerApp"
 
         Args:
-            *args: Path segments in routing tree (e.g., "shop", "tables")
-            name: Resource name to load
-
-        Returns:
-            Wrapped result with content and mime_type metadata
-
-        Raises:
-            HTTPNotFound: If resource not found
+            specs: Dict of {name: (module_name, class_name, kwargs)} from config.
+            target: Dict to store loaded app instances (apps or sys_apps).
+            target_router: Router to mount apps on. If None, uses self.router.
         """
-        result = self.resource_loader.load(*args, name=name)
-        if result is None:
-            raise HTTPNotFound(f"Resource not found: {name}")
+        import importlib
 
-        content, mime_type = result
-        return self.result_wrapper(content, mime_type=mime_type)
+        server_dir_path = self.config.server_dir
+        router = target_router if target_router is not None else self.router
 
-    @route("root", auth_tags="superadmin&has_jwt")
-    def _create_jwt(
-        self,
-        jwt_config: str | None = None,
-        sub: str | None = None,
-        tags: str | None = None,
-        exp: int | None = None,
-        **extra_kwargs: Any,
-    ) -> dict[str, Any]:
-        """Create JWT token via HTTP endpoint. Requires superadmin auth tag."""
-        if not jwt_config or not sub:
-            return {"error": "jwt_config and sub are required"}
-        # TODO: import create_jwt from genro-toolbox
-        # tags_list = tags.split(",") if tags else None
-        # extra = extra_kwargs if extra_kwargs else None
-        # token = create_jwt(jwt_config, sub, tags_list, exp, extra)
-        # return {"token": token}
-        _ = (tags, exp, extra_kwargs)  # unused until genro-toolbox is ready
-        return {"error": "not implemented - waiting for genro-toolbox"}
+        for name, (module_name, class_name, kwargs) in specs.items():
+            module_path = module_name.replace(".", "/")
+            module_as_file = server_dir_path / f"{module_path}.py"
+            module_as_dir = server_dir_path / module_path
+
+            if module_as_file.exists() or module_as_dir.exists():
+                # Local module: use AppLoader
+                app_dir = server_dir_path if module_as_file.exists() else module_as_dir
+                self.app_loader.load_package(name, app_dir)
+                app_module = self.app_loader.get_module(name, module_name)
+                if app_module is None:
+                    raise ImportError(f"Cannot load module '{module_name}' for app '{name}'")
+                kwargs["base_dir"] = app_dir
+            else:
+                # Installed package: use importlib
+                app_module = importlib.import_module(module_name)
+                module_file = getattr(app_module, "__file__", None)
+                if module_file:
+                    kwargs["base_dir"] = Path(module_file).parent
+
+            cls = getattr(app_module, class_name)
+            instance = cls(**kwargs)
+            instance._mount_name = name
+            target[name] = instance
+
+            # Mount on target router
+            router.attach_instance(instance, name=name)
 
     @property
     def request(self) -> BaseRequest | None:

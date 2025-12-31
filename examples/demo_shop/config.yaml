@@ -20,3 +20,9 @@ apps:
   shop:
     module: "main:Shop"
     connection_string: "sqlite:shop.db"
+
+sys_apps:
+  swagger:
+    module: "genro_asgi.sys_applications.swagger:SwaggerApp"
+  genro_api:
+    module: "genro_asgi.sys_applications.genro_api:GenroApiApp"

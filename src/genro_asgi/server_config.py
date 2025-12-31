@@ -20,6 +20,7 @@ def _server_opts_spec(
     host: str,
     port: int,
     reload: bool,
+    config: str,
 ) -> None:
     """Reference function for SmartOptions type extraction (no defaults)."""
 
@@ -88,7 +89,9 @@ class ServerConfig:
         else:
             global_config = SmartOptions({})
 
-        project_config = SmartOptions(str(resolved_server_dir / "config.yaml"))
+        # Use --config if specified, otherwise default to config.yaml
+        config_file = env_argv_opts["config"] or "config.yaml"
+        project_config = SmartOptions(str(resolved_server_dir / config_file))
 
         config = global_config + project_config
 
@@ -128,6 +131,12 @@ class ServerConfig:
         return result
 
     @property
+    def sys_apps(self) -> SmartOptions | None:
+        """System apps configuration."""
+        result: SmartOptions | None = self._opts["sys_apps"]
+        return result
+
+    @property
     def openapi(self) -> dict[str, Any]:
         """OpenAPI info as plain dict."""
         return self._openapi
@@ -153,6 +162,20 @@ class ServerConfig:
             return {}
         result: dict[str, tuple[str, str, dict[str, Any]]] = {}
         for name, app_opts in self.apps.as_dict().items():
+            module_path, kwargs = self._parse_app_opts(name, app_opts)
+            module_name, class_name = module_path.split(":")
+            result[name] = (module_name, class_name, kwargs)
+        return result
+
+    def get_sys_app_specs_raw(self) -> dict[str, tuple[str, str, dict[str, Any]]]:
+        """Return {name: (module_name, class_name, kwargs)} for system apps.
+
+        Same format as get_app_specs_raw but for sys_apps config section.
+        """
+        if not self.sys_apps:
+            return {}
+        result: dict[str, tuple[str, str, dict[str, Any]]] = {}
+        for name, app_opts in self.sys_apps.as_dict().items():
             module_path, kwargs = self._parse_app_opts(name, app_opts)
             module_name, class_name = module_path.split(":")
             result[name] = (module_name, class_name, kwargs)

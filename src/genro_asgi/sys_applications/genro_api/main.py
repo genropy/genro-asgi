@@ -6,8 +6,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from genro_routes import route  # type: ignore[import-untyped]
+from genro_routes.core import BaseRouter  # type: ignore[import-untyped]
 
 from genro_asgi import AsgiApplication
 
@@ -17,10 +19,10 @@ __all__ = ["GenroApiApp"]
 class GenroApiApp(AsgiApplication):
     """Genro API Explorer - custom API documentation UI.
 
-    Mount in config.yaml:
-        apps:
-          _genro_api:
-            module: "main:GenroApiApp"
+    Mount in config.yaml as sys_app:
+        sys_apps:
+          genro_api:
+            module: "genro_asgi.sys_applications.genro_api:GenroApiApp"
     """
 
     openapi_info = {
@@ -44,7 +46,9 @@ class GenroApiApp(AsgiApplication):
 
     def _serve_explorer(self, app: str = "", basepath: str = "") -> str:
         """Serve the explorer HTML with optional app and basepath preselected."""
-        html_path = self.base_dir / "resources" / "index.html"
+        if self.base_dir is None:
+            return "<html><body>No base_dir configured</body></html>"
+        html_path = Path(self.base_dir) / "resources" / "index.html"
         html = html_path.read_text()
 
         if app or basepath:
@@ -60,19 +64,16 @@ class GenroApiApp(AsgiApplication):
         return html
 
     @route(openapi_method="get")
-    def apps(self) -> dict:
-        """Return list of available apps with API routers."""
+    def apps(self) -> dict[str, Any]:
+        """Return list of available apps."""
         if not self.server:
             return {"apps": []}
 
-        app_list = []
-        for name, instance in self.server.apps.items():
-            if hasattr(instance, "api"):
-                app_list.append({"name": name, "has_api": True})
+        app_list = [{"name": name} for name in self.server.apps]
         return {"apps": app_list}
 
     @route()
-    def nodes(self, app: str = "", basepath: str = "", lazy: bool = False) -> dict:
+    def nodes(self, app: str = "", basepath: str = "", lazy: bool = False) -> dict[str, Any]:
         """Return hierarchical OpenAPI schema for tree view.
 
         Args:
@@ -83,25 +84,20 @@ class GenroApiApp(AsgiApplication):
         if not self.server:
             return {"description": None, "owner_doc": None, "paths": {}, "routers": {}}
 
-        # Get auth_tags and capabilities from current request
+        # Get auth_tags and env_capabilities from current request
         request = self.server.request
         auth_tags = request.auth_tags if request else ""
-        capabilities = request.capabilities if request else ""
+        capabilities = request.env_capabilities if request else ""
 
-        if app and app in self.server.apps:
-            instance = self.server.apps[app]
-            if hasattr(instance, "api"):
-                result: dict = instance.api.nodes(
-                    mode="h_openapi",
-                    basepath=basepath,
-                    lazy=lazy,
-                    auth_tags=auth_tags,
-                    env_capabilities=capabilities,
-                )
-                return result
-            return {"description": None, "owner_doc": None, "paths": {}, "routers": {}}
+        # Get router: app-specific or server root
+        router: BaseRouter = self.server.router
+        if app:
+            app_router = self.server.router.router_at_path(app)
+            if not app_router:
+                return {"description": None, "owner_doc": None, "paths": {}, "routers": {}}
+            router = app_router
 
-        result = self.server.router.nodes(
+        result = router.nodes(
             mode="h_openapi",
             basepath=basepath,
             lazy=lazy,
@@ -111,7 +107,7 @@ class GenroApiApp(AsgiApplication):
         return dict(result)
 
     @route(openapi_method="get")
-    def getdoc(self, path: str, app: str = "") -> dict:
+    def getdoc(self, path: str, app: str = "") -> dict[str, Any]:
         """Get documentation for a single node (router or endpoint).
 
         Args:
@@ -121,27 +117,24 @@ class GenroApiApp(AsgiApplication):
         if not self.server:
             return {"error": "No server available"}
 
-        router = None
-        if app and app in self.server.apps:
-            instance = self.server.apps[app]
-            if hasattr(instance, "api"):
-                router = instance.api
-        else:
-            router = self.server.router
+        # Get router: app-specific or server root
+        router: BaseRouter = self.server.router
+        if app:
+            app_router = self.server.router.router_at_path(app)
+            if not app_router:
+                return {"error": f"Router not found for app '{app}'"}
+            router = app_router
 
-        if not router:
-            return {"error": f"Router not found for app '{app}'"}
-
-        # Get auth_tags and capabilities from current request
+        # Get auth_tags and env_capabilities from current request
         request = self.server.request
         auth_tags = request.auth_tags if request else ""
-        capabilities = request.capabilities if request else ""
+        capabilities = request.env_capabilities if request else ""
 
         # Remove leading slash - router.node() expects path without it
         clean_path = path.lstrip("/")
         node = router.node(
             clean_path,
-            mode="openapi",
+            openapi=True,
             auth_tags=auth_tags,
             env_capabilities=capabilities,
         )
@@ -158,7 +151,10 @@ class GenroApiApp(AsgiApplication):
         if not file:
             raise ValueError("File parameter required")
 
-        resources_dir = self.base_dir / "resources"
+        if self.base_dir is None:
+            raise ValueError("No base_dir configured")
+
+        resources_dir = Path(self.base_dir) / "resources"
         file_path = resources_dir / file
 
         if not file_path.exists() or not file_path.is_file():

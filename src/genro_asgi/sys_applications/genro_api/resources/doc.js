@@ -4,7 +4,7 @@
 class ApiDoc extends HTMLElement {
   constructor() {
     super();
-    this._baseUrl = "/_genro_api";
+    this._baseUrl = "";
     this._app = "";
   }
 
@@ -25,7 +25,8 @@ class ApiDoc extends HTMLElement {
   async loadDoc(path) {
     const params = new URLSearchParams({ path });
     if (this._app) params.set("app", this._app);
-    const url = `${this._baseUrl}/getdoc?${params}`;
+    const endpoint = this._baseUrl ? `${this._baseUrl}/getdoc` : "getdoc";
+    const url = `${endpoint}?${params}`;
 
     try {
       const res = await fetch(url);

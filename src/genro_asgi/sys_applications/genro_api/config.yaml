@@ -1,0 +1,10 @@
+# Genro API Explorer standalone config
+# Run: python -m genro_asgi serve --server-dir src/genro_asgi/sys_applications/genro_api
+
+server:
+  host: "127.0.0.1"
+  port: 8002
+
+apps:
+  genro_api:
+    module: "main:GenroApiApp"
