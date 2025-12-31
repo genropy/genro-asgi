@@ -79,7 +79,7 @@ from .executors import (
     ExecutorRegistry,
     LocalExecutor,
 )
-from .server import AsgiServer
+from .server import AsgiServer, ServerConfig, Dispatcher
 from .context import AsgiContext
 from .applications import AsgiApplication
 from .routers import StaticRouter
@@ -127,6 +127,8 @@ __all__ = [
     "Send",
     # Server integration
     "AsgiServer",
+    "ServerConfig",
+    "Dispatcher",
     # Context
     "AsgiContext",
     # Applications

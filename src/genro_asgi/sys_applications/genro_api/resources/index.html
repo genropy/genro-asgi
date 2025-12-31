@@ -6,10 +6,10 @@
   <title>Genro API Explorer</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.18/cdn/themes/light.css">
   <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.18/cdn/shoelace-autoloader.js"></script>
-  <script type="module" src="static?file=tree.js"></script>
-  <script type="module" src="static?file=doc.js"></script>
-  <script type="module" src="static?file=tester.js"></script>
-  <script type="module" src="static?file=response.js"></script>
+  <script type="module" src="/_genro_api/static?file=tree.js"></script>
+  <script type="module" src="/_genro_api/static?file=doc.js"></script>
+  <script type="module" src="/_genro_api/static?file=tester.js"></script>
+  <script type="module" src="/_genro_api/static?file=response.js"></script>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -147,7 +147,7 @@
     const urlInput = document.getElementById("url-input");
     const loadBtn = document.getElementById("load-btn");
 
-    // Check if app/basepath are fixed via URL
+    // Check if app/basepath are fixed via URL (e.g., /_genro_api/shop/article)
     const fixedApp = window.GENRO_API_INITIAL_APP || "";
     const fixedBasepath = window.GENRO_API_INITIAL_BASEPATH || "";
 
@@ -161,7 +161,7 @@
         urlPresets.style.display = "none";
         urlInput.style.display = "none";
         loadBtn.style.display = "none";
-        tree.loadNodes(fixedApp, fixedBasepath);
+        loadLocalOpenApi(fixedApp);
         doc.setApp(fixedApp);
         tester.setApp(fixedApp);
       }
@@ -204,7 +204,7 @@
       // Clear and repopulate app dropdown
       appSelect.innerHTML = '<option value="">-- Server Router --</option>';
       try {
-        const res = await fetch("apps");
+        const res = await fetch("/_genro_api/apps");
         const data = await res.json();
         for (const app of data.apps || []) {
           const option = document.createElement("option");
@@ -212,8 +212,8 @@
           option.textContent = app.name;
           appSelect.appendChild(option);
         }
-        // Load server router by default
-        tree.loadNodes();
+        // Load server router OpenAPI by default
+        loadLocalOpenApi("");
         doc.setApp("");
         tester.setApp("");
         doc.showPlaceholder();
@@ -221,6 +221,23 @@
         response.showPlaceholder();
       } catch (err) {
         console.error("Failed to load apps:", err);
+      }
+    }
+
+    async function loadLocalOpenApi(app) {
+      // Fetch OpenAPI from local server (standard format like swagger)
+      const url = app ? `/_genro_api/openapi?app=${app}` : "/_genro_api/openapi";
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        // Use the same loadOpenApi method as remote - it handles standard OpenAPI format
+        tree.loadOpenApi(data, "");
+        tree._localMode = true;
+        tree._localApp = app;
+      } catch (err) {
+        console.error("Failed to load local OpenAPI:", err);
+        alert(`Failed to load OpenAPI: ${err.message}`);
       }
     }
 
@@ -260,7 +277,7 @@
     appSelect.addEventListener("change", () => {
       if (currentMode !== "local") return;
       const app = appSelect.value;
-      tree.loadNodes(app);
+      loadLocalOpenApi(app);
       doc.setApp(app);
       doc.showPlaceholder();
       tester.setApp(app);
@@ -272,34 +289,24 @@
     tree.addEventListener("node-selected", async (e) => {
       console.log("Selected node:", e.detail);
 
-      if (currentMode === "remote") {
-        // Remote mode: data is already in the event
-        const nodeData = e.detail.data;
+      if (currentMode === "remote" || !tree._localMode) {
+        // Remote mode: data is already in the event from OpenAPI transform
+        const nodeData = e.detail.data || e.detail;
         doc.render(nodeData);
         tester.setEndpoint(nodeData, e.detail.path);
         response.showPlaceholder();
         return;
       }
 
-      // Local mode: fetch doc from server
+      // Local mode: we can use the data from tree selection directly
+      // The OpenAPI data is already parsed and available
+      const nodeData = e.detail.data || e.detail;
       const currentApp = fixedApp || appSelect.value;
-      const selectedPath = e.detail.path;
       doc.setApp(currentApp);
       tester.setApp(currentApp);
-
-      const params = new URLSearchParams({ path: selectedPath });
-      if (currentApp) params.set("app", currentApp);
-      const url = `getdoc?${params}`;
-
-      try {
-        const res = await fetch(url);
-        const data = await res.json();
-        doc.render(data);
-        tester.setEndpoint(data, selectedPath);
-        response.showPlaceholder();
-      } catch (err) {
-        console.error("Failed to load doc:", err);
-      }
+      doc.render(nodeData);
+      tester.setEndpoint(nodeData, e.detail.path);
+      response.showPlaceholder();
     });
 
     // Handle API response from tester

@@ -33,18 +33,18 @@ from typing import TYPE_CHECKING, Any
 from genro_routes import is_result_wrapper
 from smartasync import smartasync
 
-from .exceptions import (
+from ..exceptions import (
     HTTPBadRequest,
     HTTPForbidden,
     HTTPNotFound,
     HTTPServiceUnavailable,
     HTTPUnauthorized,
 )
-from .request import set_current_request
+from ..request import set_current_request
 
 if TYPE_CHECKING:
     from .server import AsgiServer
-    from .types import Receive, Scope, Send
+    from ..types import Receive, Scope, Send
 
 # Error mapping for router.node()
 ROUTER_ERRORS: dict[str, type[Exception]] = {

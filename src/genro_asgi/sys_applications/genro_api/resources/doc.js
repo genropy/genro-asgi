@@ -4,7 +4,7 @@
 class ApiDoc extends HTMLElement {
   constructor() {
     super();
-    this._baseUrl = "";
+    this._baseUrl = "/_genro_api";
     this._app = "";
   }
 
@@ -25,8 +25,7 @@ class ApiDoc extends HTMLElement {
   async loadDoc(path) {
     const params = new URLSearchParams({ path });
     if (this._app) params.set("app", this._app);
-    const endpoint = this._baseUrl ? `${this._baseUrl}/getdoc` : "getdoc";
-    const url = `${endpoint}?${params}`;
+    const url = `${this._baseUrl}/getdoc?${params}`;
 
     try {
       const res = await fetch(url);
@@ -45,8 +44,7 @@ class ApiDoc extends HTMLElement {
       return;
     }
 
-    // Check if this is a router (has description/owner_doc) or endpoint (has method like get/post)
-    const isRouter = data.type === "router" || (data.description !== undefined && !this._hasMethod(data));
+    const isRouter = data.type === "router";
     const html = isRouter ? this._renderRouter(data) : this._renderEndpoint(data);
 
     this.innerHTML = `
@@ -214,64 +212,31 @@ class ApiDoc extends HTMLElement {
     `;
   }
 
-  _hasMethod(data) {
-    // Check if data has HTTP method keys (get, post, put, delete, patch)
-    const methods = ["get", "post", "put", "delete", "patch"];
-    return methods.some(m => data[m] !== undefined);
-  }
-
-  _getMethodAndOperation(data) {
-    // Handle both formats:
-    // 1. Direct: {"get": {...operation...}}
-    // 2. Wrapped: {openapi: {"get": {...operation...}}}
-    const methods = ["get", "post", "put", "delete", "patch"];
-
-    // Check direct format first
-    for (const m of methods) {
-      if (data[m]) {
-        return { method: m.toUpperCase(), operation: data[m] };
-      }
-    }
-
-    // Check wrapped format
-    if (data.openapi) {
-      for (const m of methods) {
-        if (data.openapi[m]) {
-          return { method: m.toUpperCase(), operation: data.openapi[m] };
-        }
-      }
-    }
-
-    return { method: "POST", operation: null };
-  }
-
   _renderEndpoint(data) {
-    const { method, operation } = this._getMethodAndOperation(data);
-    const params = this._extractParams(data, operation);
+    // Extract method and operation from openapi object
+    const method = data.openapi ? Object.keys(data.openapi)[0]?.toUpperCase() : "POST";
+    const operation = data.openapi ? data.openapi[method.toLowerCase()] : null;
+    const params = this._extractParams(data);
     const responses = this._extractResponses(operation);
-    const description = operation?.description || operation?.summary || data.doc || "";
-    const name = operation?.operationId || data.path || data.name || "";
 
     return `
       <div class="doc-path">
         <span class="doc-type doc-type-endpoint">Endpoint</span>
         <span class="doc-method doc-method-${method.toLowerCase()}">${method}</span>
-        ${name}
+        ${data.path || data.name}
       </div>
-      ${description ? `<div class="doc-description">${description}</div>` : ""}
+      ${data.doc ? `<div class="doc-description">${data.doc}</div>` : ""}
       ${params.length > 0 ? this._renderParams(params) : ""}
       ${responses.length > 0 ? this._renderResponses(responses) : ""}
     `;
   }
 
-  _extractParams(data, operation = null) {
+  _extractParams(data) {
     const params = [];
 
-    // If operation not passed, try to extract it
-    if (!operation) {
-      const result = this._getMethodAndOperation(data);
-      operation = result.operation;
-    }
+    // Get the operation object (data.openapi.get, data.openapi.post, etc.)
+    const method = data.openapi ? Object.keys(data.openapi)[0] : null;
+    const operation = method ? data.openapi[method] : null;
 
     // From openapi operation parameters
     if (operation?.parameters) {

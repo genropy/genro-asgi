@@ -106,8 +106,8 @@ class ServerApplication(RoutingClass):
         """
         if self.main_app:
             raise Redirect(f"/{self.main_app}/")
-        # resources/ is in genro_asgi/, go up one level from applications/
-        html_path = Path(__file__).parent.parent / "resources" / "html" / "default_index.html"
+        # resources are in server/server_app/resources/
+        html_path = Path(__file__).parent.parent / "server" / "server_app" / "resources" / "index.html"
         return html_path.read_text()
 
     @route(meta_mime_type="application/json")
