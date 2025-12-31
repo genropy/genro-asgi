@@ -188,20 +188,24 @@ class ServerConfig:
         result: Path = self.server["server_dir"]
         return result
 
-    def _parse_app_opts(self, name: str, app_opts: SmartOptions | dict | str) -> tuple[str, dict[str, Any]]:
-        """Parse app options into module_path and kwargs."""
+    def _parse_app_opts(self, name: str, app_opts: SmartOptions | dict | str | None) -> tuple[str, dict[str, Any]]:
+        """Parse app options into module_path and kwargs.
+
+        Supports convention-based loading: if module is not specified,
+        returns empty string to signal that the loader should try
+        the convention {name}_app:Application first.
+        """
+        if app_opts is None:
+            # Convention mode: loader will try {name}_app:Application
+            return "", {}
         if isinstance(app_opts, str):
             return app_opts, {}
         if isinstance(app_opts, dict):
             module_path = app_opts.get("module", "")
-            if not module_path:
-                raise ValueError(f"App '{name}' missing 'module' in config")
             kwargs = {k: v for k, v in app_opts.items() if k != "module"}
             return module_path, kwargs
         # SmartOptions
-        module_path = app_opts["module"]
-        if not module_path:
-            raise ValueError(f"App '{name}' missing 'module' in config")
+        module_path = app_opts["module"] or ""
         kwargs = {k: v for k, v in app_opts.as_dict().items() if k != "module"}
         return module_path, kwargs
 

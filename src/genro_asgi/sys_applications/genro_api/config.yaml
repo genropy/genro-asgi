@@ -7,4 +7,4 @@ server:
 
 apps:
   genro_api:
-    module: "main:GenroApiApp"
+    module: "genro_api_app:Application"

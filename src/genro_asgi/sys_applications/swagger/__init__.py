@@ -1,8 +1,8 @@
 # Copyright 2025 Softwell S.r.l.
 # Licensed under the Apache License, Version 2.0
 
-"""SwaggerApp - OpenAPI/Swagger documentation app."""
+"""Swagger - OpenAPI/Swagger documentation app."""
 
-from .main import SwaggerApp
+from .swagger_app import Application
 
-__all__ = ["SwaggerApp"]
+__all__ = ["Application"]

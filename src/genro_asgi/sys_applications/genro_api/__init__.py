@@ -1,8 +1,8 @@
 # Copyright 2025 Softwell S.r.l.
 # Licensed under the Apache License, Version 2.0
 
-"""GenroApiApp - Custom API Explorer application."""
+"""Genro API Explorer - Custom API documentation application."""
 
-from .main import GenroApiApp
+from .genro_api_app import Application
 
-__all__ = ["GenroApiApp"]
+__all__ = ["Application"]

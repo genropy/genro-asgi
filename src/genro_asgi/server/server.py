@@ -67,7 +67,7 @@ from ..middleware import middleware_chain
 from ..resources import ResourceLoader
 from ..response import Response
 from ..request import RequestRegistry, BaseRequest
-from ..applications.server_application import ServerApplication
+from .server_app.server_app import ServerApplication
 from ..storage import LocalStorage
 from ..types import Receive, Scope, Send
 
@@ -152,7 +152,18 @@ class AsgiServer(RoutingClass):
         self._sys_router = Router(self, name="_sys", parent_router=self.router)
 
         self._load_apps(self.config.get_sys_app_specs_raw(), self.sys_apps, self._sys_router)
-        self._load_apps(self.config.get_app_specs_raw(), self.apps)
+
+        # Load user apps with convention support
+        app_specs = dict(self.config.get_app_specs_raw())  # mutable copy
+        convention_app = self._detect_convention_app(app_specs)
+        self._load_apps(app_specs, self.apps)
+
+        # Set main_app: explicit config > convention app > single app
+        main_app = self.config["main_app"]
+        if not main_app and convention_app:
+            main_app = convention_app
+        if main_app:
+            self.config._opts["main_app"] = main_app
 
         # Default entry points to server_application.index
         self.router.default_entry = "_server/index"
@@ -206,6 +217,44 @@ class AsgiServer(RoutingClass):
         apps_str = ", ".join(f"{path!r}" for path in self.apps)
         return f"AsgiServer(apps=[{apps_str}])"
 
+    def _detect_convention_app(
+        self,
+        app_specs: dict[str, tuple[str, str, dict[str, Any]]],
+    ) -> str | None:
+        """Detect convention-based app in server_dir.
+
+        Looks for {server_dir.name}_app.py with class Application.
+        If found and not already in app_specs, adds it.
+
+        Args:
+            app_specs: Mutable dict of app specs to potentially update.
+
+        Returns:
+            Name of convention app if found and added, None otherwise.
+        """
+        server_dir = self.config.server_dir
+        app_name = server_dir.name
+        convention_module = f"{app_name}_app"
+        convention_file = server_dir / f"{convention_module}.py"
+
+        if not convention_file.exists():
+            return None
+
+        # Check if class Application exists in the module
+        try:
+            self.app_loader.load_package(app_name, server_dir)
+            module = self.app_loader.get_module(app_name, convention_module)
+            if module is None or not hasattr(module, "Application"):
+                return None
+        except Exception:
+            return None
+
+        # Add to specs if not already present
+        if app_name not in app_specs:
+            app_specs[app_name] = (convention_module, "Application", {"base_dir": server_dir})
+
+        return app_name
+
     def _load_apps(
         self,
         specs: dict[str, tuple[str, str, dict[str, Any]]],
@@ -229,24 +278,30 @@ class AsgiServer(RoutingClass):
         router = target_router if target_router is not None else self.router
 
         for name, (module_name, class_name, kwargs) in specs.items():
-            module_path = module_name.replace(".", "/")
-            module_as_file = server_dir_path / f"{module_path}.py"
-            module_as_dir = server_dir_path / module_path
+            # Check if already loaded by convention detection
+            app_module = self.app_loader.get_module(name, module_name)
 
-            if module_as_file.exists() or module_as_dir.exists():
-                # Local module: use AppLoader
-                app_dir = server_dir_path if module_as_file.exists() else module_as_dir
-                self.app_loader.load_package(name, app_dir)
-                app_module = self.app_loader.get_module(name, module_name)
-                if app_module is None:
-                    raise ImportError(f"Cannot load module '{module_name}' for app '{name}'")
-                kwargs["base_dir"] = app_dir
-            else:
-                # Installed package: use importlib
-                app_module = importlib.import_module(module_name)
-                module_file = getattr(app_module, "__file__", None)
-                if module_file:
-                    kwargs["base_dir"] = Path(module_file).parent
+            if app_module is None:
+                # Not pre-loaded, try to load it
+                module_path = module_name.replace(".", "/")
+                module_as_file = server_dir_path / f"{module_path}.py"
+                module_as_dir = server_dir_path / module_path
+
+                if module_as_file.exists() or module_as_dir.exists():
+                    # Local module: use AppLoader
+                    app_dir = server_dir_path if module_as_file.exists() else module_as_dir
+                    self.app_loader.load_package(name, app_dir)
+                    app_module = self.app_loader.get_module(name, module_name)
+                    if app_module is None:
+                        raise ImportError(f"Cannot load module '{module_name}' for app '{name}'")
+                    if "base_dir" not in kwargs:
+                        kwargs["base_dir"] = app_dir
+                else:
+                    # Installed package: use importlib
+                    app_module = importlib.import_module(module_name)
+                    module_file = getattr(app_module, "__file__", None)
+                    if module_file and "base_dir" not in kwargs:
+                        kwargs["base_dir"] = Path(module_file).parent
 
             cls = getattr(app_module, class_name)
             instance = cls(**kwargs)

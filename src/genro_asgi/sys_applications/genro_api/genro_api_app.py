@@ -1,7 +1,7 @@
 # Copyright 2025 Softwell S.r.l.
 # Licensed under the Apache License, Version 2.0
 
-"""GenroApiApp - Custom API Explorer application."""
+"""Genro API Explorer - Custom API documentation application."""
 
 from __future__ import annotations
 
@@ -13,16 +13,16 @@ from genro_routes.core import BaseRouter  # type: ignore[import-untyped]
 
 from genro_asgi import AsgiApplication
 
-__all__ = ["GenroApiApp"]
+__all__ = ["Application"]
 
 
-class GenroApiApp(AsgiApplication):
+class Application(AsgiApplication):
     """Genro API Explorer - custom API documentation UI.
 
     Mount in config.yaml as sys_app:
         sys_apps:
           genro_api:
-            module: "genro_asgi.sys_applications.genro_api:GenroApiApp"
+            module: "genro_asgi.sys_applications.genro_api.genro_api_app:Application"
     """
 
     openapi_info = {

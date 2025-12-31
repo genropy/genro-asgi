@@ -5,7 +5,7 @@
 
 from unittest.mock import MagicMock
 
-from genro_asgi.applications.server_application import ServerApplication
+from genro_asgi.server.server_app import ServerApplication
 
 
 class TestServerApplication:

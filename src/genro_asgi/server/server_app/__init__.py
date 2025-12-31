@@ -3,5 +3,6 @@
 
 """Server application package - default system endpoints."""
 
-# ServerApplication is still in applications/server_application.py
-# This package contains the resources for the server application
+from .server_app import ServerApplication
+
+__all__ = ["ServerApplication"]

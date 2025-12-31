@@ -1,0 +1,16 @@
+# Base Example with Swagger UI
+# Run: python -m genro_asgi serve examples/base_example --config config_with_swagger.yaml
+
+server:
+  host: "127.0.0.1"
+  port: 8000
+
+apps:
+  app:
+    module: "main:App"
+
+sys_apps:
+  swagger:
+    module: "genro_asgi.sys_applications.swagger.swagger_app:Application"
+  genro_api:
+    module: "genro_asgi.sys_applications.genro_api.genro_api_app:Application"

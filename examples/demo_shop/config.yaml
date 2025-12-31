@@ -23,6 +23,6 @@ apps:
 
 sys_apps:
   swagger:
-    module: "genro_asgi.sys_applications.swagger:SwaggerApp"
+    module: "genro_asgi.sys_applications.swagger.swagger_app:Application"
   genro_api:
-    module: "genro_asgi.sys_applications.genro_api:GenroApiApp"
+    module: "genro_asgi.sys_applications.genro_api.genro_api_app:Application"

@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING, Any
 
 from genro_routes import RoutingClass, Router, route  # type: ignore[import-untyped]
 
-from ..exceptions import HTTPNotFound, Redirect
+from ...exceptions import HTTPNotFound, Redirect
 
 if TYPE_CHECKING:
     from ..server import AsgiServer
@@ -106,8 +106,8 @@ class ServerApplication(RoutingClass):
         """
         if self.main_app:
             raise Redirect(f"/{self.main_app}/")
-        # resources are in server/server_app/resources/
-        html_path = Path(__file__).parent.parent / "server" / "server_app" / "resources" / "index.html"
+        # resources are in the same directory as this module
+        html_path = Path(__file__).parent / "resources" / "index.html"
         return html_path.read_text()
 
     @route(meta_mime_type="application/json")
