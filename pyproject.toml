@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "genro-asgi-core"
+version = "0.1.0"
+description = "Minimal ASGI server core (spec-first redesign of genro-asgi)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "Genropy Team", email = "info@softwell.it"}
+]
+keywords = ["asgi", "web", "async", "http", "server"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Framework :: AsyncIO",
+]
+
+dependencies = []
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+dev = [
+    "genro-asgi-core[test]",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/genropy/genro-asgi-core"
+Repository = "https://github.com/genropy/genro-asgi-core"
+"Bug Tracker" = "https://github.com/genropy/genro-asgi-core/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/genro_asgi_core"]
+exclude = ["**/tests/"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --cov=genro_asgi_core --cov-report=term-missing"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+# mypy is a non-blocking advisor (parent policy): non-strict, findings
+# reviewed but never gating.
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+exclude = ["tests/", ".*/tests/"]
