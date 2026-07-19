@@ -1,6 +1,6 @@
 # New Design Specification — the genro-asgi-* family (core + orchestration)
 
-**Version**: 0.2.0 · **Last Updated**: 2026-07-19 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.3.0 · **Last Updated**: 2026-07-19 · **Status**: 🔴 DA REVISIONARE
 
 > Founding specification of the redesign. Decided in the design sessions of
 > 2026-07-17→19; the critical survey of the current codebase that motivates it
@@ -346,6 +346,53 @@ work (focused context, small public API, short suites) — but only when the
 boundary is a STABLE contract; an unstable boundary costs lockstep version
 bumps at every turn.
 
+### Ratified 2026-07-19 (decision session, part 3)
+
+**D22 — The cut restated: core is the complete mono-process async server;
+the orchestration package is defined by two primitives.** (Extends ratified
+D9; amends the scope of placement-table row 1; gives the spool soul of the
+D8/D19 annotation its home.)
+
+**Core (`genro-asgi-core`) targets the Starlette/FastAPI territory**:
+everything a modern async web framework offers within ONE process, complete
+and usable on its own — the mono-process async server:
+
+- URL topology (D3/D9): primary app, mounts, the one demux;
+- authentication and HTTP sessions (identity BETWEEN requests);
+- middleware chain and plugins;
+- application base classes AND the complete OpenAPI and MCP applications
+  (widens placement-table row 1, which said "base classes" only);
+- the full `_server`;
+- storage AND db handlers — the transversal config sections of D15
+  (databases, storage) get their server-side counterparts in core;
+- the task model + local execution: the spool (state=position, invariant
+  §5.7), task lifecycle, terminal batch_id — executed in-process on the
+  core's own pool/loop (background-task style).
+
+**The orchestration package is defined by two primitives** — everything in
+it derives from them:
+
+1. the USER as the load-partition key (user→group→worker): sticky routing,
+   the D12 three-projection registries, rebalance/move, the Form C manager;
+2. PAGE_ID as the unit of living state: page registries, datachange,
+   subscriptions, per-page ordering, the D21 re-attach by page_id.
+
+The survival line makes the cut testable: what must survive a worker's
+death lives in core (sessions, logins, spool state on storage); what dies
+and is rebuilt with its process lives in orchestration (pages, pending,
+subscriptions) — the same line D21 draws.
+
+**Batch is the degenerate case — workers without users**: it shares the
+process machinery (pool/hub/spawn, dedicated workers) with neither
+primitive. Its MODEL (spool, states) lives in core; its distributed
+execution (commander app, dedicated workers) in orchestration.
+
+Consequence for §7: phase 1 widens and is re-phased into internal core
+steps (config+middleware+auth/sessions → storage+db → OpenAPI/MCP apps +
+plugins → full `_server` → tasks local); phase 0 is untouched. Q3 (the
+orchestration suffix) stays open; the two-primitive identity strengthens
+`spa` as a candidate name, with batch riding along.
+
 ---
 
 ## 3. Decision log — discussed, unopposed (◆ confirm in bulk at review)
@@ -550,11 +597,19 @@ the server (thread pool for sync handlers, registry for the current request).
 
 ## 7. Step plan
 
+Re-phased by D22 (core widened to the complete mono-process server; internal
+ordering of 1a–1e provisional, refined per-phase at workflow-writing time):
+
 | Step | Delivers | Package |
 |---|---|---|
 | **Phase 0** | base server + app contract + full test suite (checklist §4) | genro-asgi-core |
-| **Phase 1** | public server: config (site + role projections), middleware, full `_server`, auth | genro-asgi-core |
-| **Phase 2+** | orchestration: SPA commander app, group manager (Form C, both placements), pool/hub, batch, rich monitor, selective reload | orchestration pkg (`genro-asgi-*`) |
+| **Phase 1a** | config (site + role projections), middleware, auth, HTTP sessions | genro-asgi-core |
+| **Phase 1b** | storage + db handlers | genro-asgi-core |
+| **Phase 1c** | application classes: complete OpenAPI + MCP apps, plugins | genro-asgi-core |
+| **Phase 1d** | full `_server` | genro-asgi-core |
+| **Phase 1e** | tasks: spool model + local (in-process) execution | genro-asgi-core |
+| **Phase 2+** | orchestration on the two D22 primitives: SPA commander app, group manager (Form C, both placements), pool/hub, batch distributed execution, rich monitor, selective reload | orchestration pkg (`genro-asgi-*`) |
 
-Phase boundaries are package boundaries (D7/D8). Phase 0 is the birth act of
-the new repo, which forces Q4 first.
+Phase boundaries are package boundaries (D7/D8): 0–1e are core, 2+ is the
+orchestration package. Phase 0 is the birth act of the new repo, which
+forced Q4 first (resolved).
