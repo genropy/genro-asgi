@@ -12,8 +12,8 @@ Read the parent document first for:
 ## Project-Specific Context
 
 ### Current Status
-- **Development Status**: Pre-Alpha
-- **Has Implementation Code**: No
+- **Development Status**: Alpha
+- **Has Implementation Code**: Yes
 - **GitHub**: https://github.com/genropy/genro-asgi-core
 
 ### Project Purpose

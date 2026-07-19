@@ -12,11 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Minimal ASGI server core: the base server and the app-side contract."""
+"""Channel subpackage: the frame protocol and the child side (◆D10).
 
-from .application import BaseApplication
-from .server import BaseServer
+The minimal package knows how to BE a child; the orchestration package knows
+how to HAVE children — the hub imports this protocol from below, never the
+reverse.
+"""
 
-__all__ = ["BaseApplication", "BaseServer", "__version__"]
+from .client import ChannelClient
+from .frame import MAX_FRAME_SIZE, REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
 
-__version__ = "0.1.0"
+__all__ = [
+    "MAX_FRAME_SIZE",
+    "REGISTER_METHOD",
+    "REGISTER_PATH",
+    "ChannelClient",
+    "Frame",
+    "FrameStream",
+]

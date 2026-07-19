@@ -1,0 +1,109 @@
+# Copyright 2025 Softwell S.r.l.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Thread-pool tests (SPECIFICATION.md §4): a sync handler runs on the pool
+(thread identity asserted), an async handler stays on the loop, the pool is
+provisioned lazily on the first sync dispatch and torn down at shutdown.
+
+``run_sync`` is exercised directly (no uvicorn) and the throwaway app's sync
+route is driven through ``BaseServer.__call__`` at the ASGI level.
+"""
+
+from __future__ import annotations
+
+import threading
+
+from genro_asgi_core import BaseServer
+
+from .throwaway_app import ThrowawayApp
+
+
+def make_server() -> BaseServer:
+    """A server with a throwaway primary — enough to exercise the pool."""
+    return BaseServer(primary=ThrowawayApp(name="primary"))
+
+
+class TestDispatch:
+    async def test_sync_handler_runs_on_a_pool_thread(self) -> None:
+        server = make_server()
+        name = await server.run_sync(lambda: threading.current_thread().name)
+        assert name.startswith("genro-pool")
+
+    async def test_async_stays_on_loop_sync_goes_off_loop(self) -> None:
+        server = make_server()
+        loop_ident = threading.get_ident()
+
+        async def async_handler() -> int:
+            return threading.get_ident()
+
+        assert await async_handler() == loop_ident
+        assert await server.run_sync(threading.get_ident) != loop_ident
+
+
+class TestProvisioning:
+    async def test_pool_is_not_provisioned_before_first_dispatch(self) -> None:
+        server = make_server()
+        assert server.pool.provisioned is False
+        await server.run_sync(lambda: None)
+        assert server.pool.provisioned is True
+
+    async def test_shutdown_resets_the_pool_for_reprovisioning(self) -> None:
+        server = make_server()
+        await server.run_sync(lambda: None)
+        assert server.pool.provisioned is True
+
+        server.pool.shutdown(wait=True)
+        assert server.pool.provisioned is False
+
+        # a later dispatch lazily re-provisions: server reuse via repeated serve()
+        name = await server.run_sync(lambda: threading.current_thread().name)
+        assert name.startswith("genro-pool")
+        assert server.pool.provisioned is True
+
+
+class TestThrowawayRoute:
+    async def test_sync_route_dispatches_through_the_pool(self) -> None:
+        server = make_server()
+        sent: list[dict[str, object]] = []
+
+        async def receive() -> dict[str, object]:
+            return {"type": "http.request"}
+
+        async def send(message: dict[str, object]) -> None:
+            sent.append(message)
+
+        await server({"type": "http", "path": "/sync"}, receive, send)
+
+        assert server.pool.provisioned is True
+        body = next(m["body"] for m in sent if m["type"] == "http.response.body")
+        assert body == b"sync:primary"
+
+
+class TestContextPropagation:
+    async def test_sync_handler_sees_its_own_current_request(self) -> None:
+        server = make_server()
+        sent: list[dict[str, object]] = []
+
+        async def receive() -> dict[str, object]:
+            return {"type": "http.request"}
+
+        async def send(message: dict[str, object]) -> None:
+            sent.append(message)
+
+        await server({"type": "http", "path": "/sync-current"}, receive, send)
+
+        # the pool copies the caller's context: the worker thread reads the
+        # registry's ContextVar and sees the request being served
+        body = next(m["body"] for m in sent if m["type"] == "http.response.body")
+        assert body == b"current:/sync-current"

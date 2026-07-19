@@ -4,7 +4,7 @@
 
 ## Status
 
-- **Development Status**: Pre-Alpha
+- **Development Status**: Alpha
 - This repository starts from a ratified design specification rather than
   ported code. See `SPECIFICATION.md` for the founding decision log and
   design rationale.

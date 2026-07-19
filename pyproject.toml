@@ -14,7 +14,7 @@ authors = [
 ]
 keywords = ["asgi", "web", "async", "http", "server"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
@@ -26,12 +26,16 @@ classifiers = [
     "Framework :: AsyncIO",
 ]
 
-dependencies = []
+dependencies = [
+    "uvicorn>=0.30",
+]
 
 [project.optional-dependencies]
 test = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
 ]
 dev = [
     "genro-asgi-core[test]",
@@ -54,6 +58,7 @@ python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
 addopts = "-v --cov=genro_asgi_core --cov-report=term-missing"
+asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100
@@ -66,3 +71,21 @@ python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 exclude = ["tests/", ".*/tests/"]
+
+# The channel client's Optionals are constructor/connect invariants mypy
+# cannot narrow: __init__ parses exactly one address form (uds or tcp), so
+# _tcp is a tuple whenever _uds_path is None; connect() assigns _stream
+# before the receive loop ever reads it. Silence only the two codes this
+# boundary produces, scoped to this module.
+[[tool.mypy.overrides]]
+module = "genro_asgi_core.channel.client"
+disable_error_code = ["misc", "union-attr"]
+
+# CommunicationMixin forwards __call__ cooperatively to the next class in
+# the MRO (mixins compose BEFORE BaseServer, D16). mypy sees the mixin's
+# static superclass as object and calls super().__call__ "undefined",
+# although the composition always provides it at runtime — the dynamic
+# mixin category the parent policy explicitly anticipates.
+[[tool.mypy.overrides]]
+module = "genro_asgi_core.communication"
+disable_error_code = ["misc"]
