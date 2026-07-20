@@ -14,14 +14,16 @@
 
 """Session store — the storage Protocol and the in-memory default.
 
-``SessionStore`` is a runtime-checkable ``Protocol`` (get/create/delete/dump/
-restore). Its test suite is a shared CONTRACT suite parametrized over
-implementations (§5.9), so the core 1b file/db backends plug into the SAME
-tests. ``MemorySessionStore`` is the dict-backed default: ``secrets`` tokens,
-a ``default_ttl`` for new sessions, lazy expiry on ``get``, and a ``dump``/
-``restore`` that persists meta and the avatar's identity/tags only — never
-the data Bag. ``create()`` is anonymous by default (``avatar is None``);
-capturing an identity into a session is an explicit ``create(avatar=...)``.
+``SessionStore`` is a runtime-checkable ``Protocol`` (get/create/delete/
+purge_expired/dump/restore). Its test suite is a shared CONTRACT suite
+parametrized over implementations (§5.9), so the core 1b file/db backends plug
+into the SAME tests. ``MemorySessionStore`` is the dict-backed default:
+``secrets`` tokens, a ``default_ttl`` for new sessions, lazy expiry on ``get``,
+opportunistic ``purge_expired`` at ``create`` time (no background task — those
+arrive in core 1e), and a ``dump``/``restore`` that persists meta and the
+avatar's identity/tags only — never the data Bag. ``create()`` is anonymous by
+default (``avatar is None``); capturing an identity into a session is an
+explicit ``create(avatar=...)``.
 """
 
 from __future__ import annotations
@@ -49,6 +51,10 @@ class SessionStore(Protocol):
 
     def delete(self, session_id: str) -> None:
         """Remove a session from the store."""
+        ...
+
+    def purge_expired(self) -> int:
+        """Remove every expired session; return how many were purged."""
         ...
 
     def dump(self) -> dict[str, Any]:
@@ -82,7 +88,8 @@ class MemorySessionStore:
         return session
 
     def create(self, avatar: Avatar | None = None) -> Session:
-        """Create a new session with a unique token and the store's default TTL."""
+        """Create a session (default TTL), purging expired ones opportunistically first."""
+        self.purge_expired()
         session_id = secrets.token_urlsafe(32)
         session = Session(session_id=session_id, avatar=avatar, ttl=self._default_ttl)
         self._sessions[session_id] = session
@@ -91,6 +98,13 @@ class MemorySessionStore:
     def delete(self, session_id: str) -> None:
         """Remove a session from the store (a no-op if absent)."""
         self._sessions.pop(session_id, None)
+
+    def purge_expired(self) -> int:
+        """Drop every expired session from the store; return the count purged."""
+        expired = [sid for sid, session in self._sessions.items() if session.is_expired()]
+        for sid in expired:
+            del self._sessions[sid]
+        return len(expired)
 
     def dump(self) -> dict[str, Any]:
         """Serialize meta and the avatar's identity/tags per session (never the data Bag)."""

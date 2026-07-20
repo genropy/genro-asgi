@@ -15,8 +15,16 @@
 """Session package: sessions, avatars, stores, and the session capability mixin."""
 
 from .avatar import Avatar
+from .file_store import FileSessionStore
 from .mixin import SessionMixin
 from .session import Session
 from .store import MemorySessionStore, SessionStore
 
-__all__ = ["Avatar", "MemorySessionStore", "Session", "SessionMixin", "SessionStore"]
+__all__ = [
+    "Avatar",
+    "FileSessionStore",
+    "MemorySessionStore",
+    "Session",
+    "SessionMixin",
+    "SessionStore",
+]

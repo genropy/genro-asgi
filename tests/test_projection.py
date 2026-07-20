@@ -34,6 +34,7 @@ from genro_asgi_core import (
     BaseApplication,
     ConfigurationHandler,
 )
+from genro_asgi_core.config.projection import Projection
 from genro_asgi_core.middleware.base import BaseMiddleware
 from genro_asgi_core.types import Message, Receive, Scope, Send
 
@@ -189,6 +190,62 @@ class TestUnknownRole:
     def test_unknown_role_raises_valueerror_naming_it(self, handler: ConfigurationHandler):
         with pytest.raises(ValueError, match="manager"):
             handler.materialize(role="manager")
+
+
+class TestApplicationsErrorBranches:
+    def test_no_applications_section_raises(self) -> None:
+        class NoAppsConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                root.server(host="127.0.0.1", port=8000)
+
+        handler = ConfigurationHandler(NoAppsConfig(name="noapps"))
+        with pytest.raises(ValueError, match="declares no applications"):
+            handler.materialize(role="root")
+
+    def test_empty_applications_section_raises(self) -> None:
+        class EmptyAppsConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                root.applications()
+
+        handler = ConfigurationHandler(EmptyAppsConfig(name="empty"))
+        with pytest.raises(ValueError, match="applications section declares no application"):
+            handler.materialize(role="root")
+
+    def test_unknown_default_raises_naming_it(self) -> None:
+        class GhostDefaultConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                apps = root.applications(default="ghost")
+                apps.application(code="shop", app_class=ShopApp)
+
+        handler = ConfigurationHandler(GhostDefaultConfig(name="ghost"))
+        with pytest.raises(ValueError, match="ghost"):
+            handler.materialize(role="root")
+
+    def test_multiple_apps_without_default_raises(self) -> None:
+        class NoDefaultConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                apps = root.applications()
+                apps.application(code="shop", app_class=ShopApp)
+                apps.application(code="erp", app_class=ErpApp)
+
+        handler = ConfigurationHandler(NoDefaultConfig(name="nodefault"))
+        with pytest.raises(ValueError, match="default"):
+            handler.materialize(role="root")
+
+
+class TestVisibleSections:
+    def test_root_sees_every_section(self, handler: ConfigurationHandler) -> None:
+        projection = Projection(handler.builder.source, role="root")
+        assert projection.visible_sections == frozenset(
+            {"server", "middleware", "auth", "storage", "applications", "databases", "openapi"}
+        )
+
+    def test_hosted_roles_see_the_transversal_cut(self, handler: ConfigurationHandler) -> None:
+        for role in ("worker", "batch"):
+            projection = Projection(handler.builder.source, role=role, app="erp")
+            assert projection.visible_sections == frozenset(
+                {"applications", "databases", "storage"}
+            )
 
 
 class TestSameConfigEveryRole:

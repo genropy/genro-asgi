@@ -51,6 +51,13 @@ class TestDispatch:
         assert await server.run_sync(threading.get_ident) != loop_ident
 
 
+class TestMaxThreads:
+    async def test_max_threads_reaches_the_executor(self) -> None:
+        server = BaseServer(primary=ThrowawayApp(name="primary"), max_threads=2)
+        await server.run_sync(lambda: None)
+        assert server.pool.executor._max_workers == 2
+
+
 class TestProvisioning:
     async def test_pool_is_not_provisioned_before_first_dispatch(self) -> None:
         server = make_server()

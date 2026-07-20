@@ -33,9 +33,9 @@ reverse shutdown, error isolation). Each http dispatch is registered in the
 ``RequestRegistry`` (``requests``) for the span of the request — the current
 request and the in-flight picture. ``serve()`` boots uvicorn programmatically.
 
-Cooperative init (D16): peels its own kwargs (``primary``) and, as the end of
-the chain, raises ``TypeError`` naming any leftover kwargs. Mixins go BEFORE
-``BaseServer`` in the MRO.
+Cooperative init (D16): peels its own kwargs (``primary``, ``max_threads``)
+and, as the end of the chain, raises ``TypeError`` naming any leftover kwargs.
+Mixins go BEFORE ``BaseServer`` in the MRO.
 
 Ownership channel (one direction): attaching the primary and ``mount()`` both
 assign ``app.server = self``; the app-side setter enforces exactly-once.
@@ -62,13 +62,16 @@ class BaseServer:
     """Base server owning the primary application and the secondary mounts.
 
     Constructor kwargs peeled here: ``primary`` — the always-present primary
-    application (D2), answering ``/`` and everything no mount claims.
+    application (D2), answering ``/`` and everything no mount claims — and
+    ``max_threads`` — the pool's worker count, handed to ``WorkPool``
+    (``None`` keeps the stdlib default).
     """
 
     def __init__(self, **kwargs: Any) -> None:
         if "primary" not in kwargs:
             raise TypeError(f"{type(self).__name__} requires a primary application (primary=...)")
         primary: BaseApplication = kwargs.pop("primary")
+        max_threads: int | None = kwargs.pop("max_threads", None)
         if kwargs:
             unexpected = ", ".join(sorted(kwargs))
             raise TypeError(
@@ -77,8 +80,9 @@ class BaseServer:
         super().__init__()
         self._primary = primary
         self._mounts: dict[str, BaseApplication] = {}
+        self._databases: dict[str, Any] = {}
         self._uvicorn: uvicorn.Server | None = None
-        self._pool = WorkPool(self)
+        self._pool = WorkPool(self, max_threads=max_threads)
         self._lifespan = Lifespan(self)
         self._registry = RequestRegistry(self)
         primary.server = self
@@ -107,6 +111,17 @@ class BaseServer:
             raise ValueError(f"mount_name already claimed: {name}")
         app.server = self
         self.mounts[name] = app
+
+    @property
+    def databases(self) -> dict[str, Any]:
+        """Database handlers keyed by their config ``code`` (may be empty)."""
+        return self._databases
+
+    def add_database(self, code: str, handler: Any) -> None:
+        """Register ``handler`` under ``code``. A claimed code raises ``ValueError``."""
+        if code in self.databases:
+            raise ValueError(f"database code already registered: {code}")
+        self.databases[code] = handler
 
     @property
     def lifespan(self) -> Lifespan:

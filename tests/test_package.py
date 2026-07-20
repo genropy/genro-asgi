@@ -8,7 +8,9 @@ def test_version():
 def test_root_exports_public_api():
     expected = [
         "ASGIApp",
+        "ApiKeyStore",
         "AsgiConfigBuilder",
+        "AsgiDbHandlerBase",
         "AsgiServer",
         "AuthCore",
         "AuthMixin",
@@ -19,9 +21,14 @@ def test_root_exports_public_api():
         "ChannelClient",
         "CommunicationMixin",
         "ConfigurationHandler",
+        "FileApiKeyStore",
+        "FileSessionStore",
+        "FileUserStore",
         "Frame",
         "FrameStream",
         "HTTPException",
+        "LocalStorage",
+        "LocalStorageNode",
         "Message",
         "MemorySessionStore",
         "MiddlewareMixin",
@@ -35,6 +42,9 @@ def test_root_exports_public_api():
         "Session",
         "SessionMixin",
         "SessionStore",
+        "StorageMixin",
+        "StorageNode",
+        "UserStore",
         "__version__",
     ]
     assert genro_asgi_core.__all__ == expected

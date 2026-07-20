@@ -165,6 +165,19 @@ class TestSession:
         assert server.session(scope) is scope["session"]
 
 
+class TestMaxThreads:
+    async def test_recipe_max_threads_reaches_the_pool(self) -> None:
+        class SizedPoolConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                root.server(host="127.0.0.1", port=8000, max_threads=2)
+                apps = root.applications(default="shop")
+                apps.application(code="shop", app_class=ShopApp)
+
+        server = ConfigurationHandler(SizedPoolConfig(name="sized")).materialize()
+        await server.run_sync(lambda: None)
+        assert server.pool.executor._max_workers == 2
+
+
 class TestGrammarValidation:
     def test_unknown_tag_raises(self) -> None:
         class BadConfig(AsgiConfigBuilder):

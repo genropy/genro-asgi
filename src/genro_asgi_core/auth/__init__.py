@@ -21,7 +21,16 @@ armed by the mixin — lives in ``middleware/authentication.py``.
 
 from __future__ import annotations
 
+from .api_key_store import ApiKeyStore, FileApiKeyStore
 from .core import AuthCore
 from .mixin import AuthMixin
+from .user_store import FileUserStore, UserStore
 
-__all__ = ["AuthCore", "AuthMixin"]
+__all__ = [
+    "ApiKeyStore",
+    "AuthCore",
+    "AuthMixin",
+    "FileApiKeyStore",
+    "FileUserStore",
+    "UserStore",
+]

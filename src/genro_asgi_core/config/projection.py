@@ -20,13 +20,14 @@ slice: a slotted object computed from the built ``SourceBag`` tree plus the
 role (plus ``app=<code>`` for the hosted roles), consumed by
 ``ConfigurationHandler.materialize``. The projection is PER-SECTION:
 
-- ``root`` — the public server: every core-1a section (``server``,
-  ``middleware``, ``auth``, ``applications``, ``databases``, ``openapi``);
-  every application mounted, the ``default`` one primary.
+- ``root`` — the public server: every section (``server``, ``middleware``,
+  ``auth``, ``storage``, ``applications``, ``databases``, ``openapi``); every
+  application mounted, the ``default`` one primary.
 - ``worker`` — the hosted process of ONE application (``app=<code>``
   required): sees only that application (as primary, no secondaries) plus
-  ``databases`` (D15: the transversal pieces it needs) — never the public
-  middleware, never auth or sessions, never the public listener address.
+  ``databases`` and ``storage`` (D15: the transversal pieces it needs — storage
+  is survival infrastructure) — never the public middleware, never auth or
+  sessions, never the public listener address.
 - ``batch`` — the same section cut as ``worker`` with no HTTP-facing
   expectations (still an ``AsgiServer`` composition in 1a; what 1a fixes is
   WHICH SECTIONS each role sees — the orchestration semantics arrive with the
@@ -54,10 +55,10 @@ class Projection:
     def __init__(self, source: Any, role: str, app: str | None = None) -> None:
         self._rules: dict[str, frozenset[str]] = {
             "root": frozenset(
-                {"server", "middleware", "auth", "applications", "databases", "openapi"}
+                {"server", "middleware", "auth", "storage", "applications", "databases", "openapi"}
             ),
-            "worker": frozenset({"applications", "databases"}),
-            "batch": frozenset({"applications", "databases"}),
+            "worker": frozenset({"applications", "databases", "storage"}),
+            "batch": frozenset({"applications", "databases", "storage"}),
         }
         if role not in self._rules:
             declared = ", ".join(sorted(self._rules))
@@ -123,6 +124,54 @@ class Projection:
         """
         node = self.section("auth")
         return dict(node.fixed_attr_items()) if node is not None else None
+
+    def storage_config(self) -> dict[str, Any] | None:
+        """The ``storage`` mounts of this slice as ``{code: {path, encrypted}}``.
+
+        ``None`` when the section is absent (the composition builds a default
+        ``LocalStorage``). Visible to every role — storage is D15 survival
+        infrastructure, not root-only like middleware/auth.
+        """
+        node = self.section("storage")
+        if node is None:
+            return None
+        children = node.value
+        mount_nodes = list(children) if children is not None else []
+        mounts = [dict(mount_node.fixed_attr_items()) for mount_node in mount_nodes]
+        return {
+            attrs["code"]: {"path": attrs.get("path"), "encrypted": bool(attrs.get("encrypted"))}
+            for attrs in mounts
+        }
+
+    def databases_config(self) -> dict[str, dict[str, Any]]:
+        """The ``databases`` descriptors of this slice as ``{code: {db_class, db_handler_class, params}}``.
+
+        Empty dict when the section is absent or invisible to the role.
+        ``db_handler_class`` is ``None`` when the recipe omits it (the
+        materializer's default applies); ``params`` are the remaining
+        connection kwargs handed to ``db_class(**params)``. Visible to
+        ``root``, ``worker`` and ``batch`` (D15 transversal): 1b materializes
+        the whole section for every role that sees it — the per-mount slice
+        arrives with orchestration.
+        """
+        node = self.section("databases")
+        if node is None:
+            return {}
+        children = node.value
+        db_nodes = list(children) if children is not None else []
+        result: dict[str, dict[str, Any]] = {}
+        for db_node in db_nodes:
+            attrs = dict(db_node.fixed_attr_items())
+            code = attrs.pop("code")
+            db_class = attrs.pop("db_class", None)
+            if db_class is None:
+                raise ValueError(f"database {code!r} missing db_class")
+            result[code] = {
+                "db_class": db_class,
+                "db_handler_class": attrs.pop("db_handler_class", None),
+                "params": attrs,
+            }
+        return result
 
     def applications(self) -> tuple[Any, list[Any]]:
         """The role's application cut: ``(primary_node, secondary_nodes)``.

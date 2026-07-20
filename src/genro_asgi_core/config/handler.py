@@ -28,20 +28,25 @@ walking the ``SourceBag`` directly (``node.node_tag`` /
 
 Section → constructor kwarg mapping (core 1a):
 
-- ``server`` → ``host``/``port`` (the ``AsgiServer.serve`` defaults);
-  ``max_threads`` is read and SKIPPED (the frozen Macro 1 ``BaseServer`` sizes
-  its pool without a kwarg — no 1a applier).
+- ``server`` → ``host``/``port`` (the ``AsgiServer.serve`` defaults) plus
+  ``max_threads`` (the ``WorkPool`` size, peeled by ``BaseServer``) and
+  ``storage_key`` (the ``StorageMixin`` encryption key).
 - ``middleware`` → ``middleware=`` ({name: bool | dict} switches).
 - ``auth`` → ``auth=`` (the ``AuthCore`` config, handed verbatim).
+- ``storage`` → ``storage=`` ({code: {path, encrypted}} mounts for the
+  ``StorageMixin``); visible to every role.
 - ``applications`` → ``primary=`` (the ``default`` app, mount ``/``) plus the
   secondary mounts (each mounted after construction; mount defaults to ``code``).
-- ``databases``/``openapi``/nested ``groups`` → read and SKIPPED with a debug
-  log (valid config for other roles/macros, not an error).
+- ``databases`` → one ``db_handler_class(db_class(**params))`` per entry,
+  registered on the server by ``code`` (core 1b).
+- ``openapi``/nested ``groups`` → read and SKIPPED with a debug log (valid
+  config for other roles/macros, not an error).
 
 ``materialize(role=..., app=...)`` computes the role's ``Projection`` of the
 built tree (D15) and materializes THAT slice: ``root`` sees every section
 above; the hosted roles (``worker``/``batch``, ``app=<code>`` required) see
-only their application (as primary) plus ``databases`` — never the public
+only their application (as primary) plus ``databases`` and ``storage`` — never
+the public
 middleware, never auth or sessions, never the public listener address.
 """
 
@@ -54,6 +59,7 @@ from genro_builders.builder import BuilderHandler
 
 from ..application import BaseApplication
 from ..asgi_server import AsgiServer
+from ..db import AsgiDbHandlerBase
 from .projection import Projection
 
 __all__ = ["ConfigurationHandler"]
@@ -97,10 +103,9 @@ class ConfigurationHandler(BuilderHandler):
         if "port" in server_attrs:
             kwargs["port"] = server_attrs["port"]
         if "max_threads" in server_attrs:
-            self.logger.debug(
-                "server.max_threads=%r has no core-1a applier; skipped",
-                server_attrs["max_threads"],
-            )
+            kwargs["max_threads"] = server_attrs["max_threads"]
+        if "storage_key" in server_attrs:
+            kwargs["storage_key"] = server_attrs["storage_key"]
 
         middleware = projection.middleware_config()
         if middleware is not None:
@@ -110,17 +115,35 @@ class ConfigurationHandler(BuilderHandler):
         if auth is not None:
             kwargs["auth"] = auth
 
+        storage = projection.storage_config()
+        if storage is not None:
+            kwargs["storage"] = storage
+
         primary, secondaries = self._build_applications(projection)
         kwargs["primary"] = primary
 
-        for name in ("databases", "openapi"):
-            if projection.section(name) is not None:
-                self.logger.debug("config section %r has no core-1a applier; skipped", name)
+        if projection.section("openapi") is not None:
+            self.logger.debug("config section 'openapi' has no core-1a applier; skipped")
 
         server = AsgiServer(**kwargs)
         for secondary in secondaries:
             server.mount(secondary)
+        self._build_databases(projection, server)
         return server
+
+    def _build_databases(self, projection: Projection, server: AsgiServer) -> None:
+        """Materialize the ``databases`` section: build and register each handler.
+
+        Per D15 letter, each ``database`` entry becomes
+        ``db_handler_class(db_class(**params))``, registered on ``server`` by
+        its ``code``. The ``db_class`` is user-provided (imported in the
+        recipe) — the core never imports db drivers.
+        """
+        for code, attrs in projection.databases_config().items():
+            db_class = attrs["db_class"]
+            db_handler_class = attrs["db_handler_class"] or AsgiDbHandlerBase
+            handler = db_handler_class(db_class(**attrs["params"]))
+            server.add_database(code, handler)
 
     def _build_applications(
         self, projection: Projection

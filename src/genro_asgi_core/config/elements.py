@@ -23,10 +23,14 @@ attributes (read back by ``ConfigurationHandler.materialize`` via
 
 Sections and their 1a fate:
 
-- ``server`` — runtime options (``host``, ``port``, ``max_threads``). ``host``/
-  ``port`` feed ``AsgiServer.serve``; ``max_threads`` has no 1a applier and is
-  skipped (BaseServer, frozen in Macro 1, builds its pool without it).
+- ``server`` — runtime options (``host``, ``port``, ``max_threads``,
+  ``storage_key``). ``host``/``port`` feed ``AsgiServer.serve``; ``max_threads``
+  sizes the server's thread pool (peeled by ``BaseServer``, handed to
+  ``WorkPool``); ``storage_key`` installs at-rest encryption on the server's
+  storage (core 1b).
 - ``middleware`` — one ``{name: bool | dict}`` switch per middleware.
+- ``storage`` — mounts of the server's ``LocalStorage`` (core 1b); visible to
+  every role (survival infrastructure).
 - ``auth`` — the credential config (``basic``/``bearer``/``jwt`` kwargs) handed
   verbatim to ``AuthCore`` via the ``auth=`` server kwarg.
 - ``applications``/``application`` — the app collection keyed by ``code``; the
@@ -63,12 +67,26 @@ class AsgiConfigElements:
 
     @element(sub_tags="")
     def server(self) -> None:
-        """Server runtime options: ``host``, ``port``, ``max_threads``.
+        """Server runtime options: ``host``, ``port``, ``max_threads``, ``storage_key``.
 
         ``host``/``port`` become the defaults of ``AsgiServer.serve``.
-        ``max_threads`` is declared but has no core-1a applier (the frozen
-        Macro 1 ``BaseServer`` sizes its pool without a kwarg): it is read
-        and skipped, valid config for a later macro.
+        ``max_threads`` sizes the server's thread pool: ``BaseServer`` peels
+        it and hands it to ``WorkPool`` (omitted, the stdlib default
+        ``min(32, cpu + 4)`` applies).
+
+        ``storage_key`` (str, optional) installs at-rest encryption on the
+        server's storage (comma-separated Fernet keys — first encrypts, all
+        decrypt for rotation). Pass the secret as a ``^pointer`` to an
+        ``EnvResolver`` so it stays out of the recipe, never a literal::
+
+            def setup(self, data):
+                data["storage_key"] = EnvResolver("GENRO_STORAGE_KEY")
+
+            def main(self, root):
+                root.server(host="127.0.0.1", port=8000, storage_key="^storage_key")
+
+        Configured but resolved empty is an explicit boot error (no silent
+        degradation); omit it to run the encrypted mounts dormant.
         """
 
     @element(sub_tags="")
@@ -81,6 +99,20 @@ class AsgiConfigElements:
     def auth(self) -> None:
         """Credential config: ``basic``/``bearer``/``jwt`` kwargs handed
         verbatim to ``AuthCore`` through the server's ``auth=`` kwarg."""
+
+    @element(sub_tags="mount", collection_key="code")
+    def storage(self) -> None:
+        """Collection of storage mounts, each keyed by ``code``. Materialized in
+        core 1b as the server's ``LocalStorage`` (one ``add_mount`` per child).
+        Visible to EVERY role (survival infrastructure — the spool lives on
+        it), unlike ``middleware``/``auth`` which stay root-only."""
+
+    @element(sub_tags="", parent_tags="storage")
+    def mount(self) -> None:
+        """One storage mount: ``code`` (the collection key), ``path`` (the
+        filesystem path, relative to the server base dir unless absolute) and
+        optional ``encrypted`` (bool, default False — encrypt at rest, which
+        requires the server's ``storage_key``)."""
 
     @element(sub_tags="application", collection_key="code")
     def applications(self) -> None:

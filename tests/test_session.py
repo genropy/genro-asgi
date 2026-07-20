@@ -12,17 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Session tests (Macro 2 Phase 4): store contract suite + ASGI cookie flow.
+"""Session tests (Macro 2 Phase 4 + core 1b Phase 3): store contract + cookie flow.
 
-The store contract suite is PARAMETRIZED over implementations (invariant
-§5.9): today only ``MemorySessionStore``, but the core 1b file/db backends
-plug into the SAME fixture. The cookie flow is driven directly through a
+The store contract suite is PARAMETRIZED over FACTORIES (invariant §5.9):
+callables returning a fresh configured store, so a backend needing a
+storage/mount (``FileSessionStore``) plugs into the SAME suite as
+``MemorySessionStore``. The cookie flow is driven directly through a
 ``SessionMixin/MiddlewareMixin/BaseServer`` composition at the ASGI level (no
 uvicorn), the same driving style as ``test_middleware.py``.
 """
 
 from __future__ import annotations
 
+import json
 import time
 
 import pytest
@@ -31,6 +33,8 @@ from genro_asgi_core import (
     Avatar,
     BaseApplication,
     BaseServer,
+    FileSessionStore,
+    LocalStorage,
     MemorySessionStore,
     Session,
     SessionMixin,
@@ -39,58 +43,151 @@ from genro_asgi_core import (
 from genro_asgi_core.middleware import MiddlewareMixin
 from genro_asgi_core.types import Message, Receive, Scope, Send
 
-# --- store contract suite (parametrized over implementations, §5.9) ---
-
-STORE_IMPLEMENTATIONS = [MemorySessionStore]
+# --- store contract suite (parametrized over FACTORIES, §5.9) ---
 
 
-@pytest.fixture(params=STORE_IMPLEMENTATIONS)
-def store_cls(request):
-    """Each session store implementation under contract test."""
-    return request.param
+def _memory_factory(tmp_path):
+    """A factory building a fresh ``MemorySessionStore`` per call."""
+
+    def make(**kwargs):
+        return MemorySessionStore(**kwargs)
+
+    return make
+
+
+def _file_factory(tmp_path):
+    """A factory building fresh ``FileSessionStore``s over one shared tmp mount."""
+
+    def make(**kwargs):
+        return FileSessionStore(LocalStorage(base_dir=str(tmp_path)), **kwargs)
+
+    return make
+
+
+STORE_FACTORIES = [_memory_factory, _file_factory]
+
+
+@pytest.fixture(params=STORE_FACTORIES)
+def store_factory(request, tmp_path):
+    """A callable returning a fresh configured store (memory or file-over-tmp)."""
+    return request.param(tmp_path)
 
 
 class TestSessionStoreContract:
-    def test_is_a_session_store(self, store_cls) -> None:
-        assert isinstance(store_cls(), SessionStore)
+    def test_is_a_session_store(self, store_factory) -> None:
+        assert isinstance(store_factory(), SessionStore)
 
-    def test_create_default_is_anonymous(self, store_cls) -> None:
-        assert store_cls().create().avatar is None
+    def test_create_default_is_anonymous(self, store_factory) -> None:
+        assert store_factory().create().avatar is None
 
-    def test_create_get_roundtrip(self, store_cls) -> None:
-        store = store_cls()
+    def test_create_get_roundtrip(self, store_factory) -> None:
+        store = store_factory()
         created = store.create(avatar=Avatar("alice"))
         fetched = store.get(created.id)
         assert fetched is created
         assert fetched.avatar.identity == "alice"
 
-    def test_get_unknown_returns_none(self, store_cls) -> None:
-        assert store_cls().get("nope") is None
+    def test_get_unknown_returns_none(self, store_factory) -> None:
+        assert store_factory().get("nope") is None
 
-    def test_ttl_expiry(self, store_cls) -> None:
-        store = store_cls(default_ttl=3600)
+    def test_ttl_expiry(self, store_factory) -> None:
+        store = store_factory(default_ttl=3600)
         session = store.create()
         session.meta["last_access"] = time.time() - 10_000
         assert store.get(session.id) is None
 
-    def test_delete(self, store_cls) -> None:
-        store = store_cls()
+    def test_delete(self, store_factory) -> None:
+        store = store_factory()
         session = store.create()
         store.delete(session.id)
         assert store.get(session.id) is None
 
-    def test_dump_restore_keeps_avatar_drops_data(self, store_cls) -> None:
-        store = store_cls()
+    def test_purge_expired_removes_only_expired(self, store_factory) -> None:
+        store = store_factory(default_ttl=3600)
+        live = store.create()
+        expired = store.create()
+        expired.meta["last_access"] = time.time() - 10_000
+        assert store.purge_expired() == 1
+        assert store.get(live.id) is not None
+        assert store.get(expired.id) is None
+
+    def test_dump_restore_keeps_avatar_drops_data(self, store_factory) -> None:
+        store = store_factory()
         session = store.create(avatar=Avatar("bob", ["user"]))
         session.data["k"] = "v"
         dumped = store.dump()
-        fresh = store_cls()
+        fresh = store_factory()
         fresh.restore(dumped)
         restored = fresh.get(session.id)
         assert restored is not None
         assert restored.avatar.identity == "bob"
         assert restored.avatar.tags == ["user"]
         assert len(restored.data) == 0
+
+
+# --- FileSessionStore specifics (D22 survival line) ---
+
+
+class TestFileSessionStore:
+    def test_session_survives_a_new_store_on_the_same_mount(self, tmp_path) -> None:
+        store = FileSessionStore(LocalStorage(base_dir=str(tmp_path)))
+        created = store.create(avatar=Avatar("carol", ["ops"]))
+        fresh = FileSessionStore(LocalStorage(base_dir=str(tmp_path)))
+        restored = fresh.get(created.id)
+        assert restored is not None
+        assert restored is not created
+        assert restored.avatar.identity == "carol"
+        assert restored.avatar.tags == ["ops"]
+        assert len(restored.data) == 0
+
+    def test_corrupted_session_file_raises(self, tmp_path) -> None:
+        storage = LocalStorage(base_dir=str(tmp_path))
+        store = FileSessionStore(storage)
+        created = store.create()
+        storage.node(f"site:sessions/{created.id}.json").write_text("not-json{{{")
+        fresh = FileSessionStore(LocalStorage(base_dir=str(tmp_path)))
+        with pytest.raises(json.JSONDecodeError):
+            fresh.get(created.id)
+
+    def test_delete_removes_the_file(self, tmp_path) -> None:
+        storage = LocalStorage(base_dir=str(tmp_path))
+        store = FileSessionStore(storage)
+        created = store.create()
+        assert storage.node(f"site:sessions/{created.id}.json").exists
+        store.delete(created.id)
+        assert not storage.node(f"site:sessions/{created.id}.json").exists
+
+    def test_get_with_traversal_session_id_raises(self, tmp_path) -> None:
+        """A crafted cookie id may not read a file planted outside the prefix (Phase 10)."""
+        storage = LocalStorage(base_dir=str(tmp_path))
+        store = FileSessionStore(storage)
+        now = time.time()
+        planted = {
+            "meta": {"created_at": now, "last_access": now, "ttl": 3600},
+            "avatar": {"identity": "intruder", "tags": ["SUPERADMIN"]},
+        }
+        storage.node("site:secret.json").write_text(json.dumps(planted))
+        with pytest.raises(ValueError, match="escapes mount 'site'"):
+            store.get("../secret")
+
+    def test_delete_with_traversal_session_id_raises(self, tmp_path) -> None:
+        store = FileSessionStore(LocalStorage(base_dir=str(tmp_path)))
+        with pytest.raises(ValueError, match="escapes mount 'site'"):
+            store.delete("../secret")
+
+
+# --- MemorySessionStore.restore drops an expired dumped session (Macro 2 item 8) ---
+
+
+class TestMemoryStoreRestore:
+    def test_restore_drops_expired_session(self) -> None:
+        store = MemorySessionStore(default_ttl=3600)
+        session = store.create(avatar=Avatar("bob"))
+        dumped = store.dump()
+        dumped[session.id]["meta"]["last_access"] = time.time() - 10_000
+        fresh = MemorySessionStore()
+        fresh.restore(dumped)
+        assert fresh.get(session.id) is None
 
 
 # --- Session / Avatar units ---
@@ -218,3 +315,17 @@ class TestSessionCookieFlow:
         scope, sent = await http_get(server)
         assert scope.get("session") is None
         assert set_cookie_value(sent) is None
+
+    async def test_secure_option_adds_secure_cookie_attribute(self) -> None:
+        server = SessionServer(primary=EchoApp(), middleware={"session": {"secure": True}})
+        _, sent = await http_get(server)
+        cookie = set_cookie_value(sent)
+        assert cookie is not None
+        assert "Secure" in cookie
+
+    async def test_default_cookie_has_no_secure_attribute(self) -> None:
+        server = SessionServer(primary=EchoApp())
+        _, sent = await http_get(server)
+        cookie = set_cookie_value(sent)
+        assert cookie is not None
+        assert "Secure" not in cookie
