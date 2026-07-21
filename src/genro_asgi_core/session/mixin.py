@@ -25,9 +25,9 @@ arms sessions with no user action, while an explicit
 explicit switch). It overrides the §4 contract method ``session(request)`` to
 return the session attached to the request scope; a composition WITHOUT the
 mixin keeps the base answer (``None``). ``promote_session(request, avatar)``
-is the login seam: it swaps the anonymous scope session for a fresh
-identity-bearing one from the store; the ``Set-Cookie`` for the change is
-emitted by ``SessionMiddleware`` at response time (option A), never here.
+is the login seam: it attaches the avatar to the request's EXISTING session —
+the id never changes at login, so the cookie already held by the client stays
+valid and no new ``Set-Cookie`` is involved.
 """
 
 from __future__ import annotations
@@ -69,22 +69,17 @@ class SessionMixin:
         return request.get("session") if request is not None else None
 
     def promote_session(self, request: Any, avatar: Any) -> Session:
-        """Replace the request's anonymous session with an identity-bearing one.
+        """Attach ``avatar`` to the request's session — the login event.
 
-        Creates a fresh session carrying ``avatar`` through the store and sets
-        it on ``request.scope["session"]`` (replacing the anonymous session the
-        middleware put there). The promotion is also recorded in the shared
-        ``session_state`` holder the middleware installed: the D3 demux hands a
-        mounted app a shallow COPY of the scope, and the holder is the channel
-        that survives the copy so ``SessionMiddleware`` sees the change and
-        emits the ``Set-Cookie`` at response time (option A) — never here.
-        Returns the session.
+        The session keeps its id, ``data`` and ``meta``: whatever an anonymous
+        visitor accumulated (a cart, a history) survives the login, and the
+        cookie the client already holds stays valid — no new session, no new
+        ``Set-Cookie``. Session-fixation defense is the upstream cookie
+        hardening (HttpOnly, SameSite, token never read from the URL), not id
+        rotation. Returns the session.
         """
-        session = self.session_store.create(avatar=avatar)
-        request.scope["session"] = session
-        holder = request.scope.get("session_state")
-        if holder is not None:
-            holder["session"] = session
+        session: Session = request.scope["session"]
+        session.attach_avatar(avatar)
         return session
 
 
@@ -106,8 +101,9 @@ if __name__ == "__main__":
     assert BaseServer(primary=BaseApplication()).session({}) is None
 
     anonymous = server.session_store.create()
+    anonymous.data["cart"] = "kept"
     request = SimpleNamespace(scope={"session": anonymous})
     promoted = server.promote_session(request, Avatar("alice", ["admin"]))
-    assert request.scope["session"] is promoted
-    assert promoted is not anonymous
+    assert promoted is anonymous  # same session, same id — login attaches in place
     assert promoted.avatar is not None and promoted.avatar.identity == "alice"
+    assert promoted.data["cart"] == "kept"

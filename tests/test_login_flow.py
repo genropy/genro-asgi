@@ -163,9 +163,10 @@ def cookie_token(sent: list[Message]) -> str:
 
 
 class TestLoginHappyPath:
-    async def test_login_promotes_the_session_and_sets_the_cookie(self) -> None:
+    async def test_login_attaches_the_avatar_and_keeps_the_session_id(self) -> None:
         server = make_server()
         anonymous = server.session_store.create()
+        anonymous.data["cart"] = "kept"
         _, sent = await drive(
             server,
             "/_server/login",
@@ -177,13 +178,14 @@ class TestLoginHappyPath:
         payload = json_body(sent)
         assert payload["identity"] == "alice"
         assert payload["tags"] == ["admin"]
-        assert payload["session_id"] != anonymous.id
-        assert cookie_token(sent) == payload["session_id"]
-        promoted = server.session_store.get(payload["session_id"])
-        assert promoted is not None
+        assert payload["session_id"] == anonymous.id  # the id never changes at login
+        assert set_cookie_value(sent) is None  # the client's cookie is still valid
+        promoted = server.session_store.get(anonymous.id)
+        assert promoted is anonymous
         assert promoted.avatar is not None
         assert promoted.avatar.identity == "alice"
         assert promoted.avatar.tags == ["admin"]
+        assert promoted.data["cart"] == "kept"  # the cart survives the login
 
     async def test_login_accepts_the_pages_form_encoded_post(self) -> None:
         server = make_server()
@@ -211,9 +213,10 @@ class TestLoginHappyPath:
         await server(scope, receive, send)
         payload = json_body(sent)
         assert payload["identity"] == "alice"
-        assert cookie_token(sent) == payload["session_id"]
+        assert payload["session_id"] == anonymous.id  # id kept, no cookie re-issue
+        assert set_cookie_value(sent) is None
 
-    async def test_login_on_first_contact_issues_the_promoted_cookie(self) -> None:
+    async def test_login_on_first_contact_rides_the_new_session_cookie(self) -> None:
         server = make_server()
         _, sent = await drive(
             server,

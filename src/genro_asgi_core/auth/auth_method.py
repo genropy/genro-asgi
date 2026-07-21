@@ -36,9 +36,9 @@ The contract::
 identity/password form (the password method), ``redirect`` renders one button
 navigating to the method's entry URL (OIDC), ``ceremony`` is a client-driven
 exchange (passkey, a later wave). Every method converges on the SAME success
-outcome: an identity-bearing session issued through ``server.promote_session``
-— the cookie for the change is emitted by ``SessionMiddleware`` (option A),
-never by a method or a handler.
+outcome: the avatar attached to the request's session through
+``server.promote_session`` — the session id never changes at login, so no
+cookie is involved and no method or handler ever sets one.
 
 ``safe_next_path`` is the shared open-redirect guard for the login ``next``
 parameter: the login page mirrors it client-side today; the challenge

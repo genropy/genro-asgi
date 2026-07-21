@@ -44,8 +44,8 @@ schema/docs/index endpoints, and adds:
 
 Handlers stay PURE: they return values and never touch cookies or an ambient
 request/response (the old ``self.server.request`` idiom must never be
-reintroduced). The ``Set-Cookie`` for a promoted session is emitted by
-``SessionMiddleware`` at response time (option A). A handler that needs the
+reintroduced). Login attaches the avatar to the existing session in place —
+the id never changes, so no login-time cookie exists. A handler that needs the
 live request DECLARES a ``request`` parameter: ``bind_kwargs`` injects the
 per-dispatch ``Request`` for declared names — the same declarative convention
 ``body_data`` follows — and the handler reaches the server through
@@ -184,9 +184,9 @@ class ServerApplication(OpenApiApplication):
 
         The JSON convergence point of every ``form`` method: verifies the
         credentials (``UserStore.verify`` — the record key is ``identity``),
-        builds the ``Avatar`` and swaps the request's anonymous session for an
-        identity-bearing one (``server.promote_session``); the ``Set-Cookie``
-        for the change rides the response via ``SessionMiddleware`` (option A).
+        builds the ``Avatar`` and attaches it to the request's session
+        (``server.promote_session``) — the session id never changes at login,
+        so the client's cookie stays valid and no ``Set-Cookie`` is involved.
         The server's ``user_store`` is wired in the next wave (Macro 5b): until
         then a server without one answers the error shape.
 
