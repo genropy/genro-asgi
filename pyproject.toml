@@ -30,6 +30,8 @@ dependencies = [
     "uvicorn>=0.30",
     "genro-bag>=0.19.0",
     "genro-builders>=0.18.0",
+    "genro-tytx>=0.10.0",
+    "genro-routes>=0.28.0",
     "pyjwt>=2.0",
     "cryptography>=42.0",
 ]

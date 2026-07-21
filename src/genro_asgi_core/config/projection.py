@@ -21,13 +21,14 @@ role (plus ``app=<code>`` for the hosted roles), consumed by
 ``ConfigurationHandler.materialize``. The projection is PER-SECTION:
 
 - ``root`` — the public server: every section (``server``, ``middleware``,
-  ``auth``, ``storage``, ``applications``, ``databases``, ``openapi``); every
-  application mounted, the ``default`` one primary.
+  ``auth``, ``storage``, ``applications``, ``databases``, ``plugins``,
+  ``openapi``); every application mounted, the ``default`` one primary.
 - ``worker`` — the hosted process of ONE application (``app=<code>``
   required): sees only that application (as primary, no secondaries) plus
-  ``databases`` and ``storage`` (D15: the transversal pieces it needs — storage
-  is survival infrastructure) — never the public middleware, never auth or
-  sessions, never the public listener address.
+  ``databases``, ``storage`` and ``plugins`` (D15: the transversal pieces it
+  needs — storage is survival infrastructure, plugins are router behavior) —
+  never the public middleware, never auth or sessions, never the public
+  listener address.
 - ``batch`` — the same section cut as ``worker`` with no HTTP-facing
   expectations (still an ``AsgiServer`` composition in 1a; what 1a fixes is
   WHICH SECTIONS each role sees — the orchestration semantics arrive with the
@@ -55,10 +56,19 @@ class Projection:
     def __init__(self, source: Any, role: str, app: str | None = None) -> None:
         self._rules: dict[str, frozenset[str]] = {
             "root": frozenset(
-                {"server", "middleware", "auth", "storage", "applications", "databases", "openapi"}
+                {
+                    "server",
+                    "middleware",
+                    "auth",
+                    "storage",
+                    "applications",
+                    "databases",
+                    "plugins",
+                    "openapi",
+                }
             ),
-            "worker": frozenset({"applications", "databases", "storage"}),
-            "batch": frozenset({"applications", "databases", "storage"}),
+            "worker": frozenset({"applications", "databases", "storage", "plugins"}),
+            "batch": frozenset({"applications", "databases", "storage", "plugins"}),
         }
         if role not in self._rules:
             declared = ", ".join(sorted(self._rules))
@@ -163,14 +173,39 @@ class Projection:
         for db_node in db_nodes:
             attrs = dict(db_node.fixed_attr_items())
             code = attrs.pop("code")
-            db_class = attrs.pop("db_class", None)
-            if db_class is None:
-                raise ValueError(f"database {code!r} missing db_class")
+            db_class = attrs.pop("db_class")
             result[code] = {
                 "db_class": db_class,
                 "db_handler_class": attrs.pop("db_handler_class", None),
                 "params": attrs,
             }
+        return result
+
+    def plugins_config(self) -> dict[str, bool | dict[str, Any]] | None:
+        """The ``plugins`` switches of this slice as ``{code: bool | dict}``.
+
+        ``None`` when the section is absent (the composition arms no extra
+        plugins). Each ``plugin`` child maps to ``False`` when ``enabled`` is
+        explicitly false, to its remaining options dict when it carries any,
+        else to ``True``. Visible to every role — plugins are D15 transversal
+        router behavior, like storage and databases.
+        """
+        node = self.section("plugins")
+        if node is None:
+            return None
+        children = node.value
+        plugin_nodes = list(children) if children is not None else []
+        result: dict[str, bool | dict[str, Any]] = {}
+        for plugin_node in plugin_nodes:
+            attrs = dict(plugin_node.fixed_attr_items())
+            code = attrs.pop("code")
+            enabled = attrs.pop("enabled", True)
+            if not enabled:
+                result[code] = False
+            elif attrs:
+                result[code] = attrs
+            else:
+                result[code] = True
         return result
 
     def applications(self) -> tuple[Any, list[Any]]:

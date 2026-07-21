@@ -15,8 +15,10 @@
 """HTTP control-flow exceptions: raised anywhere, answered by the errors
 middleware.
 
-Plain classes, no framework machinery: ``HTTPException(status, detail=None)``
-carries the response status (and an optional plain-text detail); the common
+Plain classes, no framework machinery: ``HTTPException(status, detail=None,
+headers=None)`` carries the response status (an optional plain-text detail and
+optional response ``headers`` — ASGI ``(name, value)`` byte pairs forwarded to
+the response, e.g. a ``WWW-Authenticate`` challenge on a 401); the common
 errors are pre-filled subclasses — ``HTTPNotFound`` (404), ``HTTPUnauthorized``
 (401), ``HTTPForbidden`` (403). ``Redirect(location, status=302)`` is the
 redirecting sibling: its ``location`` becomes the ``Location`` header. The
@@ -35,46 +37,67 @@ __all__ = [
 
 
 class HTTPException(Exception):
-    """HTTP error carried as an exception: ``status`` plus optional ``detail``."""
+    """HTTP error carried as an exception: ``status``, optional ``detail`` and ``headers``.
 
-    def __init__(self, status: int, detail: str | None = None) -> None:
+    ``headers`` are ASGI ``(name, value)`` byte pairs the errors middleware
+    forwards onto the response (e.g. a ``WWW-Authenticate`` challenge).
+    """
+
+    def __init__(
+        self,
+        status: int,
+        detail: str | None = None,
+        headers: list[tuple[bytes, bytes]] | None = None,
+    ) -> None:
         super().__init__(detail if detail is not None else f"HTTP {status}")
         self.status = status
         self.detail = detail
+        self.headers: list[tuple[bytes, bytes]] = headers or []
 
 
 class HTTPNotFound(HTTPException):
     """404 Not Found."""
 
-    def __init__(self, detail: str | None = None) -> None:
-        super().__init__(404, detail)
+    def __init__(
+        self, detail: str | None = None, headers: list[tuple[bytes, bytes]] | None = None
+    ) -> None:
+        super().__init__(404, detail, headers)
 
 
 class HTTPUnauthorized(HTTPException):
     """401 Unauthorized."""
 
-    def __init__(self, detail: str | None = None) -> None:
-        super().__init__(401, detail)
+    def __init__(
+        self, detail: str | None = None, headers: list[tuple[bytes, bytes]] | None = None
+    ) -> None:
+        super().__init__(401, detail, headers)
 
 
 class HTTPForbidden(HTTPException):
     """403 Forbidden."""
 
-    def __init__(self, detail: str | None = None) -> None:
-        super().__init__(403, detail)
+    def __init__(
+        self, detail: str | None = None, headers: list[tuple[bytes, bytes]] | None = None
+    ) -> None:
+        super().__init__(403, detail, headers)
 
 
 class Redirect(HTTPException):
     """HTTP redirect: ``location`` becomes the ``Location`` header."""
 
-    def __init__(self, location: str, status: int = 302) -> None:
-        super().__init__(status)
+    def __init__(
+        self, location: str, status: int = 302, headers: list[tuple[bytes, bytes]] | None = None
+    ) -> None:
+        super().__init__(status, headers=headers)
         self.location = location
 
 
 if __name__ == "__main__":
     not_found = HTTPNotFound("missing")
     assert (not_found.status, not_found.detail) == (404, "missing")
+    assert not_found.headers == []
     assert isinstance(not_found, HTTPException)
     redirect = Redirect("/elsewhere")
     assert (redirect.status, redirect.location) == (302, "/elsewhere")
+    challenged = HTTPUnauthorized("no", headers=[(b"www-authenticate", b"Bearer")])
+    assert challenged.headers == [(b"www-authenticate", b"Bearer")]

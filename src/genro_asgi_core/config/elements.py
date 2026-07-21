@@ -38,6 +38,9 @@ Sections and their 1a fate:
   its mount from ``code`` unless it declares ``mount``.
 - ``groups``/``group`` — grammar only (orchestration package).
 - ``databases``/``database`` — grammar only (core 1b).
+- ``plugins``/``plugin`` — router plugins armed onto every routed app
+  (``PluginMixin``); visible to every role (a worker needs the same router
+  behavior).
 - ``openapi`` — grammar only (core 1c).
 
 A recipe subclasses ``AsgiConfigBuilder`` and overrides ``main(self, root)``;
@@ -108,11 +111,12 @@ class AsgiConfigElements:
         it), unlike ``middleware``/``auth`` which stay root-only."""
 
     @element(sub_tags="", parent_tags="storage")
-    def mount(self) -> None:
+    def mount(self, path: str) -> None:
         """One storage mount: ``code`` (the collection key), ``path`` (the
-        filesystem path, relative to the server base dir unless absolute) and
-        optional ``encrypted`` (bool, default False — encrypt at rest, which
-        requires the server's ``storage_key``)."""
+        filesystem path, relative to the server base dir unless absolute,
+        REQUIRED — the grammar rejects a mount without it) and optional
+        ``encrypted`` (bool, default False — encrypt at rest, which requires
+        the server's ``storage_key``)."""
 
     @element(sub_tags="application", collection_key="code")
     def applications(self) -> None:
@@ -121,9 +125,10 @@ class AsgiConfigElements:
         ``/``)."""
 
     @element(sub_tags="*", parent_tags="applications")
-    def application(self) -> None:
-        """One application: ``code`` (the collection key), optional ``mount``,
-        ``app_class`` (the imported class) plus its constructor kwargs. ``mount``
+    def application(self, app_class: type) -> None:
+        """One application: ``code`` (the collection key), ``app_class`` (the
+        imported class, REQUIRED — the grammar rejects an application without
+        it), optional ``mount`` plus the app's constructor kwargs. ``mount``
         defaults to ``code`` for a secondary; the ``default`` app is the primary
         (mount ``/``). Children are unconstrained (``sub_tags="*"``): the core
         reads only the app's own attributes and delegates the rest."""
@@ -147,9 +152,23 @@ class AsgiConfigElements:
         skipped here."""
 
     @element(sub_tags="", parent_tags="databases")
-    def database(self) -> None:
-        """One database: ``code`` (the registry key), ``db_class`` and its
-        connection kwargs. Grammar only in core 1a."""
+    def database(self, db_class: type) -> None:
+        """One database: ``code`` (the registry key), ``db_class`` (REQUIRED —
+        the grammar rejects a database without it) and its connection kwargs.
+        Grammar only in core 1a."""
+
+    @element(sub_tags="plugin", collection_key="code")
+    def plugins(self) -> None:
+        """Collection of router plugins, each keyed by ``code``. Materialized as
+        the server's ``plugins=`` switches (``PluginMixin``): the server arms
+        every enabled plugin onto each routed app it hosts. Visible to EVERY
+        role — a worker hosting an app needs the same router behavior."""
+
+    @element(sub_tags="", parent_tags="plugins")
+    def plugin(self) -> None:
+        """One router plugin: ``code`` (the collection key), optional
+        ``enabled`` (bool, default True — set False to leave it unarmed) and
+        arbitrary options handed to ``router.plug(code, **options)``."""
 
     @element(sub_tags="")
     def openapi(self) -> None:

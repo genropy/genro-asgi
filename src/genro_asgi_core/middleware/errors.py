@@ -17,9 +17,15 @@
 ``ErrorMiddleware`` (order 100, the only middleware enabled by default —
 ``errors=False`` disables it) maps control-flow exceptions to responses:
 ``Redirect`` → its status plus the ``Location`` header, ``HTTPException`` →
-its status with the detail as body, any other ``Exception`` → 500 logged via
-the instance logger. Responses are minimal hand-rolled ASGI (status +
-``text/plain``) — the real Response class arrives in core 1c. The chain only
+its status with the detail as ``text/plain`` body, any other ``Exception`` →
+500 logged via the instance logger. Responses are built with the ``Response``
+class; an exception's ``headers`` (e.g. a ``WWW-Authenticate`` challenge) are
+forwarded onto the response.
+
+The middleware wraps ``send`` to track whether ``http.response.start`` has
+already passed downstream: an exception raised AFTER the response started
+cannot be answered (a second start would corrupt the stream), so it is logged
+and re-raised — the server/transport tears the connection down. The chain only
 carries ``http`` scopes (the mixin routes the others past it), so no scope
 filtering happens here.
 """
@@ -29,10 +35,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..exceptions import HTTPException, Redirect
+from ..response import Response
 from .base import BaseMiddleware
 
 if TYPE_CHECKING:
-    from ..types import Receive, Scope, Send
+    from ..types import Message, Receive, Scope, Send
 
 __all__ = ["ErrorMiddleware"]
 
@@ -44,35 +51,43 @@ class ErrorMiddleware(BaseMiddleware):
     middleware_default = True
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """Run the chain; map ``Redirect``/``HTTPException``/``Exception`` to responses."""
-        try:
-            await self.app(scope, receive, send)
-        except Redirect as exc:
-            location = (b"location", exc.location.encode("latin-1"))
-            await self._respond(send, exc.status, "", extra_headers=[location])
-        except HTTPException as exc:
-            await self._respond(send, exc.status, exc.detail or "")
-        except Exception:
-            self.logger.exception("unhandled error serving %s", scope.get("path", "?"))
-            await self._respond(send, 500, "Internal Server Error")
+        """Run the chain; map raised exceptions to responses unless already started."""
+        started = False
 
-    async def _respond(
-        self,
-        send: Send,
-        status: int,
-        text: str,
-        extra_headers: list[tuple[bytes, bytes]] | None = None,
-    ) -> None:
-        """Send a minimal ``text/plain`` ASGI response."""
-        body = text.encode("utf-8")
-        headers = [
-            (b"content-type", b"text/plain; charset=utf-8"),
-            (b"content-length", str(len(body)).encode("latin-1")),
-        ]
-        if extra_headers:
-            headers.extend(extra_headers)
-        await send({"type": "http.response.start", "status": status, "headers": headers})
-        await send({"type": "http.response.body", "body": body})
+        async def tracking_send(message: Message) -> None:
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, tracking_send)
+        except Exception as exc:
+            if started:
+                self.logger.exception(
+                    "error after response started serving %s", scope.get("path", "?")
+                )
+                raise
+            response = self._error_response(exc, scope)
+            await response(scope, receive, send)
+
+    def _error_response(self, exc: Exception, scope: Scope) -> Response:
+        """Build the ``Response`` for a raised exception, forwarding its headers."""
+        if isinstance(exc, Redirect):
+            response = Response(status_code=exc.status, media_type="text/plain")
+            response.set_header("location", exc.location)
+        elif isinstance(exc, HTTPException):
+            response = Response(
+                content=exc.detail or "", status_code=exc.status, media_type="text/plain"
+            )
+        else:
+            self.logger.exception("unhandled error serving %s", scope.get("path", "?"))
+            return Response(
+                content="Internal Server Error", status_code=500, media_type="text/plain"
+            )
+        for name, value in exc.headers:
+            response.set_header(name.decode("latin-1"), value.decode("latin-1"))
+        return response
 
 
 if __name__ == "__main__":

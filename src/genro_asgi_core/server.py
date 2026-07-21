@@ -170,6 +170,7 @@ class BaseServer:
                 app, target = self.demux(scope)
                 await app(target, receive, send)
             finally:
+                item.run_cleanups()
                 self.requests.unregister(item)
         elif scope_type == "websocket":
             await self.on_websocket(scope, receive, send)

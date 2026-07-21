@@ -71,6 +71,24 @@ class RaisingApp(BaseApplication):
         raise RuntimeError("boom")
 
 
+class CleanupThenRaiseApp(BaseApplication):
+    """Registers a request cleanup on ``current`` and then raises.
+
+    Constructor kwarg peeled here: ``ran`` — a list the cleanup appends to, so
+    the test can assert the cleanup ran despite the handler raising.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.ran: list[str] = kwargs.pop("ran")
+        super().__init__(**kwargs)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        current = self.server.requests.current
+        assert current is not None
+        current.add_cleanup(lambda: self.ran.append("cleanup"))
+        raise RuntimeError("boom")
+
+
 async def drive(server: BaseServer, path: str) -> None:
     """Drive one http request through the server at the ASGI level."""
 
@@ -152,3 +170,38 @@ class TestErrorPath:
             await drive(server, "/boom")
         assert server.requests.in_flight == 0
         assert server.requests.current is None
+
+    async def test_cleanups_drained_even_when_handler_raises(self) -> None:
+        ran: list[str] = []
+        server = BaseServer(primary=CleanupThenRaiseApp(ran=ran))
+        with pytest.raises(RuntimeError, match="boom"):
+            await drive(server, "/boom")
+        assert ran == ["cleanup"]  # the finally drained the cleanup despite the raise
+        assert server.requests.in_flight == 0
+
+
+class TestCleanups:
+    def test_add_cleanup_runs_lifo(self) -> None:
+        item = RegisteredRequest(1, "http", "/")
+        order: list[str] = []
+        item.add_cleanup(lambda: order.append("a"))
+        item.add_cleanup(lambda: order.append("b"))
+        item.run_cleanups()
+        assert order == ["b", "a"]  # last registered runs first
+
+    def test_exception_in_one_cleanup_does_not_stop_the_rest(self) -> None:
+        item = RegisteredRequest(1, "http", "/")
+        order: list[str] = []
+
+        def boom() -> None:
+            raise RuntimeError("cleanup failure")
+
+        item.add_cleanup(lambda: order.append("first"))
+        item.add_cleanup(boom)
+        item.add_cleanup(lambda: order.append("last"))
+        item.run_cleanups()
+        assert order == ["last", "first"]  # LIFO; the raising one is swallowed
+
+    def test_run_cleanups_is_noop_without_any(self) -> None:
+        item = RegisteredRequest(1, "http", "/")
+        item.run_cleanups()  # no cleanups queued → nothing happens, no error

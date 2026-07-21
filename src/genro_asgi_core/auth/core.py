@@ -124,18 +124,20 @@ class AuthCore:
 
         ``None`` when no ``Authorization`` header is presented; a present but
         invalid credential — including a malformed header with no scheme/value
-        separator — raises ``HTTPUnauthorized`` (no silent fallback).
+        separator — raises ``HTTPUnauthorized`` (no silent fallback) carrying a
+        ``WWW-Authenticate: Bearer`` challenge header.
         """
         header = headers_dict(scope).get("authorization")
         if not header:
             return None
+        challenge = [(b"www-authenticate", b"Bearer")]
         if " " not in header:
-            raise HTTPUnauthorized("Malformed Authorization header")
+            raise HTTPUnauthorized("Malformed Authorization header", headers=challenge)
         scheme, credentials = header.split(" ", 1)
         verify = getattr(self, f"_auth_{scheme.lower()}", self._auth_default)
         result = verify(credentials)
         if result is None:
-            raise HTTPUnauthorized("Invalid or expired credentials")
+            raise HTTPUnauthorized("Invalid or expired credentials", headers=challenge)
         return Avatar(result["identity"], result["tags"])
 
     def _auth_basic(self, credentials: str) -> dict[str, Any] | None:
@@ -190,6 +192,7 @@ if __name__ == "__main__":
         core.authenticate(bad)
     except HTTPUnauthorized as error:
         assert error.status == 401
+        assert (b"www-authenticate", b"Bearer") in error.headers
     else:
         raise AssertionError("expected HTTPUnauthorized on wrong password")
     malformed: Scope = {"headers": [(b"authorization", b"Basicabc123")]}

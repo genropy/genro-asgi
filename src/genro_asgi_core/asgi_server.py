@@ -16,17 +16,18 @@
 
 ``AsgiServer`` stacks every core capability mixin over ``BaseServer`` in one
 MRO (``CommunicationMixin, AuthMixin, SessionMixin, MiddlewareMixin,
-StorageMixin, BaseServer``): the complete mono-process async server of D22. The
-future internal (worker) server simply composes the SAME base WITHOUT the auth
-mixin (D6 by construction — the base never learned about the chain).
+PluginMixin, StorageMixin, BaseServer``): the complete mono-process async
+server of D22. The future internal (worker) server simply composes the SAME
+base WITHOUT the auth mixin (D6 by construction — the base never learned about
+the chain).
 
 Its cooperative ``__init__`` peels only the two runtime kwargs the frozen
 Macro 1 ``BaseServer`` does not accept — ``host`` and ``port`` — and forwards
 everything else (``primary``, ``auth``, ``session_store``/``session_ttl``,
-``middleware``/``middleware_registry``, ``storage``/``storage_key``, ``parent``)
-down the D16 chain. The peeled ``host``/``port`` become the defaults of
-``serve``, so a config-built server serves on its configured address unless the
-caller overrides it.
+``middleware``/``middleware_registry``, ``plugins``/``plugin_registry``,
+``storage``/``storage_key``, ``parent``) down the D16 chain. The peeled
+``host``/``port`` become the defaults of ``serve``, so a config-built server
+serves on its configured address unless the caller overrides it.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from typing import Any
 from .auth import AuthMixin
 from .communication import CommunicationMixin
 from .middleware import MiddlewareMixin
+from .plugin_mixin import PluginMixin
 from .server import BaseServer
 from .session import SessionMixin
 from .storage_mixin import StorageMixin
@@ -44,9 +46,15 @@ __all__ = ["AsgiServer"]
 
 
 class AsgiServer(
-    CommunicationMixin, AuthMixin, SessionMixin, MiddlewareMixin, StorageMixin, BaseServer
+    CommunicationMixin,
+    AuthMixin,
+    SessionMixin,
+    MiddlewareMixin,
+    PluginMixin,
+    StorageMixin,
+    BaseServer,
 ):
-    """The shipped composition: communication + auth + sessions + chain + storage + base.
+    """The shipped composition: communication + auth + sessions + chain + plugins + storage + base.
 
     Constructor kwargs peeled here: ``host`` and ``port`` — the ``serve``
     defaults carried from the config's ``server`` section. Every other kwarg

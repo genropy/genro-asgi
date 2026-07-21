@@ -237,14 +237,23 @@ class TestVisibleSections:
     def test_root_sees_every_section(self, handler: ConfigurationHandler) -> None:
         projection = Projection(handler.builder.source, role="root")
         assert projection.visible_sections == frozenset(
-            {"server", "middleware", "auth", "storage", "applications", "databases", "openapi"}
+            {
+                "server",
+                "middleware",
+                "auth",
+                "storage",
+                "applications",
+                "databases",
+                "plugins",
+                "openapi",
+            }
         )
 
     def test_hosted_roles_see_the_transversal_cut(self, handler: ConfigurationHandler) -> None:
         for role in ("worker", "batch"):
             projection = Projection(handler.builder.source, role=role, app="erp")
             assert projection.visible_sections == frozenset(
-                {"applications", "databases", "storage"}
+                {"applications", "databases", "storage", "plugins"}
             )
 
 

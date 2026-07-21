@@ -95,6 +95,14 @@ class TestAuthCore:
         with pytest.raises(HTTPUnauthorized) as excinfo:
             core.authenticate(scope)
         assert excinfo.value.status == 401
+        assert (b"www-authenticate", b"Bearer") in excinfo.value.headers
+
+    def test_malformed_header_raises_401_with_challenge(self) -> None:
+        core = AuthCore(**AUTH_CONFIG)
+        scope: Scope = {"headers": [(b"authorization", b"Basicabc123")]}
+        with pytest.raises(HTTPUnauthorized) as excinfo:
+            core.authenticate(scope)
+        assert (b"www-authenticate", b"Bearer") in excinfo.value.headers
 
     def test_unknown_scheme_raises_401(self) -> None:
         core = AuthCore(**AUTH_CONFIG)
@@ -167,6 +175,14 @@ def set_cookie_value(sent: list[Message]) -> str | None:
     return None
 
 
+def header_value(sent: list[Message], header: bytes) -> bytes | None:
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    for name, value in start["headers"]:
+        if name == header:
+            return value
+    return None
+
+
 class TestHeaderAuthFlow:
     async def test_basic_ok(self) -> None:
         server = HeaderAuthServer(primary=EchoAuthApp(), auth=AUTH_CONFIG)
@@ -190,6 +206,18 @@ class TestHeaderAuthFlow:
         server = HeaderAuthServer(primary=EchoAuthApp(), auth=AUTH_CONFIG)
         _, sent = await http_get(server, basic_header("alice", "nope"))
         assert response_status(sent) == 401
+
+    async def test_invalid_credentials_401_carries_www_authenticate(self) -> None:
+        server = HeaderAuthServer(primary=EchoAuthApp(), auth=AUTH_CONFIG)
+        _, sent = await http_get(server, basic_header("alice", "nope"))
+        assert response_status(sent) == 401
+        assert header_value(sent, b"www-authenticate") == b"Bearer"
+
+    async def test_malformed_credentials_401_carries_www_authenticate(self) -> None:
+        server = HeaderAuthServer(primary=EchoAuthApp(), auth=AUTH_CONFIG)
+        _, sent = await http_get(server, "Basicabc123")
+        assert response_status(sent) == 401
+        assert header_value(sent, b"www-authenticate") == b"Bearer"
 
     async def test_no_header_is_anonymous(self) -> None:
         server = HeaderAuthServer(primary=EchoAuthApp(), auth=AUTH_CONFIG)

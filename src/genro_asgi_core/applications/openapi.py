@@ -1,0 +1,212 @@
+# Copyright 2025 Softwell S.r.l.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""OpenApiApplication: a RoutedApplication that exposes REST + OpenAPI + docs.
+
+``OpenApiApplication`` wraps an API surface — either the app's own
+``@route`` methods (direct mode) or an external ``RoutingClass`` attached
+under ``api_name`` (mounted mode) — and adds a ``_meta`` sub-tree with three
+introspection endpoints:
+
+- ``_meta/schema_json`` — the OpenAPI 3.1 document of the API;
+- ``_meta/docs`` — a Swagger-UI page pointing at ``_meta/schema_json``;
+- ``_meta/index`` — an HTML splash linking to the docs.
+
+The schema is built STANDALONE from the app's own router
+(``router_openapi(app.route)``): there is no dependency on a ``_server``
+application (that surface belongs to a later macro). The mounted routing
+class is plugged with the genro-routes ``pydantic`` plugin so its handler
+signatures are captured into the neutral ``params``/``result`` blocks the
+``OpenAPITranslator`` reads; in direct mode the same plugins reach the app's
+own router through the server's plugin arming (``PluginMixin`` config).
+
+The docs and splash HTML live in dedicated resource files next to this module
+and are read at USE time (never at import): a swap of the template file takes
+effect without re-importing the package.
+
+Kwargs peeled by the cooperative ``__init__`` (D16): ``routing_class`` (a
+``RoutingClass`` instance to mount), ``module`` (``"pkg.mod:ClassName"``
+import path, an alternative to ``routing_class``), ``docs`` (documentation
+style — ``"swagger"`` or ``"off"``) and ``api_name`` (the segment the mounted
+class is attached under, default ``"api"``). The rest flows down the chain
+(``db_name`` to ``RoutedApplication``, ``mount_name`` to ``BaseApplication``).
+"""
+
+from __future__ import annotations
+
+import importlib
+from pathlib import Path
+from typing import Any, ClassVar
+
+from genro_routes import RoutingClass, route
+
+from ..exceptions import HTTPNotFound
+from ..plugins.openapi import router_openapi
+from ..routed_application import RoutedApplication
+
+__all__ = ["OpenApiApplication"]
+
+RESOURCES_DIR = Path(__file__).parent / "resources"
+
+
+class OpenApiApplication(RoutedApplication):
+    """Expose an API surface as REST + OpenAPI 3.1 with a Swagger docs page.
+
+    Two ways to supply the API:
+
+    - direct mode — subclass and write ``@route`` methods on the app itself;
+      endpoints sit at the app root (``/{app}/endpoint``);
+    - mounted mode — pass ``routing_class=`` (or ``module=``); the class is
+      attached under ``api_name`` (``/{app}/{api_name}/endpoint``).
+
+    Meta endpoints are attached under ``_meta`` in both modes.
+    """
+
+    openapi_info: ClassVar[dict[str, Any]] = {}
+
+    def __init__(self, **kwargs: Any) -> None:
+        self._docs_style: str = kwargs.pop("docs", "swagger")
+        self._api_name: str = kwargs.pop("api_name", "api")
+        routing_class: RoutingClass | None = kwargs.pop("routing_class", None)
+        module: str | None = kwargs.pop("module", None)
+        self._mounted_info: dict[str, Any] = {}
+        super().__init__(**kwargs)
+        self.attach_instance(OpenApiMeta(self), name="_meta")
+        if routing_class is None and module:
+            routing_class = self._import_routing_class(module)
+        if routing_class is not None:
+            self._mount_routing_class(routing_class)
+
+    @property
+    def docs_style(self) -> str:
+        """Documentation style — ``"swagger"`` or ``"off"``."""
+        return self._docs_style
+
+    @property
+    def api_name(self) -> str:
+        """Path segment the mounted routing class is attached under."""
+        return self._api_name
+
+    @property
+    def api_info(self) -> dict[str, Any]:
+        """OpenAPI info dict: the mounted class's, else the app's, else empty."""
+        return self._mounted_info or self.openapi_info or {}
+
+    def schema_filters(self) -> dict[str, Any]:
+        """Node filters forwarded to ``router_openapi`` when building the schema.
+
+        Empty by default (the whole router). A subclass whose router carries the
+        ``channel`` plugin overrides this to select the REST-facing channel so
+        the schema stays visible (the ``McpOpenApiApplication`` bridge).
+        """
+        return {}
+
+    def _import_routing_class(self, module_path: str) -> RoutingClass:
+        """Import and instantiate a ``RoutingClass`` from a ``"pkg.mod:Class"`` path.
+
+        The class is instantiated with no arguments; an API needing constructor
+        arguments is supplied as a ready ``routing_class=`` instance instead.
+        """
+        module_name, class_name = module_path.split(":")
+        mod = importlib.import_module(module_name)
+        cls = getattr(mod, class_name)
+        return cls()  # type: ignore[no-any-return]
+
+    def _mount_routing_class(self, routing_class: RoutingClass) -> None:
+        """Attach the routing class under ``api_name`` and plug ``pydantic`` on it.
+
+        The pydantic plugin is what captures the handler signatures into the
+        neutral ``params``/``result`` blocks the OpenAPI translator reads;
+        plugging it on the mounted class's own router keeps mounted-mode schema
+        generation independent of the server's plugin configuration.
+        """
+        self.attach_instance(routing_class, name=self.api_name)
+        routing_class.route.plug("pydantic")
+        info = getattr(routing_class, "openapi_info", None)
+        if info:
+            self._mounted_info = info
+
+
+class OpenApiMeta(RoutingClass):
+    """Meta endpoints of an ``OpenApiApplication``, attached under ``_meta``."""
+
+    def __init__(self, application: OpenApiApplication) -> None:
+        self.application = application
+
+    @route()
+    def schema_json(self) -> dict[str, Any]:
+        """Return the OpenAPI 3.1 document for the app's routes (standalone)."""
+        app = self.application
+        info = app.api_info
+        paths_data = router_openapi(app.route, **app.schema_filters())
+        return {
+            "openapi": "3.1.0",
+            "info": {
+                "title": info.get("title", type(app).__name__),
+                "version": info.get("version", "1.0.0"),
+                "description": info.get("description", ""),
+            },
+            **paths_data,
+        }
+
+    @route(media_type="text/html")
+    def docs(self) -> str:
+        """Serve the Swagger-UI page pointing at the app's own schema endpoint."""
+        app = self.application
+        if app.docs_style == "off":
+            raise HTTPNotFound("documentation disabled")
+        mount_name = app.mount_name
+        schema_url = f"/{mount_name}/_meta/schema_json" if mount_name else "/_meta/schema_json"
+        title = app.api_info.get("title", "API")
+        template = (RESOURCES_DIR / "swagger.html").read_text()
+        return template.format(title=title, schema_url=schema_url)
+
+    @route(media_type="text/html")
+    def index(self) -> str:
+        """Serve the splash page with a link to the docs."""
+        app = self.application
+        info = app.api_info
+        title = info.get("title", type(app).__name__)
+        version = info.get("version", "")
+        description = info.get("description", "")
+        mount_name = app.mount_name
+        docs_url = f"/{mount_name}/_meta/docs" if mount_name else "/_meta/docs"
+        version_html = f"<p>Version: {version}</p>" if version else ""
+        desc_html = f"<p>{description}</p>" if description else ""
+        template = (RESOURCES_DIR / "openapi_index.html").read_text()
+        return template.format(
+            title=title,
+            version_html=version_html,
+            desc_html=desc_html,
+            docs_url=docs_url,
+        )
+
+
+if __name__ == "__main__":
+    class DemoApi(OpenApiApplication):
+        openapi_info = {"title": "Demo", "version": "1.0.0"}
+
+        @route()
+        def add(self, x: int = 0, y: int = 0) -> dict[str, int]:
+            return {"sum": x + y}
+
+    app = DemoApi()
+    assert app.api_name == "api"
+    assert app.docs_style == "swagger"
+    assert app.api_info["title"] == "Demo"
+    meta = app.route.node("/_meta/schema_json")
+    assert meta.error is None, meta.error
+    doc = meta()
+    assert doc["openapi"] == "3.1.0"
+    assert doc["info"]["title"] == "Demo"

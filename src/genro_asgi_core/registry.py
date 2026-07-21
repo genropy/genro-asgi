@@ -19,7 +19,10 @@
 in-flight set (D12 spirit): the server registers a request on entry and
 unregisters it on exit, around the http dispatch. Each registration is a
 lightweight ``RegisteredRequest`` record (D18: slotted, high cardinality)
-carrying a monotonic id, the scope type, the path, and the start time.
+carrying a monotonic id, the scope type, the path, the start time, and the
+request's cleanup callbacks. The server drains those cleanups in the http
+``finally`` (``run_cleanups``) so any app — routed or bare — gets end-of-request
+teardown (e.g. ``request.db`` closing its connection) for free.
 
 The "current request" is exposed through a ContextVar that lives on the
 registry INSTANCE (never at module level): ``register`` sets it and keeps the
@@ -32,8 +35,9 @@ rule) and concurrent requests — each on its own task context — see their own
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from contextvars import ContextVar, Token
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .server import BaseServer
@@ -45,18 +49,25 @@ __all__ = ["RegisteredRequest", "RequestRegistry"]
 class RegisteredRequest:
     """One in-flight request tracked by the registry (D18: slotted record).
 
-    An immutable snapshot taken at registration: the monotonic ``request_id``,
-    the ASGI ``scope_type``, the ``path``, and ``started_at``
-    (``time.monotonic()``). Slotted because requests are high cardinality.
+    A snapshot taken at registration: the monotonic ``request_id``, the ASGI
+    ``scope_type``, the ``path``, and ``started_at`` (``time.monotonic()``).
+    Slotted because requests are high cardinality.
+
+    It also owns the request's end-of-life cleanups: ``add_cleanup(fn)`` queues
+    a zero-arg callback and ``run_cleanups()`` drains them LIFO at the end of the
+    dispatch (the server calls it in the http ``finally``). The ``_cleanups``
+    list is lazy — allocated only when the first callback is queued — so a
+    request that registers none pays nothing.
     """
 
-    __slots__ = ("_request_id", "_scope_type", "_path", "_started_at")
+    __slots__ = ("_request_id", "_scope_type", "_path", "_started_at", "_cleanups")
 
     def __init__(self, request_id: int, scope_type: str, path: str) -> None:
         self._request_id = request_id
         self._scope_type = scope_type
         self._path = path
         self._started_at = time.monotonic()
+        self._cleanups: list[Callable[[], Any]] | None = None
 
     @property
     def request_id(self) -> int:
@@ -77,6 +88,28 @@ class RegisteredRequest:
     def started_at(self) -> float:
         """``time.monotonic()`` captured at registration."""
         return self._started_at
+
+    def add_cleanup(self, callback: Callable[[], Any]) -> None:
+        """Queue a zero-arg ``callback`` to run at end of request (LIFO)."""
+        if self._cleanups is None:
+            self._cleanups = []
+        self._cleanups.append(callback)
+
+    def run_cleanups(self, error: BaseException | None = None) -> None:
+        """Run queued cleanups LIFO, swallowing each one's exception.
+
+        Called by the server in the http ``finally`` — so cleanups run whether
+        the request succeeded or failed. ``error`` carries the terminating
+        exception (``None`` on success) for error-aware cleanups; the base drain
+        runs every callback regardless.
+        """
+        if self._cleanups is None:
+            return
+        for callback in reversed(self._cleanups):
+            try:
+                callback()
+            except Exception:
+                pass
 
     def __repr__(self) -> str:
         return (

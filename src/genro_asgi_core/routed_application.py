@@ -1,0 +1,276 @@
+# Copyright 2025 Softwell S.r.l.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""RoutedApplication: the application base wiring genro-routes into the core.
+
+``RoutedApplication`` composes the app-side contract (``BaseApplication``)
+with the genro-routes ``RoutingClass``: handlers are ``@route``-decorated
+methods on subclasses, and external ``RoutingClass`` instances mount as
+sub-trees via ``attach_instance(child, name=...)``. The constructor peels
+``db_name`` (the ``request.db`` seam resolves it against the server's
+database registry) and plugs the ``auth`` plugin on the app router, so
+entries declaring ``auth_rule`` are filtered by the request's authorization
+tags — attached children inherit the plug.
+
+The config-driven plugins (the ``openapi`` dialect today) are armed LAZILY:
+on the first ``route`` access made after the app is attached to a server, the
+app calls ``server.arm_router(self.route)`` (once, guarded), so a server built
+with a ``plugins`` section plugs them onto every routed app it hosts. A
+composition whose server lacks the ``PluginMixin`` exposes no ``arm_router``
+and arms nothing — the app degrades to the ``auth`` plug alone.
+
+The ASGI dispatch (``__call__``) is the per-app routing engine: build a
+``Request`` bound to this app, eager-parse it (``init``), resolve the node
+from the request path — already mount-relative, the server demux strips the
+prefix (D3) — with the identity tags of ``scope["auth"]`` as auth filters,
+bind kwargs, execute (async handlers stay on the loop, sync handlers go
+through ``server.run_sync`` — the Macro 1 pool protocol), then answer via
+``request.response.set_result(value, metadata)``. Resolution failures raise
+core exceptions (``ROUTER_ERRORS``: unknown or unavailable path →
+``HTTPNotFound``; a ruled entry denied, for missing or mismatched tags →
+``HTTPForbidden``) that propagate to the server's ``ErrorMiddleware``.
+Invalid handler arguments become ``HTTPException(400)`` — never a 500:
+genro-routes channels every bad-argument error (a ``pydantic.ValidationError``
+and an unbindable-argument ``TypeError`` alike) through the node's single
+``validation_error`` exception mapping, so the dispatcher catches one marker.
+A ``TypeError`` raised inside a SYNC handler body is indistinguishable from
+a binding error and maps to 400 too; an async body's ``TypeError`` surfaces
+at await time and reaches ``ErrorMiddleware`` as a 500. There is no local
+cleanup drain: the server ``finally`` owns end-of-request cleanups.
+
+Kwargs binding: ``bind_kwargs`` starts from ``request.handler_kwargs()``
+(query + body by content-type) and reconciles a hydrated JSON body with a
+scalar-parameter handler — when the node's neutral ``params`` block declares
+fields (pydantic plugin) and the handler does not itself absorb ``body_data``
+or ``**kwargs``, the body dict is spread over the declared names through
+``spread_over_params`` (extras dropped). Auth without the middleware: when
+``scope`` carries no ``auth`` key the resolution runs unfiltered — the public
+router exposes exactly what the auth plugin leaves untagged.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
+
+from genro_routes import RoutingClass, is_result_wrapper
+
+from .application import BaseApplication
+from .exceptions import HTTPException, HTTPForbidden, HTTPNotFound
+from .request import Request
+
+if TYPE_CHECKING:
+    from genro_routes import Router, RouterNode
+
+    from .types import Receive, Scope, Send
+
+__all__ = ["RoutedApplication"]
+
+
+class _HandlerArgumentsInvalid(Exception):
+    """Marker raised by the node's ``validation_error`` exception mapping.
+
+    genro-routes re-raises every escaping bad-argument error — a handler's
+    ``pydantic.ValidationError`` and an unbindable-argument ``TypeError`` alike —
+    as the class mapped to the ``validation_error`` code, with the original error
+    as ``__cause__``; the dispatcher catches invalid handler arguments through
+    this class without importing pydantic (the sibling of the MCP engine's marker).
+    """
+
+
+class RoutedApplication(BaseApplication, RoutingClass):
+    """Application base serving ``@route`` handlers through the app router.
+
+    Constructor kwargs peeled here: ``db_name`` — the server database code
+    the ``request.db`` seam resolves for this app (``None`` falls back to
+    ``"default"``). The rest flows down the D16 chain (``mount_name`` to
+    ``BaseApplication``).
+    """
+
+    # genro-routes resolution error codes mapped to core HTTP exceptions
+    # (the node.error string-code contract): an unknown or unavailable path
+    # answers 404; a ruled entry denied — whether no tags were presented or the
+    # presented tags do not match — answers 403.
+    ROUTER_ERRORS: dict[str, type[Exception]] = {
+        "not_found": HTTPNotFound,
+        "not_available": HTTPNotFound,
+        "not_authorized": HTTPForbidden,
+        "not_authenticated": HTTPForbidden,
+    }
+
+    def __init__(self, **kwargs: Any) -> None:
+        self._armed: bool = False
+        self._db_name: str | None = kwargs.pop("db_name", None)
+        super().__init__(**kwargs)
+        self.route.plug("auth")
+
+    @property
+    def db_name(self) -> str | None:
+        """Server database code for the ``request.db`` seam (``None`` → default)."""
+        return self._db_name
+
+    @property
+    def route(self) -> Router:
+        """The app router; arms the server's configured plugins on first access.
+
+        The first access made once a server owns this app triggers
+        ``server.arm_router`` (once, guarded by ``_armed``); accesses before
+        attachment — the ``auth`` plug in ``__init__`` — arm nothing.
+        """
+        router: Router = super().route
+        arm_router = getattr(self.server, "arm_router", None)
+        if not self._armed and arm_router is not None:
+            self._armed = True
+            arm_router(router)
+        return router
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Resolve the request in the app router, execute, respond.
+
+        Raises the mapped ``ROUTER_ERRORS`` exception when resolution fails;
+        the server's ``ErrorMiddleware`` answers it. A handler called with
+        invalid arguments — a ``pydantic.ValidationError`` or an
+        unbindable-argument ``TypeError``, both mapped through the node's single
+        ``validation_error`` seam — surfaces as ``HTTPException(400)`` (never a
+        500), the original error kept as ``__cause__``.
+        """
+        server = self.server
+        if server is None:
+            raise RuntimeError(f"{type(self).__name__} dispatch requires an owning server")
+        request = Request(scope, receive, server=server, application=self)
+        await request.init()
+        errors = {**self.ROUTER_ERRORS, "validation_error": _HandlerArgumentsInvalid}
+        node = self.route.node(request.path, errors=errors, **self.auth_filters(scope))
+        call = self.make_callable(node, request)
+        try:
+            if asyncio.iscoroutinefunction(node):
+                result = await call()
+            else:
+                result = await server.run_sync(call)
+        except _HandlerArgumentsInvalid as exc:
+            detail = exc.__cause__ or exc
+            raise HTTPException(400, f"Invalid request arguments: {detail}") from exc
+        if is_result_wrapper(result):
+            request.response.set_result(result.value, {**node.metadata, **result.metadata})
+        else:
+            request.response.set_result(result, node.metadata)
+        await request.response(scope, receive, send)
+
+    def auth_filters(self, scope: Scope) -> dict[str, str]:
+        """Auth filters for node resolution, from the scope identity.
+
+        An ``Avatar`` on ``scope["auth"]`` becomes the comma-separated
+        ``auth_tags`` the auth plugin evaluates entry rules against. No
+        identity — key absent (middleware off) or ``None`` (anonymous) —
+        passes no filter: the plugin still denies every ruled entry.
+        """
+        avatar = scope.get("auth")
+        if avatar is None:
+            return {}
+        return {"auth_tags": ",".join(avatar.tags)}
+
+    def make_callable(self, node: RouterNode, request: Request) -> Callable[[], Any]:
+        """Package the node invocation as the zero-arg call the dispatcher runs.
+
+        The node declares its handler's nature (genro-routes marks async
+        entries so ``asyncio.iscoroutinefunction(node)`` is honest); the
+        dispatcher reads that same nature to pick the vehicle — the returned
+        async callable is awaited on the loop, the sync one goes through the
+        server pool. ``bind_kwargs`` decides the arguments.
+        """
+        kwargs = self.bind_kwargs(node, request)
+
+        # asyncio.iscoroutinefunction, not inspect's: on 3.11 genro-routes
+        # falls back to the asyncio sentinel, which only the asyncio check reads.
+        if asyncio.iscoroutinefunction(node):
+
+            async def acall() -> Any:
+                return await node(**kwargs)
+
+            return acall
+
+        def call() -> Any:
+            return node(**kwargs)
+
+        return call
+
+    def bind_kwargs(self, node: RouterNode, request: Request) -> dict[str, Any]:
+        """Reconcile the request kwargs with the handler's declared parameters.
+
+        Base: ``request.handler_kwargs()``. A hydrated JSON body arrives as a
+        single ``body_data`` dict; a REST handler declares scalar parameters,
+        so the dict is spread over the fields the handler accepts (from the
+        node's neutral ``params`` block — never ``inspect``). The whole
+        ``body_data`` is kept when the handler itself declares it, accepts
+        ``**kwargs``, or exposes no signature (no pydantic plugin).
+        """
+        kwargs = request.handler_kwargs()
+        body = kwargs.get("body_data")
+        if not isinstance(body, dict):
+            return kwargs
+        fields = node.params.get("fields")
+        if fields is None:
+            return kwargs
+        param_names = {
+            f["name"] for f in fields if f["kind"] not in ("var_positional", "var_keyword")
+        }
+        accepts_kwargs = any(f["kind"] == "var_keyword" for f in fields)
+        if "body_data" in param_names or accepts_kwargs:
+            return kwargs
+        del kwargs["body_data"]
+        kwargs.update(self.spread_over_params(node, body))
+        return kwargs
+
+    def spread_over_params(self, node: RouterNode, data: dict[str, Any]) -> dict[str, Any]:
+        """Fit a dict of values to the handler's declared parameters.
+
+        Shared by every wire dialect (REST body today, MCP arguments later):
+        keeps ``data`` whole when the handler declares no signature
+        (``fields`` is ``None`` — no pydantic plugin) or accepts ``**kwargs``;
+        otherwise keeps only the declared names, dropping extras. An empty
+        ``fields`` list is a known no-parameter handler: everything drops.
+        """
+        fields = node.params.get("fields")
+        if fields is None:
+            return data
+        if any(f["kind"] == "var_keyword" for f in fields):
+            return data
+        param_names = {
+            f["name"] for f in fields if f["kind"] not in ("var_positional", "var_keyword")
+        }
+        return {k: v for k, v in data.items() if k in param_names}
+
+
+if __name__ == "__main__":
+    from genro_routes import route
+
+    class DemoApp(RoutedApplication):
+        @route()
+        def hello(self, name: str = "world") -> dict[str, str]:
+            return {"hello": name}
+
+    app = DemoApp(mount_name="demo")
+    assert app.mount_name == "demo"
+    assert app.db_name is None
+    node = app.route.node("hello", errors=app.ROUTER_ERRORS)
+    assert node(name="genro") == {"hello": "genro"}
+    assert app.spread_over_params(node, {"name": "x"}) == {"name": "x"}
+    missing = app.route.node("nowhere", errors=app.ROUTER_ERRORS)
+    try:
+        missing()
+    except HTTPNotFound:
+        pass
+    else:
+        raise AssertionError("expected HTTPNotFound")

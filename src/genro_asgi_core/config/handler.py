@@ -39,6 +39,8 @@ Section → constructor kwarg mapping (core 1a):
   secondary mounts (each mounted after construction; mount defaults to ``code``).
 - ``databases`` → one ``db_handler_class(db_class(**params))`` per entry,
   registered on the server by ``code`` (core 1b).
+- ``plugins`` → ``plugins=`` ({code: bool | dict} switches for the
+  ``PluginMixin``); visible to every role.
 - ``openapi``/nested ``groups`` → read and SKIPPED with a debug log (valid
   config for other roles/macros, not an error).
 
@@ -119,6 +121,10 @@ class ConfigurationHandler(BuilderHandler):
         if storage is not None:
             kwargs["storage"] = storage
 
+        plugins = projection.plugins_config()
+        if plugins is not None:
+            kwargs["plugins"] = plugins
+
         primary, secondaries = self._build_applications(projection)
         kwargs["primary"] = primary
 
@@ -167,13 +173,13 @@ class ConfigurationHandler(BuilderHandler):
         """Instantiate one application node as ``app_class(mount_name=..., **kwargs)``.
 
         ``code``/``app_class``/``mount`` are consumed here; the remaining
-        attributes are the app's constructor kwargs. Any nested section (e.g.
+        attributes are the app's constructor kwargs. ``app_class`` presence is
+        guaranteed by the grammar (the ``application`` element declares it
+        required), so it is popped unconditionally. Any nested section (e.g.
         ``groups``) has no core-1a applier and is skipped with a debug log.
         """
         attrs = dict(node.fixed_attr_items())
-        app_class: type[BaseApplication] | None = attrs.pop("app_class", None)
-        if app_class is None:
-            raise ValueError(f"application {attrs.get('code')!r} missing app_class")
+        app_class: type[BaseApplication] = attrs.pop("app_class")
         attrs.pop("code", None)
         attrs.pop("mount", None)
         children = node.value

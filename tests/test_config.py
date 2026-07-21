@@ -188,6 +188,37 @@ class TestGrammarValidation:
         with pytest.raises(AttributeError):
             ConfigurationHandler(BadConfig(name="bad"))
 
+    def test_application_without_app_class_rejected_by_grammar(self) -> None:
+        class NoClassConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                apps = root.applications()
+                apps.application(code="shop")
+
+        with pytest.raises(ValueError, match="app_class"):
+            ConfigurationHandler(NoClassConfig(name="noclass"))
+
+    def test_database_without_db_class_rejected_by_grammar(self) -> None:
+        class NoDbClassConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                apps = root.applications(default="shop")
+                apps.application(code="shop", app_class=ShopApp)
+                dbs = root.databases()
+                dbs.database(code="default")
+
+        with pytest.raises(ValueError, match="db_class"):
+            ConfigurationHandler(NoDbClassConfig(name="nodbclass"))
+
+    def test_mount_without_path_rejected_by_grammar(self) -> None:
+        class NoPathConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                mounts = root.storage()
+                mounts.mount(code="data")
+                apps = root.applications(default="shop")
+                apps.application(code="shop", app_class=ShopApp)
+
+        with pytest.raises(ValueError, match="path"):
+            ConfigurationHandler(NoPathConfig(name="nopath"))
+
 
 class TestSkippedSections:
     def test_groups_databases_openapi_materialize_without_error(self) -> None:
