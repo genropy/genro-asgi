@@ -34,6 +34,7 @@ rule) and concurrent requests — each on its own task context — see their own
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from contextvars import ContextVar, Token
@@ -96,7 +97,7 @@ class RegisteredRequest:
         self._cleanups.append(callback)
 
     def run_cleanups(self, error: BaseException | None = None) -> None:
-        """Run queued cleanups LIFO, swallowing each one's exception.
+        """Run queued cleanups LIFO, isolating and logging each one's exception.
 
         Called by the server in the http ``finally`` — so cleanups run whether
         the request succeeded or failed. ``error`` carries the terminating
@@ -109,7 +110,7 @@ class RegisteredRequest:
             try:
                 callback()
             except Exception:
-                pass
+                logging.getLogger(__name__).exception("Request cleanup %r failed", callback)
 
     def __repr__(self) -> str:
         return (
