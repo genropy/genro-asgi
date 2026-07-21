@@ -24,13 +24,17 @@ arms sessions with no user action, while an explicit
 ``middleware={"session": False}`` still wins (``setdefault`` never overrides an
 explicit switch). It overrides the §4 contract method ``session(request)`` to
 return the session attached to the request scope; a composition WITHOUT the
-mixin keeps the base answer (``None``).
+mixin keeps the base answer (``None``). ``promote_session(request, avatar)``
+is the login seam: it swaps the anonymous scope session for a fresh
+identity-bearing one from the store; the ``Set-Cookie`` for the change is
+emitted by ``SessionMiddleware`` at response time (option A), never here.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from .session import Session
 from .store import MemorySessionStore, SessionStore
 
 __all__ = ["SessionMixin"]
@@ -64,11 +68,33 @@ class SessionMixin:
         """The session attached to the request scope, or ``None`` if none."""
         return request.get("session") if request is not None else None
 
+    def promote_session(self, request: Any, avatar: Any) -> Session:
+        """Replace the request's anonymous session with an identity-bearing one.
+
+        Creates a fresh session carrying ``avatar`` through the store and sets
+        it on ``request.scope["session"]`` (replacing the anonymous session the
+        middleware put there). The promotion is also recorded in the shared
+        ``session_state`` holder the middleware installed: the D3 demux hands a
+        mounted app a shallow COPY of the scope, and the holder is the channel
+        that survives the copy so ``SessionMiddleware`` sees the change and
+        emits the ``Set-Cookie`` at response time (option A) — never here.
+        Returns the session.
+        """
+        session = self.session_store.create(avatar=avatar)
+        request.scope["session"] = session
+        holder = request.scope.get("session_state")
+        if holder is not None:
+            holder["session"] = session
+        return session
+
 
 if __name__ == "__main__":
+    from types import SimpleNamespace
+
     from ..application import BaseApplication
     from ..middleware import MiddlewareMixin
     from ..server import BaseServer
+    from .avatar import Avatar
 
     class DemoServer(SessionMixin, MiddlewareMixin, BaseServer):
         pass
@@ -78,3 +104,10 @@ if __name__ == "__main__":
     assert server.session({"session": "S"}) == "S"
     assert server.session({}) is None
     assert BaseServer(primary=BaseApplication()).session({}) is None
+
+    anonymous = server.session_store.create()
+    request = SimpleNamespace(scope={"session": anonymous})
+    promoted = server.promote_session(request, Avatar("alice", ["admin"]))
+    assert request.scope["session"] is promoted
+    assert promoted is not anonymous
+    assert promoted.avatar is not None and promoted.avatar.identity == "alice"

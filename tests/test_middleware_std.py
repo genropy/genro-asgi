@@ -28,11 +28,13 @@ response-started guard) and the two previously-untested CORS branches
 
 from __future__ import annotations
 
+import json
 import logging
+from urllib.parse import quote
 
 import pytest
 
-from genro_asgi_core import BaseApplication, BaseServer, MiddlewareMixin
+from genro_asgi_core import AsgiServer, BaseApplication, BaseServer, MiddlewareMixin
 from genro_asgi_core.exceptions import HTTPNotFound, HTTPUnauthorized, Redirect
 from genro_asgi_core.types import Message, Receive, Scope, Send
 
@@ -197,6 +199,107 @@ class TestErrorMiddlewareOnResponse:
         starts = [m for m in sent if m["type"] == "http.response.start"]
         assert len(starts) == 1
         assert starts[0]["status"] == 200
+
+
+class TestErrorContentNegotiation:
+    """Macro 5a Phase 5: the error body follows the caller's ``Accept``."""
+
+    async def test_json_accept_gets_error_document(
+        self, http_request, response_status, response_headers, response_body
+    ) -> None:
+        server = MwServer(primary=RaisingApp())
+        sent = await http_request(server, "/missing", headers=[(b"accept", b"application/json")])
+        assert response_status(sent) == 404
+        assert response_headers(sent)[b"content-type"] == b"application/json"
+        assert json.loads(response_body(sent)) == {"error": "nothing here"}
+
+    async def test_wildcard_accept_gets_error_document(
+        self, http_request, response_headers, response_body
+    ) -> None:
+        server = MwServer(primary=RaisingApp())
+        sent = await http_request(server, "/missing", headers=[(b"accept", b"*/*")])
+        assert response_headers(sent)[b"content-type"] == b"application/json"
+        assert json.loads(response_body(sent)) == {"error": "nothing here"}
+
+    async def test_html_accept_keeps_text_plain(
+        self, http_request, response_headers, response_body
+    ) -> None:
+        server = MwServer(primary=RaisingApp())
+        sent = await http_request(server, "/missing", headers=[(b"accept", b"text/html")])
+        assert response_headers(sent)[b"content-type"] == b"text/plain; charset=utf-8"
+        assert response_body(sent) == b"nothing here"
+
+    async def test_no_accept_defaults_text_plain(
+        self, http_request, response_headers, response_body
+    ) -> None:
+        server = MwServer(primary=RaisingApp())
+        sent = await http_request(server, "/missing")
+        assert response_headers(sent)[b"content-type"] == b"text/plain; charset=utf-8"
+        assert response_body(sent) == b"nothing here"
+
+    async def test_generic_500_json_hides_internal_message(
+        self, http_request, response_status, response_body
+    ) -> None:
+        server = MwServer(primary=RaisingApp())
+        sent = await http_request(server, "/boom", headers=[(b"accept", b"application/json")])
+        assert response_status(sent) == 500
+        assert json.loads(response_body(sent)) == {"error": "Internal Server Error"}
+
+
+class TestChallengeNegotiation:
+    """Macro 5a Phase 5: a 401 is negotiated when the server has a login surface."""
+
+    def test_login_enabled_reflects_registered_method(self) -> None:
+        server = AsgiServer(primary=BaseApplication())
+        assert server.login_enabled is True
+
+    async def test_browser_navigation_redirects_to_login_page(
+        self, http_request, response_status, response_headers
+    ) -> None:
+        server = AsgiServer(primary=RaisingApp())
+        sent = await http_request(server, "/challenge", headers=[(b"accept", b"text/html")])
+        assert response_status(sent) == 302
+        assert response_headers(sent)[b"location"] == b"/_server/login_page?next=%2Fchallenge"
+
+    async def test_api_caller_gets_login_url_and_challenge_header(
+        self, http_request, response_status, response_headers, response_body
+    ) -> None:
+        server = AsgiServer(primary=RaisingApp())
+        sent = await http_request(server, "/challenge", headers=[(b"accept", b"application/json")])
+        assert response_status(sent) == 401
+        assert response_headers(sent)[b"www-authenticate"] == b"Bearer"
+        assert json.loads(response_body(sent)) == {"login_url": "/_server/login_page"}
+
+    async def test_login_disabled_leaves_401_unchanged(
+        self, http_request, response_status, response_headers
+    ) -> None:
+        server = MwServer(primary=RaisingApp())
+        sent = await http_request(server, "/challenge", headers=[(b"accept", b"text/html")])
+        assert response_status(sent) == 401
+        assert response_headers(sent)[b"www-authenticate"] == b"Bearer"
+
+    async def test_browser_redirect_preserves_path_and_query_through_safe_next(self) -> None:
+        server = AsgiServer(primary=RaisingApp())
+        scope: Scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/challenge",
+            "query_string": b"a=1&b=2",
+            "headers": [(b"accept", b"text/html")],
+        }
+        sent: list[Message] = []
+
+        async def receive() -> Message:
+            return {"type": "http.request"}
+
+        async def send(message: Message) -> None:
+            sent.append(message)
+
+        await server(scope, receive, send)
+        start = next(m for m in sent if m["type"] == "http.response.start")
+        assert start["status"] == 302
+        location = dict(start["headers"])[b"location"].decode()
+        assert location == "/_server/login_page?next=" + quote("/challenge?a=1&b=2", safe="")
 
 
 class TestLoggingMiddleware:

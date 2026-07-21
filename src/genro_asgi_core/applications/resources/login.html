@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<!-- Copyright 2025 Softwell S.r.l. Licensed under the Apache License, Version 2.0 -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    margin: 0; min-height: 100vh; display: flex;
+    align-items: center; justify-content: center; background: #f4f5f7;
+  }
+  .card {
+    background: #fff; padding: 2rem; border-radius: 10px;
+    box-shadow: 0 2px 16px rgba(0,0,0,.08); width: 320px; max-width: 90vw;
+  }
+  h1 { font-size: 1.25rem; margin: 0 0 1.25rem; text-align: center; }
+  label { display: block; font-size: .8rem; margin: .75rem 0 .25rem; color: #555; }
+  input {
+    width: 100%; box-sizing: border-box; padding: .5rem .6rem;
+    border: 1px solid #ccc; border-radius: 6px; font-size: 1rem;
+  }
+  button {
+    width: 100%; box-sizing: border-box; margin-top: 1rem; padding: .6rem;
+    border: 0; border-radius: 6px; font-size: 1rem; cursor: pointer;
+    background: #2d6cdf; color: #fff;
+  }
+  button.redirect { background: #444; margin-top: .5rem; }
+  .sep { text-align: center; color: #999; font-size: .75rem; margin: 1rem 0 .25rem; }
+  .error { color: #c0392b; font-size: .85rem; margin-top: .75rem; min-height: 1.2em; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #1c1e22; }
+    .card { background: #26282d; box-shadow: none; }
+    h1, label { color: #ddd; }
+    input { background: #1c1e22; color: #eee; border-color: #444; }
+  }
+</style>
+<div class="card">
+  <h1>Sign in</h1>
+  <div id="methods"></div>
+  <div class="error" id="error"></div>
+</div>
+<script>
+// Descriptor-driven login page. Fetches the active methods and renders each:
+// kind=form -> the identity/password form (posts to the method's action);
+// kind=redirect -> one button that navigates to the method's url.
+// A validated next (same-origin relative path only) rides every path.
+
+function safeNext(value) {
+  // Mirror of the server-side safe_next_path guard: same-origin relative only.
+  if (!value) return "/";
+  if (value[0] !== "/") return "/";
+  if (value.slice(0, 2) === "//") return "/";
+  if (value.indexOf("\\") !== -1) return "/";
+  return value;
+}
+
+const params = new URLSearchParams(window.location.search);
+const NEXT = safeNext(params.get("next"));
+const errorBox = document.getElementById("error");
+const methodsBox = document.getElementById("methods");
+
+function withNext(url) {
+  const sep = url.indexOf("?") === -1 ? "?" : "&";
+  return url + sep + "next=" + encodeURIComponent(NEXT);
+}
+
+function renderForm(descriptor) {
+  const form = document.createElement("form");
+  form.innerHTML =
+    '<label>Identity</label><input name="identity" autocomplete="username" autofocus>' +
+    '<label>Password</label><input name="password" type="password" autocomplete="current-password">' +
+    '<button type="submit">' + (descriptor.label || "Sign in") + "</button>";
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    errorBox.textContent = "";
+    const body = new URLSearchParams({
+      identity: form.identity.value,
+      password: form.password.value,
+    });
+    const response = await fetch(descriptor.action, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
+      body: body,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.ok && data.session_id) {
+      window.location.assign(NEXT);
+    } else {
+      errorBox.textContent = data.error || "Sign in failed";
+    }
+  });
+  methodsBox.appendChild(form);
+}
+
+function renderRedirect(descriptor) {
+  const button = document.createElement("button");
+  button.className = "redirect";
+  button.textContent = descriptor.label || descriptor.id;
+  button.addEventListener("click", () => {
+    window.location.assign(withNext(descriptor.url));
+  });
+  methodsBox.appendChild(button);
+}
+
+async function build() {
+  let methods = [];
+  try {
+    const response = await fetch("/_server/login_methods", { headers: { "Accept": "application/json" } });
+    methods = (await response.json()).methods || [];
+  } catch (err) {
+    errorBox.textContent = "Cannot load sign-in methods";
+    return;
+  }
+  const forms = methods.filter((m) => m.kind === "form");
+  const redirects = methods.filter((m) => m.kind === "redirect");
+  forms.forEach(renderForm);
+  if (forms.length && redirects.length) {
+    const sep = document.createElement("div");
+    sep.className = "sep";
+    sep.textContent = "or";
+    methodsBox.appendChild(sep);
+  }
+  redirects.forEach(renderRedirect);
+  if (!methods.length) {
+    errorBox.textContent = "No sign-in methods are configured";
+  }
+}
+
+build();
+</script>

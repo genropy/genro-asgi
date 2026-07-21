@@ -40,7 +40,7 @@ through ``server.run_sync`` — the Macro 1 pool protocol), then answer via
 core exceptions (``ROUTER_ERRORS``: unknown or unavailable path →
 ``HTTPNotFound``; a ruled entry denied, for missing or mismatched tags →
 ``HTTPForbidden``) that propagate to the server's ``ErrorMiddleware``.
-Invalid handler arguments become ``HTTPException(400)`` — never a 500:
+Invalid handler arguments become ``HTTPBadRequest`` (400) — never a 500:
 genro-routes channels every bad-argument error (a ``pydantic.ValidationError``
 and an unbindable-argument ``TypeError`` alike) through the node's single
 ``validation_error`` exception mapping, so the dispatcher catches one marker.
@@ -62,13 +62,14 @@ router exposes exactly what the auth plugin leaves untagged.
 from __future__ import annotations
 
 import asyncio
+import importlib
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from genro_routes import RoutingClass, is_result_wrapper
 
 from .application import BaseApplication
-from .exceptions import HTTPException, HTTPForbidden, HTTPNotFound
+from .exceptions import HTTPBadRequest, HTTPForbidden, HTTPNotFound
 from .request import Request
 
 if TYPE_CHECKING:
@@ -121,6 +122,18 @@ class RoutedApplication(BaseApplication, RoutingClass):
         """Server database code for the ``request.db`` seam (``None`` → default)."""
         return self._db_name
 
+    def _import_routing_class(self, module_path: str) -> RoutingClass:
+        """Import and instantiate a ``RoutingClass`` from a ``"pkg.mod:Class"`` path.
+
+        The class is instantiated with no arguments; an API needing constructor
+        arguments is supplied as a ready ``routing_class=`` instance instead.
+        Shared by the ``OpenApiApplication`` and ``McpApplication`` subclasses.
+        """
+        module_name, class_name = module_path.split(":")
+        mod = importlib.import_module(module_name)
+        cls = getattr(mod, class_name)
+        return cls()  # type: ignore[no-any-return]
+
     @property
     def route(self) -> Router:
         """The app router; arms the server's configured plugins on first access.
@@ -143,7 +156,7 @@ class RoutedApplication(BaseApplication, RoutingClass):
         the server's ``ErrorMiddleware`` answers it. A handler called with
         invalid arguments — a ``pydantic.ValidationError`` or an
         unbindable-argument ``TypeError``, both mapped through the node's single
-        ``validation_error`` seam — surfaces as ``HTTPException(400)`` (never a
+        ``validation_error`` seam — surfaces as ``HTTPBadRequest`` (400, never a
         500), the original error kept as ``__cause__``.
         """
         server = self.server
@@ -161,7 +174,7 @@ class RoutedApplication(BaseApplication, RoutingClass):
                 result = await server.run_sync(call)
         except _HandlerArgumentsInvalid as exc:
             detail = exc.__cause__ or exc
-            raise HTTPException(400, f"Invalid request arguments: {detail}") from exc
+            raise HTTPBadRequest(f"Invalid request arguments: {detail}") from exc
         if is_result_wrapper(result):
             request.response.set_result(result.value, {**node.metadata, **result.metadata})
         else:

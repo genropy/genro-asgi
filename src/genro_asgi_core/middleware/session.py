@@ -19,11 +19,15 @@ Reads the session token from the request ``Cookie`` header (via the shared
 session or creates a new ANONYMOUS one through ``server.session_store``
 (``store.create()`` with no avatar — capturing an identity into a session is
 an explicit act of the login surface, core 1d), attaches it to
-``scope["session"]``, and — for a NEW session — wraps ``send`` to add a
-``Set-Cookie`` header (HttpOnly, ``Max-Age`` = the session TTL). Armed by
-``SessionMixin``; order 400 (OUTSIDE ``AuthMiddleware`` at 450, so the session
-is on the scope before the §5.5 fallback runs), default OFF. The chain only
-carries ``http`` scopes, so no scope filtering happens here.
+``scope["session"]``, and wraps ``send`` to add a ``Set-Cookie`` header
+(HttpOnly, ``Max-Age`` = the session TTL) whenever the session on
+``scope["session"]`` at response time differs from the token that arrived on
+the cookie (option A): this covers BOTH a freshly created session and a
+session a handler promoted in place via ``promote_session`` — handlers stay
+pure and never set cookies themselves. Armed by ``SessionMixin``; order 400
+(OUTSIDE ``AuthMiddleware`` at 450, so the session is on the scope before the
+§5.5 fallback runs), default OFF. The chain only carries ``http`` scopes, so
+no scope filtering happens here.
 """
 
 from __future__ import annotations
@@ -72,7 +76,7 @@ class SessionMiddleware(BaseMiddleware):
         return morsel.value if morsel is not None else None
 
     def _set_cookie(self, session: Any) -> tuple[bytes, bytes]:
-        """Build the ``Set-Cookie`` header tuple for a newly created session."""
+        """Build the ``Set-Cookie`` header tuple for a session to (re)issue to the client."""
         parts = [
             f"{self._cookie_name}={session.id}",
             f"Max-Age={session.meta['ttl']}",
@@ -85,26 +89,35 @@ class SessionMiddleware(BaseMiddleware):
         return (b"set-cookie", "; ".join(parts).encode("latin-1"))
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """Attach the session to the scope; emit ``Set-Cookie`` for a new session."""
+        """Attach the session to the scope; emit ``Set-Cookie`` when it changed (option A).
+
+        Besides ``scope["session"]`` the middleware installs a shared holder,
+        ``scope["session_state"]``: the D3 demux forwards a mounted app a
+        SHALLOW COPY of the scope, so a promotion that replaces the copy's
+        ``session`` key never reaches this scope — the holder dict is shared
+        by the copy, and ``promote_session`` records the promoted session in
+        it. At response time the holder wins when a promotion went through it;
+        otherwise the scope key answers (a primary-app handler swapping
+        ``scope["session"]`` directly shares this very scope).
+        """
         store = self.server.session_store
-        session_id = self._cookie_value(scope)
-        session = store.get(session_id) if session_id else None
-        is_new = session is None
-        if is_new:
+        incoming = self._cookie_value(scope)
+        session = store.get(incoming) if incoming else None
+        if session is None:
             session = store.create()
         scope["session"] = session
-
-        if not is_new:
-            await self.app(scope, receive, send)
-            return
-
-        cookie = self._set_cookie(session)
+        holder: dict[str, Any] = {"session": session}
+        scope["session_state"] = holder
 
         async def send_with_cookie(message: MutableMapping[str, Any]) -> None:
             if message["type"] == "http.response.start":
-                headers = list(message.get("headers", []))
-                headers.append(cookie)
-                message = {**message, "headers": headers}
+                current = holder["session"]
+                if current is session:
+                    current = scope.get("session")
+                if current is not None and current.id != incoming:
+                    headers = list(message.get("headers", []))
+                    headers.append(self._set_cookie(current))
+                    message = {**message, "headers": headers}
             await send(message)
 
         await self.app(scope, receive, send_with_cookie)

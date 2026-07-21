@@ -1,0 +1,28 @@
+# Copyright 2025 Softwell S.r.l.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""System sections of the automatic ``_server`` application.
+
+Each section is a ``RoutingClass`` the ``ServerApplication`` attaches through
+``attach_section(section, name)``, so its endpoints live at
+``/_server/<name>/...``. This wave ships ``AuthSection`` (the ``auth`` mount
+carrying the login methods); the identity-management sections (Users/Tokens)
+arrive in the next wave.
+"""
+
+from __future__ import annotations
+
+from .auth_section import AuthSection
+
+__all__ = ["AuthSection"]

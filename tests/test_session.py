@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -329,3 +330,83 @@ class TestSessionCookieFlow:
         cookie = set_cookie_value(sent)
         assert cookie is not None
         assert "Secure" not in cookie
+
+
+# --- promote_session (login seam, option A) ---
+
+
+class TestPromoteSession:
+    def test_promote_replaces_anonymous_scope_session_with_identity(self) -> None:
+        server = SessionServer(primary=EchoApp())
+        anonymous = server.session_store.create()
+        request = SimpleNamespace(scope={"session": anonymous})
+        promoted = server.promote_session(request, Avatar("alice", ["admin"]))
+        assert request.scope["session"] is promoted
+        assert promoted is not anonymous
+        assert promoted.avatar is not None
+        assert promoted.avatar.identity == "alice"
+        assert promoted.avatar.tags == ["admin"]
+
+    def test_promoted_session_lives_in_the_store(self) -> None:
+        server = SessionServer(primary=EchoApp())
+        request = SimpleNamespace(scope={"session": server.session_store.create()})
+        promoted = server.promote_session(request, Avatar("bob"))
+        assert server.session_store.get(promoted.id) is promoted
+
+    def test_promote_does_not_touch_cookies(self) -> None:
+        server = SessionServer(primary=EchoApp())
+        request = SimpleNamespace(scope={"session": server.session_store.create()})
+        promoted = server.promote_session(request, Avatar("carol"))
+        assert set(request.scope) == {"session"}
+        assert isinstance(promoted, Session)
+
+
+# --- SessionMiddleware emits Set-Cookie on a promoted/changed session (option A) ---
+
+
+class PromotingApp(BaseApplication):
+    """A login-like handler: swaps ``scope['session']`` for a fresh identity-bearing one."""
+
+    def __init__(self, store: MemorySessionStore, avatar: Avatar, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._store = store
+        self._avatar = avatar
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        promoted = self._store.create(avatar=self._avatar)
+        scope["session"] = promoted
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": promoted.id.encode()})
+
+
+class TestPromotedSessionCookie:
+    async def test_promotion_in_a_first_request_sets_the_promoted_cookie(self) -> None:
+        store = MemorySessionStore()
+        app = PromotingApp(store, Avatar("alice", ["admin"]))
+        server = SessionServer(primary=app, session_store=store)
+        scope, sent = await http_get(server)
+        promoted_id = scope["session"].id
+        assert scope["session"].avatar is not None
+        assert scope["session"].avatar.identity == "alice"
+        cookie = set_cookie_value(sent)
+        assert cookie is not None
+        assert cookie.startswith(f"session_id={promoted_id}")
+        assert "HttpOnly" in cookie
+        assert response_body(sent) == promoted_id.encode()
+
+    async def test_promotion_on_a_returning_session_reissues_the_cookie(self) -> None:
+        store = MemorySessionStore()
+        app = PromotingApp(store, Avatar("bob", ["user"]))
+        server = SessionServer(primary=app, session_store=store)
+        anonymous = store.create()
+        scope, sent = await http_get(server, cookie=f"session_id={anonymous.id}")
+        promoted_id = scope["session"].id
+        assert promoted_id != anonymous.id
+        assert cookie_token(sent) == promoted_id
+
+    async def test_unchanged_returning_session_still_sends_no_cookie(self) -> None:
+        server = SessionServer(primary=EchoApp())
+        _, first = await http_get(server)
+        token = cookie_token(first)
+        _, second = await http_get(server, cookie=f"session_id={token}")
+        assert set_cookie_value(second) is None

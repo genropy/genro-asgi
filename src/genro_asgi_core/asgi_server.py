@@ -28,12 +28,21 @@ everything else (``primary``, ``auth``, ``session_store``/``session_ttl``,
 ``storage``/``storage_key``, ``parent``) down the D16 chain. The peeled
 ``host``/``port`` become the defaults of ``serve``, so a config-built server
 serves on its configured address unless the caller overrides it.
+
+Once the chain has run, ``__init__`` mounts the automatic ``_server`` app
+(``_mount_server_app``, D4 "automatic, not configured"): a hand-built
+``AsgiServer(primary=...)`` exposes ``/_server/...`` exactly like a
+config-materialized one, and ``ConfigurationHandler.materialize`` never
+special-cases it. The app's FULL/MINIMAL profile is the class attribute
+``server_app_profile`` — ``"full"`` here (the public server); a composition
+for an internal role overrides it with ``"minimal"``.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
+from .applications.server_app import ServerApplication
 from .auth import AuthMixin
 from .communication import CommunicationMixin
 from .middleware import MiddlewareMixin
@@ -61,10 +70,37 @@ class AsgiServer(
     flows to the capability mixins and the base (D16 cooperative init).
     """
 
+    server_app_profile: ClassVar[str] = "full"
+
     def __init__(self, **kwargs: Any) -> None:
         self._config_host: str | None = kwargs.pop("host", None)
         self._config_port: int | None = kwargs.pop("port", None)
         super().__init__(**kwargs)
+        self._mount_server_app()
+
+    def _mount_server_app(self) -> None:
+        """Mount the automatic ``_server`` app (D4) unless one is already there.
+
+        Runs at the end of ``__init__`` — before any configured secondary is
+        mounted — so the guard only matters for re-invocations (idempotent).
+        The profile comes from ``server_app_profile``.
+        """
+        if "_server" not in self.mounts:
+            self.mount(ServerApplication(profile=self.server_app_profile))
+
+    @property
+    def login_enabled(self) -> bool:
+        """True when the ``_server`` app carries a registered auth method.
+
+        The challenge negotiation (``ErrorMiddleware``) reads this to decide
+        whether a 401 becomes a login redirect (browser) or a ``login_url``
+        body (API). It reflects live state: the FULL profile registers the
+        password method at construction, so its server has a login surface; the
+        minimal profile registers none, so it does not.
+        """
+        server_app = self.mounts.get("_server")
+        section = getattr(server_app, "auth_section", None)
+        return bool(section is not None and section.methods)
 
     @property
     def config_host(self) -> str | None:
@@ -102,3 +138,6 @@ if __name__ == "__main__":
     assert server.config_port == 9000
     assert server.authenticate({"headers": []}) is None
     assert server.session({}) is None
+    assert isinstance(server.mounts["_server"], ServerApplication)
+    assert server.mounts["_server"].profile == "full"
+    assert server.login_enabled is True
