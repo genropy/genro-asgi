@@ -16,15 +16,17 @@
 
 When the login surface is active the ``ServerApplication`` attaches ONE
 ``AuthSection`` under the ``auth`` name, so it lives at ``/_server/auth/``.
-Each registered auth method (``AuthMethod``) is then attached to this section
-under its ``method_id``, so a method's own routes live at
+A registered auth method (``AuthMethod``) is attached to this section under
+its ``method_id`` ONLY when it owns routes, so those routes live at
 ``/_server/auth/<method_id>/`` (e.g. a future OIDC ``start`` and ``callback``
-at ``/_server/auth/oidc:google/start``).
+at ``/_server/auth/oidc:google/start``). A route-less method — the password
+one — is recorded in the registry but never attached: zero-route nodes never
+enter the routing tree (Invariant 10).
 
 The section is a thin router node: it holds no routes of its own, it only
-carries the method children and keeps the ordered registry the login surface
-reads to build ``login_methods``. The methods are the sections; this is their
-mount.
+carries the routed method children and keeps the ordered registry the login
+surface reads to build ``login_methods``. Routing is dispatch; the registry
+is this dict.
 """
 
 from __future__ import annotations
@@ -70,11 +72,14 @@ class AuthSection(RoutingClass):
         return self._methods
 
     def register(self, method: AuthMethod) -> None:
-        """Attach a method under its ``method_id`` and record it.
+        """Record a method; mount its routes only when it owns some.
 
-        Links the method's router into this section under ``method_id`` (so its
-        own routes live at ``/_server/auth/<method_id>/``) and stores it so the
-        login surface can enumerate the active methods for ``login_methods``.
+        Every method enters the ordered registry the login surface reads to
+        build ``login_methods``. Only a method that OWNS routes is also linked
+        into this section's router under ``method_id`` (so its routes live at
+        ``/_server/auth/<method_id>/``); a route-less method (the password one)
+        stays registry-only — zero-route nodes are never attached to the
+        routing tree (Invariant 10: routing is dispatch, never a registry).
 
         Args:
             method: The AuthMethod to register. Its ``method_id`` must be unique.
@@ -87,7 +92,9 @@ class AuthSection(RoutingClass):
         method_id = method.method_id
         if method_id in self.methods:
             raise ValueError(f"auth method already registered: {method_id}")
-        self.attach_instance(method, name=method_id)
+        tree = method.route.nodes(lazy=True, forbidden=True)
+        if tree.get("entries") or tree.get("routers"):
+            self.attach_instance(method, name=method_id)
         self._methods[method_id] = method
 
     def descriptors(self) -> list[dict[str, Any]]:
@@ -108,6 +115,9 @@ if __name__ == "__main__":
     section.register(method)
     assert section.methods == {"password": method}
     assert section.descriptors() == [method.descriptor()]
+    # Invariant 10: the route-less password method is registry-only, never
+    # attached — the section's router carries no "password" child.
+    assert "password" not in (section.route.nodes(lazy=True).get("routers") or {})
     try:
         section.register(PasswordMethod(application, "password"))
     except ValueError:

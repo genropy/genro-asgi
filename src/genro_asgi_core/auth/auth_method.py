@@ -16,12 +16,14 @@
 
 An auth method is one way a user proves who they are: a password form today,
 an OIDC redirect to an external provider in the next wave. Each method is a
-``RoutingClass`` attached under ``_server/auth/<method_id>``, so it carries its
-own routes when it has any (password: none — Invariant 10 — it adapts the
-existing ``/_server/login``; OIDC will own ``start`` + ``callback``). The
-method is also self-describing: ``descriptor()`` is the small dict the login
-page renders it from (an id, a ``kind``, a label, the entry URL for redirect
-methods).
+``RoutingClass``; the ``AuthSection`` attaches it under
+``_server/auth/<method_id>`` ONLY when it owns routes (OIDC will own
+``start`` + ``callback``). The password method owns none — it adapts the
+existing ``/_server/login`` — so it is never attached: it lives only in the
+section's registry (Invariant 10: zero-route nodes never enter the routing
+tree). The method is also self-describing: ``descriptor()`` is the small dict
+the login page renders it from (an id, a ``kind``, a label, the entry URL for
+redirect methods).
 
 The contract::
 
@@ -81,9 +83,11 @@ class AuthMethod(RoutingClass):
     A concrete method sets ``kind`` and (usually) ``method_id``, overrides
     ``descriptor()`` to add what its ``kind`` needs (a label, an entry URL),
     and adds its own routes with ``@route`` when it has any (OIDC does;
-    password does not). The ServerApplication that owns the login surface is
-    reached through ``self.application`` (dual relationship), the AsgiServer
-    through ``self.application.server``.
+    password does not — a route-less method is recorded in the AuthSection
+    registry but never attached to the routing tree, Invariant 10). The
+    ServerApplication that owns the login surface is reached through
+    ``self.application`` (dual relationship), the AsgiServer through
+    ``self.application.server``.
     """
 
     #: The method kind: "form" | "redirect" | "ceremony". A concrete method sets it.
@@ -124,10 +128,12 @@ class AuthMethod(RoutingClass):
 class PasswordMethod(AuthMethod):
     """The password method: a thin adapter over ``/_server/login``.
 
-    Owns no routes (Invariant 10) — the credential check and session promotion
-    live on the ServerApplication's ``/_server/login`` route (store-backed via
-    the UserStore). This method only declares itself to the login page as a
-    ``form`` so the page renders the identity/password form and posts it there.
+    Owns no routes and is therefore never attached to the routing tree
+    (Invariant 10) — it lives only in the AuthSection registry. The credential
+    check and session promotion live on the ServerApplication's
+    ``/_server/login`` route (store-backed via the UserStore). This method only
+    declares itself to the login page as a ``form`` so the page renders the
+    identity/password form and posts it there.
     """
 
     kind = "form"

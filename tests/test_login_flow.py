@@ -33,6 +33,7 @@ import pytest
 
 from genro_asgi_core import (
     AsgiServer,
+    AuthMethod,
     AuthSection,
     BaseApplication,
     PasswordMethod,
@@ -347,6 +348,35 @@ class TestAuthMethodContract:
         method = app.auth_section.methods["password"]
         assert isinstance(method, PasswordMethod)
         assert method.route.nodes() == {}
+
+    async def test_password_method_is_never_attached_to_the_routing_tree(self) -> None:
+        server = make_server(with_users=False)
+        app = server.mounts["_server"]
+        assert isinstance(app, ServerApplication)
+        assert app.auth_section is not None
+        routers = app.auth_section.route.nodes(lazy=True).get("routers") or {}
+        assert "password" not in routers
+        _, sent = await drive(server, "/_server/auth/password/anything")
+        assert response_status(sent) == 404
+
+    def test_a_method_owning_routes_is_attached(self) -> None:
+        from genro_routes import route
+
+        class RoutedMethod(AuthMethod):
+            kind = "redirect"
+
+            @route(media_type="application/json")
+            def start(self) -> dict[str, str]:
+                """Entry route of the redirect method."""
+                return {"ok": "start"}
+
+        server = make_server(with_users=False)
+        app = server.mounts["_server"]
+        assert isinstance(app, ServerApplication)
+        assert app.auth_section is not None
+        app.register_auth_method(RoutedMethod(app, "routed"))
+        routers = app.auth_section.route.nodes(lazy=True).get("routers") or {}
+        assert "routed" in routers
 
     def test_password_method_is_registered_under_the_auth_section(self) -> None:
         server = make_server(with_users=False)
