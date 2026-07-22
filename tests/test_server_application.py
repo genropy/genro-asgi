@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from genro_routes import RoutingClass, route
 
 from genro_asgi_core import AsgiServer, BaseApplication, ServerApplication
@@ -48,6 +49,13 @@ class TestAutoMount:
         app = server.mounts["_server"]
         server._mount_server_app()
         assert server.mounts["_server"] is app
+
+    def test_mount_name_is_fixed_to_server(self) -> None:
+        # D4: the system mount name is an invariant, not a preference — three
+        # cross-file references hardcode /_server/..., so a rename would 404
+        # them silently. A non-default value raises instead.
+        with pytest.raises(ValueError, match="fixed to '_server'"):
+            ServerApplication(mount_name="system")
 
 
 class TestServerEndpoints:

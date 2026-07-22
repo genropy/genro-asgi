@@ -59,8 +59,13 @@ The future internal server (a D8 orchestration concern) is a SUBCLASS that
 overrides what it needs — not a profile flag on this class: no code exists for
 a consumer that does not exist yet.
 
-Kwargs peeled by the cooperative ``__init__`` (D16): ``mount_name`` defaults
-to ``"_server"``; the rest flows down the chain.
+Kwargs peeled by the cooperative ``__init__`` (D16): ``mount_name`` is FIXED
+to ``"_server"`` — the system mount is a D4 invariant, not a preference, and
+three cross-file references hardcode ``/_server/...`` (``PasswordMethod``'s
+``action``, ``LOGIN_PAGE_URL``, ``login.html``'s fetch). A non-default value
+raises rather than silently 404-ing those references; the rest flows down the
+chain. In practice nobody passes it: ``AsgiServer`` auto-mounts the app with no
+kwargs, so the fixed name is reached by construction.
 """
 
 from __future__ import annotations
@@ -96,7 +101,11 @@ class ServerApplication(OpenApiApplication):
     }
 
     def __init__(self, **kwargs: Any) -> None:
-        kwargs.setdefault("mount_name", "_server")
+        mount_name = kwargs.setdefault("mount_name", "_server")
+        if mount_name != "_server":
+            raise ValueError(
+                f"ServerApplication mount_name is fixed to '_server', got {mount_name!r}"
+            )
         self._sections: dict[str, RoutingClass] = {}
         self._auth_section: AuthSection | None = None
         super().__init__(**kwargs)
@@ -263,6 +272,13 @@ class ServerApplication(OpenApiApplication):
 if __name__ == "__main__":
     app = ServerApplication()
     assert app.mount_name == "_server"
+    # The system mount name is fixed (D4): a non-default value raises.
+    try:
+        ServerApplication(mount_name="system")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a non-'_server' mount_name must raise")
     assert app.docs_style == "swagger"
     node = app.route.node("/")
     assert node.error is None, node.error
