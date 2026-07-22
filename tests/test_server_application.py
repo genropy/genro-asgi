@@ -91,7 +91,7 @@ class TestServerEndpoints:
         props = login["post"]["requestBody"]["content"]["application/json"]["schema"][
             "properties"
         ]
-        assert set(props) == {"identity", "password", "next"}
+        assert set(props) == {"identity", "password"}
         assert "_request" not in props and "request" not in props
 
 

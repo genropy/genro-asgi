@@ -170,9 +170,7 @@ class ServerApplication(OpenApiApplication):
         }
 
     @route(media_type="application/json", openapi_method="post")
-    def login(
-        self, identity: str = "", password: str = "", next: str = "", _request=None
-    ) -> dict[str, Any]:
+    def login(self, identity: str = "", password: str = "", _request=None) -> dict[str, Any]:
         """Authenticate against the server's UserStore and attach the identity.
 
         The JSON convergence point of every ``form`` method: verifies the
@@ -183,15 +181,18 @@ class ServerApplication(OpenApiApplication):
         involved. The server's ``user_store`` is wired in the next wave (Macro
         5b): until then a server without one answers the error shape.
 
+        The ``next`` return path is NOT a login parameter: the challenge
+        redirects to ``login_page?next=...`` and the page script owns the
+        post-success redirect — ``login`` itself never sees it and posts carry
+        only the credentials.
+
         The method is POST by declaration (``openapi_method="post"``): with
-        ``_request`` hidden from the schema (see below) the three remaining
-        fields are all scalar, so the guesser would otherwise pick GET.
+        ``_request`` hidden from the schema (see below) the remaining fields
+        are all scalar, so the guesser would otherwise pick GET.
 
         Args:
             identity: The record key to verify (NOT the old ``username``).
             password: The password to verify.
-            next: Return path set by the login challenge redirect. Accepted so
-                the URL binds; consumed by the page script, ignored here.
             _request: The live ``Request``, injected by ``bind_kwargs``. Left
                 unannotated so it stays out of the pydantic model — and thus out
                 of the public OpenAPI request body — while the ``_`` prefix is
