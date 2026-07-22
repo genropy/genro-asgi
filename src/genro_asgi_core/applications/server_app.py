@@ -44,13 +44,16 @@ Handlers stay PURE: they return values and never touch cookies or an ambient
 request/response (the old ``self.server.request`` idiom must never be
 reintroduced). Login attaches the avatar to the existing session in place —
 the id never changes, so no login-time cookie exists. A handler that needs the
-live request DECLARES a ``request`` parameter: ``bind_kwargs`` injects the
-per-dispatch ``Request`` for declared names — the same declarative convention
-``body_data`` follows — and the handler reaches the server through
-``request.server``. The app plugs the genro-routes ``pydantic`` plugin on its
-own router at construction, so its handler signatures are always captured
-(the JSON body spread and the ``request`` detection both read the neutral
-``params`` block) regardless of the owning server's plugin config.
+live request DECLARES an UNANNOTATED ``_request`` parameter: ``bind_kwargs``
+injects the per-dispatch ``Request`` for that name — the same declarative
+convention ``body_data`` follows — and the handler reaches the server through
+``_request.server``. Leaving it unannotated keeps it out of the pydantic model
+(and thus the public OpenAPI schema); the pydantic wrapper, seeing no type hint,
+passes it straight through instead of routing it into validation. The ``_``
+prefix is the injected-name convention ``bind_kwargs`` matches in the neutral
+``fields`` block. ``pydantic`` and ``openapi`` are fixed server structure (armed
+on every router by ``PluginMixin``), so the handler signatures are always
+captured and per-entry OpenAPI controls (``openapi_method``) always take effect.
 
 The future internal server (a D8 orchestration concern) is a SUBCLASS that
 overrides what it needs — not a profile flag on this class: no code exists for
@@ -97,7 +100,6 @@ class ServerApplication(OpenApiApplication):
         self._sections: dict[str, RoutingClass] = {}
         self._auth_section: AuthSection | None = None
         super().__init__(**kwargs)
-        self.route.plug("pydantic")
         self.register_auth_method(PasswordMethod(self, "password"))
 
     @property
@@ -133,18 +135,21 @@ class ServerApplication(OpenApiApplication):
         self.ensure_auth_section().register(method)
 
     def bind_kwargs(self, node: RouterNode, request: Request) -> dict[str, Any]:
-        """Inject the live ``Request`` into handlers that declare ``request``.
+        """Inject the live ``Request`` into handlers that declare ``_request``.
 
         Extends the base reconciliation with the declarative seam the login
         surface needs: when the node's neutral ``params`` block declares a
-        ``request`` parameter, the per-dispatch ``Request`` is bound to it
-        (overriding any same-named wire value). No ambient state — the request
-        travels as an ordinary argument, exactly like ``body_data``.
+        ``_request`` parameter, the per-dispatch ``Request`` is bound to it
+        (overriding any same-named wire value). Handlers leave ``_request``
+        unannotated so it stays out of the pydantic model — and therefore out of
+        the public OpenAPI schema — while still being visible in the neutral
+        ``fields`` this method reads. No ambient state — the request travels as
+        an ordinary argument, exactly like ``body_data``.
         """
         kwargs = super().bind_kwargs(node, request)
         fields = node.params.get("fields") or []
-        if any(f["name"] == "request" for f in fields):
-            kwargs["request"] = request
+        if any(f["name"] == "_request" for f in fields):
+            kwargs["_request"] = request
         return kwargs
 
     @route()
@@ -155,26 +160,33 @@ class ServerApplication(OpenApiApplication):
             "sections": sorted(self.sections),
         }
 
-    @route(media_type="application/json")
+    @route(media_type="application/json", openapi_method="post")
     def login(
-        self, identity: str = "", password: str = "", next: str = "", request: Any = None
+        self, identity: str = "", password: str = "", next: str = "", _request=None
     ) -> dict[str, Any]:
         """Authenticate against the server's UserStore and attach the identity.
 
         The JSON convergence point of every ``form`` method: verifies the
         credentials (``UserStore.verify`` — the record key is ``identity``),
         builds the ``Avatar`` and attaches it to the request's session in place
-        (``request.session.attach_avatar``) — the session id never changes at
+        (``_request.session.attach_avatar``) — the session id never changes at
         login, so the client's cookie stays valid and no ``Set-Cookie`` is
         involved. The server's ``user_store`` is wired in the next wave (Macro
         5b): until then a server without one answers the error shape.
+
+        The method is POST by declaration (``openapi_method="post"``): with
+        ``_request`` hidden from the schema (see below) the three remaining
+        fields are all scalar, so the guesser would otherwise pick GET.
 
         Args:
             identity: The record key to verify (NOT the old ``username``).
             password: The password to verify.
             next: Return path set by the login challenge redirect. Accepted so
                 the URL binds; consumed by the page script, ignored here.
-            request: The live ``Request``, injected by ``bind_kwargs``.
+            _request: The live ``Request``, injected by ``bind_kwargs``. Left
+                unannotated so it stays out of the pydantic model — and thus out
+                of the public OpenAPI request body — while the ``_`` prefix is
+                the injected-name convention ``bind_kwargs`` matches.
 
         Returns:
             ``{session_id, identity, tags}`` on success, ``{"error": ...}`` on
@@ -185,14 +197,14 @@ class ServerApplication(OpenApiApplication):
         """
         if not identity or not password:
             return {"error": "Identity and password are required"}
-        user_store = getattr(request.server, "user_store", None)
+        user_store = getattr(_request.server, "user_store", None)
         if user_store is None:
             return {"error": "Login is not available"}
         record = user_store.verify(identity, password)
         if record is None:
             return {"error": "Invalid credentials"}
         avatar = Avatar(record["identity"], record["tags"])
-        session = request.session
+        session = _request.session
         session.attach_avatar(avatar)
         return {"session_id": session.id, "identity": avatar.identity, "tags": avatar.tags}
 

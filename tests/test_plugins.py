@@ -111,9 +111,10 @@ class TestArmRouter:
         server.arm_router(svc.route)
         assert "openapi" in {plugin.name for plugin in svc.route.iter_plugins()}
 
-    def test_dict_value_enables_with_options(self) -> None:
+    def test_dict_value_tunes_the_fixed_plugin_with_options(self) -> None:
         server = _MiniServer(plugins={"openapi": {"security_scheme": "ApiKey"}})
-        assert server.plugins == {"openapi": {"security_scheme": "ApiKey"}}
+        # openapi is fixed; the dict value tunes it. pydantic stays in the base.
+        assert server.plugins == {"openapi": {"security_scheme": "ApiKey"}, "pydantic": {}}
         svc = _Svc()
         server.arm_router(svc.route)  # options reach router.plug without error
         assert "openapi" in {plugin.name for plugin in svc.route.iter_plugins()}
@@ -132,12 +133,19 @@ class TestArmRouter:
         server.arm_router(svc.route)
         assert "customtest" in {plugin.name for plugin in svc.route.iter_plugins()}
 
-    def test_false_leaves_plugin_unarmed(self) -> None:
-        server = _MiniServer(plugins={"openapi": False})
-        assert server.plugins == {}
+    def test_disabling_a_fixed_plugin_is_a_config_error(self) -> None:
+        with pytest.raises(ValueError, match="fixed structure"):
+            _MiniServer(plugins={"openapi": False})
+
+    def test_false_leaves_an_extra_plugin_unarmed(self) -> None:
+        server = _MiniServer(
+            plugins={"customtest": False}, plugin_registry={"customtest": _CustomPlugin}
+        )
+        # the extra is dropped; only the fixed base remains.
+        assert set(server.plugins) == {"pydantic", "openapi"}
         svc = _Svc()
         server.arm_router(svc.route)
-        assert "openapi" not in {plugin.name for plugin in svc.route.iter_plugins()}
+        assert "customtest" not in {plugin.name for plugin in svc.route.iter_plugins()}
 
     def test_arming_twice_is_a_no_op(self) -> None:
         server = _MiniServer(plugins={"openapi": True, "pydantic": True})
@@ -190,7 +198,8 @@ class TestConfigDriven:
                 plugins.plugin(code="openapi", security_scheme="ApiKey")
 
         server = ConfigurationHandler(Recipe(name="config")).materialize()
-        assert server.plugins == {"openapi": {"security_scheme": "ApiKey"}}
+        # openapi is fixed; the config tunes it. pydantic stays in the base.
+        assert server.plugins == {"openapi": {"security_scheme": "ApiKey"}, "pydantic": {}}
 
 
 class TestNoImportSideEffect:
@@ -216,12 +225,16 @@ class TestLazyArming:
         names = {plugin.name for plugin in app.route.iter_plugins()}
         assert {"auth", "openapi"} <= names
 
-    def test_no_plugins_config_arms_only_auth(self) -> None:
-        # Degrade path: a mixin-equipped server with no plugins config leaves
-        # the routed app on its ``auth`` plug alone.
+    def test_no_plugins_config_still_arms_the_fixed_base(self) -> None:
+        # A mixin-equipped server always arms the fixed base (pydantic/openapi)
+        # on top of the app's own ``auth`` plug, even with no plugins config.
         app = ApiApp()
         AsgiServer(primary=app)
-        assert {plugin.name for plugin in app.route.iter_plugins()} == {"auth"}
+        assert {plugin.name for plugin in app.route.iter_plugins()} == {
+            "auth",
+            "pydantic",
+            "openapi",
+        }
 
 
 class TestTranslator:

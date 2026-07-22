@@ -70,6 +70,22 @@ class TestServerEndpoints:
         assert doc["openapi"] == "3.1.0"
         assert doc["info"]["title"] == "genro-asgi-core server endpoints"
 
+    async def test_login_schema_hides_the_injected_request_and_is_post(
+        self, http_request, response_body
+    ) -> None:
+        # REVIEW #6: the injected ``_request`` must NOT surface in the public
+        # request body, and the route is POST by declaration (openapi_method).
+        server = AsgiServer(primary=BaseApplication())
+        sent = await http_request(server, "/_server/_meta/schema_json")
+        doc = json.loads(response_body(sent))
+        login = doc["paths"]["/login"]
+        assert set(login) == {"post"}
+        props = login["post"]["requestBody"]["content"]["application/json"]["schema"][
+            "properties"
+        ]
+        assert set(props) == {"identity", "password", "next"}
+        assert "_request" not in props and "request" not in props
+
 
 class TestDocs:
     async def test_server_serves_the_docs_page(self, http_request, response_status) -> None:
