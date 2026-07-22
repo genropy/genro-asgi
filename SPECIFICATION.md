@@ -1,6 +1,6 @@
 # New Design Specification — the genro-asgi-* family (core + orchestration)
 
-**Version**: 0.4.0 · **Last Updated**: 2026-07-22 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.5.0 · **Last Updated**: 2026-07-22 · **Status**: 🔴 DA REVISIONARE
 
 > Founding specification of the redesign. Decided in the design sessions of
 > 2026-07-17→19; the critical survey of the current codebase that motivates it
@@ -452,6 +452,20 @@ self}}` — the rule-7 dual relationship as data); the `register()`/
 is part of the migration design; the 4 call sites (`openapi.py:84`,
 `openapi.py:122`, `server_app.py:140`, `auth_section.py:90`) migrate in
 Macro 5b together with OIDC, which lands directly on branches.
+
+**D26 — The `_server` profile flag is removed; the internal server is a
+subclass.** (Supersedes the D23 wave-ruling bullet — "one
+`ServerApplication` with a full/minimal `profile` chosen by the server".)
+The profile was dormant code for an absent consumer — a runtime branch on a
+shared class for a distinction that has no live second case; `7630055`
+removed it. The future internal server will be a SUBCLASS overriding only
+what it needs, not a flag: this is the more principled form — D16 ("the
+class says WHO you are", extension = subclassing) and D6 (minimal surface by
+construction) rather than a profile switch. The 5a-bis REVIEW items are all
+closed by this point (`0bc609d` #6, `99ce7c3` #12, `360a4f9` #13, `7867420`
+#14; #9/#11 ratified without code); as part of #6, `pydantic` and `openapi`
+became FIXED server structure (armed on every router), so per-entry OpenAPI
+controls always apply.
 
 ---
 
