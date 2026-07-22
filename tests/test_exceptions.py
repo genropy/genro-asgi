@@ -22,6 +22,7 @@ forwarded to the response, e.g. a ``WWW-Authenticate`` challenge) carried by
 from __future__ import annotations
 
 from genro_asgi_core.exceptions import (
+    HTTPBadRequest,
     HTTPException,
     HTTPForbidden,
     HTTPNotFound,
@@ -45,6 +46,7 @@ class TestHTTPException:
 
 class TestSubclasses:
     def test_prefilled_statuses(self) -> None:
+        assert HTTPBadRequest().status == 400
         assert HTTPNotFound().status == 404
         assert HTTPUnauthorized().status == 401
         assert HTTPForbidden().status == 403
@@ -54,9 +56,14 @@ class TestSubclasses:
         assert HTTPUnauthorized("no", headers=challenge).headers == challenge
         assert HTTPForbidden("no", headers=challenge).headers == challenge
         assert HTTPNotFound("no", headers=challenge).headers == challenge
+        assert HTTPBadRequest("no", headers=challenge).headers == challenge
 
     def test_subclasses_are_http_exceptions(self) -> None:
         assert isinstance(HTTPNotFound(), HTTPException)
+        assert isinstance(HTTPBadRequest(), HTTPException)
+
+    def test_bad_request_carries_detail(self) -> None:
+        assert HTTPBadRequest("nope").detail == "nope"
 
 
 class TestRedirect:

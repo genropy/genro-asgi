@@ -24,7 +24,10 @@ arms sessions with no user action, while an explicit
 ``middleware={"session": False}`` still wins (``setdefault`` never overrides an
 explicit switch). It overrides the §4 contract method ``session(request)`` to
 return the session attached to the request scope; a composition WITHOUT the
-mixin keeps the base answer (``None``).
+mixin keeps the base answer (``None``). The login seam is not a server method:
+a handler attaches the identity through the request facade
+(``request.session.attach_avatar(avatar)``) — the session id never changes at
+login, so the cookie already held by the client stays valid.
 """
 
 from __future__ import annotations
@@ -65,10 +68,12 @@ class SessionMixin:
         return request.get("session") if request is not None else None
 
 
+
 if __name__ == "__main__":
     from ..application import BaseApplication
     from ..middleware import MiddlewareMixin
     from ..server import BaseServer
+    from .avatar import Avatar
 
     class DemoServer(SessionMixin, MiddlewareMixin, BaseServer):
         pass
@@ -78,3 +83,10 @@ if __name__ == "__main__":
     assert server.session({"session": "S"}) == "S"
     assert server.session({}) is None
     assert BaseServer(primary=BaseApplication()).session({}) is None
+
+    anonymous = server.session_store.create()
+    anonymous.data["cart"] = "kept"
+    # login seam via the request facade: attach the avatar to the session in place
+    anonymous.attach_avatar(Avatar("alice", ["admin"]))
+    assert anonymous.avatar is not None and anonymous.avatar.identity == "alice"
+    assert anonymous.data["cart"] == "kept"  # same session, same id — the cart survives

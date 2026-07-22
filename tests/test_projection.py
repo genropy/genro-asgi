@@ -110,7 +110,7 @@ class TestRootRole:
     def test_root_mounts_both_apps_arms_chain_and_auth(self, handler: ConfigurationHandler):
         server = handler.materialize(role="root")
         assert isinstance(server.primary, ShopApp)
-        assert set(server.mounts) == {"erp"}
+        assert set(server.mounts) == {"erp", "_server"}
         types = chain_types(server)
         assert "CORSMiddleware" in types
         assert "ErrorMiddleware" in types
@@ -131,7 +131,7 @@ class TestWorkerRole:
         assert isinstance(server, AsgiServer)
         assert isinstance(server.primary, ErpApp)
         assert server.primary.mount_name == ""
-        assert server.mounts == {}
+        assert set(server.mounts) == {"_server"}
 
     def test_worker_has_no_chain_no_auth_no_listener_address(
         self, handler: ConfigurationHandler
@@ -175,7 +175,7 @@ class TestBatchRole:
         server = handler.materialize(role="batch", app="erp")
         assert isinstance(server, AsgiServer)
         assert isinstance(server.primary, ErpApp)
-        assert server.mounts == {}
+        assert set(server.mounts) == {"_server"}
         assert chain_types(server) == []
         assert server.authenticate({"headers": []}) is None
         assert server.config_host is None
@@ -262,6 +262,6 @@ class TestSameConfigEveryRole:
         root = handler.materialize(role="root")
         worker = handler.materialize(role="worker", app="erp")
         batch = handler.materialize(role="batch", app="shop")
-        assert isinstance(root.primary, ShopApp) and set(root.mounts) == {"erp"}
-        assert isinstance(worker.primary, ErpApp) and worker.mounts == {}
-        assert isinstance(batch.primary, ShopApp) and batch.mounts == {}
+        assert isinstance(root.primary, ShopApp) and set(root.mounts) == {"erp", "_server"}
+        assert isinstance(worker.primary, ErpApp) and set(worker.mounts) == {"_server"}
+        assert isinstance(batch.primary, ShopApp) and set(batch.mounts) == {"_server"}

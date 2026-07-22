@@ -54,10 +54,9 @@ isolates the transport, so the push half slots in without touching the engine.
 from __future__ import annotations
 
 import asyncio
-import importlib
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from ..exceptions import HTTPException, HTTPForbidden
+from ..exceptions import HTTPBadRequest, HTTPException, HTTPForbidden
 from ..mcp import JSONRPC_INTERNAL_ERROR, McpEngine, McpError
 from ..request import Request
 from ..routed_application import RoutedApplication
@@ -164,7 +163,7 @@ class McpTransport:
             raise HTTPForbidden(f"Origin not allowed: {origin}")
         version = request.headers.get("mcp-protocol-version")
         if version is not None and version not in McpEngine.SUPPORTED_VERSIONS:
-            raise HTTPException(400, f"Unsupported MCP-Protocol-Version: {version}")
+            raise HTTPBadRequest(f"Unsupported MCP-Protocol-Version: {version}")
 
         response = request.response
         envelope = request.data
@@ -238,13 +237,6 @@ class McpApplication(RoutedApplication):
         if routing_class is None and module:
             routing_class = self._import_routing_class(module)
         return routing_class.route if routing_class is not None else None
-
-    def _import_routing_class(self, module_path: str) -> RoutingClass:
-        """Import and instantiate a ``RoutingClass`` from a ``"pkg.mod:Class"`` path."""
-        module_name, class_name = module_path.split(":")
-        mod = importlib.import_module(module_name)
-        cls = getattr(mod, class_name)
-        return cls()  # type: ignore[no-any-return]
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Every request is an MCP JSON-RPC message on the single endpoint."""

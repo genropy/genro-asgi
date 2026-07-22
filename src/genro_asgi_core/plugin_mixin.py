@@ -52,6 +52,15 @@ if TYPE_CHECKING:
 __all__ = ["PluginMixin", "default_plugin_registry"]
 
 
+#: The plugins every server arms unconditionally — the fixed structure of a
+#: routed core, not a config choice. ``pydantic`` captures handler signatures
+#: into the neutral ``params``/``result`` blocks; ``openapi`` carries the
+#: per-entry schema controls (``openapi_method`` and friends). The ``plugins``
+#: config section only ADDS extras over this base; disabling a fixed plugin is
+#: a config error, not an opt-out.
+FIXED_PLUGINS: tuple[str, ...] = ("pydantic", "openapi")
+
+
 def default_plugin_registry() -> dict[str, type[BasePlugin]]:
     """A fresh ``{name: class}`` mapping of the plugins this core arms itself.
 
@@ -65,8 +74,11 @@ def default_plugin_registry() -> dict[str, type[BasePlugin]]:
 class PluginMixin:
     """Router-plugin capability mixin, composed BEFORE a server class.
 
-    Constructor kwargs peeled here: ``plugins`` — the ``{name: bool | dict}``
-    switches (a dict value enables the plugin and becomes its plug options);
+    Every server arms the ``FIXED_PLUGINS`` (``pydantic``/``openapi``)
+    unconditionally — the fixed structure of a routed core. Constructor kwargs
+    peeled here: ``plugins`` — the ``{name: bool | dict}`` switches tuning the
+    base and adding extras (a dict value becomes the plug options; ``False``
+    drops an EXTRA but is a config error on a fixed plugin);
     ``plugin_registry`` — extra ``{name: class}`` entries merged over
     ``default_plugin_registry()``.
     """
@@ -84,17 +96,25 @@ class PluginMixin:
     def _resolve_plugins(
         self, config: dict[str, bool | dict[str, Any]]
     ) -> dict[str, dict[str, Any]]:
-        """Reduce the ``{name: bool | dict}`` switches to ``{name: options}`` of the enabled plugins.
+        """Merge the config switches over the fixed base into ``{name: options}``.
 
-        A dict value is the plug options; a truthy scalar enables the plugin
-        with no options; ``False``/``None`` leaves it unarmed.
+        The result always carries the ``FIXED_PLUGINS`` (``pydantic``/``openapi``)
+        — the fixed structure of a routed core. The ``{name: bool | dict}``
+        config only tunes the base and adds extras: a dict value is the plug
+        options; a truthy scalar enables an extra with no options;
+        ``False``/``None`` drops an EXTRA. Disabling a fixed plugin
+        (``{"openapi": False}``) is a config error, not an opt-out.
         """
-        resolved: dict[str, dict[str, Any]] = {}
+        resolved: dict[str, dict[str, Any]] = {name: {} for name in FIXED_PLUGINS}
         for name, value in config.items():
+            if not value and name in FIXED_PLUGINS:
+                raise ValueError(f"Plugin '{name}' is fixed structure and cannot be disabled")
             if isinstance(value, dict):
                 resolved[name] = value
             elif value:
                 resolved[name] = {}
+            else:
+                resolved.pop(name, None)
         return resolved
 
     @property
@@ -141,8 +161,17 @@ if __name__ == "__main__":
 
     assert set(default_plugin_registry()) == {"openapi"}
 
-    server = _Server(plugins={"openapi": True, "pydantic": True, "logging": False})
-    assert set(server.plugins) == {"openapi", "pydantic"}
+    # The fixed base is always present, even with no plugins config.
+    assert set(_Server().plugins) == set(FIXED_PLUGINS)
+    server = _Server(plugins={"logging": True})
+    assert set(server.plugins) == {"pydantic", "openapi", "logging"}
+    # Disabling a fixed plugin is a config error, not an opt-out.
+    try:
+        _Server(plugins={"openapi": False})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("disabling a fixed plugin must raise")
 
     class _Svc(RoutingClass):
         @route()

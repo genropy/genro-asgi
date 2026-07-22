@@ -200,7 +200,23 @@ class TestCleanups:
         item.add_cleanup(boom)
         item.add_cleanup(lambda: order.append("last"))
         item.run_cleanups()
-        assert order == ["last", "first"]  # LIFO; the raising one is swallowed
+        assert order == ["last", "first"]  # LIFO; the raising one is isolated
+
+    def test_exception_in_a_cleanup_is_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        item = RegisteredRequest(1, "http", "/")
+
+        def boom() -> None:
+            raise RuntimeError("cleanup failure")
+
+        item.add_cleanup(boom)
+        with caplog.at_level("ERROR", logger="genro_asgi_core.registry"):
+            item.run_cleanups()
+        assert any(
+            "Request cleanup" in record.message and record.exc_info
+            for record in caplog.records
+        )
 
     def test_run_cleanups_is_noop_without_any(self) -> None:
         item = RegisteredRequest(1, "http", "/")

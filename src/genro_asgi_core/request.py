@@ -206,14 +206,18 @@ class Request:
         return self._application
 
     @property
-    def auth(self) -> Any:
-        """The authenticated identity (an ``Avatar``) or ``None``, from the scope."""
+    def avatar(self) -> Any:
+        """The identity acting on this request (an ``Avatar``) or ``None``.
+
+        The effective identity the auth chain resolved for this request —
+        header credentials or the session's avatar — read from the scope.
+        """
         return self._scope.get("auth")
 
     @property
     def auth_tags(self) -> list[str]:
         """Authorization tags of the current identity (empty when anonymous)."""
-        avatar = self.auth
+        avatar = self.avatar
         return list(avatar.tags) if avatar is not None else []
 
     @property

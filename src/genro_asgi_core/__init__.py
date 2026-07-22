@@ -15,14 +15,36 @@
 """Minimal ASGI server core: the base server and the app-side contract."""
 
 from .application import BaseApplication
-from .applications import McpApplication, McpOpenApiApplication, OpenApiApplication
+from .applications import (
+    McpApplication,
+    McpOpenApiApplication,
+    OpenApiApplication,
+    ServerApplication,
+)
+from .applications.server_sections import AuthSection
 from .asgi_server import AsgiServer
-from .auth import ApiKeyStore, AuthCore, AuthMixin, FileApiKeyStore, FileUserStore, UserStore
+from .auth import (
+    ApiKeyStore,
+    AuthCore,
+    AuthMethod,
+    AuthMixin,
+    FileApiKeyStore,
+    FileUserStore,
+    PasswordMethod,
+    UserStore,
+)
 from .channel import ChannelClient, Frame, FrameStream
 from .communication import CommunicationMixin
 from .config import AsgiConfigBuilder, ConfigurationHandler, Projection
 from .db import AsgiDbHandlerBase
-from .exceptions import HTTPException, HTTPForbidden, HTTPNotFound, HTTPUnauthorized, Redirect
+from .exceptions import (
+    HTTPBadRequest,
+    HTTPException,
+    HTTPForbidden,
+    HTTPNotFound,
+    HTTPUnauthorized,
+    Redirect,
+)
 from .mcp import McpEngine, McpError
 from .middleware import BaseMiddleware, MiddlewareMixin
 from .plugin_mixin import PluginMixin
@@ -51,7 +73,9 @@ __all__ = [
     "AsgiDbHandlerBase",
     "AsgiServer",
     "AuthCore",
+    "AuthMethod",
     "AuthMixin",
+    "AuthSection",
     "Avatar",
     "BaseApplication",
     "BaseMiddleware",
@@ -64,6 +88,7 @@ __all__ = [
     "FileUserStore",
     "Frame",
     "FrameStream",
+    "HTTPBadRequest",
     "HTTPException",
     "HTTPForbidden",
     "HTTPNotFound",
@@ -80,6 +105,7 @@ __all__ = [
     "OpenAPIPlugin",
     "OpenAPITranslator",
     "OpenApiApplication",
+    "PasswordMethod",
     "PluginMixin",
     "Projection",
     "Receive",
@@ -91,6 +117,7 @@ __all__ = [
     "RoutedApplication",
     "Scope",
     "Send",
+    "ServerApplication",
     "Session",
     "SessionMixin",
     "SessionStore",

@@ -114,7 +114,7 @@ class TestMaterialize:
         server = build_two_app_server()
         assert isinstance(server.primary, ShopApp)
         assert server.primary.mount_name == ""
-        assert set(server.mounts) == {"api"}
+        assert set(server.mounts) == {"api", "_server"}
         assert isinstance(server.mounts["api"], ApiApp)
 
 
@@ -236,7 +236,7 @@ class TestSkippedSections:
         server = ConfigurationHandler(OrchestrationConfig(name="orch")).materialize()
         assert isinstance(server, AsgiServer)
         assert isinstance(server.primary, ShopApp)
-        assert server.mounts == {}
+        assert set(server.mounts) == {"_server"}
 
 
 class TestSingleAppNoDefault:
@@ -248,4 +248,4 @@ class TestSingleAppNoDefault:
 
         server = ConfigurationHandler(OneAppConfig(name="one")).materialize()
         assert isinstance(server.primary, ShopApp)
-        assert server.mounts == {}
+        assert set(server.mounts) == {"_server"}

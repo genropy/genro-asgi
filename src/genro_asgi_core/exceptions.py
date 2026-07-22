@@ -19,8 +19,9 @@ Plain classes, no framework machinery: ``HTTPException(status, detail=None,
 headers=None)`` carries the response status (an optional plain-text detail and
 optional response ``headers`` — ASGI ``(name, value)`` byte pairs forwarded to
 the response, e.g. a ``WWW-Authenticate`` challenge on a 401); the common
-errors are pre-filled subclasses — ``HTTPNotFound`` (404), ``HTTPUnauthorized``
-(401), ``HTTPForbidden`` (403). ``Redirect(location, status=302)`` is the
+errors are pre-filled subclasses — ``HTTPBadRequest`` (400), ``HTTPNotFound``
+(404), ``HTTPUnauthorized`` (401), ``HTTPForbidden`` (403).
+``Redirect(location, status=302)`` is the
 redirecting sibling: its ``location`` becomes the ``Location`` header. The
 mapping to actual ASGI responses lives in ``middleware/errors.py``.
 """
@@ -28,6 +29,7 @@ mapping to actual ASGI responses lives in ``middleware/errors.py``.
 from __future__ import annotations
 
 __all__ = [
+    "HTTPBadRequest",
     "HTTPException",
     "HTTPForbidden",
     "HTTPNotFound",
@@ -53,6 +55,15 @@ class HTTPException(Exception):
         self.status = status
         self.detail = detail
         self.headers: list[tuple[bytes, bytes]] = headers or []
+
+
+class HTTPBadRequest(HTTPException):
+    """400 Bad Request."""
+
+    def __init__(
+        self, detail: str | None = None, headers: list[tuple[bytes, bytes]] | None = None
+    ) -> None:
+        super().__init__(400, detail, headers)
 
 
 class HTTPNotFound(HTTPException):
@@ -97,6 +108,9 @@ if __name__ == "__main__":
     assert (not_found.status, not_found.detail) == (404, "missing")
     assert not_found.headers == []
     assert isinstance(not_found, HTTPException)
+    bad_request = HTTPBadRequest("bad")
+    assert (bad_request.status, bad_request.detail) == (400, "bad")
+    assert isinstance(bad_request, HTTPException)
     redirect = Redirect("/elsewhere")
     assert (redirect.status, redirect.location) == (302, "/elsewhere")
     challenged = HTTPUnauthorized("no", headers=[(b"www-authenticate", b"Bearer")])

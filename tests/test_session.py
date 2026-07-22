@@ -329,3 +329,74 @@ class TestSessionCookieFlow:
         cookie = set_cookie_value(sent)
         assert cookie is not None
         assert "Secure" not in cookie
+
+
+# --- attach_avatar (login seam): identity attached in place, id unchanged ---
+
+
+class TestAttachAvatar:
+    def test_attach_sets_the_avatar_on_the_existing_session(self) -> None:
+        session = MemorySessionStore().create()
+        session.attach_avatar(Avatar("alice", ["admin"]))
+        assert session.avatar is not None
+        assert session.avatar.identity == "alice"
+        assert session.avatar.tags == ["admin"]
+
+    def test_attach_preserves_session_data_and_id(self) -> None:
+        store = MemorySessionStore()
+        session = store.create()
+        session_id = session.id
+        session.data["cart"] = "kept"
+        session.attach_avatar(Avatar("bob"))
+        assert session.id == session_id  # the id never changes at login
+        assert session.data["cart"] == "kept"  # the cart survives the login
+        assert store.get(session_id) is session
+
+
+# --- SessionMiddleware and login: the cookie is issued for a NEW session only ---
+
+
+class PromotingApp(BaseApplication):
+    """A login-like handler: attaches the avatar via the request facade in place."""
+
+    def __init__(self, avatar: Avatar, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._avatar = avatar
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        scope["session"].attach_avatar(self._avatar)
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": scope["session"].id.encode()})
+
+
+class TestPromotedSessionCookie:
+    async def test_promotion_in_a_first_request_rides_the_new_session_cookie(self) -> None:
+        app = PromotingApp(Avatar("alice", ["admin"]))
+        server = SessionServer(primary=app)
+        scope, sent = await http_get(server)
+        session_id = scope["session"].id
+        assert scope["session"].avatar is not None
+        assert scope["session"].avatar.identity == "alice"
+        cookie = set_cookie_value(sent)  # issued for the NEW session, not for the login
+        assert cookie is not None
+        assert cookie.startswith(f"session_id={session_id}")
+        assert "HttpOnly" in cookie
+        assert response_body(sent) == session_id.encode()
+
+    async def test_promotion_on_a_returning_session_sends_no_cookie(self) -> None:
+        app = PromotingApp(Avatar("bob", ["user"]))
+        server = SessionServer(primary=app)
+        anonymous = server.session_store.create()
+        anonymous.data["cart"] = "kept"
+        scope, sent = await http_get(server, cookie=f"session_id={anonymous.id}")
+        assert scope["session"] is anonymous  # same session, same id
+        assert scope["session"].avatar is not None
+        assert scope["session"].data["cart"] == "kept"  # the cart survives the login
+        assert set_cookie_value(sent) is None  # the client's cookie is still valid
+
+    async def test_unchanged_returning_session_still_sends_no_cookie(self) -> None:
+        server = SessionServer(primary=EchoApp())
+        _, first = await http_get(server)
+        token = cookie_token(first)
+        _, second = await http_get(server, cookie=f"session_id={token}")
+        assert set_cookie_value(second) is None

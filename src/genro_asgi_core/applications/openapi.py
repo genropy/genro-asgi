@@ -45,7 +45,6 @@ class is attached under, default ``"api"``). The rest flows down the chain
 
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -111,17 +110,6 @@ class OpenApiApplication(RoutedApplication):
         the schema stays visible (the ``McpOpenApiApplication`` bridge).
         """
         return {}
-
-    def _import_routing_class(self, module_path: str) -> RoutingClass:
-        """Import and instantiate a ``RoutingClass`` from a ``"pkg.mod:Class"`` path.
-
-        The class is instantiated with no arguments; an API needing constructor
-        arguments is supplied as a ready ``routing_class=`` instance instead.
-        """
-        module_name, class_name = module_path.split(":")
-        mod = importlib.import_module(module_name)
-        cls = getattr(mod, class_name)
-        return cls()  # type: ignore[no-any-return]
 
     def _mount_routing_class(self, routing_class: RoutingClass) -> None:
         """Attach the routing class under ``api_name`` and plug ``pydantic`` on it.

@@ -19,11 +19,15 @@ Reads the session token from the request ``Cookie`` header (via the shared
 session or creates a new ANONYMOUS one through ``server.session_store``
 (``store.create()`` with no avatar — capturing an identity into a session is
 an explicit act of the login surface, core 1d), attaches it to
-``scope["session"]``, and — for a NEW session — wraps ``send`` to add a
-``Set-Cookie`` header (HttpOnly, ``Max-Age`` = the session TTL). Armed by
-``SessionMixin``; order 400 (OUTSIDE ``AuthMiddleware`` at 450, so the session
-is on the scope before the §5.5 fallback runs), default OFF. The chain only
-carries ``http`` scopes, so no scope filtering happens here.
+``scope["session"]``, and — ONLY when the session was created here — wraps
+``send`` to add its ``Set-Cookie`` header (HttpOnly, ``Max-Age`` = the session
+TTL). Login never changes the session id: a handler attaches the avatar to
+the existing session in place (``request.session.attach_avatar``), so the
+cookie the client already holds stays valid and no login-time cookie exists —
+handlers stay pure and never set cookies themselves. Armed by ``SessionMixin``; order 400 (OUTSIDE
+``AuthMiddleware`` at 450, so the session is on the scope before the §5.5
+fallback runs), default OFF. The chain only carries ``http`` scopes, so no
+scope filtering happens here.
 """
 
 from __future__ import annotations
@@ -72,7 +76,7 @@ class SessionMiddleware(BaseMiddleware):
         return morsel.value if morsel is not None else None
 
     def _set_cookie(self, session: Any) -> tuple[bytes, bytes]:
-        """Build the ``Set-Cookie`` header tuple for a newly created session."""
+        """Build the ``Set-Cookie`` header tuple for a session to (re)issue to the client."""
         parts = [
             f"{self._cookie_name}={session.id}",
             f"Max-Age={session.meta['ttl']}",
@@ -85,25 +89,28 @@ class SessionMiddleware(BaseMiddleware):
         return (b"set-cookie", "; ".join(parts).encode("latin-1"))
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """Attach the session to the scope; emit ``Set-Cookie`` for a new session."""
-        store = self.server.session_store
-        session_id = self._cookie_value(scope)
-        session = store.get(session_id) if session_id else None
-        is_new = session is None
-        if is_new:
-            session = store.create()
-        scope["session"] = session
+        """Attach the session to the scope; issue the cookie for a NEW session only.
 
-        if not is_new:
+        Login never changes the session id (a handler attaches the avatar to
+        the existing session in place), so the only moment a cookie must be
+        issued is when the store had no session for the incoming token (none
+        arrived, expired, or unknown) and a fresh anonymous one was created
+        here.
+        """
+        store = self.server.session_store
+        incoming = self._cookie_value(scope)
+        session = store.get(incoming) if incoming else None
+        if session is not None:
+            scope["session"] = session
             await self.app(scope, receive, send)
             return
-
-        cookie = self._set_cookie(session)
+        session = store.create()
+        scope["session"] = session
 
         async def send_with_cookie(message: MutableMapping[str, Any]) -> None:
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
-                headers.append(cookie)
+                headers.append(self._set_cookie(session))
                 message = {**message, "headers": headers}
             await send(message)
 

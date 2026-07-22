@@ -18,12 +18,14 @@ Each application in this package is a ready-to-mount ASGI app for one
 transport dialect. ``OpenApiApplication`` wraps an API surface as REST +
 OpenAPI 3.1 with a Swagger docs page; ``McpApplication`` and
 ``McpOpenApiApplication`` expose a router as MCP tools over stateless
-Streamable HTTP.
+Streamable HTTP; ``ServerApplication`` is the automatic ``_server`` system
+app every server mounts (D4).
 """
 
 from __future__ import annotations
 
 from .mcp import McpApplication, McpOpenApiApplication
 from .openapi import OpenApiApplication
+from .server_app import ServerApplication
 
-__all__ = ["McpApplication", "McpOpenApiApplication", "OpenApiApplication"]
+__all__ = ["McpApplication", "McpOpenApiApplication", "OpenApiApplication", "ServerApplication"]

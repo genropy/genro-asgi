@@ -65,8 +65,17 @@ class Session:
 
     @property
     def avatar(self) -> Avatar | None:
-        """Identity avatar captured at creation; ``None`` = anonymous session."""
+        """Identity avatar; ``None`` = anonymous session."""
         return self._avatar
+
+    def attach_avatar(self, avatar: Avatar) -> None:
+        """Attach the identity avatar — the login event.
+
+        The session stays the same object: id, ``data`` and ``meta`` are
+        untouched, so whatever an anonymous visitor accumulated survives
+        the login.
+        """
+        self._avatar = avatar
 
     def touch(self) -> None:
         """Refresh ``last_access`` to now."""

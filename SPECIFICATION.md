@@ -1,6 +1,6 @@
 # New Design Specification — the genro-asgi-* family (core + orchestration)
 
-**Version**: 0.3.0 · **Last Updated**: 2026-07-19 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.5.0 · **Last Updated**: 2026-07-22 · **Status**: 🔴 DA REVISIONARE
 
 > Founding specification of the redesign. Decided in the design sessions of
 > 2026-07-17→19; the critical survey of the current codebase that motivates it
@@ -392,6 +392,80 @@ steps (config+middleware+auth/sessions → storage+db → OpenAPI/MCP apps +
 plugins → full `_server` → tasks local); phase 0 is untouched. Q3 (the
 orchestration suffix) stays open; the two-primitive identity strengthens
 `spa` as a candidate name, with batch riding along.
+
+### Ratified 2026-07-21/22 (implementation sessions, core 1d wave 1)
+
+**D23 — Wave record-keeping: the per-wave rulings are part of this log.**
+Since D22 four implementation waves were ratified and delivered
+(1a `cc85eef`, 1b `4b8000d`, 1c `53b4e38`, 1d-wave-1 on branch
+`feat/phase-1d-server-login`) with their decisions recorded in per-wave plan
+files only — against the §1 rule that every ratified decision is APPENDED
+here. This entry reinstates the rule and incorporates the wave rulings by
+reference (the per-wave plan files and each wave's `.claude/REVIEW.md`
+remain the detailed record). The 1d-wave-1 rulings, compressed:
+
+- `_server` = ONE `ServerApplication(OpenApiApplication)` with a
+  full/minimal `profile` chosen by the server (D4/D6) — not two classes;
+  auto-mounted by a hook at the end of `AsgiServer.__init__`, so a
+  hand-built server gets it too ("automatic, not configured").
+- Dual-mode login = TWO routes (`login` JSON POST + `login_page` HTML GET),
+  never in-handler `Accept` sniffing; the user-record key is `identity`.
+- Handlers are PURE (the old ambient `server.request`/`server.response`
+  never returns); a handler needing the live request DECLARES a `request`
+  parameter injected by `bind_kwargs`.
+- The login-cookie policy was first ratified as "option A" (middleware
+  emits on session change) and superseded the same day by D24.
+- The two-stage live-config architecture (config as live object,
+  `apply_configuration`, hot/cold changes) stays parked as a future macro.
+
+**D24 — Login attaches identity in place: the session id never changes.**
+(Supersedes the wave-plan "option A" ruling.) A session is a CONTINUUM: the
+login is an event that enriches it with an identity, not a replacement.
+`Session.attach_avatar(avatar)` mutates the existing session; id, `data`
+and `meta` are untouched — whatever an anonymous visitor accumulated (a
+cart, a history) survives the login, and the cookie the client already
+holds stays valid. `promote_session(request, avatar)` delegates to it. The
+`SessionMiddleware` issues a cookie ONLY when a new anonymous session is
+created; no login-time cookie exists. Session-fixation defense is upstream
+cookie hardening (HttpOnly, SameSite, the token is never read from the
+URL), NOT id rotation — the codebase does not accumulate ceremony against
+threats its cookie discipline already forecloses. Open point for 5b:
+`FileSessionStore` persists only at creation (post-creation mutations —
+cart, avatar — live in the process cache only); decide the write-back seam.
+
+**D25 — Invariant 10 enforced; `attach_instance` is transitional and will
+be removed.** The wave initially attached the zero-route `PasswordMethod`
+to the routing tree (the exact §5.10 anti-pattern, under compliant-looking
+prose); now enforced in code: `AuthSection.register()` links a method's
+router ONLY when it owns routes — a route-less method lives in the ordered
+registry that feeds `login_methods`, never in the tree. On the attach API:
+the 2026-07-17 ruling STANDS, non-negotiable — `attach_instance` will be
+removed in favor of declarative branches (`add_branches` factory specs).
+Verified on genro-routes 0.28.0: branch specs default to `lazy=False` —
+branches are EAGER BY DEFAULT (materialized at first tree access, or
+immediately when declared after the eager pass), so the declarative model
+satisfies "routes exist from boot" with no lazy opt-in needed in 1d; a
+lazy branch is still describable from its CLASS in `nodes()`. Migration
+rulings: the parent rides the spec (`{"cls": X, "params": {"application":
+self}}` — the rule-7 dual relationship as data); the `register()`/
+`attach_section` contract redesign (built instances → cls+params recipes)
+is part of the migration design; the 4 call sites (`openapi.py:84`,
+`openapi.py:122`, `server_app.py:140`, `auth_section.py:90`) migrate in
+Macro 5b together with OIDC, which lands directly on branches.
+
+**D26 — The `_server` profile flag is removed; the internal server is a
+subclass.** (Supersedes the D23 wave-ruling bullet — "one
+`ServerApplication` with a full/minimal `profile` chosen by the server".)
+The profile was dormant code for an absent consumer — a runtime branch on a
+shared class for a distinction that has no live second case; `7630055`
+removed it. The future internal server will be a SUBCLASS overriding only
+what it needs, not a flag: this is the more principled form — D16 ("the
+class says WHO you are", extension = subclassing) and D6 (minimal surface by
+construction) rather than a profile switch. The 5a-bis REVIEW items are all
+closed by this point (`0bc609d` #6, `99ce7c3` #12, `360a4f9` #13, `7867420`
+#14; #9/#11 ratified without code); as part of #6, `pydantic` and `openapi`
+became FIXED server structure (armed on every router), so per-entry OpenAPI
+controls always apply.
 
 ---
 

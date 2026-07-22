@@ -158,15 +158,15 @@ class TestIdentityMetadata:
 
 
 class TestAuthSessionAccessors:
-    async def test_auth_and_tags_from_scope(self) -> None:
+    async def test_avatar_and_tags_from_scope(self) -> None:
         avatar = Avatar("alice", ["admin", "staff"])
         request = await make_request(scope_extra={"auth": avatar})
-        assert request.auth is avatar
+        assert request.avatar is avatar
         assert request.auth_tags == ["admin", "staff"]
 
-    async def test_anonymous_when_no_auth_on_scope(self) -> None:
+    async def test_anonymous_when_no_avatar_on_scope(self) -> None:
         request = await make_request()
-        assert request.auth is None
+        assert request.avatar is None
         assert request.auth_tags == []
 
     async def test_session_from_scope(self) -> None:

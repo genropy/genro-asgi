@@ -120,3 +120,13 @@ disable_error_code = ["misc"]
 [[tool.mypy.overrides]]
 module = "genro_asgi_core.auth.mixin"
 disable_error_code = ["misc", "attr-defined"]
+
+# ServerApplication's login surface reaches server capabilities supplied by
+# the composed mixins (session_store/promote_session from SessionMixin,
+# user_store wired in Macro 5b) through the statically-typed BaseServer
+# handle (`self.server`/`request.server` -> BaseServer | None) — the same
+# dynamic-mixin category as AuthMixin above: the attributes exist on every
+# runtime composition but not on the static base.
+[[tool.mypy.overrides]]
+module = "genro_asgi_core.applications.server_app"
+disable_error_code = ["attr-defined", "union-attr"]
