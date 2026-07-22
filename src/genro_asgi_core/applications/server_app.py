@@ -26,8 +26,8 @@ It extends ``OpenApiApplication`` (REST + OpenAPI; the MCP face on
 ``_server`` is out of this wave), so ``/_server/_meta/`` carries the usual
 schema/docs/index endpoints, and adds:
 
-- ``index`` — the ``/_server/`` descriptor: title, active profile and the
-  attached section names (JSON — no HTML in code);
+- ``index`` — the ``/_server/`` descriptor: title and the attached section
+  names (JSON — no HTML in code);
 - ``sections`` / ``attach_section(section, name)`` — the registry of system
   sections: ``attach_section`` links a ``RoutingClass`` under ``name``
   (endpoints at ``/_server/<name>/...``) and records it so introspection
@@ -38,9 +38,7 @@ schema/docs/index endpoints, and adds:
   read at USE time), ``logout`` and the public ``login_methods`` — dual-mode
   by TWO routes, never in-handler ``Accept`` sniffing. The methods live in an
   ``AuthSection`` attached under ``auth`` (``ensure_auth_section`` /
-  ``register_auth_method``); the FULL profile registers ``PasswordMethod``
-  at construction (the minimal profile is the internal server, D6 — no
-  login surface).
+  ``register_auth_method``); ``PasswordMethod`` is registered at construction.
 
 Handlers stay PURE: they return values and never touch cookies or an ambient
 request/response (the old ``self.server.request`` idiom must never be
@@ -54,15 +52,12 @@ own router at construction, so its handler signatures are always captured
 (the JSON body spread and the ``request`` detection both read the neutral
 ``params`` block) regardless of the owning server's plugin config.
 
-FULL vs MINIMAL is a ``profile`` on this ONE class, chosen by the server
-(``AsgiServer.server_app_profile``), not a class split — the internal-server
-class is an orchestration concern (D8). Per D4 the OpenAPI docs surface is a
-FULL feature: the ``minimal`` profile defaults ``docs`` to ``"off"`` (the
-Swagger page 404s); later phases gate the full-only sections on the profile.
+The future internal server (a D8 orchestration concern) is a SUBCLASS that
+overrides what it needs — not a profile flag on this class: no code exists for
+a consumer that does not exist yet.
 
-Kwargs peeled by the cooperative ``__init__`` (D16): ``profile`` (``"full"``,
-the default, or ``"minimal"``; anything else raises ``ValueError``).
-``mount_name`` defaults to ``"_server"``; the rest flows down the chain.
+Kwargs peeled by the cooperative ``__init__`` (D16): ``mount_name`` defaults
+to ``"_server"``; the rest flows down the chain.
 """
 
 from __future__ import annotations
@@ -83,16 +78,13 @@ if TYPE_CHECKING:
 
 __all__ = ["ServerApplication"]
 
-PROFILES = ("full", "minimal")
-
-
 class ServerApplication(OpenApiApplication):
     """System endpoints of a server, auto-mounted under ``/_server`` (D4).
 
-    One class, two profiles: ``full`` (the public server) and ``minimal``
-    (the future internal server; in this wave a test-only composition).
-    System sections attach through ``attach_section`` and are listed by the
-    ``index`` descriptor; the FULL profile carries the password login surface.
+    Carries the public server's system surface: the password login surface and
+    the sections attached through ``attach_section``, listed by the ``index``
+    descriptor. The future internal server (a D8 orchestration concern) will be
+    a SUBCLASS overriding what it needs — not a profile flag on this class.
     """
 
     openapi_info: ClassVar[dict[str, Any]] = {
@@ -102,23 +94,11 @@ class ServerApplication(OpenApiApplication):
 
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("mount_name", "_server")
-        profile: str = kwargs.pop("profile", "full")
-        if profile not in PROFILES:
-            raise ValueError(f"unknown _server profile: {profile!r}")
-        if profile == "minimal":
-            kwargs.setdefault("docs", "off")
-        self._profile = profile
         self._sections: dict[str, RoutingClass] = {}
         self._auth_section: AuthSection | None = None
         super().__init__(**kwargs)
         self.route.plug("pydantic")
-        if self.profile == "full":
-            self.register_auth_method(PasswordMethod(self, "password"))
-
-    @property
-    def profile(self) -> str:
-        """The active profile — ``"full"`` or ``"minimal"`` (D4)."""
-        return self._profile
+        self.register_auth_method(PasswordMethod(self, "password"))
 
     @property
     def sections(self) -> dict[str, RoutingClass]:
@@ -169,10 +149,9 @@ class ServerApplication(OpenApiApplication):
 
     @route()
     def index(self) -> dict[str, Any]:
-        """The ``/_server/`` descriptor: title, profile and section names."""
+        """The ``/_server/`` descriptor: title and section names."""
         return {
             "title": self.api_info.get("title", type(self).__name__),
-            "profile": self.profile,
             "sections": sorted(self.sections),
         }
 
@@ -257,7 +236,7 @@ class ServerApplication(OpenApiApplication):
         The login page builds itself from this: register a method, its
         descriptor (and therefore its button/form) appears. Deliberately public
         — a caller must see the methods before it can authenticate. Empty list
-        when no login surface is active (the minimal profile).
+        when no login surface is active.
 
         Returns:
             ``{"methods": [descriptor, ...]}`` in registration order.
@@ -272,14 +251,12 @@ class ServerApplication(OpenApiApplication):
 if __name__ == "__main__":
     app = ServerApplication()
     assert app.mount_name == "_server"
-    assert app.profile == "full"
     assert app.docs_style == "swagger"
     node = app.route.node("/")
     assert node.error is None, node.error
     data = node()
     assert data == {
         "title": "genro-asgi-core server endpoints",
-        "profile": "full",
         "sections": ["auth"],
     }
     assert app.login_methods() == {
@@ -291,14 +268,3 @@ if __name__ == "__main__":
     # login's credentialed path needs the dispatch-injected request; it is
     # covered end-to-end (store absent, invalid creds, success) by test_login_flow.py.
     assert "<title>Sign in</title>" in app.login_page()
-    minimal = ServerApplication(profile="minimal")
-    assert minimal.profile == "minimal"
-    assert minimal.docs_style == "off"
-    assert minimal.auth_section is None
-    assert minimal.login_methods() == {"methods": []}
-    try:
-        ServerApplication(profile="bogus")
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("expected ValueError for an unknown profile")

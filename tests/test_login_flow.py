@@ -65,12 +65,6 @@ class MemoryUserStore(UserStore):
         return self._records.pop(identity, None) is not None
 
 
-class MinimalProfileServer(AsgiServer):
-    """Test-only composition exercising the MINIMAL profile seam (D4/D6)."""
-
-    server_app_profile = "minimal"
-
-
 def make_server(with_users: bool = True) -> AsgiServer:
     """A full hand-built server; ``with_users`` seeds alice/wonder on a user store."""
     server = AsgiServer(primary=BaseApplication())
@@ -316,14 +310,6 @@ class TestLoginMethods:
                 }
             ]
         }
-
-    async def test_minimal_profile_has_no_login_methods(self) -> None:
-        server = MinimalProfileServer(primary=BaseApplication())
-        app = server.mounts["_server"]
-        assert isinstance(app, ServerApplication)
-        assert app.auth_section is None
-        _, sent = await drive(server, "/_server/login_methods")
-        assert json_body(sent) == {"methods": []}
 
 
 class TestLogout:

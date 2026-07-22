@@ -18,16 +18,9 @@ from __future__ import annotations
 
 import json
 
-import pytest
 from genro_routes import RoutingClass, route
 
 from genro_asgi_core import AsgiServer, BaseApplication, ServerApplication
-
-
-class MinimalProfileServer(AsgiServer):
-    """Test-only composition exercising the MINIMAL profile seam (D4/D6)."""
-
-    server_app_profile = "minimal"
 
 
 class DemoSection(RoutingClass):
@@ -48,7 +41,6 @@ class TestAutoMount:
         app = server.mounts["_server"]
         assert isinstance(app, ServerApplication)
         assert app.mount_name == "_server"
-        assert app.profile == "full"
         assert app.server is server
 
     def test_mount_hook_is_idempotent(self) -> None:
@@ -66,7 +58,6 @@ class TestServerEndpoints:
         sent = await http_request(server, "/_server/")
         assert response_status(sent) == 200
         data = json.loads(response_body(sent))
-        assert data["profile"] == "full"
         assert data["sections"] == ["auth"]
 
     async def test_meta_schema_json_is_exposed(
@@ -80,27 +71,10 @@ class TestServerEndpoints:
         assert doc["info"]["title"] == "genro-asgi-core server endpoints"
 
 
-class TestProfiles:
-    def test_unknown_profile_is_rejected(self) -> None:
-        with pytest.raises(ValueError, match="unknown _server profile"):
-            ServerApplication(profile="bogus")
-
-    async def test_full_profile_serves_docs(self, http_request, response_status) -> None:
+class TestDocs:
+    async def test_server_serves_the_docs_page(self, http_request, response_status) -> None:
         server = AsgiServer(primary=BaseApplication())
         sent = await http_request(server, "/_server/_meta/docs")
-        assert response_status(sent) == 200
-
-    async def test_minimal_profile_exposes_only_the_minimal_surface(
-        self, http_request, response_status
-    ) -> None:
-        server = MinimalProfileServer(primary=BaseApplication())
-        app = server.mounts["_server"]
-        assert isinstance(app, ServerApplication)
-        assert app.profile == "minimal"
-        assert app.docs_style == "off"
-        sent = await http_request(server, "/_server/_meta/docs")
-        assert response_status(sent) == 404
-        sent = await http_request(server, "/_server/")
         assert response_status(sent) == 200
 
 
