@@ -23,8 +23,16 @@ from .applications import (
 )
 from .applications.server_sections import AuthSection
 from .asgi_server import AsgiServer
-from .auth import ApiKeyStore, AuthCore, AuthMixin, FileApiKeyStore, FileUserStore, UserStore
-from .auth.auth_method import AuthMethod, PasswordMethod
+from .auth import (
+    ApiKeyStore,
+    AuthCore,
+    AuthMethod,
+    AuthMixin,
+    FileApiKeyStore,
+    FileUserStore,
+    PasswordMethod,
+    UserStore,
+)
 from .channel import ChannelClient, Frame, FrameStream
 from .communication import CommunicationMixin
 from .config import AsgiConfigBuilder, ConfigurationHandler, Projection

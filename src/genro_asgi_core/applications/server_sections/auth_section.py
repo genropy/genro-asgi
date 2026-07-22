@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any
 from genro_routes import RoutingClass
 
 if TYPE_CHECKING:
-    from ...auth.auth_method import AuthMethod
+    from ...auth import AuthMethod
     from ..server_app import ServerApplication
 
 __all__ = ["AuthSection"]
@@ -105,7 +105,7 @@ class AuthSection(RoutingClass):
 if __name__ == "__main__":
     from types import SimpleNamespace
 
-    from ...auth.auth_method import PasswordMethod
+    from ...auth import PasswordMethod
 
     application: Any = SimpleNamespace(server="SERVER")
     section = AuthSection(application)

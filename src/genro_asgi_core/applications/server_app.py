@@ -74,7 +74,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from genro_routes import RoutingClass, route
 
-from ..auth.auth_method import AuthMethod, PasswordMethod
+from ..auth import AuthMethod, PasswordMethod
 from ..session import Avatar
 from .openapi import RESOURCES_DIR, OpenApiApplication
 from .server_sections import AuthSection

@@ -52,7 +52,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
-from ..auth.auth_method import safe_next_path
+from ..auth import safe_next_path
 from ..exceptions import HTTPException, Redirect
 from ..response import Response
 from .base import BaseMiddleware, headers_dict
