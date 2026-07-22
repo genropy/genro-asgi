@@ -16,12 +16,12 @@
 
 The flow is driven through a full hand-built ``AsgiServer`` at the ASGI level
 (no uvicorn), the same driving style as ``test_session.py``: JSON POST to
-``/_server/login`` verifies against a seeded in-memory ``UserStore``, promotes
-the session (``promote_session``) and the ``Set-Cookie`` for the change rides
-the response via ``SessionMiddleware`` (option A) — handlers never touch
-cookies. The HTML page, the public ``login_methods``, ``logout``, the
-``AuthMethod``/``AuthSection`` contract and the ``safe_next_path`` guard are
-covered alongside.
+``/_server/login`` verifies against a seeded in-memory ``UserStore`` and
+attaches the avatar to the request's session in place
+(``request.session.attach_avatar``) — the id never changes, so no login-time
+cookie is issued and handlers never touch cookies. The HTML page, the public
+``login_methods``, ``logout``, the ``AuthMethod``/``AuthSection`` contract and
+the ``safe_next_path`` guard are covered alongside.
 """
 
 from __future__ import annotations

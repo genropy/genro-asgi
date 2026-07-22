@@ -24,17 +24,16 @@ arms sessions with no user action, while an explicit
 ``middleware={"session": False}`` still wins (``setdefault`` never overrides an
 explicit switch). It overrides the §4 contract method ``session(request)`` to
 return the session attached to the request scope; a composition WITHOUT the
-mixin keeps the base answer (``None``). ``promote_session(request, avatar)``
-is the login seam: it attaches the avatar to the request's EXISTING session —
-the id never changes at login, so the cookie already held by the client stays
-valid and no new ``Set-Cookie`` is involved.
+mixin keeps the base answer (``None``). The login seam is not a server method:
+a handler attaches the identity through the request facade
+(``request.session.attach_avatar(avatar)``) — the session id never changes at
+login, so the cookie already held by the client stays valid.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from .session import Session
 from .store import MemorySessionStore, SessionStore
 
 __all__ = ["SessionMixin"]
@@ -68,24 +67,9 @@ class SessionMixin:
         """The session attached to the request scope, or ``None`` if none."""
         return request.get("session") if request is not None else None
 
-    def promote_session(self, request: Any, avatar: Any) -> Session:
-        """Attach ``avatar`` to the request's session — the login event.
-
-        The session keeps its id, ``data`` and ``meta``: whatever an anonymous
-        visitor accumulated (a cart, a history) survives the login, and the
-        cookie the client already holds stays valid — no new session, no new
-        ``Set-Cookie``. Session-fixation defense is the upstream cookie
-        hardening (HttpOnly, SameSite, token never read from the URL), not id
-        rotation. Returns the session.
-        """
-        session: Session = request.scope["session"]
-        session.attach_avatar(avatar)
-        return session
 
 
 if __name__ == "__main__":
-    from types import SimpleNamespace
-
     from ..application import BaseApplication
     from ..middleware import MiddlewareMixin
     from ..server import BaseServer
@@ -102,8 +86,7 @@ if __name__ == "__main__":
 
     anonymous = server.session_store.create()
     anonymous.data["cart"] = "kept"
-    request = SimpleNamespace(scope={"session": anonymous})
-    promoted = server.promote_session(request, Avatar("alice", ["admin"]))
-    assert promoted is anonymous  # same session, same id — login attaches in place
-    assert promoted.avatar is not None and promoted.avatar.identity == "alice"
-    assert promoted.data["cart"] == "kept"
+    # login seam via the request facade: attach the avatar to the session in place
+    anonymous.attach_avatar(Avatar("alice", ["admin"]))
+    assert anonymous.avatar is not None and anonymous.avatar.identity == "alice"
+    assert anonymous.data["cart"] == "kept"  # same session, same id — the cart survives

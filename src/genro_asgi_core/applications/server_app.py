@@ -33,7 +33,7 @@ schema/docs/index endpoints, and adds:
   (endpoints at ``/_server/<name>/...``) and records it so introspection
   surfaces (the index today, monitors later) can enumerate them;
 - the PASSWORD login surface (core 1d wave 1): ``login`` (JSON POST →
-  ``UserStore.verify`` → ``Avatar`` → ``server.promote_session``),
+  ``UserStore.verify`` → ``Avatar`` → ``request.session.attach_avatar``),
   ``login_page`` (HTML GET, the descriptor-driven ``resources/login.html``
   read at USE time), ``logout`` and the public ``login_methods`` — dual-mode
   by TWO routes, never in-handler ``Accept`` sniffing. The methods live in an
@@ -180,15 +180,15 @@ class ServerApplication(OpenApiApplication):
     def login(
         self, identity: str = "", password: str = "", next: str = "", request: Any = None
     ) -> dict[str, Any]:
-        """Authenticate against the server's UserStore and promote the session.
+        """Authenticate against the server's UserStore and attach the identity.
 
         The JSON convergence point of every ``form`` method: verifies the
         credentials (``UserStore.verify`` — the record key is ``identity``),
-        builds the ``Avatar`` and attaches it to the request's session
-        (``server.promote_session``) — the session id never changes at login,
-        so the client's cookie stays valid and no ``Set-Cookie`` is involved.
-        The server's ``user_store`` is wired in the next wave (Macro 5b): until
-        then a server without one answers the error shape.
+        builds the ``Avatar`` and attaches it to the request's session in place
+        (``request.session.attach_avatar``) — the session id never changes at
+        login, so the client's cookie stays valid and no ``Set-Cookie`` is
+        involved. The server's ``user_store`` is wired in the next wave (Macro
+        5b): until then a server without one answers the error shape.
 
         Args:
             identity: The record key to verify (NOT the old ``username``).
@@ -206,15 +206,15 @@ class ServerApplication(OpenApiApplication):
         """
         if not identity or not password:
             return {"error": "Identity and password are required"}
-        server = request.server if request is not None else self.server
-        user_store = getattr(server, "user_store", None)
+        user_store = getattr(request.server, "user_store", None)
         if user_store is None:
             return {"error": "Login is not available"}
         record = user_store.verify(identity, password)
         if record is None:
             return {"error": "Invalid credentials"}
         avatar = Avatar(record["identity"], record["tags"])
-        session = server.promote_session(request, avatar)
+        session = request.session
+        session.attach_avatar(avatar)
         return {"session_id": session.id, "identity": avatar.identity, "tags": avatar.tags}
 
     @route(media_type="text/html")
@@ -288,7 +288,8 @@ if __name__ == "__main__":
         ]
     }
     assert app.login() == {"error": "Identity and password are required"}
-    assert app.login(identity="alice", password="x") == {"error": "Login is not available"}
+    # login's credentialed path needs the dispatch-injected request; it is
+    # covered end-to-end (store absent, invalid creds, success) by test_login_flow.py.
     assert "<title>Sign in</title>" in app.login_page()
     minimal = ServerApplication(profile="minimal")
     assert minimal.profile == "minimal"

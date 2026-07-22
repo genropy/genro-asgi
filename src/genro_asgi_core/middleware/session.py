@@ -21,10 +21,10 @@ session or creates a new ANONYMOUS one through ``server.session_store``
 an explicit act of the login surface, core 1d), attaches it to
 ``scope["session"]``, and — ONLY when the session was created here — wraps
 ``send`` to add its ``Set-Cookie`` header (HttpOnly, ``Max-Age`` = the session
-TTL). Login never changes the session id: ``promote_session`` attaches the
-avatar to the existing session in place, so the cookie the client already
-holds stays valid and no login-time cookie exists — handlers stay pure and
-never set cookies themselves. Armed by ``SessionMixin``; order 400 (OUTSIDE
+TTL). Login never changes the session id: a handler attaches the avatar to
+the existing session in place (``request.session.attach_avatar``), so the
+cookie the client already holds stays valid and no login-time cookie exists —
+handlers stay pure and never set cookies themselves. Armed by ``SessionMixin``; order 400 (OUTSIDE
 ``AuthMiddleware`` at 450, so the session is on the scope before the §5.5
 fallback runs), default OFF. The chain only carries ``http`` scopes, so no
 scope filtering happens here.
@@ -91,11 +91,11 @@ class SessionMiddleware(BaseMiddleware):
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Attach the session to the scope; issue the cookie for a NEW session only.
 
-        Login never changes the session id (``promote_session`` attaches the
-        avatar to the existing session in place), so the only moment a cookie
-        must be issued is when the store had no session for the incoming token
-        (none arrived, expired, or unknown) and a fresh anonymous one was
-        created here.
+        Login never changes the session id (a handler attaches the avatar to
+        the existing session in place), so the only moment a cookie must be
+        issued is when the store had no session for the incoming token (none
+        arrived, expired, or unknown) and a fresh anonymous one was created
+        here.
         """
         store = self.server.session_store
         incoming = self._cookie_value(scope)

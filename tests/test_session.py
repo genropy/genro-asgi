@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import json
 import time
-from types import SimpleNamespace
 
 import pytest
 
@@ -332,53 +331,42 @@ class TestSessionCookieFlow:
         assert "Secure" not in cookie
 
 
-# --- promote_session (login seam) ---
+# --- attach_avatar (login seam): identity attached in place, id unchanged ---
 
 
-class TestPromoteSession:
-    def test_promote_attaches_the_avatar_to_the_existing_session(self) -> None:
-        server = SessionServer(primary=EchoApp())
-        anonymous = server.session_store.create()
-        request = SimpleNamespace(scope={"session": anonymous})
-        promoted = server.promote_session(request, Avatar("alice", ["admin"]))
-        assert promoted is anonymous  # same session — the id never changes at login
-        assert promoted.avatar is not None
-        assert promoted.avatar.identity == "alice"
-        assert promoted.avatar.tags == ["admin"]
+class TestAttachAvatar:
+    def test_attach_sets_the_avatar_on_the_existing_session(self) -> None:
+        session = MemorySessionStore().create()
+        session.attach_avatar(Avatar("alice", ["admin"]))
+        assert session.avatar is not None
+        assert session.avatar.identity == "alice"
+        assert session.avatar.tags == ["admin"]
 
-    def test_promote_preserves_session_data_and_id(self) -> None:
-        server = SessionServer(primary=EchoApp())
-        anonymous = server.session_store.create()
-        anonymous.data["cart"] = "kept"
-        request = SimpleNamespace(scope={"session": anonymous})
-        promoted = server.promote_session(request, Avatar("bob"))
-        assert promoted.id == anonymous.id
-        assert promoted.data["cart"] == "kept"  # the cart survives the login
-        assert server.session_store.get(anonymous.id) is promoted
-
-    def test_promote_does_not_touch_cookies(self) -> None:
-        server = SessionServer(primary=EchoApp())
-        request = SimpleNamespace(scope={"session": server.session_store.create()})
-        promoted = server.promote_session(request, Avatar("carol"))
-        assert set(request.scope) == {"session"}
-        assert isinstance(promoted, Session)
+    def test_attach_preserves_session_data_and_id(self) -> None:
+        store = MemorySessionStore()
+        session = store.create()
+        session_id = session.id
+        session.data["cart"] = "kept"
+        session.attach_avatar(Avatar("bob"))
+        assert session.id == session_id  # the id never changes at login
+        assert session.data["cart"] == "kept"  # the cart survives the login
+        assert store.get(session_id) is session
 
 
-# --- SessionMiddleware and promotion: the cookie is issued for a NEW session only ---
+# --- SessionMiddleware and login: the cookie is issued for a NEW session only ---
 
 
 class PromotingApp(BaseApplication):
-    """A login-like handler: attaches the avatar via the real ``promote_session`` seam."""
+    """A login-like handler: attaches the avatar via the request facade in place."""
 
     def __init__(self, avatar: Avatar, **kwargs) -> None:
         super().__init__(**kwargs)
         self._avatar = avatar
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        request = SimpleNamespace(scope=scope)
-        promoted = self.server.promote_session(request, self._avatar)
+        scope["session"].attach_avatar(self._avatar)
         await send({"type": "http.response.start", "status": 200, "headers": []})
-        await send({"type": "http.response.body", "body": promoted.id.encode()})
+        await send({"type": "http.response.body", "body": scope["session"].id.encode()})
 
 
 class TestPromotedSessionCookie:
