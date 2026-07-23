@@ -17,7 +17,7 @@
 ``RoutedApplication`` composes the app-side contract (``BaseApplication``)
 with the genro-routes ``RoutingClass``: handlers are ``@route``-decorated
 methods on subclasses, and external ``RoutingClass`` instances mount as
-sub-trees via ``attach_instance(child, name=...)``. The constructor peels
+sub-trees via ``add_branches({"name": ..., "instance": child})``. The constructor peels
 ``db_name`` (the ``request.db`` seam resolves it against the server's
 database registry) and plugs the ``auth`` plugin on the app router, so
 entries declaring ``auth_rule`` are filtered by the request's authorization

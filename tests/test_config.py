@@ -24,9 +24,11 @@ Requests are driven at the ASGI level (no uvicorn), the same style as
 from __future__ import annotations
 
 import base64
+from pathlib import Path
 from typing import Any
 
 import pytest
+from genro_bag.resolvers import EnvResolver
 
 from genro_asgi_core import (
     AsgiConfigBuilder,
@@ -34,9 +36,13 @@ from genro_asgi_core import (
     BaseApplication,
     ConfigurationHandler,
 )
+from genro_asgi_core.applications.server_app import ServerAppConfig
+from genro_asgi_core.config.configurable import ConfigError
 from genro_asgi_core.exceptions import HTTPUnauthorized
 from genro_asgi_core.middleware.base import BaseMiddleware
 from genro_asgi_core.types import Message, Receive, Scope, Send
+
+ADMIN_PW_ENV_VAR = "GENRO_TEST_ADMIN_PW"
 
 
 class ShopApp(BaseApplication):
@@ -247,5 +253,135 @@ class TestSingleAppNoDefault:
                 apps.application(code="only", app_class=ShopApp)
 
         server = ConfigurationHandler(OneAppConfig(name="one")).materialize()
+        assert isinstance(server.primary, ShopApp)
+        assert set(server.mounts) == {"_server"}
+
+
+def storage_site_config(base_path: Path) -> AsgiConfigBuilder:
+    """A site recipe with a plain ``idstore`` storage mount (for store wiring)."""
+
+    class StorageSiteConfig(AsgiConfigBuilder):
+        def main(self, root: Any) -> None:
+            root.server(host="127.0.0.1", port=8000)
+            mounts = root.storage()
+            mounts.mount(code="idstore", path=str(base_path))
+            apps = root.applications(default="shop")
+            apps.application(code="shop", app_class=ShopApp)
+
+    return StorageSiteConfig(name="config")
+
+
+class IdentityServerAppConfig(ServerAppConfig):
+    """A ``_server`` config: admin password by ``^pointer`` plus both stores."""
+
+    def setup(self, data: Any) -> None:
+        data["admin_pw"] = EnvResolver(ADMIN_PW_ENV_VAR)
+
+    def main(self, root: Any) -> None:
+        root.admin_password("^admin_pw")
+        root.users(mount="idstore", prefix="users")
+        root.tokens(mount="idstore", prefix="api_keys")
+
+
+class TestServerAppConfigClass:
+    """The ``_server`` app's config-class: claim, lift, defaults (design 2026-07-23)."""
+
+    def test_no_config_uses_the_default_base(self) -> None:
+        handler = ConfigurationHandler(TwoAppConfig(name="config"))
+        assert isinstance(handler.server_app_config, ServerAppConfig)
+        server = handler.materialize()
+        assert server.user_store is None
+        assert server.api_key_store is None
+
+    def test_claimed_config_lifts_identity_kwargs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(ADMIN_PW_ENV_VAR, "s3cret")
+        handler = ConfigurationHandler(
+            storage_site_config(tmp_path), IdentityServerAppConfig()
+        )
+        server = handler.materialize()
+        assert server.user_store is not None
+        assert server.api_key_store is not None
+        admin = server.user_store.get("admin")
+        assert admin is not None
+        assert "SUPERADMIN" in admin["tags"]
+
+    def test_admin_password_literal_is_a_boot_error(self, tmp_path: Path) -> None:
+        class LiteralConfig(ServerAppConfig):
+            def main(self, root: Any) -> None:
+                root.admin_password("plain-secret")
+
+        handler = ConfigurationHandler(storage_site_config(tmp_path), LiteralConfig())
+        with pytest.raises(ConfigError, match="\\^pointer"):
+            handler.materialize()
+
+    def test_admin_password_pointer_resolving_empty_is_a_boot_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv(ADMIN_PW_ENV_VAR, raising=False)
+        handler = ConfigurationHandler(
+            storage_site_config(tmp_path), IdentityServerAppConfig()
+        )
+        with pytest.raises(ConfigError, match="resolved empty"):
+            handler.materialize()
+
+    def test_duplicate_tag_in_config_is_a_boot_error(self, tmp_path: Path) -> None:
+        class DoubledConfig(ServerAppConfig):
+            def main(self, root: Any) -> None:
+                root.users(mount="one")
+                root.users(mount="two")
+
+        handler = ConfigurationHandler(storage_site_config(tmp_path), DoubledConfig())
+        with pytest.raises(ConfigError, match="duplicate 'users'"):
+            handler.materialize()
+
+    def test_unclaimed_app_config_is_a_boot_error(self) -> None:
+        with pytest.raises(ConfigError, match="no application claims it"):
+            ConfigurationHandler(TwoAppConfig(name="config"), TwoAppConfig(name="other"))
+
+    def test_duplicate_server_config_is_a_boot_error(self) -> None:
+        with pytest.raises(ConfigError, match="duplicate config"):
+            ConfigurationHandler(
+                TwoAppConfig(name="config"),
+                ServerAppConfig(name="first"),
+                ServerAppConfig(name="second"),
+            )
+
+    def test_hosted_role_never_lifts_identity(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(ADMIN_PW_ENV_VAR, "s3cret")
+        handler = ConfigurationHandler(
+            storage_site_config(tmp_path), IdentityServerAppConfig()
+        )
+        worker = handler.materialize(role="worker", app="shop")
+        assert worker.user_store is None
+        assert worker.api_key_store is None
+
+
+class TestSessionTtl:
+    def test_session_child_reaches_the_store_ttl(self) -> None:
+        class SessionConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                srv = root.server(host="127.0.0.1", port=8000)
+                srv.session(ttl=1234)
+                apps = root.applications(default="shop")
+                apps.application(code="shop", app_class=ShopApp)
+
+        server = ConfigurationHandler(SessionConfig(name="config")).materialize()
+        assert server.session_store.create().meta["ttl"] == 1234
+
+
+class TestConfigurationTag:
+    def test_configuration_subtree_is_read_and_skipped(self) -> None:
+        class ConfiguredAppConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                root.server(host="127.0.0.1", port=8000)
+                apps = root.applications(default="shop")
+                shop = apps.application(code="shop", app_class=ShopApp)
+                shop.configuration(theme="dark", max_items=10)
+
+        server = ConfigurationHandler(ConfiguredAppConfig(name="config")).materialize()
         assert isinstance(server.primary, ShopApp)
         assert set(server.mounts) == {"_server"}

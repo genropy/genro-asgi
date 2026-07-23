@@ -94,7 +94,7 @@ class AuthSection(RoutingClass):
             raise ValueError(f"auth method already registered: {method_id}")
         tree = method.route.nodes(lazy=True, forbidden=True)
         if tree.get("entries") or tree.get("routers"):
-            self.attach_instance(method, name=method_id)
+            self.route.add_branches({"name": method_id, "instance": method})
         self._methods[method_id] = method
 
     def descriptors(self) -> list[dict[str, Any]]:

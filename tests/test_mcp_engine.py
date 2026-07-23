@@ -56,7 +56,7 @@ class ToolService(RoutingClass):
         self.route.plug("pydantic")
         self.route.plug("channel")
         self.route.plug("auth")
-        self.attach_instance(SubTools(), name="sub")
+        self.route.add_branches({"name": "sub", "instance": SubTools()})
 
     @route(channel_channels="mcp,rest")
     def add(self, x: int, y: int = 0) -> dict:

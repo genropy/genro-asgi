@@ -49,6 +49,10 @@ class SessionStore(Protocol):
         """Create a new session with a unique token (anonymous by default)."""
         ...
 
+    def save(self, session: Session) -> None:
+        """Persist a dirty session's state (the middleware calls this at request end)."""
+        ...
+
     def delete(self, session_id: str) -> None:
         """Remove a session from the store."""
         ...
@@ -94,6 +98,9 @@ class MemorySessionStore:
         session = Session(session_id=session_id, avatar=avatar, ttl=self._default_ttl)
         self._sessions[session_id] = session
         return session
+
+    def save(self, session: Session) -> None:
+        """No-op: the in-memory store holds the live object, so it is already saved."""
 
     def delete(self, session_id: str) -> None:
         """Remove a session from the store (a no-op if absent)."""

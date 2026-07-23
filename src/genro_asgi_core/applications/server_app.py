@@ -72,19 +72,67 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from genro_builders.builder import BuilderBase, element
 from genro_routes import RoutingClass, route
 
 from ..auth import AuthMethod, PasswordMethod
 from ..session import Avatar
 from .openapi import RESOURCES_DIR, OpenApiApplication
-from .server_sections import AuthSection
+from .server_sections import AuthSection, TokensSection, UsersSection
 
 if TYPE_CHECKING:
     from genro_routes import RouterNode
 
     from ..request import Request
 
-__all__ = ["ServerApplication"]
+__all__ = ["ServerAppConfig", "ServerAppConfigElements", "ServerApplication"]
+
+
+class ServerAppConfigElements:
+    """Config grammar of ``ServerApplication`` — the dialect of its config-class.
+
+    NOT composed into the site dialect: an application's configuration is a
+    SEPARATE builder (distributed config), and ``_server``'s is the one the
+    core knows how to mount by construction. Declares the identity surface:
+    ``admin_password`` (a ``^pointer`` node value) plus ``users()``/``tokens()``
+    store descriptors. All three are LIFTED to the SERVER constructor kwargs
+    (``AuthMixin`` peels them): the stores live on the server (Phase 3) — the
+    config keeps the app's shape, the runtime stays where it is.
+    """
+
+    @element(sub_tags="")
+    def admin_password(self) -> None:
+        """The SUPERADMIN bootstrap password as a ``^pointer`` node value —
+        never a literal (secrets stay out of recipes). Resolved at materialize
+        time; configured-but-empty is a boot error."""
+
+    @element(sub_tags="")
+    def users(self) -> None:
+        """Identity store descriptor: ``{mount, prefix}`` (or omitted for the
+        default) — the ``users=`` kwarg ``AuthMixin`` peels."""
+
+    @element(sub_tags="")
+    def tokens(self) -> None:
+        """Api-key store descriptor: ``{mount, prefix}`` — the ``tokens=`` kwarg
+        ``AuthMixin`` peels."""
+
+
+class ServerAppConfig(BuilderBase, ServerAppConfigElements):
+    """The ``_server`` app's config-class: the base IS the default.
+
+    ``main()`` declares nothing, so materializing the base yields today's bare
+    ``ServerApplication()`` — no configuration, no regression. A site
+    personalizes ``_server`` by subclassing this in its ``config.py`` and
+    passing the subclass to ``ConfigurationHandler`` alongside the site
+    recipe; the handler claims it by class identity
+    (``ServerApplication.config_class``), no name registry.
+    """
+
+    _name = "server_app"
+
+    def main(self, root: Any) -> None:
+        """Default ``_server`` configuration: nothing to declare."""
+
 
 class ServerApplication(OpenApiApplication):
     """System endpoints of a server, auto-mounted under ``/_server`` (D4).
@@ -99,6 +147,7 @@ class ServerApplication(OpenApiApplication):
         "title": "genro-asgi-core server endpoints",
         "version": "1.0.0",
     }
+    config_class = ServerAppConfig
 
     def __init__(self, **kwargs: Any) -> None:
         mount_name = kwargs.setdefault("mount_name", "_server")
@@ -110,6 +159,8 @@ class ServerApplication(OpenApiApplication):
         self._auth_section: AuthSection | None = None
         super().__init__(**kwargs)
         self.register_auth_method(PasswordMethod(self, "password"))
+        self.attach_section(UsersSection(self), name="users")
+        self.attach_section(TokensSection(self), name="tokens")
 
     @property
     def sections(self) -> dict[str, RoutingClass]:
@@ -128,7 +179,7 @@ class ServerApplication(OpenApiApplication):
         ``/_server/<name>/...``) and keeps it enumerable for the
         introspection surfaces (the ``index`` descriptor today).
         """
-        self.attach_instance(section, name=name)
+        self.route.add_branches({"name": name, "instance": section})
         self.sections[name] = section
 
     def ensure_auth_section(self) -> AuthSection:
@@ -286,7 +337,7 @@ if __name__ == "__main__":
     data = node()
     assert data == {
         "title": "genro-asgi-core server endpoints",
-        "sections": ["auth"],
+        "sections": ["auth", "tokens", "users"],
     }
     assert app.login_methods() == {
         "methods": [

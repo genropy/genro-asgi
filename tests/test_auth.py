@@ -27,22 +27,72 @@ time and END-TO-END through the REAL combined chain (session middleware order
 from __future__ import annotations
 
 import base64
+from pathlib import Path
 
 import jwt
 import pytest
+from cryptography.fernet import Fernet
 
 from genro_asgi_core import (
+    ApiKeyStore,
+    AsgiServer,
     AuthCore,
     AuthMixin,
     Avatar,
     BaseApplication,
     BaseServer,
+    FileApiKeyStore,
+    FileUserStore,
+    LocalStorage,
     Session,
     SessionMixin,
+    UserStore,
 )
 from genro_asgi_core.exceptions import HTTPUnauthorized
 from genro_asgi_core.middleware import MiddlewareMixin
 from genro_asgi_core.types import Message, Receive, Scope, Send
+
+
+class MemoryUserStore(UserStore):
+    """In-memory ``UserStore`` backend used as a ready store instance in tests."""
+
+    __slots__ = ("_records",)
+
+    def __init__(self) -> None:
+        self._records: dict[str, dict] = {}
+
+    def load_all(self) -> list[dict]:
+        return list(self._records.values())
+
+    def get(self, identity: str) -> dict | None:
+        return self._records.get(identity)
+
+    def save(self, record: dict) -> None:
+        self._records[record["identity"]] = record
+
+    def delete(self, identity: str) -> bool:
+        return self._records.pop(identity, None) is not None
+
+
+class MemoryApiKeyStore(ApiKeyStore):
+    """In-memory ``ApiKeyStore`` backend: the shared issue/verify logic over a dict."""
+
+    __slots__ = ("_records",)
+
+    def __init__(self) -> None:
+        self._records: dict[str, dict] = {}
+
+    def load_all(self) -> list[dict]:
+        return list(self._records.values())
+
+    def get(self, key_id: str) -> dict | None:
+        return self._records.get(key_id)
+
+    def save(self, record: dict) -> None:
+        self._records[record["key_id"]] = record
+
+    def delete(self, key_id: str) -> bool:
+        return self._records.pop(key_id, None) is not None
 
 
 def basic_header(username: str, password: str) -> str:
@@ -88,6 +138,18 @@ class TestAuthCore:
         assert avatar is not None
         assert avatar.identity == "carol"
         assert avatar.tags == ["reader"]
+
+    def test_signing_config_is_the_symmetric_secret(self) -> None:
+        core = AuthCore(**AUTH_CONFIG)
+        signing = core.signing_jwt_config
+        assert signing is not None
+        assert signing["secret"] == "topsecret"
+
+    def test_public_key_never_becomes_the_signing_config(self) -> None:
+        # A verifier configured with public_key only (algorithm defaulted):
+        # it can verify, but public key material must never mint tokens.
+        core = AuthCore(jwt=[{"public_key": "not-a-secret"}])
+        assert core.signing_jwt_config is None
 
     def test_wrong_password_raises_401(self) -> None:
         core = AuthCore(**AUTH_CONFIG)
@@ -338,3 +400,129 @@ class TestWithoutAuthMixin:
 
         server = SessionOnly(primary=EchoAuthApp())
         assert server.authenticate({"headers": []}) is None
+
+
+def encrypted_server(tmp_path, **kwargs) -> AsgiServer:
+    """An ``AsgiServer`` over an encrypted ``secure`` storage mount, for store wiring."""
+    storage = LocalStorage(base_dir=tmp_path)
+    storage.set_encryption_keys(Fernet.generate_key().decode())
+    return AsgiServer(primary=BaseApplication(), storage=storage, **kwargs)
+
+
+class TestStoreWiring:
+    def test_stores_are_none_when_unconfigured(self) -> None:
+        server = AsgiServer(primary=BaseApplication())
+        assert server.user_store is None
+        assert server.api_key_store is None
+
+    def test_users_config_dict_builds_a_file_store(self, tmp_path: Path) -> None:
+        server = encrypted_server(tmp_path, users={})
+        assert isinstance(server.user_store, FileUserStore)
+        assert server.api_key_store is None
+
+    def test_tokens_config_dict_builds_a_file_store(self, tmp_path: Path) -> None:
+        server = encrypted_server(tmp_path, tokens={})
+        assert isinstance(server.api_key_store, FileApiKeyStore)
+
+    def test_config_dict_honours_mount_and_prefix(self, tmp_path: Path) -> None:
+        server = encrypted_server(tmp_path, users={"prefix": "people"})
+        server.user_store.save(
+            {"identity": "bob", "password_hash": "x", "tags": [], "enabled": True}
+        )
+        node = server.storage.node("secure:people/bob.json")
+        assert node.exists
+
+    def test_ready_instance_is_passed_through(self) -> None:
+        store = MemoryUserStore()
+        server = AsgiServer(primary=BaseApplication(), users=store)
+        assert server.user_store is store
+
+    def test_config_dict_without_storage_is_a_boot_error(self) -> None:
+        class NoStorageServer(AuthMixin, MiddlewareMixin, BaseServer):
+            pass
+
+        with pytest.raises(RuntimeError, match="storage"):
+            NoStorageServer(primary=BaseApplication(), users={})
+
+
+class TestBootstrapAdmin:
+    def test_admin_password_seeds_the_superadmin(self) -> None:
+        store = MemoryUserStore()
+        server = AsgiServer(primary=BaseApplication(), users=store, admin_password="pw")
+        record = server.user_store.get("admin")
+        assert record is not None
+        assert record["tags"] == ["SUPERADMIN"]
+        assert record["enabled"] is True
+        assert server.user_store.verify("admin", "pw") is not None
+
+    def test_admin_password_without_users_implies_the_default_store(self, tmp_path: Path) -> None:
+        server = encrypted_server(tmp_path, admin_password="pw")
+        assert isinstance(server.user_store, FileUserStore)
+        assert server.user_store.verify("admin", "pw") is not None
+
+    def test_bootstrap_is_an_upsert_config_wins(self) -> None:
+        store = MemoryUserStore()
+        store.save(
+            {"identity": "admin", "password_hash": "stale", "tags": [], "enabled": False}
+        )
+        server = AsgiServer(primary=BaseApplication(), users=store, admin_password="fresh")
+        record = server.user_store.get("admin")
+        assert record["enabled"] is True
+        assert record["tags"] == ["SUPERADMIN"]
+        assert server.user_store.verify("admin", "fresh") is not None
+
+
+def bearer_scope(token: str) -> Scope:
+    """A scope carrying ``Authorization: Bearer <token>``."""
+    return {"headers": [(b"authorization", f"Bearer {token}".encode())]}
+
+
+class TestApiKeyBearer:
+    def _core_with_key(self, tags: list[str]) -> tuple[AuthCore, str, MemoryApiKeyStore]:
+        store = MemoryApiKeyStore()
+        key = store.issue("ci-bot", tags)
+        return AuthCore(api_key_store=store), key, store
+
+    def test_valid_gak_key_authenticates_with_label_identity(self) -> None:
+        core, key, _ = self._core_with_key(["ci", "deploy"])
+        avatar = core.authenticate(bearer_scope(key))
+        assert avatar is not None
+        assert avatar.identity == "ci-bot"  # identity is the key label
+        assert avatar.tags == ["ci", "deploy"]
+
+    def test_revoked_key_is_unauthorized_not_a_jwt_fallthrough(self) -> None:
+        core, key, store = self._core_with_key(["ci"])
+        key_id = key[len("gak_") :].partition("_")[0]
+        store.revoke(key_id)
+        with pytest.raises(HTTPUnauthorized):
+            core.authenticate(bearer_scope(key))
+
+    def test_unknown_gak_key_is_unauthorized(self) -> None:
+        core, _, _ = self._core_with_key(["ci"])
+        with pytest.raises(HTTPUnauthorized):
+            core.authenticate(bearer_scope("gak_deadbeef_nonexistentsecret"))
+
+    def test_gak_key_with_no_store_is_unauthorized(self) -> None:
+        core = AuthCore()  # no api_key_store wired
+        with pytest.raises(HTTPUnauthorized):
+            core.authenticate(bearer_scope("gak_deadbeef_secret"))
+
+    def test_non_gak_bearer_still_uses_the_static_chain(self) -> None:
+        store = MemoryApiKeyStore()
+        core = AuthCore(
+            bearer={"svc": {"token": "sk_live_xyz", "tags": "service"}},
+            api_key_store=store,
+        )
+        avatar = core.authenticate(bearer_scope("sk_live_xyz"))
+        assert avatar is not None
+        assert avatar.identity == "svc"
+        assert avatar.tags == ["service"]
+
+    def test_end_to_end_gak_key_authenticates_through_the_server(self) -> None:
+        store = MemoryApiKeyStore()
+        server = AsgiServer(primary=BaseApplication(), tokens=store)
+        key = store.issue("robot", ["worker"])
+        avatar = server.auth_core.authenticate(bearer_scope(key))
+        assert avatar is not None
+        assert avatar.identity == "robot"
+        assert avatar.tags == ["worker"]

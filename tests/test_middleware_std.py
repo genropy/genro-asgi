@@ -34,7 +34,13 @@ from urllib.parse import quote
 
 import pytest
 
-from genro_asgi_core import AsgiServer, BaseApplication, BaseServer, MiddlewareMixin
+from genro_asgi_core import (
+    AsgiServer,
+    BaseApplication,
+    BaseServer,
+    MemorySessionStore,
+    MiddlewareMixin,
+)
 from genro_asgi_core.exceptions import HTTPNotFound, HTTPUnauthorized, Redirect
 from genro_asgi_core.types import Message, Receive, Scope, Send
 
@@ -324,6 +330,55 @@ class TestLoggingMiddleware:
         assert len(records) == 2
         assert records[0].startswith("<- GET /")
         assert records[1].startswith("-> GET / 200")
+
+
+class CountingSessionStore(MemorySessionStore):
+    """A memory store that counts ``save`` calls (write-back assertions)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.saves = 0
+
+    def save(self, session) -> None:
+        self.saves += 1
+        super().save(session)
+
+
+class SessionMutatingApp(BaseApplication):
+    """Mutates the scope session on ``/write``, reads it on any other path."""
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        session = scope.get("session")
+        if session is not None and scope["path"] == "/write":
+            session.data["hit"] = "yes"
+            session.mark_dirty()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+
+class TestSessionWriteBack:
+    def _server(self) -> tuple[AsgiServer, CountingSessionStore]:
+        store = CountingSessionStore()
+        return AsgiServer(primary=SessionMutatingApp(), session_store=store), store
+
+    async def test_read_only_request_does_not_save(self, http_request, response_status) -> None:
+        server, store = self._server()
+        sent = await http_request(server, "/read")
+        assert response_status(sent) == 200
+        assert store.saves == 0  # read-only stays zero-I/O
+
+    async def test_mutating_request_saves_once(self, http_request, response_status) -> None:
+        server, store = self._server()
+        sent = await http_request(server, "/write")
+        assert response_status(sent) == 200
+        assert store.saves == 1  # dirty → one write-back
+
+    async def test_write_back_clears_the_dirty_flag(self, http_request) -> None:
+        server, store = self._server()
+        await http_request(server, "/write")
+        # the single live session in the store is clean again after the save
+        session = next(iter(store.dump()))
+        assert store.get(session).dirty is False
 
 
 class TestDisabledByDefault:

@@ -27,15 +27,19 @@ the ``safe_next_path`` guard are covered alongside.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
+from cryptography.fernet import Fernet
 
 from genro_asgi_core import (
     AsgiServer,
     AuthMethod,
     AuthSection,
     BaseApplication,
+    FileUserStore,
+    LocalStorage,
     PasswordMethod,
     ServerApplication,
     UserStore,
@@ -67,27 +71,26 @@ class MemoryUserStore(UserStore):
 
 def make_server(with_users: bool = True) -> AsgiServer:
     """A full hand-built server; ``with_users`` seeds alice/wonder on a user store."""
-    server = AsgiServer(primary=BaseApplication())
-    if with_users:
-        store = MemoryUserStore()
-        store.save(
-            {
-                "identity": "alice",
-                "password_hash": store.hash_password("wonder"),
-                "tags": ["admin"],
-                "enabled": True,
-            }
-        )
-        store.save(
-            {
-                "identity": "mallory",
-                "password_hash": store.hash_password("evil"),
-                "tags": [],
-                "enabled": False,
-            }
-        )
-        server.user_store = store
-    return server
+    if not with_users:
+        return AsgiServer(primary=BaseApplication())
+    store = MemoryUserStore()
+    store.save(
+        {
+            "identity": "alice",
+            "password_hash": store.hash_password("wonder"),
+            "tags": ["admin"],
+            "enabled": True,
+        }
+    )
+    store.save(
+        {
+            "identity": "mallory",
+            "password_hash": store.hash_password("evil"),
+            "tags": [],
+            "enabled": False,
+        }
+    )
+    return AsgiServer(primary=BaseApplication(), users=store)
 
 
 async def drive(
@@ -180,6 +183,32 @@ class TestLoginHappyPath:
         assert promoted.avatar.identity == "alice"
         assert promoted.avatar.tags == ["admin"]
         assert promoted.data["cart"] == "kept"  # the cart survives the login
+
+    async def test_login_green_path_against_a_file_user_store(self, tmp_path: Path) -> None:
+        storage = LocalStorage(base_dir=tmp_path)
+        storage.set_encryption_keys(Fernet.generate_key().decode())
+        store = FileUserStore(storage)
+        store.save(
+            {
+                "identity": "alice",
+                "password_hash": store.hash_password("wonder"),
+                "tags": ["admin"],
+                "enabled": True,
+            }
+        )
+        server = AsgiServer(primary=BaseApplication(), users=store)
+        anonymous = server.session_store.create()
+        _, sent = await drive(
+            server,
+            "/_server/login",
+            "POST",
+            cookie=f"session_id={anonymous.id}",
+            body={"identity": "alice", "password": "wonder"},
+        )
+        assert response_status(sent) == 200
+        payload = json_body(sent)
+        assert payload["identity"] == "alice"
+        assert payload["tags"] == ["admin"]
 
     async def test_login_accepts_the_pages_form_encoded_post(self) -> None:
         server = make_server()

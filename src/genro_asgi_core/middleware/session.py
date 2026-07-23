@@ -88,6 +88,17 @@ class SessionMiddleware(BaseMiddleware):
             parts.append("Secure")
         return (b"set-cookie", "; ".join(parts).encode("latin-1"))
 
+    def _write_back(self, session: Any) -> None:
+        """Persist the session at request end, but ONLY when it is dirty.
+
+        A read-only request never marks the session dirty (``get`` only refreshes
+        ``last_access``), so it stays zero-I/O; a data mutation or a login raised
+        the flag, and here it is saved and cleared.
+        """
+        if session.dirty:
+            self.server.session_store.save(session)
+            session.clear_dirty()
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Attach the session to the scope; issue the cookie for a NEW session only.
 
@@ -95,7 +106,8 @@ class SessionMiddleware(BaseMiddleware):
         the existing session in place), so the only moment a cookie must be
         issued is when the store had no session for the incoming token (none
         arrived, expired, or unknown) and a fresh anonymous one was created
-        here.
+        here. In either path the session is written back at request end when
+        dirty (``_write_back``).
         """
         store = self.server.session_store
         incoming = self._cookie_value(scope)
@@ -103,6 +115,7 @@ class SessionMiddleware(BaseMiddleware):
         if session is not None:
             scope["session"] = session
             await self.app(scope, receive, send)
+            self._write_back(session)
             return
         session = store.create()
         scope["session"] = session
@@ -115,6 +128,7 @@ class SessionMiddleware(BaseMiddleware):
             await send(message)
 
         await self.app(scope, receive, send_with_cookie)
+        self._write_back(session)
 
 
 if __name__ == "__main__":

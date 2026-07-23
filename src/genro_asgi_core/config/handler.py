@@ -30,7 +30,8 @@ Section → constructor kwarg mapping (core 1a):
 
 - ``server`` → ``host``/``port`` (the ``AsgiServer.serve`` defaults) plus
   ``max_threads`` (the ``WorkPool`` size, peeled by ``BaseServer``) and
-  ``storage_key`` (the ``StorageMixin`` encryption key).
+  ``storage_key`` (the ``StorageMixin`` encryption key); its ``session``
+  child → ``session_ttl`` (server-domain).
 - ``middleware`` → ``middleware=`` ({name: bool | dict} switches).
 - ``auth`` → ``auth=`` (the ``AuthCore`` config, handed verbatim).
 - ``storage`` → ``storage=`` ({code: {path, encrypted}} mounts for the
@@ -41,8 +42,18 @@ Section → constructor kwarg mapping (core 1a):
   registered on the server by ``code`` (core 1b).
 - ``plugins`` → ``plugins=`` ({code: bool | dict} switches for the
   ``PluginMixin``); visible to every role.
-- ``openapi``/nested ``groups`` → read and SKIPPED with a debug log (valid
-  config for other roles/macros, not an error).
+- ``openapi``/nested ``groups``/nested ``configuration`` → read and SKIPPED
+  with a debug log (valid config for other roles/macros — ``configuration``
+  is the app's own opaque subtree, consumed at runtime — not an error).
+
+App config-classes: the constructor takes the site recipe FIRST plus any
+app-config builders (``ConfigurationHandler(site, MyServerAppConfig(...))``).
+Each extra builder is claimed by the application it configures via class
+identity — today only ``_server`` (``ServerApplication.config_class``); a
+builder nobody claims is a boot error. The claimed config's values
+(``admin_password``/``users``/``tokens``) LIFT to the server constructor
+kwargs (root role only); without one the base default applies (empty recipe,
+today's bare ``ServerApplication()``).
 
 ``materialize(role=..., app=...)`` computes the role's ``Projection`` of the
 built tree (D15) and materializes THAT slice: ``root`` sees every section
@@ -60,8 +71,10 @@ from typing import Any
 from genro_builders.builder import BuilderHandler
 
 from ..application import BaseApplication
+from ..applications.server_app import ServerApplication
 from ..asgi_server import AsgiServer
 from ..db import AsgiDbHandlerBase
+from .configurable import ConfigError, resolve_pointers
 from .projection import Projection
 
 __all__ = ["ConfigurationHandler"]
@@ -70,16 +83,43 @@ __all__ = ["ConfigurationHandler"]
 class ConfigurationHandler(BuilderHandler):
     """Owns the ``AsgiConfigBuilder`` recipe and materializes an ``AsgiServer``."""
 
-    def __init__(self, builder: Any) -> None:
+    def __init__(self, builder: Any, *app_configs: Any) -> None:
         super().__init__()
         self._builder = builder
         self._logger = logging.getLogger(f"{__name__}.{type(self).__name__}")
-        self.add_builder(builder)
+        self._server_app_config = self._claim_app_configs(app_configs)
+        self.add_builder(builder, self._server_app_config)
 
     @property
     def builder(self) -> Any:
         """The mounted configuration builder (its recipe already run)."""
         return self._builder
+
+    @property
+    def server_app_config(self) -> Any:
+        """The ``_server`` app's config builder (the claimed one or the default)."""
+        return self._server_app_config
+
+    def _claim_app_configs(self, app_configs: tuple[Any, ...]) -> Any:
+        """Match each extra builder to the application it configures.
+
+        The core knows ONE app by construction: ``_server`` — the claim is by
+        class identity (``ServerApplication.config_class``, D4/D26), no name
+        registry. A builder no application claims is an explicit boot error;
+        so is a second config for the same app. No config at all = the base
+        default (empty recipe → today's bare ``ServerApplication()``).
+        """
+        claimed = None
+        for config in app_configs:
+            if not isinstance(config, ServerApplication.config_class):
+                raise ConfigError(
+                    f"app-config builder {type(config).__name__!r}: "
+                    "no application claims it"
+                )
+            if claimed is not None:
+                raise ConfigError("duplicate config for the '_server' application")
+            claimed = config
+        return claimed if claimed is not None else ServerApplication.config_class()
 
     @property
     def logger(self) -> logging.Logger:
@@ -109,6 +149,9 @@ class ConfigurationHandler(BuilderHandler):
         if "storage_key" in server_attrs:
             kwargs["storage_key"] = server_attrs["storage_key"]
 
+        self._apply_session(projection, kwargs)
+        self._apply_server_app_config(projection, kwargs)
+
         middleware = projection.middleware_config()
         if middleware is not None:
             kwargs["middleware"] = middleware
@@ -136,6 +179,55 @@ class ConfigurationHandler(BuilderHandler):
             server.mount(secondary)
         self._build_databases(projection, server)
         return server
+
+    def _apply_session(self, projection: Projection, kwargs: dict[str, Any]) -> None:
+        """Lift the ``server`` section's ``session`` child to ``session_ttl``.
+
+        ``session`` is server-domain (sessions live on the server), so its
+        ``ttl`` attribute becomes the ``session_ttl`` server kwarg. Absent for
+        hosted roles (they never see ``server``).
+        """
+        node = projection.session_node()
+        if node is None:
+            return
+        kwargs["session_ttl"] = dict(node.fixed_attr_items())["ttl"]
+
+    def _apply_server_app_config(
+        self, projection: Projection, kwargs: dict[str, Any]
+    ) -> None:
+        """Lift the ``_server`` config-class values to the server kwargs.
+
+        Walks the claimed config builder's source (the base default is empty —
+        nothing lifts): ``admin_password`` is a ``^pointer`` node value (a
+        literal is a boot error — secrets stay out of recipes; resolved-empty
+        is a boot error via ``resolve_pointers``), ``users``/``tokens`` are
+        ``{mount, prefix}`` store descriptors. All three become the identity
+        kwargs ``AuthMixin`` peels: the stores live on the server (Phase 3),
+        so the VALUES lift while the config keeps the app's shape. Root-only:
+        the identity surface belongs to the public process (D6). A repeated
+        tag is a boot error (D16 strictness — a silently winning last node
+        is never acceptable for identity config).
+        """
+        if projection.role != "root":
+            return
+        config = self.server_app_config
+        seen: set[str] = set()
+        for node in config.source:
+            if node.node_tag in seen:
+                raise ConfigError(
+                    f"duplicate '{node.node_tag}' in the '_server' configuration"
+                )
+            seen.add(node.node_tag)
+            if node.node_tag == "admin_password":
+                raw = node.value
+                if not (isinstance(raw, str) and raw.startswith("^")):
+                    raise ConfigError(
+                        "'_server' admin_password must be a ^pointer, not a literal"
+                    )
+                value, _attrs = resolve_pointers(config, node)
+                kwargs["admin_password"] = value
+            else:
+                kwargs[node.node_tag] = dict(node.fixed_attr_items())
 
     def _build_databases(self, projection: Projection, server: AsgiServer) -> None:
         """Materialize the ``databases`` section: build and register each handler.
@@ -176,7 +268,8 @@ class ConfigurationHandler(BuilderHandler):
         attributes are the app's constructor kwargs. ``app_class`` presence is
         guaranteed by the grammar (the ``application`` element declares it
         required), so it is popped unconditionally. Any nested section (e.g.
-        ``groups``) has no core-1a applier and is skipped with a debug log.
+        ``groups``, or the RESERVED opaque ``configuration``) has no core-1a
+        applier and is skipped with a debug log.
         """
         attrs = dict(node.fixed_attr_items())
         app_class: type[BaseApplication] = attrs.pop("app_class")

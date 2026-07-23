@@ -85,7 +85,7 @@ class TypedApp(RoutedApplication):
 
 
 class SubApi(RoutingClass):
-    """External RoutingClass mounted into an app via ``attach_instance``."""
+    """External RoutingClass mounted into an app via ``add_branches`` (instance form)."""
 
     @route()
     def ping(self) -> dict[str, bool]:
@@ -320,7 +320,7 @@ class TestSubTrees:
         self, http_request, response_status, response_body
     ) -> None:
         app = DemoApp()
-        app.attach_instance(SubApi(), name="sub")
+        app.route.add_branches({"name": "sub", "instance": SubApi()})
         server = AsgiServer(primary=app)
         sent = await http_request(server, "/sub/ping")
         assert response_status(sent) == 200

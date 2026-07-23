@@ -26,8 +26,9 @@ introspection endpoints:
 The schema is built STANDALONE from the app's own router
 (``router_openapi(app.route)``): there is no dependency on a ``_server``
 application (that surface belongs to a later macro). The mounted routing
-class is plugged with the genro-routes ``pydantic`` plugin so its handler
-signatures are captured into the neutral ``params``/``result`` blocks the
+class is linked as an eager ``instance`` branch, so it inherits the app
+router's plugins — pydantic among them — and its handler signatures are
+captured into the neutral ``params``/``result`` blocks the
 ``OpenAPITranslator`` reads; in direct mode the same plugins reach the app's
 own router through the server's plugin arming (``PluginMixin`` config).
 
@@ -81,7 +82,7 @@ class OpenApiApplication(RoutedApplication):
         module: str | None = kwargs.pop("module", None)
         self._mounted_info: dict[str, Any] = {}
         super().__init__(**kwargs)
-        self.attach_instance(OpenApiMeta(self), name="_meta")
+        self.route.add_branches({"name": "_meta", "instance": OpenApiMeta(self)})
         if routing_class is None and module:
             routing_class = self._import_routing_class(module)
         if routing_class is not None:
@@ -112,15 +113,14 @@ class OpenApiApplication(RoutedApplication):
         return {}
 
     def _mount_routing_class(self, routing_class: RoutingClass) -> None:
-        """Attach the routing class under ``api_name`` and plug ``pydantic`` on it.
+        """Mount the routing class under ``api_name`` as an eager branch.
 
-        The pydantic plugin is what captures the handler signatures into the
-        neutral ``params``/``result`` blocks the OpenAPI translator reads;
-        plugging it on the mounted class's own router keeps mounted-mode schema
-        generation independent of the server's plugin configuration.
+        The instance is linked immediately (the ``instance`` branch form), so it
+        inherits the app router's plugins — pydantic among them (fixed on every
+        router), which captures the handler signatures into the neutral
+        ``params``/``result`` blocks the OpenAPI translator reads.
         """
-        self.attach_instance(routing_class, name=self.api_name)
-        routing_class.route.plug("pydantic")
+        self.route.add_branches({"name": self.api_name, "instance": routing_class})
         info = getattr(routing_class, "openapi_info", None)
         if info:
             self._mounted_info = info

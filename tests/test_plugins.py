@@ -323,7 +323,7 @@ class TestRouterOpenapi:
     def test_hierarchical_format_preserves_the_tree(self) -> None:
         server = _MiniServer(plugins={"openapi": True, "pydantic": True})
         parent = ApiApp()
-        parent.attach_instance(_Svc(), name="sub")
+        parent.route.add_branches({"name": "sub", "instance": _Svc()})
         server.arm_router(parent.route)
         flat = router_openapi(parent.route)
         assert "/sub/ping" in flat["paths"]

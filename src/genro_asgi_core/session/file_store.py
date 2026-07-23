@@ -134,6 +134,10 @@ class FileSessionStore:
         self._write(session)
         return session
 
+    def save(self, session: Session) -> None:
+        """Persist a session's current state to disk (the write-back seam)."""
+        self._write(session)
+
     def delete(self, session_id: str) -> None:
         """Remove a session from the cache and disk (a no-op if absent)."""
         self._sessions.pop(session_id, None)

@@ -124,6 +124,17 @@ class TestSessionStoreContract:
         assert restored.avatar.tags == ["user"]
         assert len(restored.data) == 0
 
+    def test_save_is_in_the_contract(self, store_factory) -> None:
+        # save() is part of the SessionStore Protocol on every backend; calling it
+        # on a live session must succeed (the write-back seam).
+        store = store_factory()
+        session = store.create()
+        session.attach_avatar(Avatar("carol", ["ops"]))
+        store.save(session)
+        again = store.get(session.id)
+        assert again is not None
+        assert again.avatar is not None and again.avatar.identity == "carol"
+
 
 # --- FileSessionStore specifics (D22 survival line) ---
 
@@ -139,6 +150,17 @@ class TestFileSessionStore:
         assert restored.avatar.identity == "carol"
         assert restored.avatar.tags == ["ops"]
         assert len(restored.data) == 0
+
+    def test_save_persists_an_attached_avatar_to_disk(self, tmp_path) -> None:
+        store = FileSessionStore(LocalStorage(base_dir=str(tmp_path)))
+        created = store.create()  # anonymous
+        created.attach_avatar(Avatar("dave", ["admin"]))
+        store.save(created)  # the write-back seam
+        fresh = FileSessionStore(LocalStorage(base_dir=str(tmp_path)))
+        restored = fresh.get(created.id)
+        assert restored is not None
+        assert restored.avatar is not None and restored.avatar.identity == "dave"
+        assert restored.avatar.tags == ["admin"]
 
     def test_corrupted_session_file_raises(self, tmp_path) -> None:
         storage = LocalStorage(base_dir=str(tmp_path))
@@ -215,6 +237,27 @@ class TestSessionUnit:
 
     def test_zero_ttl_is_expired(self) -> None:
         assert Session("tok", avatar=None, ttl=0).is_expired()
+
+    def test_new_session_is_not_dirty(self) -> None:
+        assert Session("tok", avatar=None, ttl=3600).dirty is False
+
+    def test_touch_does_not_mark_dirty(self) -> None:
+        # a read-only request only touches last_access; it must stay non-dirty
+        session = Session("tok", avatar=None, ttl=3600)
+        session.touch()
+        assert session.dirty is False
+
+    def test_mark_dirty_and_clear(self) -> None:
+        session = Session("tok", avatar=None, ttl=3600)
+        session.mark_dirty()
+        assert session.dirty is True
+        session.clear_dirty()
+        assert session.dirty is False
+
+    def test_attach_avatar_marks_dirty(self) -> None:
+        session = Session("tok", avatar=None, ttl=3600)
+        session.attach_avatar(Avatar("alice"))
+        assert session.dirty is True
 
 
 # --- ASGI cookie flow ---

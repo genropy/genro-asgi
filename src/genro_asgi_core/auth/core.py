@@ -47,11 +47,18 @@ import jwt
 from ..exceptions import HTTPUnauthorized
 from ..middleware.base import headers_dict
 from ..session.avatar import Avatar
+from .api_key_store import API_KEY_PREFIX
 
 if TYPE_CHECKING:
     from ..types import Scope
+    from .api_key_store import ApiKeyStore
 
 __all__ = ["AuthCore"]
+
+# HMAC algorithms share one secret for sign and verify, so a verifier using them
+# can also MINT tokens (the tokens surface's create_jwt); asymmetric verifiers
+# (RS*/ES*, a public_key) can only verify.
+SYMMETRIC_JWT_ALGORITHMS = frozenset({"HS256", "HS384", "HS512"})
 
 
 def _split_and_strip(value: str | list[str] | None) -> list[str]:
@@ -71,8 +78,14 @@ def _basic_auth_key(username: str, password: str) -> str:
 class AuthCore:
     """Per-instance credential store and header verifier for basic/bearer/jwt."""
 
-    def __init__(self, **entries: Any) -> None:
-        """Build the credential store from the configured sections."""
+    def __init__(self, api_key_store: ApiKeyStore | None = None, **entries: Any) -> None:
+        """Build the credential store from the configured sections.
+
+        ``api_key_store`` is the wired registry the ``AuthMixin`` passes: when
+        present, an inbound ``gak_`` bearer token is verified against it before
+        the static-bearer/JWT chain.
+        """
+        self._api_key_store = api_key_store
         self._basic: dict[str, dict[str, Any]] = {}
         self._bearer: dict[str, dict[str, Any]] = {}
         self._jwt: list[dict[str, Any]] = []
@@ -105,7 +118,13 @@ class AuthCore:
             }
 
     def _configure_jwt(self, credentials: list[dict[str, Any]]) -> None:
-        """Store the JWT verifier configs as an ordered list of secrets/algorithms."""
+        """Store the JWT verifier configs as an ordered list of secrets/algorithms.
+
+        ``signing`` records the key's provenance: only a key configured as
+        ``secret`` (shared HMAC material) can SIGN — a ``public_key`` folded
+        into the same slot verifies but must never mint tokens, whatever the
+        (defaulted) algorithm says.
+        """
         for config in credentials:
             self._jwt.append(
                 {
@@ -113,11 +132,29 @@ class AuthCore:
                     "secret": config.get("secret") or config.get("public_key"),
                     "algorithm": config.get("algorithm", "HS256"),
                     "tags": _split_and_strip(config.get("tags")),
+                    "signing": bool(config.get("secret")),
                 }
             )
 
     def _configure_default(self, credentials: Any) -> None:
         """Unknown config section — ignored (salvage semantics)."""
+
+    @property
+    def signing_jwt_config(self) -> dict[str, Any] | None:
+        """The first symmetric (``HS*``) JWT verifier config, usable for signing.
+
+        A read-only seam for the tokens surface: HMAC verifiers share one secret
+        for sign and verify, so a token minted here verifies against the same
+        config with zero new key material. Asymmetric verifiers (``RS*``/``ES*``,
+        a ``public_key``) can only verify and are skipped — the ``signing``
+        provenance flag guards them even when the algorithm was defaulted, so
+        public key material can never mint tokens. ``None`` when no symmetric
+        verifier is configured.
+        """
+        for config in self._jwt:
+            if config["algorithm"] in SYMMETRIC_JWT_ALGORITHMS and config["signing"]:
+                return config
+        return None
 
     def authenticate(self, scope: Scope) -> Avatar | None:
         """Verify the request's credentials; return an ``Avatar`` or ``None``.
@@ -145,11 +182,32 @@ class AuthCore:
         return self._basic.get(credentials)
 
     def _auth_bearer(self, credentials: str) -> dict[str, Any] | None:
-        """Resolve a Bearer token, falling back to the JWT verifiers."""
+        """Resolve a Bearer token: a ``gak_`` api key first, then static/JWT.
+
+        A ``gak_``-prefixed token is unambiguously an api key: it is verified
+        against the registry and NEVER falls through to the JWT chain — a miss
+        (revoked, expired, unknown, or no store wired) is a hard ``None``.
+        Any other token keeps the static-bearer → JWT chain unchanged.
+        """
+        if credentials.startswith(API_KEY_PREFIX):
+            return self._auth_api_key(credentials)
         entry = self._bearer.get(credentials)
         if entry is not None:
             return entry
         return self._auth_jwt(credentials)
+
+    def _auth_api_key(self, credentials: str) -> dict[str, Any] | None:
+        """Verify a ``gak_`` key against the wired registry (identity = label)."""
+        if self._api_key_store is None:
+            return None
+        record = self._api_key_store.verify(credentials)
+        if record is None:
+            return None
+        return {
+            "identity": record["label"],
+            "tags": record["tags"],
+            "backend": "api_key",
+        }
 
     def _auth_jwt(self, credentials: str) -> dict[str, Any] | None:
         """Try each configured JWT verifier in turn."""
@@ -202,3 +260,32 @@ if __name__ == "__main__":
         pass
     else:
         raise AssertionError("expected HTTPUnauthorized on malformed header")
+
+    from .api_key_store import ApiKeyStore
+
+    class MemApiKeyStore(ApiKeyStore):
+        __slots__ = ("_records",)
+
+        def __init__(self) -> None:
+            self._records: dict[str, dict[str, Any]] = {}
+
+        def get(self, key_id: str) -> dict[str, Any] | None:
+            return self._records.get(key_id)
+
+        def save(self, record: dict[str, Any]) -> None:
+            self._records[record["key_id"]] = record
+
+    keys = MemApiKeyStore()
+    full_key = keys.issue("ci-bot", ["ci", "deploy"])
+    keyed_core = AuthCore(api_key_store=keys)
+    key_scope: Scope = {"headers": [(b"authorization", b"Bearer " + full_key.encode())]}
+    key_avatar = keyed_core.authenticate(key_scope)
+    assert key_avatar is not None and key_avatar.identity == "ci-bot"
+    assert key_avatar.tags == ["ci", "deploy"]
+    # a gak_ token with no store wired is rejected, never tried as a JWT
+    try:
+        AuthCore().authenticate(key_scope)
+    except HTTPUnauthorized:
+        pass
+    else:
+        raise AssertionError("expected HTTPUnauthorized on gak_ with no store")

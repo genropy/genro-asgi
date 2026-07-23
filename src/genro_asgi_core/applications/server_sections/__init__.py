@@ -17,12 +17,15 @@
 Each section is a ``RoutingClass`` the ``ServerApplication`` attaches through
 ``attach_section(section, name)``, so its endpoints live at
 ``/_server/<name>/...``. This wave ships ``AuthSection`` (the ``auth`` mount
-carrying the login methods); the identity-management sections (Users/Tokens)
-arrive in the next wave.
+carrying the login methods), ``UsersSection`` (SUPERADMIN-gated user management
+at ``users``) and ``TokensSection`` (issued credentials — api keys and JWTs —
+at ``tokens``).
 """
 
 from __future__ import annotations
 
 from .auth_section import AuthSection
+from .tokens_section import TokensSection
+from .users_section import UsersSection
 
-__all__ = ["AuthSection"]
+__all__ = ["AuthSection", "TokensSection", "UsersSection"]

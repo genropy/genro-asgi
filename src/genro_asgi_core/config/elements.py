@@ -68,7 +68,7 @@ class AsgiConfigElements:
     materialization time.
     """
 
-    @element(sub_tags="")
+    @element(sub_tags="session")
     def server(self) -> None:
         """Server runtime options: ``host``, ``port``, ``max_threads``, ``storage_key``.
 
@@ -90,7 +90,20 @@ class AsgiConfigElements:
 
         Configured but resolved empty is an explicit boot error (no silent
         degradation); omit it to run the encrypted mounts dormant.
+
+        Child (server-domain, materialized to a server kwarg): ``session``
+        (the session TTL). The ``_server`` app's identity surface is NOT
+        configured here — it has its own config-class (``ServerAppConfig``,
+        see ``applications/server_app.py``) passed to the handler alongside
+        the site recipe.
         """
+
+    @element(sub_tags="", parent_tags="server")
+    def session(self, ttl: int) -> None:
+        """Session options: ``ttl`` (seconds, REQUIRED — the grammar rejects a
+        session without it) → the server's ``session_ttl`` kwarg (the default
+        store's TTL). Server-domain, so it lives under ``server``, not under an
+        application."""
 
     @element(sub_tags="")
     def middleware(self) -> None:
@@ -132,6 +145,14 @@ class AsgiConfigElements:
         defaults to ``code`` for a secondary; the ``default`` app is the primary
         (mount ``/``). Children are unconstrained (``sub_tags="*"``): the core
         reads only the app's own attributes and delegates the rest."""
+
+    @element(sub_tags="*", parent_tags="application")
+    def configuration(self) -> None:
+        """The application's own configuration (RESERVED tag): opaque to the
+        core, which reads and skips it — the site dialect never validates an
+        app's internal grammar (distributed configuration). Today it carries
+        free attributes; the machinery that fills and mounts its subtree with
+        the app's own dialect is a future macro."""
 
     @element(sub_tags="group", collection_key="code", parent_tags="application")
     def groups(self) -> None:

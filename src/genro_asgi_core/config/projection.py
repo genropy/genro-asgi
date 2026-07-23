@@ -106,10 +106,26 @@ class Projection:
         """The ``server`` section attributes of this slice (empty for hosted roles).
 
         The public listener address (``host``/``port``) belongs to the root
-        process; a hosted worker/batch process never inherits it.
+        process; a hosted worker/batch process never inherits it. Only the
+        node's own attributes — the ``session`` child is read through its own
+        seam.
         """
         node = self.section("server")
         return dict(node.fixed_attr_items()) if node is not None else {}
+
+    def session_node(self) -> Any:
+        """The ``server`` section's ``session`` child node, or ``None``.
+
+        Server-domain: absent for hosted roles (they never see ``server``).
+        """
+        return self._server_child("session")
+
+    def _server_child(self, tag: str) -> Any:
+        """The named child of the ``server`` section node, or ``None``."""
+        node = self.section("server")
+        if node is None or node.value is None or not hasattr(node.value, "nodes"):
+            return None
+        return next((child for child in node.value if child.node_tag == tag), None)
 
     def middleware_config(self) -> dict[str, Any] | None:
         """The middleware switches of this slice.
