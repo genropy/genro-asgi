@@ -279,6 +279,26 @@ class TestSpool:
         assert payload(sent) == {"task_id": "t1", "result": {"answer": 42}}
 
 
+class TestSchedulesMoreErrors:
+    """The remaining schedule/spool validation branches."""
+
+    async def test_update_bad_spec_is_error(self, tmp_path: Path) -> None:
+        # A schedule exists; updating it with an unparseable spec surfaces the
+        # next_run ValueError as the error document (not a 500).
+        server = make_server(tmp_path)
+        await drive(server, "/_server/tasks/create", method="POST",
+                    body={"code": "cleanup", "kind": "every", "spec": "1s"})
+        sent = await drive(server, "/_server/tasks/update", method="POST",
+                           body={"code": "cleanup", "kind": "every", "spec": "bogus"})
+        assert status(sent) == 200
+        assert "invalid every spec" in payload(sent)["error"]
+
+    async def test_result_unknown_is_error(self, tmp_path: Path) -> None:
+        sent = await drive(make_server(tmp_path), "/_server/tasks/result?task_id=ghost")
+        assert status(sent) == 200
+        assert "not found" in payload(sent)["error"]
+
+
 class TestDisabled:
     """tasks=False: every endpoint answers the error document at 200."""
 
@@ -287,9 +307,16 @@ class TestDisabled:
         for path, method in [
             ("/_server/tasks/list", "GET"),
             ("/_server/tasks/create", "POST"),
+            ("/_server/tasks/update", "POST"),
+            ("/_server/tasks/enable?code=x", "POST"),
+            ("/_server/tasks/disable?code=x", "POST"),
             ("/_server/tasks/run_now?code=x", "POST"),
+            ("/_server/tasks/delete?code=x", "POST"),
+            ("/_server/tasks/logs?task_name=x", "GET"),
             ("/_server/tasks/spool_list?owner=x", "GET"),
             ("/_server/tasks/progress?task_id=x", "GET"),
+            ("/_server/tasks/cancel?task_id=x", "POST"),
+            ("/_server/tasks/result?task_id=x", "GET"),
         ]:
             body = {} if method == "POST" else None
             sent = await drive(server, path, method=method, body=body)

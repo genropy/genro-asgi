@@ -289,3 +289,72 @@ class TestNoStore:
         sent = await drive(make_server(SUPERADMIN, store=None), "/_server/users/list")
         assert status(sent) == 200
         assert "error" in payload(sent)
+
+    async def test_get_without_a_store_is_the_error_shape(self) -> None:
+        sent = await drive(make_server(SUPERADMIN, store=None), "/_server/users/get?identity=alice")
+        assert status(sent) == 200
+        assert "error" in payload(sent)
+
+    async def test_create_user_without_a_store_is_the_error_shape(self) -> None:
+        sent = await drive(
+            make_server(SUPERADMIN, store=None),
+            "/_server/users/create_user?identity=alice",
+            "POST",
+            body={"password": "pw", "password_confirm": "pw"},
+        )
+        assert status(sent) == 200
+        assert "error" in payload(sent)
+
+    async def test_save_without_a_store_is_the_error_shape(self) -> None:
+        sent = await drive(
+            make_server(SUPERADMIN, store=None),
+            "/_server/users/save?identity=alice",
+            "POST",
+            body={"tags": []},
+        )
+        assert status(sent) == 200
+        assert "error" in payload(sent)
+
+    async def test_set_password_without_a_store_is_the_error_shape(self) -> None:
+        sent = await drive(
+            make_server(SUPERADMIN, store=None),
+            "/_server/users/set_password?identity=alice",
+            "POST",
+            body={"password": "pw", "password_confirm": "pw"},
+        )
+        assert status(sent) == 200
+        assert "error" in payload(sent)
+
+    async def test_delete_without_a_store_is_the_error_shape(self) -> None:
+        sent = await drive(
+            make_server(SUPERADMIN, store=None), "/_server/users/delete?identity=alice", "POST"
+        )
+        assert status(sent) == 200
+        assert "error" in payload(sent)
+
+
+class TestValidationErrors:
+    async def test_get_missing_user_reports_no_such_user(self) -> None:
+        sent = await drive(make_server(SUPERADMIN), "/_server/users/get?identity=ghost")
+        assert status(sent) == 200
+        assert payload(sent)["error"] == "No such user: ghost"
+
+    async def test_create_user_without_identity_is_rejected(self) -> None:
+        sent = await drive(
+            make_server(SUPERADMIN),
+            "/_server/users/create_user",
+            "POST",
+            body={"password": "pw", "password_confirm": "pw"},
+        )
+        assert status(sent) == 200
+        assert payload(sent)["error"] == "Identity is required"
+
+    async def test_set_password_on_a_missing_user_is_an_error(self) -> None:
+        sent = await drive(
+            make_server(SUPERADMIN),
+            "/_server/users/set_password?identity=ghost",
+            "POST",
+            body={"password": "pw", "password_confirm": "pw"},
+        )
+        assert status(sent) == 200
+        assert payload(sent)["error"] == "No such user: ghost"

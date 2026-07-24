@@ -221,3 +221,24 @@ class TestNoStore:
         sent = await drive(make_server(store=None), "/_server/tokens/list")
         assert status(sent) == 200
         assert "error" in payload(sent)
+
+    async def test_issue_without_a_store_is_the_error_shape(self) -> None:
+        sent = await drive(
+            make_server(store=None), "/_server/tokens/issue", "POST", body={"label": "ci"}
+        )
+        assert status(sent) == 200
+        assert "error" in payload(sent)
+
+    async def test_revoke_without_a_store_is_the_error_shape(self) -> None:
+        sent = await drive(
+            make_server(store=None), "/_server/tokens/revoke?key_id=abc", "POST"
+        )
+        assert status(sent) == 200
+        assert "error" in payload(sent)
+
+    async def test_delete_without_a_store_is_the_error_shape(self) -> None:
+        sent = await drive(
+            make_server(store=None), "/_server/tokens/delete?key_id=abc", "POST"
+        )
+        assert status(sent) == 200
+        assert "error" in payload(sent)
