@@ -23,11 +23,12 @@ attributes (read back by ``ConfigurationHandler.materialize`` via
 
 Sections and their 1a fate:
 
-- ``server`` — runtime options (``host``, ``port``, ``max_threads``,
-  ``storage_key``). ``host``/``port`` feed ``AsgiServer.serve``; ``max_threads``
-  sizes the server's thread pool (peeled by ``BaseServer``, handed to
-  ``WorkPool``); ``storage_key`` installs at-rest encryption on the server's
-  storage (core 1b).
+- ``server`` — runtime options (``host``, ``port``, ``external_url``,
+  ``max_threads``, ``storage_key``). ``host``/``port`` feed
+  ``AsgiServer.serve``; ``external_url`` is the server's public base address
+  (the OIDC ``redirect_uri`` prefix); ``max_threads`` sizes the server's thread
+  pool (peeled by ``BaseServer``, handed to ``WorkPool``); ``storage_key``
+  installs at-rest encryption on the server's storage (core 1b).
 - ``middleware`` — one ``{name: bool | dict}`` switch per middleware.
 - ``storage`` — mounts of the server's ``LocalStorage`` (core 1b); visible to
   every role (survival infrastructure).
@@ -74,9 +75,19 @@ class AsgiConfigElements(TaskConfigElements):
 
     @element(sub_tags="session,tasks")
     def server(self) -> None:
-        """Server runtime options: ``host``, ``port``, ``max_threads``, ``storage_key``.
+        """Server runtime options: ``host``, ``port``, ``external_url``,
+        ``max_threads``, ``storage_key``.
 
         ``host``/``port`` become the defaults of ``AsgiServer.serve``.
+
+        ``external_url`` (str, optional) is the server's PUBLIC base address —
+        what the server calls itself when it hands its own URL to a third party
+        (``https://shop.example.com``; a trailing slash is stripped). It is not
+        the listener: behind a proxy the bind address and the public address
+        differ, and only the latter is meaningful to an outside caller. Required
+        when an ``oidc()`` provider is configured — the provider is given an
+        absolute ``redirect_uri`` — and a boot error when missing there.
+
         ``max_threads`` sizes the server's thread pool: ``BaseServer`` peels
         it and hands it to ``WorkPool`` (omitted, the stdlib default
         ``min(32, cpu + 4)`` applies).

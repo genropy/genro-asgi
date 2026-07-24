@@ -25,6 +25,13 @@ fetched at construction: a server booting while its provider is unreachable
 must not die. ``discovery()`` fetches ``<issuer>/.well-known/openid-configuration``
 LAZILY at first use and caches it per instance.
 
+The ``redirect_uri`` handed to the provider is ABSOLUTE (RFC 6749 §3.1.2) and
+built from the server's ``external_url`` — its declared public base address.
+Two properties make that the only workable source: the provider compares the
+URI byte for byte with the one registered for the client, and the token
+exchange must repeat the SAME value in a context where no request exists.
+A server carrying a provider without ``external_url`` refuses to boot.
+
 The ``start`` route begins the authorization-code flow with PKCE (S256, always
 on — the ``client_secret`` is optional, a public client works without one and
 the secret is never logged nor put on the wire here). It mints a fresh ``state``
@@ -92,6 +99,7 @@ class OidcMethod(AuthMethod):
         self._code = code
         self._provider = provider
         self._discovery: dict[str, Any] | None = None
+        self._jwk_client: jwt.PyJWKClient | None = None
 
     @property
     def code(self) -> str:
@@ -122,12 +130,26 @@ class OidcMethod(AuthMethod):
         return discovery
 
     def start_url(self) -> str:
-        """The ``start`` route url — the descriptor entry the login page navigates to."""
+        """The ``start`` route url — the descriptor entry the login page navigates to.
+
+        RELATIVE by design: the login page navigates to it within our own site,
+        so it needs no host (and works on every address the server answers on).
+        """
         return f"/_server/auth/{self.method_id}/start"
 
     def callback_url(self) -> str:
-        """The ``callback`` route url — the ``redirect_uri`` handed to the provider."""
-        return f"/_server/auth/{self.method_id}/callback"
+        """The ABSOLUTE ``callback`` url — the ``redirect_uri`` handed to the provider.
+
+        Absolute because the provider redirects a browser to it from another
+        origin and matches it against the URI registered for the client (RFC
+        6749 §3.1.2); relative here would be rejected before the user ever sees
+        a login screen. Built from the server's declared ``external_url``, so the
+        authorization request and the token exchange — which has no request to
+        derive a host from — send the identical string. The server refuses to
+        boot with a provider configured and no ``external_url``, so this never
+        renders a ``None`` prefix.
+        """
+        return f"{self.server.external_url}/_server/auth/{self.method_id}/callback"
 
     def descriptor(self) -> dict[str, Any]:
         """Public descriptor for the login page: a labelled redirect button.
@@ -265,6 +287,20 @@ class OidcMethod(AuthMethod):
             raise HTTPBadRequest("OIDC token response carried no id_token")
         return id_token
 
+    async def jwk_client(self) -> jwt.PyJWKClient:
+        """The provider's JWKS client, built once and kept for the instance.
+
+        ``PyJWKClient`` caches the fetched key set (its own ``lifespan``), which
+        only pays off if the client SURVIVES the request — a fresh one per
+        callback would re-fetch every time. Built from the lazily discovered
+        ``jwks_uri``, so it inherits the offline-boot guarantee.
+        """
+        client = self._jwk_client
+        if client is None:
+            discovery = await self.discovery()
+            client = self._jwk_client = jwt.PyJWKClient(discovery["jwks_uri"])
+        return client
+
     async def _verify_id_token(self, id_token: str) -> dict[str, Any]:
         """Verify the ``id_token`` signature/audience/issuer; return its claims.
 
@@ -273,10 +309,18 @@ class OidcMethod(AuthMethod):
         the client id, issuer = the configured issuer. Any verification failure
         collapses to a 400 (mirrors ``AuthCore._verify_jwt``'s
         ``InvalidTokenError`` shape).
+
+        ``PyJWKClient`` fetches the key set with a BLOCKING stdlib call, so the
+        resolution goes through ``server.run_sync`` (the D2 pool protocol every
+        blocking call in the core follows) — on the loop it would freeze the whole
+        server for the duration of a request to the provider. The signature check
+        itself is pure CPU and stays here.
         """
-        discovery = await self.discovery()
+        client = await self.jwk_client()
         try:
-            signing_key = jwt.PyJWKClient(discovery["jwks_uri"]).get_signing_key_from_jwt(id_token)
+            signing_key = await self.server.run_sync(
+                lambda: client.get_signing_key_from_jwt(id_token)
+            )
             claims: dict[str, Any] = jwt.decode(
                 id_token,
                 signing_key.key,
@@ -300,14 +344,18 @@ if __name__ == "__main__":
 
     from ..exceptions import HTTPBadRequest
 
-    application = SimpleNamespace(server="SERVER")
+    application = SimpleNamespace(server=SimpleNamespace(external_url="https://shop.example.com"))
     provider = {"issuer": "https://accounts.example.com", "client_id": "abc", "scopes": DEFAULT_SCOPES}
     method = OidcMethod(application, "oidc:google", "google", provider)
     assert method.method_id == "oidc:google"
     assert method.kind == "redirect"
     assert method.code == "google"
+    # start stays relative (our own site navigates to it); the redirect_uri the
+    # provider receives is absolute, built from the server's external_url.
     assert method.start_url() == "/_server/auth/oidc:google/start"
-    assert method.callback_url() == "/_server/auth/oidc:google/callback"
+    assert method.callback_url() == (
+        "https://shop.example.com/_server/auth/oidc:google/callback"
+    )
     assert method.descriptor() == {
         "id": "oidc:google",
         "kind": "redirect",

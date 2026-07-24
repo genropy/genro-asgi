@@ -107,7 +107,8 @@ Login lockout with backoff is configurable via `server_app={"login": {...}}`.
 
 ## OIDC
 
-An OIDC provider is configured under `server_app`:
+An OIDC provider is configured under `server_app`, and the server must know its
+own **public base address** — `external_url`:
 
 ```python
 PROVIDER = {
@@ -117,7 +118,26 @@ PROVIDER = {
     "identity_claim": "email",
     "tags": [],
 }
-server = AsgiServer(primary=App(), server_app={"oidc": {"google": PROVIDER}})
+server = AsgiServer(
+    primary=App(),
+    external_url="https://shop.example.com",
+    server_app={"oidc": {"google": PROVIDER}},
+)
+```
+
+`external_url` is what the server calls *itself* when it hands its own URL to
+the provider: the `redirect_uri` the browser is sent back to must be absolute,
+and must match the one you registered for the client in the provider's console —
+here `https://shop.example.com/_server/auth/oidc:google/callback`. It is
+distinct from the `host`/`port` the server binds to, which differ behind a proxy
+and mean nothing to an outside caller. Configuring a provider **without**
+`external_url` is a boot error: the server refuses to start rather than fail at
+the first login attempt with a provider-side error.
+
+In a config recipe it lives on the `server` section:
+
+```python
+root.server(host="127.0.0.1", port=8000, external_url="https://shop.example.com")
 ```
 
 - `GET /_server/auth/oidc:google/start?next=...` → `302` (PKCE S256).
@@ -147,6 +167,9 @@ $ curl -H "Authorization: Bearer sk_live_xyz" http://127.0.0.1:8000/public
   one-element list.
 - An invalid `Authorization` header is `401` and does **not** fall back to the
   session cookie.
+- An OIDC provider needs `external_url`, and the resulting callback URL must be
+  registered verbatim with the provider — a mismatch is refused by the provider,
+  not by us. A missing `external_url` stops the server at boot.
 - The auth symbols (`AuthMixin`, `PasswordMethod`, `OidcMethod`, `ApiKeyStore`,
   `FileApiKeyStore`, `UserStore`, `FileUserStore`, `AuthCore`, `AuthMethod`) are
   importable from `genro_asgi`.

@@ -82,10 +82,17 @@ class _FakeSigningKey:
 
 
 class _FakePyJWKClient:
-    """Stand-in for ``jwt.PyJWKClient``: resolves every token to the module key."""
+    """Stand-in for ``jwt.PyJWKClient``: resolves every token to the module key.
+
+    ``instances`` counts constructions: the real client caches the fetched key
+    set on the instance, so building one per callback would re-fetch the JWKS
+    every time — the count pins that the method keeps ONE.
+    """
+
+    instances = 0
 
     def __init__(self, uri: str) -> None:
-        pass
+        type(self).instances += 1
 
     def get_signing_key_from_jwt(self, token: str) -> _FakeSigningKey:
         return _FakeSigningKey(_SIGNING_KEY.public_key())
@@ -108,10 +115,13 @@ class FakeAsyncClient:
     """Stand-in for ``httpx.AsyncClient``: GET returns discovery, POST the token set.
 
     ``token_response`` (a class attribute swapped per test) is what the token
-    endpoint answers; the default carries a freshly signed id_token.
+    endpoint answers; the default carries a freshly signed id_token. ``posted``
+    records every token-exchange form so a test can assert what the provider
+    actually received.
     """
 
     token_response: dict[str, Any] = {}
+    posted: list[dict[str, Any]] = []
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         pass
@@ -126,6 +136,7 @@ class FakeAsyncClient:
         return FakeResponse(DISCOVERY_DOC)
 
     async def post(self, url: str, data: dict[str, Any] | None = None) -> FakeResponse:
+        type(self).posted.append(dict(data or {}))
         return FakeResponse(self.token_response or {"id_token": make_id_token()})
 
 
@@ -139,14 +150,25 @@ def mock_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
 def mock_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     """Mock discovery, the JWKS signing-key resolution, and the token endpoint."""
     FakeAsyncClient.token_response = {}
+    FakeAsyncClient.posted = []
+    _FakePyJWKClient.instances = 0
     monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
     monkeypatch.setattr(jwt, "PyJWKClient", _FakePyJWKClient)
 
 
+EXTERNAL_URL = "https://shop.example.com"
+
+
 def make_server(provider: dict[str, Any] | None = None) -> AsgiServer:
-    """A hand-built server carrying one OIDC provider under code ``google``."""
+    """A hand-built server carrying one OIDC provider under code ``google``.
+
+    ``external_url`` is mandatory alongside a provider: it is the prefix of the
+    absolute ``redirect_uri`` the provider is handed, so a server configured
+    without it refuses to boot.
+    """
     return AsgiServer(
         primary=BaseApplication(),
+        external_url=EXTERNAL_URL,
         server_app={"oidc": {"google": provider if provider is not None else PROVIDER}},
     )
 
@@ -258,7 +280,11 @@ class TestOidcStart:
         query = location_query(sent)
         assert query["response_type"] == ["code"]
         assert query["client_id"] == ["client-123"]
-        assert query["redirect_uri"] == ["/_server/auth/oidc:google/callback"]
+        # ABSOLUTE, built from the server's external_url (RFC 6749 §3.1.2): a
+        # relative redirect_uri is refused by every real provider.
+        assert query["redirect_uri"] == [
+            f"{EXTERNAL_URL}/_server/auth/oidc:google/callback"
+        ]
         assert query["scope"] == ["openid email profile"]
         assert query["code_challenge_method"] == ["S256"]
         assert query["state"][0]
@@ -313,6 +339,76 @@ class TestOidcStart:
             hashlib.sha256(verifier.encode("ascii")).digest()
         ).rstrip(b"=").decode("ascii")
         assert challenge == expected
+
+
+class TestOidcRedirectUri:
+    """The ``redirect_uri`` contract: absolute, stable, and declared not derived.
+
+    A provider matches the URI byte for byte against the one registered for the
+    client and refuses anything relative, so these are the assertions that decide
+    whether a real login can happen at all.
+    """
+
+    async def test_redirect_uri_is_identical_in_start_and_token_exchange(
+        self, mock_provider: None
+    ) -> None:
+        # The provider compares the two: a mismatch between the authorization
+        # request and the exchange is invalid_grant. The exchange has no request
+        # to derive a host from, which is why both read the declared external_url.
+        server = make_server()
+        session_id, state = await begin_flow(server)
+        _, sent = await drive(
+            server,
+            f"/_server/auth/oidc:google/callback?state={state}&code=auth-code",
+            cookie=f"session_id={session_id}",
+        )
+        assert response_status(sent) == 302
+        exchanged = FakeAsyncClient.posted[-1]["redirect_uri"]
+        assert exchanged == f"{EXTERNAL_URL}/_server/auth/oidc:google/callback"
+
+    async def test_redirect_uri_carries_a_scheme_and_host(self, mock_discovery: None) -> None:
+        server = make_server()
+        session = server.session_store.create()
+        _, sent = await drive(
+            server,
+            "/_server/auth/oidc:google/start",
+            cookie=f"session_id={session.id}",
+        )
+        parsed = urlparse(location_query(sent)["redirect_uri"][0])
+        assert parsed.scheme == "https"
+        assert parsed.netloc == "shop.example.com"
+        assert parsed.path == "/_server/auth/oidc:google/callback"
+
+    async def test_external_url_trailing_slash_does_not_double_the_separator(
+        self, mock_discovery: None
+    ) -> None:
+        server = AsgiServer(
+            primary=BaseApplication(),
+            external_url="https://shop.example.com/",
+            server_app={"oidc": {"google": PROVIDER}},
+        )
+        session = server.session_store.create()
+        _, sent = await drive(
+            server,
+            "/_server/auth/oidc:google/start",
+            cookie=f"session_id={session.id}",
+        )
+        assert location_query(sent)["redirect_uri"] == [
+            "https://shop.example.com/_server/auth/oidc:google/callback"
+        ]
+
+    def test_a_configured_provider_without_external_url_refuses_to_boot(self) -> None:
+        # An incomplete configuration is loud at boot, not an opaque provider
+        # error at the first login attempt.
+        with pytest.raises(ValueError, match="external_url"):
+            AsgiServer(
+                primary=BaseApplication(),
+                server_app={"oidc": {"google": PROVIDER}},
+            )
+
+    def test_a_server_without_providers_needs_no_external_url(self) -> None:
+        server = AsgiServer(primary=BaseApplication())
+        assert server.external_url is None
 
 
 class TestOidcDiscoveryLazy:
@@ -487,6 +583,43 @@ class TestOidcCallback:
             cookie=f"session_id={session_id}",
         )
         assert response_status(sent) == 400
+
+
+class TestOidcJwksResolution:
+    """How the id_token's signing key is fetched: once, and off the event loop."""
+
+    async def test_the_jwks_client_is_built_once_across_callbacks(
+        self, mock_provider: None
+    ) -> None:
+        # PyJWKClient caches the key set ON THE INSTANCE, so a client per callback
+        # would re-fetch the JWKS on every login. One instance serves the method.
+        server = make_server()
+        for _ in range(2):
+            session_id, state = await begin_flow(server)
+            _, sent = await drive(
+                server,
+                f"/_server/auth/oidc:google/callback?state={state}&code=auth-code",
+                cookie=f"session_id={session_id}",
+            )
+            assert response_status(sent) == 302
+        assert _FakePyJWKClient.instances == 1
+
+    async def test_the_signing_key_is_resolved_off_the_event_loop(
+        self, mock_provider: None
+    ) -> None:
+        # The real client fetches with a blocking stdlib call: it must run on the
+        # server pool (D2), never on the loop. The pool is provisioned lazily, so
+        # having been provisioned by the callback is the observable proof.
+        server = make_server()
+        assert server.pool.provisioned is False
+        session_id, state = await begin_flow(server)
+        _, sent = await drive(
+            server,
+            f"/_server/auth/oidc:google/callback?state={state}&code=auth-code",
+            cookie=f"session_id={session_id}",
+        )
+        assert response_status(sent) == 302
+        assert server.pool.provisioned is True
 
 
 class TestOidcEndToEnd:

@@ -28,10 +28,11 @@ walking the ``SourceBag`` directly (``node.node_tag`` /
 
 Section → constructor kwarg mapping (core 1a):
 
-- ``server`` → ``host``/``port`` (the ``AsgiServer.serve`` defaults) plus
-  ``max_threads`` (the ``WorkPool`` size, peeled by ``BaseServer``) and
-  ``storage_key`` (the ``StorageMixin`` encryption key); its ``session``
-  child → ``session_ttl`` (server-domain).
+- ``server`` → ``host``/``port`` (the ``AsgiServer.serve`` defaults),
+  ``external_url`` (the public base address, required by a configured OIDC
+  provider) plus ``max_threads`` (the ``WorkPool`` size, peeled by
+  ``BaseServer``) and ``storage_key`` (the ``StorageMixin`` encryption key);
+  its ``session`` child → ``session_ttl`` (server-domain).
 - ``middleware`` → ``middleware=`` ({name: bool | dict} switches).
 - ``auth`` → ``auth=`` (the ``AuthCore`` config, handed verbatim).
 - ``storage`` → ``storage=`` ({code: {path, encrypted}} mounts for the
@@ -144,6 +145,8 @@ class ConfigurationHandler(BuilderHandler):
             kwargs["host"] = server_attrs["host"]
         if "port" in server_attrs:
             kwargs["port"] = server_attrs["port"]
+        if "external_url" in server_attrs:
+            kwargs["external_url"] = server_attrs["external_url"]
         if "max_threads" in server_attrs:
             kwargs["max_threads"] = server_attrs["max_threads"]
         if "storage_key" in server_attrs:

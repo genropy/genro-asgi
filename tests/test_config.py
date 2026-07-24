@@ -63,10 +63,16 @@ class ApiApp(BaseApplication):
 
 
 class TwoAppConfig(AsgiConfigBuilder):
-    """Two apps (shop default primary, api secondary), cors + basic auth, host/port."""
+    """Two apps (shop default primary, api secondary), cors + basic auth, host/port.
+
+    Declares ``external_url`` too — the whole-site recipe of these tests, and a
+    site that configures an OIDC provider must name its public base address (the
+    absolute ``redirect_uri`` prefix) or the server refuses to boot. The
+    without-``external_url`` case is covered on its own in ``test_oidc.py``.
+    """
 
     def main(self, root: Any) -> None:
-        root.server(host="0.0.0.0", port=9100)
+        root.server(host="0.0.0.0", port=9100, external_url="https://shop.example.com")
         root.middleware(cors=True)
         root.auth(basic={"admin": {"password": "secret", "tags": "admin"}})
         apps = root.applications(default="shop")
