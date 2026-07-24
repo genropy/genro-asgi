@@ -3,8 +3,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "genro-asgi-core"
-version = "0.1.0"
+name = "genro-asgi"
+version = "0.20.0"
 description = "Minimal ASGI server core (spec-first redesign of genro-asgi)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -14,7 +14,7 @@ authors = [
 ]
 keywords = ["asgi", "web", "async", "http", "server"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
@@ -44,18 +44,18 @@ test = [
     "pytest-asyncio>=0.23",
 ]
 dev = [
-    "genro-asgi-core[test]",
+    "genro-asgi[test]",
     "ruff>=0.1.0",
     "mypy>=1.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/genropy/genro-asgi-core"
-Repository = "https://github.com/genropy/genro-asgi-core"
-"Bug Tracker" = "https://github.com/genropy/genro-asgi-core/issues"
+Homepage = "https://github.com/genropy/genro-asgi"
+Repository = "https://github.com/genropy/genro-asgi"
+"Bug Tracker" = "https://github.com/genropy/genro-asgi/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/genro_asgi_core"]
+packages = ["src/genro_asgi"]
 exclude = ["**/tests/"]
 
 [tool.pytest.ini_options]
@@ -63,7 +63,7 @@ testpaths = ["tests"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
-addopts = "-v --cov=genro_asgi_core --cov-report=term-missing"
+addopts = "-v --cov=genro_asgi --cov-report=term-missing"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
@@ -85,7 +85,7 @@ exclude = ["tests/", ".*/tests/"]
 # before the receive loop ever reads it. Silence only the two codes this
 # boundary produces, scoped to this module.
 [[tool.mypy.overrides]]
-module = "genro_asgi_core.channel.client"
+module = "genro_asgi.channel.client"
 disable_error_code = ["misc", "union-attr"]
 
 # CommunicationMixin forwards __call__ cooperatively to the next class in
@@ -94,14 +94,14 @@ disable_error_code = ["misc", "union-attr"]
 # although the composition always provides it at runtime — the dynamic
 # mixin category the parent policy explicitly anticipates.
 [[tool.mypy.overrides]]
-module = "genro_asgi_core.communication"
+module = "genro_asgi.communication"
 disable_error_code = ["misc"]
 
 # MiddlewareMixin (middleware/__init__.py) forwards __call__ cooperatively
 # to the next class in the MRO — the same dynamic-mixin category as
 # CommunicationMixin above.
 [[tool.mypy.overrides]]
-module = "genro_asgi_core.middleware"
+module = "genro_asgi.middleware"
 disable_error_code = ["misc"]
 
 # SessionMixin forwards __init__ cooperatively to the next class in the MRO
@@ -110,7 +110,7 @@ disable_error_code = ["misc"]
 # and rejects super().__init__(**kwargs), although the composition always
 # provides it at runtime.
 [[tool.mypy.overrides]]
-module = "genro_asgi_core.session.mixin"
+module = "genro_asgi.session.mixin"
 disable_error_code = ["misc"]
 
 # AuthMixin forwards __init__ cooperatively (misc, as SessionMixin) and also
@@ -118,7 +118,7 @@ disable_error_code = ["misc"]
 # MRO (SessionMixin or BaseServer), which mypy cannot see on the static bases
 # (object). The same dynamic-mixin category the parent policy anticipates.
 [[tool.mypy.overrides]]
-module = "genro_asgi_core.auth.mixin"
+module = "genro_asgi.auth.mixin"
 disable_error_code = ["misc", "attr-defined"]
 
 # ServerApplication's login surface reaches server capabilities supplied by
@@ -128,7 +128,7 @@ disable_error_code = ["misc", "attr-defined"]
 # dynamic-mixin category as AuthMixin above: the attributes exist on every
 # runtime composition but not on the static base.
 [[tool.mypy.overrides]]
-module = "genro_asgi_core.applications.server_app"
+module = "genro_asgi.applications.server_app"
 disable_error_code = ["attr-defined", "union-attr"]
 
 # LocalTaskExecutor reaches server.storage (supplied by StorageMixin) and
@@ -137,7 +137,7 @@ disable_error_code = ["attr-defined", "union-attr"]
 # same dynamic-mixin category as server_app above: the attributes exist on every
 # runtime composition but not on the static bases.
 [[tool.mypy.overrides]]
-module = "genro_asgi_core.tasks.executor"
+module = "genro_asgi.tasks.executor"
 disable_error_code = ["attr-defined"]
 
 # TaskMixin forwards __init__/__call__ cooperatively to the next class in the
@@ -146,7 +146,7 @@ disable_error_code = ["attr-defined"]
 # static self as object/TaskMixin, not the BaseServer the composition always
 # supplies at runtime. The dynamic-mixin category the parent policy anticipates.
 [[tool.mypy.overrides]]
-module = "genro_asgi_core.tasks.mixin"
+module = "genro_asgi.tasks.mixin"
 disable_error_code = ["misc", "arg-type"]
 
 # TaskManager reaches server.storage / server.session_store — attributes present
@@ -154,12 +154,12 @@ disable_error_code = ["misc", "arg-type"]
 # always does), invisible to mypy's static BaseServer. Same attr-defined category
 # as tasks.executor. (scheduler.py stays clean: it goes through the manager.)
 [[tool.mypy.overrides]]
-module = "genro_asgi_core.tasks.manager"
+module = "genro_asgi.tasks.manager"
 disable_error_code = ["attr-defined"]
 
 # TasksSection reaches server.tasks through the static BaseServer | None handle
 # (present only when TaskMixin is composed and a request is in flight) — the
 # same dynamic-composition category as server_app.
 [[tool.mypy.overrides]]
-module = "genro_asgi_core.applications.server_sections.tasks_section"
+module = "genro_asgi.applications.server_sections.tasks_section"
 disable_error_code = ["union-attr", "no-any-return"]

@@ -30,17 +30,17 @@ from typing import Any
 import pytest
 from genro_bag.resolvers import EnvResolver
 
-from genro_asgi_core import (
+from genro_asgi import (
     AsgiConfigBuilder,
     AsgiServer,
     BaseApplication,
     ConfigurationHandler,
 )
-from genro_asgi_core.applications.server_app import ServerAppConfig
-from genro_asgi_core.config.configurable import ConfigError
-from genro_asgi_core.exceptions import HTTPUnauthorized
-from genro_asgi_core.middleware.base import BaseMiddleware
-from genro_asgi_core.types import Message, Receive, Scope, Send
+from genro_asgi.applications.server_app import ServerAppConfig
+from genro_asgi.config.configurable import ConfigError
+from genro_asgi.exceptions import HTTPUnauthorized
+from genro_asgi.middleware.base import BaseMiddleware
+from genro_asgi.types import Message, Receive, Scope, Send
 
 ADMIN_PW_ENV_VAR = "GENRO_TEST_ADMIN_PW"
 OIDC_SECRET_ENV_VAR = "GENRO_TEST_OIDC_SECRET"

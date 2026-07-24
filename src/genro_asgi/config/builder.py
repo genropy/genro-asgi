@@ -23,7 +23,7 @@ is read back directly from the ``SourceBag`` (``node.node_tag`` /
 
 Example ``config.py``::
 
-    from genro_asgi_core.config import AsgiConfigBuilder
+    from genro_asgi.config import AsgiConfigBuilder
     from myshop.app import Application as Shop
 
     class ServerConfiguration(AsgiConfigBuilder):

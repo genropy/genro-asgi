@@ -31,8 +31,8 @@ from typing import Any, Callable
 import pytest
 from genro_routes import RoutingClass, route
 
-from genro_asgi_core import AsgiServer, McpApplication, McpOpenApiApplication, RoutedApplication
-from genro_asgi_core.types import Message, Scope
+from genro_asgi import AsgiServer, McpApplication, McpOpenApiApplication, RoutedApplication
+from genro_asgi.types import Message, Scope
 
 
 class Empty(RoutedApplication):

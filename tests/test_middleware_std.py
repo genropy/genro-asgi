@@ -34,15 +34,15 @@ from urllib.parse import quote
 
 import pytest
 
-from genro_asgi_core import (
+from genro_asgi import (
     AsgiServer,
     BaseApplication,
     BaseServer,
     MemorySessionStore,
     MiddlewareMixin,
 )
-from genro_asgi_core.exceptions import HTTPNotFound, HTTPUnauthorized, Redirect
-from genro_asgi_core.types import Message, Receive, Scope, Send
+from genro_asgi.exceptions import HTTPNotFound, HTTPUnauthorized, Redirect
+from genro_asgi.types import Message, Receive, Scope, Send
 
 
 class MwServer(MiddlewareMixin, BaseServer):
@@ -317,7 +317,7 @@ class TestLoggingMiddleware:
                 records.append(record.getMessage())
 
         server = MwServer(primary=RoutedApp(), middleware={"logging": True})
-        access_logger = logging.getLogger("genro_asgi_core.middleware.logging.LoggingMiddleware")
+        access_logger = logging.getLogger("genro_asgi.middleware.logging.LoggingMiddleware")
         handler = RecordingHandler()
         access_logger.addHandler(handler)
         access_logger.setLevel(logging.INFO)
@@ -399,7 +399,7 @@ class TestDisabledByDefault:
             def emit(self, record: logging.LogRecord) -> None:
                 records.append(record.getMessage())
 
-        access_logger = logging.getLogger("genro_asgi_core.middleware.logging.LoggingMiddleware")
+        access_logger = logging.getLogger("genro_asgi.middleware.logging.LoggingMiddleware")
         handler = RecordingHandler()
         access_logger.addHandler(handler)
         try:

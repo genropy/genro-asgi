@@ -26,7 +26,7 @@ from datetime import datetime
 
 import pytest
 
-from genro_asgi_core.tasks.schedule import CronSpec, next_run, parse_at, parse_every
+from genro_asgi.tasks.schedule import CronSpec, next_run, parse_at, parse_every
 
 
 class TestParseEvery:

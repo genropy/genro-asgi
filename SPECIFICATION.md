@@ -1,6 +1,6 @@
 # New Design Specification — the genro-asgi-* family (core + orchestration)
 
-**Version**: 0.5.0 · **Last Updated**: 2026-07-22 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.6.0 · **Last Updated**: 2026-07-24 · **Status**: 🔴 DA REVISIONARE
 
 > Founding specification of the redesign. Decided in the design sessions of
 > 2026-07-17→19; the critical survey of the current codebase that motivates it
@@ -738,3 +738,33 @@ ordering of 1a–1e provisional, refined per-phase at workflow-writing time):
 Phase boundaries are package boundaries (D7/D8): 0–1e are core, 2+ is the
 orchestration package. Phase 0 is the birth act of the new repo, which
 forced Q4 first (resolved).
+
+---
+
+## 8. Decision log — later ratifications
+
+### Ratified 2026-07-24 (naming reversal)
+
+**D-rename — the package IS `genro-asgi`; it continues the PyPI name.**
+(Supersedes the naming half of **Q4**, 2026-07-19; the family-scheme and
+documentation-umbrella parts of Q4 are unaffected.)
+
+- Dist name and import name are now **`genro-asgi` / `genro_asgi`** (was
+  `genro-asgi-core` / `genro_asgi_core`). The name `genro-asgi-core` is
+  retired everywhere in code, config and repo.
+- Version is **0.20.0** and the package **continues the existing PyPI
+  `genro-asgi` line** (parked at 0.13.0), rather than starting a fresh
+  `0.1.0` under a new name. 0.20.0 becomes the new latest; `genro-asgi
+  <= 0.13.0` remains resolvable for existing dependents.
+- Development status moves **Alpha → Beta**.
+- The Q4 concern — a `genro_asgi.*` namespace shadowed by the old regular
+  `genro_asgi` dist in a shared environment — no longer applies: the old
+  project is **frozen** (renamed `genro-asgi-legacy` on GitHub, its CI and
+  PyPI-publish workflow removed) and will not publish again. There are no
+  two dists publishing under `genro-asgi`: one name, one continued line.
+- GitHub: `genropy/genro-asgi-core` → `genropy/genro-asgi`; the former
+  `genropy/genro-asgi` (old code) → `genropy/genro-asgi-legacy`.
+
+The historical Q4/D22 entries above are kept verbatim as the record of why
+`-core` was originally chosen; this decision is the correction that cites
+them, per §1 (history is never rewritten).

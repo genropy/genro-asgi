@@ -51,7 +51,7 @@ The module offers three operations over that convention:
   (None or "") raises :class:`ConfigError` (a secret the recipe promised
   MUST exist — no silent degradation).
 
-EXTRACTION BOUNDARY: this module imports nothing from genro_asgi_core and
+EXTRACTION BOUNDARY: this module imports nothing from genro_asgi and
 nothing ASGI — it is duck-typed over genro-builders' public seams (the
 ``_decorator`` marker attribute, the source-node API, ``runtime_values``)
 and moves as-is to genro-builders or a standalone package, tests included.

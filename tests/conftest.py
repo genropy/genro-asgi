@@ -29,7 +29,7 @@ from typing import Callable
 
 import pytest
 
-from genro_asgi_core.types import Message, Scope
+from genro_asgi.types import Message, Scope
 
 
 @pytest.fixture

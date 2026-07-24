@@ -26,9 +26,9 @@ import asyncio
 from collections.abc import AsyncIterable
 from typing import Any
 
-from genro_asgi_core.sse import KEEPALIVE_SECONDS, SseStream
-from genro_asgi_core.streaming import StreamingResponse
-from genro_asgi_core.types import Message, Scope
+from genro_asgi.sse import KEEPALIVE_SECONDS, SseStream
+from genro_asgi.streaming import StreamingResponse
+from genro_asgi.types import Message, Scope
 
 
 async def source(*events: dict[str, Any]) -> AsyncIterable[dict[str, Any]]:

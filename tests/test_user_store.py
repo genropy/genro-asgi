@@ -27,7 +27,7 @@ import json
 import pytest
 from cryptography.fernet import Fernet
 
-from genro_asgi_core import FileUserStore, LocalStorage, UserStore
+from genro_asgi import FileUserStore, LocalStorage, UserStore
 
 # --- store contract suite (parametrized over FACTORIES, §5.9) ---
 

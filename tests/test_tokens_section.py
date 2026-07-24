@@ -27,9 +27,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from genro_asgi_core import ApiKeyStore, AsgiServer, Avatar, BaseApplication
-from genro_asgi_core.middleware.base import BaseMiddleware
-from genro_asgi_core.types import Message, Scope
+from genro_asgi import ApiKeyStore, AsgiServer, Avatar, BaseApplication
+from genro_asgi.middleware.base import BaseMiddleware
+from genro_asgi.types import Message, Scope
 
 JWT_SECRET = "sign-me-please"
 

@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from genro_asgi_core import (
+from genro_asgi import (
     AsgiConfigBuilder,
     AsgiDbHandlerBase,
     AsgiServer,

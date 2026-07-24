@@ -21,7 +21,7 @@ forwarded to the response, e.g. a ``WWW-Authenticate`` challenge) carried by
 
 from __future__ import annotations
 
-from genro_asgi_core.exceptions import (
+from genro_asgi.exceptions import (
     HTTPBadRequest,
     HTTPException,
     HTTPForbidden,

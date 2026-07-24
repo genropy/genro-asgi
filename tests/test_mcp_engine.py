@@ -31,8 +31,8 @@ from typing import Any
 import pytest
 from genro_routes import RoutingClass, route
 
-from genro_asgi_core import McpEngine, McpError
-from genro_asgi_core.mcp import (
+from genro_asgi import McpEngine, McpError
+from genro_asgi.mcp import (
     JSONRPC_INTERNAL_ERROR,
     JSONRPC_INVALID_REQUEST,
     JSONRPC_METHOD_NOT_FOUND,

@@ -33,7 +33,7 @@ import jwt
 import pytest
 from cryptography.fernet import Fernet
 
-from genro_asgi_core import (
+from genro_asgi import (
     ApiKeyStore,
     AsgiServer,
     AuthCore,
@@ -48,9 +48,9 @@ from genro_asgi_core import (
     SessionMixin,
     UserStore,
 )
-from genro_asgi_core.exceptions import HTTPUnauthorized
-from genro_asgi_core.middleware import MiddlewareMixin
-from genro_asgi_core.types import Message, Receive, Scope, Send
+from genro_asgi.exceptions import HTTPUnauthorized
+from genro_asgi.middleware import MiddlewareMixin
+from genro_asgi.types import Message, Receive, Scope, Send
 
 
 class MemoryUserStore(UserStore):

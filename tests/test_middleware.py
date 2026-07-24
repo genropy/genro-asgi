@@ -27,10 +27,10 @@ from __future__ import annotations
 
 import pytest
 
-from genro_asgi_core import BaseApplication, BaseServer, MiddlewareMixin
-from genro_asgi_core.exceptions import HTTPNotFound, Redirect
-from genro_asgi_core.middleware import BaseMiddleware
-from genro_asgi_core.types import Message, Receive, Scope, Send
+from genro_asgi import BaseApplication, BaseServer, MiddlewareMixin
+from genro_asgi.exceptions import HTTPNotFound, Redirect
+from genro_asgi.middleware import BaseMiddleware
+from genro_asgi.types import Message, Receive, Scope, Send
 
 
 class MwServer(MiddlewareMixin, BaseServer):

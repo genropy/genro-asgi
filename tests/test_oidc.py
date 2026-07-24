@@ -39,8 +39,8 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from genro_asgi_core import AsgiServer, BaseApplication, OidcMethod, ServerApplication
-from genro_asgi_core.types import Message, Scope
+from genro_asgi import AsgiServer, BaseApplication, OidcMethod, ServerApplication
+from genro_asgi.types import Message, Scope
 
 DISCOVERY_DOC = {
     "authorization_endpoint": "https://accounts.example.com/authorize",

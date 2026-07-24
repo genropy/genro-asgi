@@ -29,9 +29,9 @@ from pathlib import Path
 import pytest
 from genro_routes import route
 
-from genro_asgi_core import AsgiServer, RoutedApplication
-from genro_asgi_core.storage import LocalStorage
-from genro_asgi_core.tasks.scheduler import TaskScheduler
+from genro_asgi import AsgiServer, RoutedApplication
+from genro_asgi.storage import LocalStorage
+from genro_asgi.tasks.scheduler import TaskScheduler
 
 RUN_MARKS: list[str] = []
 

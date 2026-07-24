@@ -28,8 +28,8 @@ from urllib.parse import quote
 
 from genro_tytx import TRANSPORT_MIME, json_dumps, to_tytx
 
-from genro_asgi_core import HTTPForbidden, HTTPNotFound, HTTPUnauthorized, Response
-from genro_asgi_core.types import Message
+from genro_asgi import HTTPForbidden, HTTPNotFound, HTTPUnauthorized, Response
+from genro_asgi.types import Message
 
 
 class StubRequest:

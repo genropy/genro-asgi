@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""OpenAPI dialect for genro-asgi-core.
+"""OpenAPI dialect for genro-asgi.
 
 genro-routes exposes a dialect-neutral description of each endpoint via
 ``router.nodes()`` — including a per-entry ``result`` block ``{schema,

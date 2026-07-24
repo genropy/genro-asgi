@@ -25,8 +25,8 @@ from typing import Any
 
 import pytest
 
-from genro_asgi_core.storage import LocalStorage
-from genro_asgi_core.tasks import STATUSES, TaskSpool, new_descriptor
+from genro_asgi.storage import LocalStorage
+from genro_asgi.tasks import STATUSES, TaskSpool, new_descriptor
 
 
 @pytest.fixture

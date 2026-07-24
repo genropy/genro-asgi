@@ -130,4 +130,4 @@ __all__ = [
     "router_openapi",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.20.0"

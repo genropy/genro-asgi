@@ -28,8 +28,8 @@ from typing import Any, Callable
 import pytest
 from genro_routes import RoutingClass, route
 
-from genro_asgi_core import AsgiServer, Avatar, BaseMiddleware, RoutedApplication
-from genro_asgi_core.types import Message, Scope
+from genro_asgi import AsgiServer, Avatar, BaseMiddleware, RoutedApplication
+from genro_asgi.types import Message, Scope
 
 
 class DemoApp(RoutedApplication):

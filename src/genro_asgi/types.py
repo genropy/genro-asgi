@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""ASGI type aliases for genro-asgi-core.
+"""ASGI type aliases for genro-asgi.
 
 Aliases follow the ASGI spec (MutableMapping, not TypedDict, for
 extensibility): ``Scope`` — connection metadata (type, method, path,

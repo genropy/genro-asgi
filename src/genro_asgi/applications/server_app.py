@@ -171,7 +171,7 @@ class ServerApplication(OpenApiApplication):
     """
 
     openapi_info: ClassVar[dict[str, Any]] = {
-        "title": "genro-asgi-core server endpoints",
+        "title": "genro-asgi server endpoints",
         "version": "1.0.0",
     }
     config_class = ServerAppConfig
@@ -434,7 +434,7 @@ if __name__ == "__main__":
     assert node.error is None, node.error
     data = node()
     assert data == {
-        "title": "genro-asgi-core server endpoints",
+        "title": "genro-asgi server endpoints",
         "sections": ["auth", "tokens", "users"],
     }
     assert app.login_methods() == {

@@ -31,10 +31,10 @@ import pytest
 from genro_routes import RoutingClass, route
 from genro_routes.plugins._base_plugin import BasePlugin
 
-from genro_asgi_core import AsgiServer, OpenAPIPlugin, OpenAPITranslator, RoutedApplication
-from genro_asgi_core.config import AsgiConfigBuilder, ConfigurationHandler
-from genro_asgi_core.plugin_mixin import PluginMixin, default_plugin_registry
-from genro_asgi_core.plugins import router_openapi
+from genro_asgi import AsgiServer, OpenAPIPlugin, OpenAPITranslator, RoutedApplication
+from genro_asgi.config import AsgiConfigBuilder, ConfigurationHandler
+from genro_asgi.plugin_mixin import PluginMixin, default_plugin_registry
+from genro_asgi.plugins import router_openapi
 
 
 class _MiniBase:
@@ -205,8 +205,8 @@ class TestConfigDriven:
 class TestNoImportSideEffect:
     def test_importing_the_package_does_not_register_openapi(self) -> None:
         code = (
-            "import genro_asgi_core\n"
-            "import genro_asgi_core.plugins.openapi\n"
+            "import genro_asgi\n"
+            "import genro_asgi.plugins.openapi\n"
             "from genro_routes import Router\n"
             "assert 'openapi' not in Router.available_plugins(), Router.available_plugins()\n"
         )
@@ -241,7 +241,7 @@ class TestTranslator:
     def test_translator_module_imports_no_pydantic(self) -> None:
         # The redesigned translator reads genro-routes' cached neutral blocks;
         # it must not import pydantic nor inspect callables (ratified ruling).
-        from genro_asgi_core.plugins.openapi import translator as translator_module
+        from genro_asgi.plugins.openapi import translator as translator_module
 
         source = inspect.getsource(translator_module)
         assert "import pydantic" not in source

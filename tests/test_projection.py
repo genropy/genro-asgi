@@ -28,15 +28,15 @@ from typing import Any
 
 import pytest
 
-from genro_asgi_core import (
+from genro_asgi import (
     AsgiConfigBuilder,
     AsgiServer,
     BaseApplication,
     ConfigurationHandler,
 )
-from genro_asgi_core.config.projection import Projection
-from genro_asgi_core.middleware.base import BaseMiddleware
-from genro_asgi_core.types import Message, Receive, Scope, Send
+from genro_asgi.config.projection import Projection
+from genro_asgi.middleware.base import BaseMiddleware
+from genro_asgi.types import Message, Receive, Scope, Send
 
 
 class ShopApp(BaseApplication):

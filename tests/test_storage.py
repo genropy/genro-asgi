@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 from cryptography.fernet import Fernet, InvalidToken
 
-from genro_asgi_core.storage import LocalStorage
+from genro_asgi.storage import LocalStorage
 
 
 @pytest.fixture

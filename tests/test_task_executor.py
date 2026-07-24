@@ -31,9 +31,9 @@ from typing import Any
 import pytest
 from genro_routes import route
 
-from genro_asgi_core import AsgiServer, RoutedApplication
-from genro_asgi_core.storage import LocalStorage
-from genro_asgi_core.tasks import WORKER_ID, LocalTaskExecutor, TaskSpool, new_descriptor
+from genro_asgi import AsgiServer, RoutedApplication
+from genro_asgi.storage import LocalStorage
+from genro_asgi.tasks import WORKER_ID, LocalTaskExecutor, TaskSpool, new_descriptor
 
 
 class DemoApp(RoutedApplication):

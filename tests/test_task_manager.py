@@ -34,13 +34,13 @@ from pathlib import Path
 import pytest
 from genro_routes import route
 
-from genro_asgi_core import AsgiServer, BaseServer, RoutedApplication
-from genro_asgi_core.application import BaseApplication
-from genro_asgi_core.storage import LocalStorage
-from genro_asgi_core.tasks import TaskManager, new_descriptor
-from genro_asgi_core.tasks.manager import POLL_SECONDS
-from genro_asgi_core.tasks.scheduler import TaskScheduler
-from genro_asgi_core.tasks.store import FileTaskStore
+from genro_asgi import AsgiServer, BaseServer, RoutedApplication
+from genro_asgi.application import BaseApplication
+from genro_asgi.storage import LocalStorage
+from genro_asgi.tasks import TaskManager, new_descriptor
+from genro_asgi.tasks.manager import POLL_SECONDS
+from genro_asgi.tasks.scheduler import TaskScheduler
+from genro_asgi.tasks.store import FileTaskStore
 
 
 class DemoApp(RoutedApplication):

@@ -19,7 +19,7 @@ as genro-storage, but only supports the local filesystem. When genro-storage
 becomes available, simply change the import:
 
     # Before (local only)
-    from genro_asgi_core.storage import LocalStorage
+    from genro_asgi.storage import LocalStorage
 
     # After (full genro-storage)
     from genro_storage import StorageManager as LocalStorage

@@ -345,7 +345,7 @@ class TaskSpool:
 if __name__ == "__main__":
     import tempfile
 
-    from genro_asgi_core.storage import LocalStorage
+    from genro_asgi.storage import LocalStorage
 
     with tempfile.TemporaryDirectory() as tmp:
         spool = TaskSpool(LocalStorage(tmp))

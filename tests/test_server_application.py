@@ -21,7 +21,7 @@ import json
 import pytest
 from genro_routes import RoutingClass, route
 
-from genro_asgi_core import AsgiServer, BaseApplication, ServerApplication
+from genro_asgi import AsgiServer, BaseApplication, ServerApplication
 
 
 class DemoSection(RoutingClass):
@@ -76,7 +76,7 @@ class TestServerEndpoints:
         assert response_status(sent) == 200
         doc = json.loads(response_body(sent))
         assert doc["openapi"] == "3.1.0"
-        assert doc["info"]["title"] == "genro-asgi-core server endpoints"
+        assert doc["info"]["title"] == "genro-asgi server endpoints"
 
     async def test_login_schema_hides_the_injected_request_and_is_post(
         self, http_request, response_body

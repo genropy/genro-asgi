@@ -1,8 +1,8 @@
-import genro_asgi_core
+import genro_asgi
 
 
 def test_version():
-    assert genro_asgi_core.__version__ == "0.1.0"
+    assert genro_asgi.__version__ == "0.20.0"
 
 
 def test_root_exports_public_api():
@@ -68,6 +68,6 @@ def test_root_exports_public_api():
         "__version__",
         "router_openapi",
     ]
-    assert genro_asgi_core.__all__ == expected
+    assert genro_asgi.__all__ == expected
     for name in expected:
-        assert hasattr(genro_asgi_core, name)
+        assert hasattr(genro_asgi, name)

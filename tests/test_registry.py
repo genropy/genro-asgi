@@ -30,9 +30,9 @@ from typing import Any
 
 import pytest
 
-from genro_asgi_core import BaseApplication, BaseServer
-from genro_asgi_core.registry import RegisteredRequest
-from genro_asgi_core.types import Receive, Scope, Send
+from genro_asgi import BaseApplication, BaseServer
+from genro_asgi.registry import RegisteredRequest
+from genro_asgi.types import Receive, Scope, Send
 
 
 class RendezvousApp(BaseApplication):
@@ -211,7 +211,7 @@ class TestCleanups:
             raise RuntimeError("cleanup failure")
 
         item.add_cleanup(boom)
-        with caplog.at_level("ERROR", logger="genro_asgi_core.registry"):
+        with caplog.at_level("ERROR", logger="genro_asgi.registry"):
             item.run_cleanups()
         assert any(
             "Request cleanup" in record.message and record.exc_info

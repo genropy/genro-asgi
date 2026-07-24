@@ -34,7 +34,7 @@ from typing import Any
 import pytest
 from cryptography.fernet import Fernet
 
-from genro_asgi_core import (
+from genro_asgi import (
     AsgiServer,
     AuthMethod,
     AuthSection,
@@ -45,8 +45,8 @@ from genro_asgi_core import (
     ServerApplication,
     UserStore,
 )
-from genro_asgi_core.auth.auth_method import safe_next_path
-from genro_asgi_core.types import Message, Scope
+from genro_asgi.auth.auth_method import safe_next_path
+from genro_asgi.types import Message, Scope
 
 
 class MemoryUserStore(UserStore):

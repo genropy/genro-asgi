@@ -26,9 +26,9 @@ from __future__ import annotations
 from collections.abc import AsyncIterable
 from typing import Any
 
-from genro_asgi_core.response import Response
-from genro_asgi_core.streaming import StreamingResponse
-from genro_asgi_core.types import Message, Scope
+from genro_asgi.response import Response
+from genro_asgi.streaming import StreamingResponse
+from genro_asgi.types import Message, Scope
 
 
 async def drive(app: Any) -> list[Message]:

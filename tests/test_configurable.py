@@ -29,7 +29,7 @@ import pytest
 from genro_bag.resolvers import EnvResolver
 from genro_builders.builder import BuilderBase, BuilderHandler, abstract, container, element
 
-from genro_asgi_core.config.configurable import (
+from genro_asgi.config.configurable import (
     ConfigError,
     declared_elements,
     element_kwargs,

@@ -28,8 +28,8 @@ import time
 import pytest
 from cryptography.fernet import Fernet
 
-from genro_asgi_core import ApiKeyStore, FileApiKeyStore, LocalStorage
-from genro_asgi_core.auth.api_key_store import API_KEY_PREFIX
+from genro_asgi import ApiKeyStore, FileApiKeyStore, LocalStorage
+from genro_asgi.auth.api_key_store import API_KEY_PREFIX
 
 # --- store contract suite (parametrized over FACTORIES, §5.9) ---
 

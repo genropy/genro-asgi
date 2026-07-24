@@ -23,8 +23,8 @@ this one lives in ``tests/`` on purpose.
 
 from __future__ import annotations
 
-from genro_asgi_core import BaseApplication
-from genro_asgi_core.types import Receive, Scope, Send
+from genro_asgi import BaseApplication
+from genro_asgi.types import Receive, Scope, Send
 
 
 class ThrowawayApp(BaseApplication):

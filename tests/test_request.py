@@ -30,8 +30,8 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from genro_asgi_core import Avatar, BaseApplication, BaseServer, Request, Response
-from genro_asgi_core.types import Receive, Scope, Send
+from genro_asgi import Avatar, BaseApplication, BaseServer, Request, Response
+from genro_asgi.types import Receive, Scope, Send
 
 
 async def make_request(

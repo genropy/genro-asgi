@@ -24,7 +24,7 @@ import asyncio
 
 import pytest
 
-from genro_asgi_core import BaseApplication, BaseServer
+from genro_asgi import BaseApplication, BaseServer
 
 
 class AlphaMixin:

@@ -1,4 +1,4 @@
-# Claude Code Instructions - genro-asgi-core
+# Claude Code Instructions - genro-asgi
 
 **Parent Document**: This project follows all policies from the central [meta-genro-modules CLAUDE.md](https://github.com/softwellsrl/meta-genro-modules/blob/main/CLAUDE.md)
 
@@ -12,9 +12,9 @@ Read the parent document first for:
 ## Project-Specific Context
 
 ### Current Status
-- **Development Status**: Alpha
+- **Development Status**: Beta
 - **Has Implementation Code**: Yes
-- **GitHub**: https://github.com/genropy/genro-asgi-core
+- **GitHub**: https://github.com/genropy/genro-asgi
 
 ### Project Purpose
 

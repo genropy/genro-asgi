@@ -1,13 +1,13 @@
-# Contributing to genro-asgi-core
+# Contributing to genro-asgi
 
-Thank you for your interest in contributing to genro-asgi-core!
+Thank you for your interest in contributing to genro-asgi!
 
 ## Development Setup
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/genropy/genro-asgi-core.git
-   cd genro-asgi-core
+   git clone https://github.com/genropy/genro-asgi.git
+   cd genro-asgi
    ```
 
 2. **Create virtual environment**:
@@ -67,7 +67,7 @@ pytest -q
 pytest tests/test_package.py -v
 
 # With coverage report
-pytest --cov=genro_asgi_core --cov-report=term-missing
+pytest --cov=genro_asgi --cov-report=term-missing
 ```
 
 ## Pull Request Process

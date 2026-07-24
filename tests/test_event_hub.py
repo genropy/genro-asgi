@@ -21,8 +21,8 @@ the hub's runtime (one server event loop).
 
 from __future__ import annotations
 
-from genro_asgi_core.tasks import EventHub
-from genro_asgi_core.tasks.hub import QUEUE_MAXSIZE
+from genro_asgi.tasks import EventHub
+from genro_asgi.tasks.hub import QUEUE_MAXSIZE
 
 
 class TestSubscribePublish:

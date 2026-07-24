@@ -32,8 +32,8 @@ import tempfile
 
 import pytest
 
-from genro_asgi_core import BaseApplication, BaseServer
-from genro_asgi_core.channel import (
+from genro_asgi import BaseApplication, BaseServer
+from genro_asgi.channel import (
     MAX_FRAME_SIZE,
     REGISTER_METHOD,
     REGISTER_PATH,
@@ -41,7 +41,7 @@ from genro_asgi_core.channel import (
     Frame,
     FrameStream,
 )
-from genro_asgi_core.communication import CommunicationMixin
+from genro_asgi.communication import CommunicationMixin
 
 
 class FakeHub:

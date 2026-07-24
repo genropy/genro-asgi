@@ -28,8 +28,8 @@ from typing import Any
 import pytest
 from cryptography.fernet import Fernet
 
-from genro_asgi_core.storage import LocalStorage
-from genro_asgi_core.tasks.store import LOG_CAP, FileTaskStore
+from genro_asgi.storage import LocalStorage
+from genro_asgi.tasks.store import LOG_CAP, FileTaskStore
 
 
 def record(code: str, next_run_ts: float | None = 0.0, enabled: bool = True) -> dict[str, Any]:

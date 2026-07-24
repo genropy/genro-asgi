@@ -23,7 +23,7 @@ hooks so ordering and error isolation can be asserted.
 
 from __future__ import annotations
 
-from genro_asgi_core import BaseApplication, BaseServer
+from genro_asgi import BaseApplication, BaseServer
 
 
 class SyncRecordingApp(BaseApplication):

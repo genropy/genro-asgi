@@ -32,10 +32,10 @@ from typing import Any
 import pytest
 from genro_routes import route
 
-from genro_asgi_core import AsgiServer, McpApplication, RoutedApplication
-from genro_asgi_core.storage import LocalStorage
-from genro_asgi_core.tasks import new_descriptor
-from genro_asgi_core.types import Message, Scope
+from genro_asgi import AsgiServer, McpApplication, RoutedApplication
+from genro_asgi.storage import LocalStorage
+from genro_asgi.tasks import new_descriptor
+from genro_asgi.types import Message, Scope
 
 
 class Primary(RoutedApplication):

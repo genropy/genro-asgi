@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import threading
 
-from genro_asgi_core import BaseServer
+from genro_asgi import BaseServer
 
 from .throwaway_app import ThrowawayApp
 

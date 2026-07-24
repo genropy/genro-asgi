@@ -29,7 +29,7 @@ import time
 
 import pytest
 
-from genro_asgi_core import (
+from genro_asgi import (
     Avatar,
     BaseApplication,
     BaseServer,
@@ -40,8 +40,8 @@ from genro_asgi_core import (
     SessionMixin,
     SessionStore,
 )
-from genro_asgi_core.middleware import MiddlewareMixin
-from genro_asgi_core.types import Message, Receive, Scope, Send
+from genro_asgi.middleware import MiddlewareMixin
+from genro_asgi.types import Message, Receive, Scope, Send
 
 # --- store contract suite (parametrized over FACTORIES, §5.9) ---
 

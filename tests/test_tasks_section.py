@@ -30,11 +30,11 @@ from typing import Any
 
 from genro_routes import route
 
-from genro_asgi_core import AsgiServer, Avatar, RoutedApplication
-from genro_asgi_core.middleware.base import BaseMiddleware
-from genro_asgi_core.storage import LocalStorage
-from genro_asgi_core.tasks import new_descriptor
-from genro_asgi_core.types import Message, Scope
+from genro_asgi import AsgiServer, Avatar, RoutedApplication
+from genro_asgi.middleware.base import BaseMiddleware
+from genro_asgi.storage import LocalStorage
+from genro_asgi.tasks import new_descriptor
+from genro_asgi.types import Message, Scope
 
 RUN_MARKS: list[str] = []
 

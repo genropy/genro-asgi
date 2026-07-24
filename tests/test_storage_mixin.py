@@ -29,7 +29,7 @@ from typing import Any
 import pytest
 from cryptography.fernet import Fernet
 
-from genro_asgi_core import (
+from genro_asgi import (
     AsgiConfigBuilder,
     AsgiServer,
     BaseApplication,
@@ -38,8 +38,8 @@ from genro_asgi_core import (
     LocalStorage,
     StorageMixin,
 )
-from genro_asgi_core.middleware.base import BaseMiddleware
-from genro_asgi_core.types import Receive, Scope, Send
+from genro_asgi.middleware.base import BaseMiddleware
+from genro_asgi.types import Receive, Scope, Send
 
 
 class ShopApp(BaseApplication):
