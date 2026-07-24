@@ -38,6 +38,9 @@ htmlcov/
 # Temporary files
 temp/
 
+# Sphinx documentation build output
+docs/_build/
+
 # Package metadata
 src/*.egg-info/
 

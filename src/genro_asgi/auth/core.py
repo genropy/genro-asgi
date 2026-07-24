@@ -20,12 +20,13 @@ configured per instance from ``{'basic': ..., 'bearer': ..., 'jwt': [...]}``
 and consumed by the server-side ``AuthMixin`` (never by walking wrappers).
 
 Config sections (``_configure_<type>`` dynamic dispatch, unknown sections
-ignored):
-    basic:  ``{username: {password: "...", tags: "..."}}`` — O(1) lookup keyed
-            by the base64 ``username:password`` the Basic header carries.
-    bearer: ``{name: {token: "...", tags: "..."}}`` — O(1) lookup keyed by the
+ignored)::
+
+    basic:  {username: {password: "...", tags: "..."}} — O(1) lookup keyed
+            by the base64 username:password the Basic header carries.
+    bearer: {name: {token: "...", tags: "..."}} — O(1) lookup keyed by the
             token value.
-    jwt:    ``[{secret|public_key, algorithm, tags, name}, ...]`` — a list of
+    jwt:    [{secret|public_key, algorithm, tags, name}, ...] — a list of
             verifier configs, each tried in turn and decoded with pyjwt.
 
 ``authenticate(scope)`` reads the ``Authorization`` header via the shared

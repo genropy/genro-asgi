@@ -68,6 +68,7 @@ class BaseApplication:
 
     @server.setter
     def server(self, value: BaseServer) -> None:
+        """Assign the owning server once; a second assignment raises ``RuntimeError``."""
         if self._server is not None:
             raise RuntimeError(f"{type(self).__name__} is already owned by a server")
         self._server = value
