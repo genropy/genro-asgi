@@ -42,6 +42,7 @@ def test_root_exports_public_api():
         "Message",
         "MemorySessionStore",
         "MiddlewareMixin",
+        "OidcMethod",
         "OpenAPIPlugin",
         "OpenAPITranslator",
         "OpenApiApplication",

@@ -43,6 +43,7 @@ from genro_asgi_core.middleware.base import BaseMiddleware
 from genro_asgi_core.types import Message, Receive, Scope, Send
 
 ADMIN_PW_ENV_VAR = "GENRO_TEST_ADMIN_PW"
+OIDC_SECRET_ENV_VAR = "GENRO_TEST_OIDC_SECRET"
 
 
 class ShopApp(BaseApplication):
@@ -358,6 +359,130 @@ class TestServerAppConfigClass:
         worker = handler.materialize(role="worker", app="shop")
         assert worker.user_store is None
         assert worker.api_key_store is None
+
+
+class LoginSurfaceConfig(ServerAppConfig):
+    """A ``_server`` config: lockout policy plus two OIDC providers."""
+
+    def setup(self, data: Any) -> None:
+        data["oidc_secret"] = EnvResolver(OIDC_SECRET_ENV_VAR)
+
+    def main(self, root: Any) -> None:
+        root.login(max_attempts=3, backoff=10)
+        root.oidc(
+            code="corp",
+            issuer="https://idp.example.com",
+            client_id="corp-client",
+            client_secret="^oidc_secret",
+            scopes="openid profile",
+            identity_claim="preferred_username",
+            tags=["staff"],
+        )
+        root.oidc(
+            code="public",
+            issuer="https://accounts.example.org",
+            client_id="pub-client",
+        )
+
+
+class TestServerAppLift:
+    """The login-surface lift: ``login()``/``oidc()`` → ``server_app=`` → the app."""
+
+    def test_lift_reaches_the_server_app(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(OIDC_SECRET_ENV_VAR, "oidc-s3cret")
+        server = ConfigurationHandler(
+            TwoAppConfig(name="config"), LoginSurfaceConfig()
+        ).materialize()
+        app = server.mounts["_server"]
+        assert app.login_policy == {"max_attempts": 3, "backoff": 10}
+        assert set(app.oidc_providers) == {"corp", "public"}
+        corp = app.oidc_providers["corp"]
+        assert corp["client_secret"] == "oidc-s3cret"
+        assert corp["scopes"] == "openid profile"
+        assert corp["identity_claim"] == "preferred_username"
+        assert corp["tags"] == ["staff"]
+
+    def test_oidc_defaults_apply_per_provider(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(OIDC_SECRET_ENV_VAR, "oidc-s3cret")
+        server = ConfigurationHandler(
+            TwoAppConfig(name="config"), LoginSurfaceConfig()
+        ).materialize()
+        public = server.mounts["_server"].oidc_providers["public"]
+        assert public == {
+            "issuer": "https://accounts.example.org",
+            "client_id": "pub-client",
+            "scopes": "openid email profile",
+            "identity_claim": "email",
+            "tags": [],
+        }
+
+    def test_no_config_leaves_the_bare_app(self) -> None:
+        app = build_two_app_server().mounts["_server"]
+        assert app.login_policy == {}
+        assert app.oidc_providers == {}
+
+    def test_client_secret_literal_is_a_boot_error(self) -> None:
+        class LiteralSecretConfig(ServerAppConfig):
+            def main(self, root: Any) -> None:
+                root.oidc(
+                    code="corp",
+                    issuer="https://idp.example.com",
+                    client_id="corp-client",
+                    client_secret="plain-secret",
+                )
+
+        handler = ConfigurationHandler(
+            TwoAppConfig(name="config"), LiteralSecretConfig()
+        )
+        with pytest.raises(ConfigError, match="\\^pointer"):
+            handler.materialize()
+
+    def test_client_secret_pointer_resolving_empty_is_a_boot_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv(OIDC_SECRET_ENV_VAR, raising=False)
+        handler = ConfigurationHandler(
+            TwoAppConfig(name="config"), LoginSurfaceConfig()
+        )
+        with pytest.raises(ConfigError, match="resolved empty"):
+            handler.materialize()
+
+    def test_duplicate_oidc_code_is_a_boot_error(self) -> None:
+        class DoubledCodeConfig(ServerAppConfig):
+            def main(self, root: Any) -> None:
+                root.oidc(code="corp", issuer="https://a.example.com", client_id="a")
+                root.oidc(code="corp", issuer="https://b.example.com", client_id="b")
+
+        handler = ConfigurationHandler(
+            TwoAppConfig(name="config"), DoubledCodeConfig()
+        )
+        with pytest.raises(ConfigError, match="duplicate oidc code"):
+            handler.materialize()
+
+    def test_missing_oidc_code_is_a_boot_error(self) -> None:
+        class NoCodeConfig(ServerAppConfig):
+            def main(self, root: Any) -> None:
+                root.oidc(issuer="https://idp.example.com", client_id="x")
+
+        handler = ConfigurationHandler(TwoAppConfig(name="config"), NoCodeConfig())
+        with pytest.raises(ConfigError, match="'code'"):
+            handler.materialize()
+
+    def test_hosted_role_never_lifts_the_login_surface(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(OIDC_SECRET_ENV_VAR, "oidc-s3cret")
+        handler = ConfigurationHandler(
+            TwoAppConfig(name="config"), LoginSurfaceConfig()
+        )
+        worker = handler.materialize(role="worker", app="shop")
+        app = worker.mounts["_server"]
+        assert app.login_policy == {}
+        assert app.oidc_providers == {}
 
 
 class TestSessionTtl:

@@ -27,6 +27,7 @@ the ``safe_next_path`` guard are covered alongside.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -159,6 +160,50 @@ def cookie_token(sent: list[Message]) -> str:
     return cookie.split(";")[0].split("=", 1)[1]
 
 
+class Clock:
+    """Controllable stand-in for ``time.time`` — drives the lockout window tests."""
+
+    def __init__(self, now: float = 1_000_000.0) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def make_lockout_server(
+    policy: dict[str, Any] | None = None,
+) -> tuple[AsgiServer, MemoryUserStore]:
+    """A server seeded with alice/wonder; ``policy`` rides the ``login()`` config lift."""
+    store = MemoryUserStore()
+    store.save(
+        {
+            "identity": "alice",
+            "password_hash": store.hash_password("wonder"),
+            "tags": ["admin"],
+            "enabled": True,
+        }
+    )
+    kwargs: dict[str, Any] = {"server_app": {"login": policy}} if policy else {}
+    return AsgiServer(primary=BaseApplication(), users=store, **kwargs), store
+
+
+async def login_attempt(
+    server: AsgiServer, session_id: str, password: str, identity: str = "alice"
+) -> Any:
+    """One login POST riding ``session_id``; returns the JSON payload."""
+    _, sent = await drive(
+        server,
+        "/_server/login",
+        "POST",
+        cookie=f"session_id={session_id}",
+        body={"identity": identity, "password": password},
+    )
+    return json_body(sent)
+
+
 class TestLoginHappyPath:
     async def test_login_attaches_the_avatar_and_keeps_the_session_id(self) -> None:
         server = make_server()
@@ -265,7 +310,7 @@ class TestLoginFailures:
             body={"identity": "alice", "password": "nope"},
         )
         assert response_status(sent) == 200
-        assert json_body(sent) == {"error": "Invalid credentials"}
+        assert json_body(sent) == {"error": "Invalid credentials", "remaining_attempts": 4}
         assert set_cookie_value(sent) is None
 
     async def test_disabled_user_never_authenticates(self) -> None:
@@ -278,7 +323,8 @@ class TestLoginFailures:
             cookie=f"session_id={anonymous.id}",
             body={"identity": "mallory", "password": "evil"},
         )
-        assert json_body(sent) == {"error": "Invalid credentials"}
+        # disabled users have a record: their failures count and surface the counter
+        assert json_body(sent) == {"error": "Invalid credentials", "remaining_attempts": 4}
         assert set_cookie_value(sent) is None
 
     async def test_missing_credentials_answer_the_error(self) -> None:
@@ -306,6 +352,98 @@ class TestLoginFailures:
         )
         assert json_body(sent) == {"error": "Login is not available"}
         assert set_cookie_value(sent) is None
+
+
+class TestLoginLockout:
+    @pytest.fixture
+    def clock(self, monkeypatch: pytest.MonkeyPatch) -> Clock:
+        """Freeze ``time.time`` on a controllable clock."""
+        frozen = Clock()
+        monkeypatch.setattr(time, "time", frozen)
+        return frozen
+
+    async def test_max_attempts_failures_lock_even_the_correct_password(
+        self, clock: Clock
+    ) -> None:
+        server, store = make_lockout_server()
+        session = server.session_store.create()
+        for expected_remaining in (4, 3, 2, 1, 0):
+            payload = await login_attempt(server, session.id, "nope")
+            assert payload == {
+                "error": "Invalid credentials",
+                "remaining_attempts": expected_remaining,
+            }
+        payload = await login_attempt(server, session.id, "wonder")
+        assert payload == {"error": "Too many failed attempts"}
+        assert store.get("alice")["failed_attempts"] == 5
+
+    async def test_locked_attempt_does_not_touch_the_counter(self, clock: Clock) -> None:
+        server, store = make_lockout_server({"max_attempts": 2, "backoff": 10})
+        session = server.session_store.create()
+        await login_attempt(server, session.id, "nope")
+        await login_attempt(server, session.id, "nope")
+        record = store.get("alice")
+        assert record is not None
+        locked_at = record["last_failed_at"]
+        clock.advance(5)  # still inside the 10s window
+        payload = await login_attempt(server, session.id, "nope")
+        assert payload == {"error": "Too many failed attempts"}
+        assert record["failed_attempts"] == 2  # the refused attempt never counted
+        assert record["last_failed_at"] == locked_at  # nor extended the lock
+
+    async def test_window_expiry_re_allows_and_success_resets(self, clock: Clock) -> None:
+        server, store = make_lockout_server({"max_attempts": 2, "backoff": 10})
+        session = server.session_store.create()
+        await login_attempt(server, session.id, "nope")
+        await login_attempt(server, session.id, "nope")
+        clock.advance(11)  # past the 10s window
+        payload = await login_attempt(server, session.id, "wonder")
+        assert payload["identity"] == "alice"
+        assert payload["session_id"] == session.id
+        assert store.get("alice")["failed_attempts"] == 0
+
+    async def test_success_resets_the_counter(self, clock: Clock) -> None:
+        server, store = make_lockout_server()
+        session = server.session_store.create()
+        await login_attempt(server, session.id, "nope")
+        payload = await login_attempt(server, session.id, "nope")
+        assert payload == {"error": "Invalid credentials", "remaining_attempts": 3}
+        payload = await login_attempt(server, session.id, "wonder")
+        assert payload["identity"] == "alice"
+        assert store.get("alice")["failed_attempts"] == 0
+        payload = await login_attempt(server, session.id, "nope")
+        assert payload == {"error": "Invalid credentials", "remaining_attempts": 4}
+
+    async def test_unknown_identity_has_no_counter(self, clock: Clock) -> None:
+        server, store = make_lockout_server()
+        session = server.session_store.create()
+        payload = await login_attempt(server, session.id, "nope", identity="ghost")
+        assert payload == {"error": "Invalid credentials"}  # no remaining_attempts
+        assert store.get("ghost") is None  # no record is ever created
+
+    async def test_policy_is_tunable_via_the_login_config(self, clock: Clock) -> None:
+        server, store = make_lockout_server({"max_attempts": 2, "backoff": 10})
+        session = server.session_store.create()
+        await login_attempt(server, session.id, "nope")
+        payload = await login_attempt(server, session.id, "nope")
+        assert payload == {"error": "Invalid credentials", "remaining_attempts": 0}
+        payload = await login_attempt(server, session.id, "wonder")
+        assert payload == {"error": "Too many failed attempts"}
+
+    async def test_backoff_grows_exponentially(self, clock: Clock) -> None:
+        server, store = make_lockout_server({"max_attempts": 2, "backoff": 10})
+        session = server.session_store.create()
+        await login_attempt(server, session.id, "nope")
+        await login_attempt(server, session.id, "nope")  # locked: window 10 * 2**0
+        clock.advance(11)  # first window expired
+        payload = await login_attempt(server, session.id, "nope")
+        assert payload == {"error": "Invalid credentials", "remaining_attempts": 0}
+        clock.advance(11)  # the third failure doubled the window to 20s
+        payload = await login_attempt(server, session.id, "wonder")
+        assert payload == {"error": "Too many failed attempts"}
+        clock.advance(10)  # 21s past the third failure — window passed
+        payload = await login_attempt(server, session.id, "wonder")
+        assert payload["identity"] == "alice"
 
 
 class TestLoginPage:

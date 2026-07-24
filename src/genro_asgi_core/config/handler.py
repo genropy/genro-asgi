@@ -203,16 +203,31 @@ class ConfigurationHandler(BuilderHandler):
         is a boot error via ``resolve_pointers``), ``users``/``tokens`` are
         ``{mount, prefix}`` store descriptors. All three become the identity
         kwargs ``AuthMixin`` peels: the stores live on the server (Phase 3),
-        so the VALUES lift while the config keeps the app's shape. Root-only:
-        the identity surface belongs to the public process (D6). A repeated
-        tag is a boot error (D16 strictness — a silently winning last node
-        is never acceptable for identity config).
+        so the VALUES lift while the config keeps the app's shape. The login
+        surface lifts as ONE kwarg instead — ``server_app`` = ``login`` policy
+        attrs plus the ``oidc`` providers folded per ``code`` — forwarded to
+        ``ServerApplication`` at mount time (the app peels what its config
+        declared). Root-only: the identity surface belongs to the public
+        process (D6). A repeated tag is a boot error (D16 strictness — a
+        silently winning last node is never acceptable for identity config);
+        ``oidc`` repeats by design, keyed by ``code`` (a repeated code is the
+        boot error).
         """
         if projection.role != "root":
             return
         config = self.server_app_config
+        server_app: dict[str, Any] = {}
+        oidc: dict[str, dict[str, Any]] = {}
         seen: set[str] = set()
         for node in config.source:
+            if node.node_tag == "oidc":
+                code, provider = self._fold_oidc_node(config, node)
+                if code in oidc:
+                    raise ConfigError(
+                        f"duplicate oidc code {code!r} in the '_server' configuration"
+                    )
+                oidc[code] = provider
+                continue
             if node.node_tag in seen:
                 raise ConfigError(
                     f"duplicate '{node.node_tag}' in the '_server' configuration"
@@ -226,8 +241,37 @@ class ConfigurationHandler(BuilderHandler):
                     )
                 value, _attrs = resolve_pointers(config, node)
                 kwargs["admin_password"] = value
+            elif node.node_tag == "login":
+                server_app["login"] = dict(node.fixed_attr_items())
             else:
                 kwargs[node.node_tag] = dict(node.fixed_attr_items())
+        if oidc:
+            server_app["oidc"] = oidc
+        if server_app:
+            kwargs["server_app"] = server_app
+
+    def _fold_oidc_node(self, config: Any, node: Any) -> tuple[str, dict[str, Any]]:
+        """One ``oidc()`` element → the ``(code, provider)`` pair of the lift.
+
+        ``client_secret`` follows the ``admin_password`` rule: configured as a
+        literal is a boot error (secrets stay out of recipes), resolved-empty
+        is a boot error via ``resolve_pointers``; absent is fine (public
+        client). ``code`` is the collection key — missing is a boot error.
+        Provider defaults land here: ``scopes``/``identity_claim``/``tags``.
+        """
+        secret = dict(node.fixed_attr_items()).get("client_secret")
+        if secret is not None and node.pointer_type(secret) != "^":
+            raise ConfigError(
+                "'_server' oidc client_secret must be a ^pointer, not a literal"
+            )
+        _value, attrs = resolve_pointers(config, node)
+        code = attrs.pop("code", None)
+        if not code:
+            raise ConfigError("'_server' oidc element requires a 'code' attribute")
+        attrs.setdefault("scopes", "openid email profile")
+        attrs.setdefault("identity_claim", "email")
+        attrs.setdefault("tags", [])
+        return code, attrs
 
     def _build_databases(self, projection: Projection, server: AsgiServer) -> None:
         """Materialize the ``databases`` section: build and register each handler.

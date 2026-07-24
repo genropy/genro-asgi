@@ -39,6 +39,10 @@ schema/docs/index endpoints, and adds:
   by TWO routes, never in-handler ``Accept`` sniffing. The methods live in an
   ``AuthSection`` attached under ``auth`` (``ensure_auth_section`` /
   ``register_auth_method``); ``PasswordMethod`` is registered at construction.
+  ``login`` enforces the store-backed lockout (REVIEW #9): the per-identity
+  failure counter (``failed_attempts``/``last_failed_at``) rides the UserStore
+  record with exponential backoff; the policy comes from the config's
+  ``login()`` element (``login_policy``, defaults 5 attempts / 30s base).
 
 Handlers stay PURE: they return values and never touch cookies or an ambient
 request/response (the old ``self.server.request`` idiom must never be
@@ -63,19 +67,24 @@ Kwargs peeled by the cooperative ``__init__`` (D16): ``mount_name`` is FIXED
 to ``"_server"`` — the system mount is a D4 invariant, not a preference, and
 three cross-file references hardcode ``/_server/...`` (``PasswordMethod``'s
 ``action``, ``LOGIN_PAGE_URL``, ``login.html``'s fetch). A non-default value
-raises rather than silently 404-ing those references; the rest flows down the
-chain. In practice nobody passes it: ``AsgiServer`` auto-mounts the app with no
-kwargs, so the fixed name is reached by construction.
+raises rather than silently 404-ing those references. ``login`` and ``oidc``
+are the values the config-class lift carries (the ``server_app=`` server kwarg,
+forwarded by ``_mount_server_app``): the lockout policy dict and the
+per-``code`` OIDC provider dicts, stored as ``login_policy``/``oidc_providers``
+(consumed by the lockout check and the ``OidcMethod`` registration). The rest
+flows down the chain. A hand-built ``AsgiServer(primary=...)`` passes nothing,
+so the defaults (empty dicts) keep today's bare app.
 """
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from genro_builders.builder import BuilderBase, element
 from genro_routes import RoutingClass, route
 
-from ..auth import AuthMethod, PasswordMethod
+from ..auth import AuthMethod, OidcMethod, PasswordMethod
 from ..session import Avatar
 from .openapi import RESOURCES_DIR, OpenApiApplication
 from .server_sections import AuthSection, TokensSection, UsersSection
@@ -87,6 +96,9 @@ if TYPE_CHECKING:
 
 __all__ = ["ServerAppConfig", "ServerAppConfigElements", "ServerApplication"]
 
+LOCKOUT_MAX_ATTEMPTS = 5
+LOCKOUT_BACKOFF_SECONDS = 30.0
+
 
 class ServerAppConfigElements:
     """Config grammar of ``ServerApplication`` — the dialect of its config-class.
@@ -97,7 +109,10 @@ class ServerAppConfigElements:
     ``admin_password`` (a ``^pointer`` node value) plus ``users()``/``tokens()``
     store descriptors. All three are LIFTED to the SERVER constructor kwargs
     (``AuthMixin`` peels them): the stores live on the server (Phase 3) — the
-    config keeps the app's shape, the runtime stays where it is.
+    config keeps the app's shape, the runtime stays where it is. The login
+    surface (``login()`` policy, ``oidc()`` providers) lifts as the single
+    ``server_app=`` server kwarg instead: those values belong to THIS app,
+    which peels them when ``AsgiServer`` forwards them at mount time.
     """
 
     @element(sub_tags="")
@@ -115,6 +130,18 @@ class ServerAppConfigElements:
     def tokens(self) -> None:
         """Api-key store descriptor: ``{mount, prefix}`` — the ``tokens=`` kwarg
         ``AuthMixin`` peels."""
+
+    @element(sub_tags="")
+    def login(self) -> None:
+        """Login-surface policy: lockout tuning (``max_attempts``, ``backoff``)
+        — the ``login=`` kwarg ``ServerApplication`` peels (``server_app`` lift)."""
+
+    @element(sub_tags="")
+    def oidc(self) -> None:
+        """One OIDC provider (repeatable, keyed by ``code``): ``issuer``,
+        ``client_id``, ``client_secret`` (a ``^pointer``, optional — public
+        client), ``scopes``, ``identity_claim``, ``tags`` — folded into the
+        ``oidc=`` kwarg ``ServerApplication`` peels (``server_app`` lift)."""
 
 
 class ServerAppConfig(BuilderBase, ServerAppConfigElements):
@@ -155,12 +182,37 @@ class ServerApplication(OpenApiApplication):
             raise ValueError(
                 f"ServerApplication mount_name is fixed to '_server', got {mount_name!r}"
             )
+        self._login_policy: dict[str, Any] = kwargs.pop("login", {})
+        self._oidc_providers: dict[str, dict[str, Any]] = kwargs.pop("oidc", {})
         self._sections: dict[str, RoutingClass] = {}
         self._auth_section: AuthSection | None = None
         super().__init__(**kwargs)
         self.register_auth_method(PasswordMethod(self, "password"))
+        for code, provider in self.oidc_providers.items():
+            method_id = self._oidc_method_id(code)
+            self.register_auth_method(OidcMethod(self, method_id, code, provider))
         self.attach_section(UsersSection(self), name="users")
         self.attach_section(TokensSection(self), name="tokens")
+
+    @staticmethod
+    def _oidc_method_id(code: str) -> str:
+        """The mount name of the OIDC method for ``code`` under ``_server/auth``.
+
+        The colon form is legal on the router and through the server demux (a
+        boot-time verification): if a future router rejected it, the fallback is
+        the single-line change ``f"oidc_{code}"``.
+        """
+        return f"oidc:{code}"
+
+    @property
+    def login_policy(self) -> dict[str, Any]:
+        """The lockout policy from the config's ``login()`` element (may be empty)."""
+        return self._login_policy
+
+    @property
+    def oidc_providers(self) -> dict[str, dict[str, Any]]:
+        """OIDC provider configs from the ``oidc()`` elements, keyed by code."""
+        return self._oidc_providers
 
     @property
     def sections(self) -> dict[str, RoutingClass]:
@@ -212,6 +264,23 @@ class ServerApplication(OpenApiApplication):
             kwargs["_request"] = request
         return kwargs
 
+    def _lock_seconds_remaining(self, record: dict[str, Any]) -> float:
+        """Seconds left in ``record``'s lockout window, ``0.0`` when not locked.
+
+        The window opens after ``max_attempts`` consecutive failures and lasts
+        ``backoff * 2**(failed_attempts - max_attempts)`` seconds from the last
+        failure — exponential backoff, tuned by the config's ``login()`` policy
+        (``login_policy``; defaults 5 attempts / 30s base).
+        """
+        policy = self.login_policy
+        failed = record.get("failed_attempts", 0)
+        max_attempts = policy.get("max_attempts", LOCKOUT_MAX_ATTEMPTS)
+        if failed < max_attempts:
+            return 0.0
+        backoff = policy.get("backoff", LOCKOUT_BACKOFF_SECONDS)
+        window = backoff * 2 ** (failed - max_attempts)
+        return max(0.0, record.get("last_failed_at", 0.0) + window - time.time())
+
     @route()
     def index(self) -> dict[str, Any]:
         """The ``/_server/`` descriptor: title and section names."""
@@ -237,6 +306,18 @@ class ServerApplication(OpenApiApplication):
         post-success redirect — ``login`` itself never sees it and posts carry
         only the credentials.
 
+        Enforces the server-side lockout (REVIEW #9): the failure counter
+        lives ON the user's store record (``failed_attempts`` /
+        ``last_failed_at``), so it survives restarts and is shared across
+        processes on a shared store. After ``max_attempts`` consecutive
+        failures the identity is refused until the exponential-backoff window
+        (``_lock_seconds_remaining``) has passed; refused attempts never touch
+        the counter — an attacker hammering a locked identity cannot extend a
+        legitimate user's lock — and a success resets it. Known-identity
+        failures surface the server-computed ``remaining_attempts``; unknown
+        identities have no record, hence no counter and no such field. Per-IP
+        rate limiting is a future middleware concern, not this handler's.
+
         The method is POST by declaration (``openapi_method="post"``): with
         ``_request`` hidden from the schema (see below) the remaining fields
         are all scalar, so the guesser would otherwise pick GET.
@@ -250,8 +331,10 @@ class ServerApplication(OpenApiApplication):
                 the injected-name convention ``bind_kwargs`` matches.
 
         Returns:
-            ``{session_id, identity, tags}`` on success, ``{"error": ...}`` on
-            missing/invalid credentials or when no user store is wired.
+            ``{session_id, identity, tags}`` on success; ``{"error": ...}`` on
+            missing/invalid credentials, active lockout, or when no user store
+            is wired — with ``remaining_attempts`` when the identity has a
+            record.
 
         Note:
             Route: POST /_server/login
@@ -261,10 +344,24 @@ class ServerApplication(OpenApiApplication):
         user_store = getattr(_request.server, "user_store", None)
         if user_store is None:
             return {"error": "Login is not available"}
-        record = user_store.verify(identity, password)
-        if record is None:
-            return {"error": "Invalid credentials"}
-        avatar = Avatar(record["identity"], record["tags"])
+        record = user_store.get(identity)
+        if record is not None and self._lock_seconds_remaining(record) > 0:
+            return {"error": "Too many failed attempts"}
+        verified = user_store.verify(identity, password)
+        if verified is None:
+            if record is None:
+                return {"error": "Invalid credentials"}
+            record["failed_attempts"] = record.get("failed_attempts", 0) + 1
+            record["last_failed_at"] = time.time()
+            user_store.save(record)
+            max_attempts = self.login_policy.get("max_attempts", LOCKOUT_MAX_ATTEMPTS)
+            remaining = max(0, max_attempts - record["failed_attempts"])
+            return {"error": "Invalid credentials", "remaining_attempts": remaining}
+        if verified.get("failed_attempts"):
+            verified["failed_attempts"] = 0
+            verified["last_failed_at"] = 0.0
+            user_store.save(verified)
+        avatar = Avatar(verified["identity"], verified["tags"])
         session = _request.session
         session.attach_avatar(avatar)
         return {"session_id": session.id, "identity": avatar.identity, "tags": avatar.tags}

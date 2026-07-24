@@ -28,6 +28,7 @@ from .api_key_store import ApiKeyStore, FileApiKeyStore
 from .auth_method import AuthMethod, PasswordMethod, safe_next_path
 from .core import AuthCore
 from .mixin import AuthMixin
+from .oidc_method import OidcMethod
 from .user_store import FileUserStore, UserStore
 
 __all__ = [
@@ -37,6 +38,7 @@ __all__ = [
     "AuthMixin",
     "FileApiKeyStore",
     "FileUserStore",
+    "OidcMethod",
     "PasswordMethod",
     "UserStore",
     "safe_next_path",

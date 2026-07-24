@@ -21,13 +21,15 @@ server of D22. The future internal (worker) server simply composes the SAME
 base WITHOUT the auth mixin (D6 by construction — the base never learned about
 the chain).
 
-Its cooperative ``__init__`` peels only the two runtime kwargs the frozen
-Macro 1 ``BaseServer`` does not accept — ``host`` and ``port`` — and forwards
-everything else (``primary``, ``auth``, ``session_store``/``session_ttl``,
+Its cooperative ``__init__`` peels the kwargs the frozen Macro 1
+``BaseServer`` does not accept — ``host``/``port`` plus ``server_app`` (the
+``_server`` config-class lift) — and forwards everything else (``primary``,
+``auth``, ``session_store``/``session_ttl``,
 ``middleware``/``middleware_registry``, ``plugins``/``plugin_registry``,
 ``storage``/``storage_key``, ``parent``) down the D16 chain. The peeled
 ``host``/``port`` become the defaults of ``serve``, so a config-built server
-serves on its configured address unless the caller overrides it.
+serves on its configured address unless the caller overrides it;
+``server_app`` travels to ``_mount_server_app``.
 
 Once the chain has run, ``__init__`` mounts the automatic ``_server`` app
 (``_mount_server_app``, D4 "automatic, not configured"): a hand-built
@@ -64,13 +66,16 @@ class AsgiServer(
     """The shipped composition: communication + auth + sessions + chain + plugins + storage + base.
 
     Constructor kwargs peeled here: ``host`` and ``port`` — the ``serve``
-    defaults carried from the config's ``server`` section. Every other kwarg
-    flows to the capability mixins and the base (D16 cooperative init).
+    defaults carried from the config's ``server`` section — plus
+    ``server_app``, the ``_server`` config-class lift forwarded to the
+    auto-mounted app. Every other kwarg flows to the capability mixins and
+    the base (D16 cooperative init).
     """
 
     def __init__(self, **kwargs: Any) -> None:
         self._config_host: str | None = kwargs.pop("host", None)
         self._config_port: int | None = kwargs.pop("port", None)
+        self._server_app_kwargs: dict[str, Any] = kwargs.pop("server_app", {})
         super().__init__(**kwargs)
         self._mount_server_app()
 
@@ -79,9 +84,11 @@ class AsgiServer(
 
         Runs at the end of ``__init__`` — before any configured secondary is
         mounted — so the guard only matters for re-invocations (idempotent).
+        The peeled ``server_app`` kwargs (the config-class lift: ``login``
+        policy, ``oidc`` providers) are forwarded here — the app peels them.
         """
         if "_server" not in self.mounts:
-            self.mount(ServerApplication())
+            self.mount(ServerApplication(**self._server_app_kwargs))
 
     @property
     def login_enabled(self) -> bool:

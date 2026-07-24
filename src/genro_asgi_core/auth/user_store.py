@@ -42,8 +42,14 @@ The record::
       "identity": "admin",
       "password_hash": "scrypt$n=16384,r=8,p=1$<salt-b64>$<hash-b64>",
       "tags": ["SUPERADMIN"],
-      "enabled": true
+      "enabled": true,
+      "failed_attempts": 0,
+      "last_failed_at": 0.0
     }
+
+``failed_attempts``/``last_failed_at`` are OPTIONAL (absent until the first
+failure): the store-backed login-lockout counter the ``_server`` login route
+maintains — incremented on failure, reset on success (``applications/server_app.py``).
 
 Passwords are hashed with ``hashlib.scrypt`` (stdlib, zero new deps): a random
 per-user salt and the cost parameters are embedded in the hash string, so a

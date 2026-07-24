@@ -30,6 +30,7 @@ from .auth import (
     AuthMixin,
     FileApiKeyStore,
     FileUserStore,
+    OidcMethod,
     PasswordMethod,
     UserStore,
 )
@@ -102,6 +103,7 @@ __all__ = [
     "Message",
     "MemorySessionStore",
     "MiddlewareMixin",
+    "OidcMethod",
     "OpenAPIPlugin",
     "OpenAPITranslator",
     "OpenApiApplication",

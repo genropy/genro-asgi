@@ -467,6 +467,57 @@ closed by this point (`0bc609d` #6, `99ce7c3` #12, `360a4f9` #13, `7867420`
 became FIXED server structure (armed on every router), so per-entry OpenAPI
 controls always apply.
 
+### Ratified 2026-07-23 (implementation sessions, core 1d wave 3)
+
+**D27 — The OIDC login contract: authorization-code + PKCE, one method per
+provider.** OIDC is a `redirect` `AuthMethod` (`OidcMethod`), one instance per
+configured provider, registered on the `ServerApplication` from the `oidc()`
+config elements (after `PasswordMethod`) and, unlike password, OWNING routes —
+so it enters the routing tree (Invariant 10) under `/_server/auth/oidc:<code>/`
+with a `start` and a `callback` route. The contract, ratified points:
+
+- **PKCE always on (S256), the client_secret optional.** Every authorization
+  request carries an S256 code challenge; a public client (no secret) works. The
+  `client_secret`, when configured, stays inside the provider config, is sent
+  only in the token exchange, and is never logged nor exposed by the descriptor
+  (which carries id/kind/label/start-url ONLY — no client_id, issuer, or secret).
+- **Discovery is lazy and cached per instance.** Provider metadata is fetched
+  from `<issuer>/.well-known/openid-configuration` at FIRST use, never at
+  construction — a server booting while its provider is unreachable must not die.
+- **`start` mints and stores; `callback` converges.** `start` mints a fresh
+  `state` + PKCE `verifier`, stores them and the `safe_next_path`-guarded `next`
+  under `oidc.<method_id>.*` in the session `data` (`mark_dirty`), and 302s to the
+  authorization endpoint. `callback` checks the `state` (mismatch/missing → 400,
+  never retried — CSRF binding), exchanges the code on the token endpoint (PKCE
+  verifier + secret when set), and validates the `id_token`: RS256 signature
+  against the provider JWKS (`jwt.PyJWKClient`, no new dependency — pyjwt +
+  cryptography are runtime deps), audience = the client_id, issuer = the
+  configured issuer. Any verification failure → 400.
+- **Identity and tags are per-provider config.** The avatar identity is the
+  `identity_claim` claim (default `email`), the tags the provider's configured
+  `tags` (default `[]`). Success converges on the SAME outcome every method shares
+  (D24): `session.attach_avatar` in place, session id UNCHANGED, one-shot
+  `oidc.*` keys cleared, 302 to the stored safe `next`. Errors answer
+  `HTTPBadRequest` (400) — coherent with the browser-driven flow, not a JSON body
+  a browser would render as text.
+
+**D28 — Server-side login lockout: a store-backed counter with exponential
+backoff (REVIEW #9).** The password login enforces a lockout whose failure
+counter LIVES ON the user's store record (`failed_attempts` int,
+`last_failed_at` epoch float) — store-backed, so it survives restarts and is
+shared across processes on a shared store. After `max_attempts` consecutive
+failures (default 5) further attempts are refused until
+`backoff * 2**(failed_attempts - max_attempts)` seconds (base default 30) have
+passed since the last failure; a success resets the counter. Attempts refused
+DURING the lock window do NOT increment the counter nor touch `last_failed_at`
+— anti-DoS: an attacker hammering a locked identity cannot extend a legitimate
+user's lock. Known-identity failures surface the server-computed
+`remaining_attempts`; unknown identities have no record, hence no counter and no
+such field. The policy is tuned by the config's `login(max_attempts=, backoff=)`
+element. Per-IP rate limiting is a FUTURE middleware concern, not this handler's;
+OIDC never routes through this path, so an OIDC login leaves the counter
+untouched.
+
 ---
 
 ## 3. Decision log — discussed, unopposed (◆ confirm in bulk at review)
