@@ -130,3 +130,36 @@ disable_error_code = ["misc", "attr-defined"]
 [[tool.mypy.overrides]]
 module = "genro_asgi_core.applications.server_app"
 disable_error_code = ["attr-defined", "union-attr"]
+
+# LocalTaskExecutor reaches server.storage (supplied by StorageMixin) and
+# app.route (supplied by RoutedApplication) through statically-typed handles
+# (`server` -> BaseServer, `server.mounts`/`primary` -> BaseApplication) — the
+# same dynamic-mixin category as server_app above: the attributes exist on every
+# runtime composition but not on the static bases.
+[[tool.mypy.overrides]]
+module = "genro_asgi_core.tasks.executor"
+disable_error_code = ["attr-defined"]
+
+# TaskMixin forwards __init__/__call__ cooperatively to the next class in the
+# MRO (composed BEFORE BaseServer, D16 — same misc category as
+# CommunicationMixin) and builds TaskManager(self): mypy sees the mixin's
+# static self as object/TaskMixin, not the BaseServer the composition always
+# supplies at runtime. The dynamic-mixin category the parent policy anticipates.
+[[tool.mypy.overrides]]
+module = "genro_asgi_core.tasks.mixin"
+disable_error_code = ["misc", "arg-type"]
+
+# TaskManager reaches server.storage / server.session_store — attributes present
+# only when StorageMixin / SessionMixin are composed (which the running server
+# always does), invisible to mypy's static BaseServer. Same attr-defined category
+# as tasks.executor. (scheduler.py stays clean: it goes through the manager.)
+[[tool.mypy.overrides]]
+module = "genro_asgi_core.tasks.manager"
+disable_error_code = ["attr-defined"]
+
+# TasksSection reaches server.tasks through the static BaseServer | None handle
+# (present only when TaskMixin is composed and a request is in flight) — the
+# same dynamic-composition category as server_app.
+[[tool.mypy.overrides]]
+module = "genro_asgi_core.applications.server_sections.tasks_section"
+disable_error_code = ["union-attr", "no-any-return"]

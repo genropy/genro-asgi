@@ -120,6 +120,13 @@ class Projection:
         """
         return self._server_child("session")
 
+    def tasks_node(self) -> Any:
+        """The ``server`` section's ``tasks`` child node, or ``None``.
+
+        Server-domain: absent for hosted roles (they never see ``server``).
+        """
+        return self._server_child("tasks")
+
     def _server_child(self, tag: str) -> Any:
         """The named child of the ``server`` section node, or ``None``."""
         node = self.section("server")

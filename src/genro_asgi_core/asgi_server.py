@@ -16,8 +16,10 @@
 
 ``AsgiServer`` stacks every core capability mixin over ``BaseServer`` in one
 MRO (``CommunicationMixin, AuthMixin, SessionMixin, MiddlewareMixin,
-PluginMixin, StorageMixin, BaseServer``): the complete mono-process async
-server of D22. The future internal (worker) server simply composes the SAME
+PluginMixin, StorageMixin, TaskMixin, BaseServer``): the complete mono-process
+async server of D22. ``TaskMixin`` sits after ``StorageMixin`` (it needs
+``server.storage``) and before ``BaseServer`` (its lifespan hook must wrap the
+base ``Lifespan``). The future internal (worker) server simply composes the SAME
 base WITHOUT the auth mixin (D6 by construction — the base never learned about
 the chain).
 
@@ -50,6 +52,7 @@ from .plugin_mixin import PluginMixin
 from .server import BaseServer
 from .session import SessionMixin
 from .storage_mixin import StorageMixin
+from .tasks import TaskMixin
 
 __all__ = ["AsgiServer"]
 
@@ -61,6 +64,7 @@ class AsgiServer(
     MiddlewareMixin,
     PluginMixin,
     StorageMixin,
+    TaskMixin,
     BaseServer,
 ):
     """The shipped composition: communication + auth + sessions + chain + plugins + storage + base.

@@ -510,3 +510,52 @@ class TestConfigurationTag:
         server = ConfigurationHandler(ConfiguredAppConfig(name="config")).materialize()
         assert isinstance(server.primary, ShopApp)
         assert set(server.mounts) == {"_server"}
+
+
+class TestTasksConfig:
+    """The ``tasks()`` child of ``server`` lifts to the ``tasks=`` kwarg (Phase 7)."""
+
+    def test_tasks_disabled_via_recipe(self) -> None:
+        class TasksOffConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                srv = root.server(host="127.0.0.1", port=8000)
+                srv.tasks(enabled=False)
+                apps = root.applications(default="shop")
+                apps.application(code="shop", app_class=ShopApp)
+
+        server = ConfigurationHandler(TasksOffConfig(name="tasksoff")).materialize()
+        assert server.tasks_enabled is False
+        with pytest.raises(RuntimeError, match="disabled"):
+            server.tasks
+
+    def test_tuning_reaches_scheduler_and_store(self) -> None:
+        class TunedConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                srv = root.server(host="127.0.0.1", port=8000)
+                srv.tasks(tick_seconds=5, mount="site")
+                apps = root.applications(default="shop")
+                apps.application(code="shop", app_class=ShopApp)
+
+        server = ConfigurationHandler(TunedConfig(name="tuned")).materialize()
+        assert server.tasks_enabled is True                  # enabled defaults on
+        assert server.tasks.scheduler.tick_seconds == 5.0
+        assert server.tasks.task_store.mount == "site"       # explicit override
+
+    def test_direct_dict_kwarg(self) -> None:
+        server = AsgiServer(primary=ShopApp(),
+                            tasks={"enabled": True, "tick_seconds": 3})
+        assert server.tasks.scheduler.tick_seconds == 3.0
+        assert server.tasks_config == {"tick_seconds": 3}    # enabled peeled away
+
+    def test_unknown_child_under_tasks_is_config_error(self) -> None:
+        class StrayChildConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                srv = root.server(host="127.0.0.1", port=8000)
+                stray = srv.tasks()
+                stray.middleware()          # declared in the dialect, foreign to tasks
+                apps = root.applications(default="shop")
+                apps.application(code="shop", app_class=ShopApp)
+
+        handler = ConfigurationHandler(StrayChildConfig(name="stray"))
+        with pytest.raises(ConfigError, match="not declared by the config grammar"):
+            handler.materialize()

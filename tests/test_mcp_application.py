@@ -180,9 +180,11 @@ class TestMcpApplication:
         assert response_status(sent) == 202
         assert response_body(sent) == b""
 
-    async def test_get_is_method_not_allowed(self, drive, response_status) -> None:
+    async def test_other_method_is_method_not_allowed(self, drive, response_status) -> None:
+        # GET is the push stream since core 1e (test_mcp_push.py); DELETE keeps
+        # the 405 gate covered.
         app = McpApplication(mount_name="mcp", routing_class=Calc())
-        sent = await drive(mcp_server(app), "/mcp", method="GET")
+        sent = await drive(mcp_server(app), "/mcp", method="DELETE")
         assert response_status(sent) == 405
 
     async def test_unsupported_protocol_version_is_400(
@@ -330,8 +332,9 @@ class TestMcpOpenApiApplication:
         assert doc["info"]["title"] == "Bridge"
         assert "/echo" in doc["paths"]
 
-    async def test_mcp_get_is_method_not_allowed(self, drive, response_status) -> None:
-        sent = await drive(bridge_server(), "/mcp", method="GET")
+    async def test_mcp_other_method_is_method_not_allowed(self, drive, response_status) -> None:
+        # GET on the mcp segment is the push stream since core 1e (test_mcp_push.py)
+        sent = await drive(bridge_server(), "/mcp", method="DELETE")
         assert response_status(sent) == 405
 
 

@@ -35,9 +35,9 @@ replacing the old ``smartasync``). The transport holds its owning application as
   channel ``"mcp"`` (``@route(channel_channels="mcp,rest")`` for a dual method);
   undeclared methods default to REST-only (``channels=rest_channel``).
 
-STATELESS conformance (MCP Streamable HTTP): a JSON-RPC request answers with a
+Transport conformance (MCP Streamable HTTP): a JSON-RPC POST answers with a
 JSON response; a notification (no ``id``) answers HTTP 202 with an empty body; a
-non-POST request answers 405 (the server offers no SSE stream — conformant); an
+GET opens the SSE push stream (below); any other method answers 405; an
 ``MCP-Protocol-Version`` header that is present but unsupported answers 400 (an
 absent header is assumed ``2025-03-26`` per the spec's backwards-compat rule);
 an ``Origin`` header present and not in ``allowed_origins`` answers 403 (the
@@ -45,21 +45,29 @@ an ``Origin`` header present and not in ``allowed_origins`` answers 403 (the
 default: production fronting owns the Origin gate). The transport gates raise
 core HTTP exceptions answered by the server's ``ErrorMiddleware``.
 
-Push (SSE progress, ``MCP-Session-Id``, resumability) is explicitly OUT of this
-macro (ratified option B): 1c ships stateless only, the push channel arrives in
-core 1e with task/spool as the event source. The engine/app split already
-isolates the transport, so the push half slots in without touching the engine.
+The push half (core 1e, the option-B commitment honored): a GET opens a
+``text/event-stream`` keyed by ``Mcp-Session-Id`` — echoed when the client
+supplies one, minted otherwise (``secrets.token_urlsafe``, decoupled from the
+cookie session: MCP clients carry no cookie) — and follows the server's task
+hub live (``server.tasks.hub``, the A<->C bridge). A ``Last-Event-ID`` header
+replays the session's current ``progress.json`` snapshots first
+(snapshot-baseline resumability — no durable event log, ratified). A server
+composed without tasks answers GET with 405, the 1c stateless behavior. The
+engine stays untouched apart from advertising the capability.
 """
 
 from __future__ import annotations
 
 import asyncio
+import secrets
+from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from ..exceptions import HTTPBadRequest, HTTPException, HTTPForbidden
 from ..mcp import JSONRPC_INTERNAL_ERROR, McpEngine, McpError
 from ..request import Request
 from ..routed_application import RoutedApplication
+from ..sse import SseStream
 from .openapi import OpenApiApplication
 
 if TYPE_CHECKING:
@@ -147,23 +155,27 @@ class McpTransport:
         return server.run_sync(lambda: node(**kwargs))
 
     async def handle(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """Answer one MCP request over the stateless Streamable HTTP transport.
+        """Answer one MCP request over the Streamable HTTP transport.
 
-        Gates the request (405/400/403), then dispatches the JSON-RPC message
-        through the engine and answers with the JSON-RPC envelope; a
-        notification (no ``id``) answers HTTP 202 with an empty body.
+        Gates the request (403/400), then routes by method: GET opens the SSE
+        push stream, POST dispatches the JSON-RPC message through the engine
+        and answers with the JSON-RPC envelope (a notification — no ``id`` —
+        answers HTTP 202 with an empty body), anything else answers 405.
         """
         app = self.application
         request = Request(scope, receive, server=app.server, application=app)
         await request.init()
-        if request.method != "POST":
-            raise HTTPException(405, "Method Not Allowed", headers=[(b"allow", b"POST")])
         origin = request.headers.get("origin")
         if self.allowed_origins is not None and origin is not None and origin not in self.allowed_origins:
             raise HTTPForbidden(f"Origin not allowed: {origin}")
         version = request.headers.get("mcp-protocol-version")
         if version is not None and version not in McpEngine.SUPPORTED_VERSIONS:
             raise HTTPBadRequest(f"Unsupported MCP-Protocol-Version: {version}")
+        if request.method == "GET":
+            await self.open_stream(request, scope, receive, send)
+            return
+        if request.method != "POST":
+            raise HTTPException(405, "Method Not Allowed", headers=[(b"allow", b"GET, POST")])
 
         response = request.response
         envelope = request.data
@@ -183,6 +195,76 @@ class McpTransport:
             payload = {"jsonrpc": "2.0", "id": jsonrpc_id, "result": result}
         response.set_result(payload)
         await response(scope, receive, send)
+
+    async def open_stream(self, request: Request, scope: Scope, receive: Receive, send: Send) -> None:
+        """Open the SSE push stream for one MCP session (the GET branch).
+
+        ``Mcp-Session-Id`` is echoed when the client supplies one, minted
+        otherwise (``secrets.token_urlsafe`` — the ``MemorySessionStore.create``
+        pattern) and always returned in the response headers. A ``Last-Event-ID``
+        header asks for the snapshot baseline before the live feed. A server
+        composed without tasks has no hub: GET answers 405 (the 1c stateless
+        behavior).
+        """
+        server = self.application.server
+        if not getattr(server, "tasks_enabled", False):
+            raise HTTPException(405, "Method Not Allowed", headers=[(b"allow", b"POST")])
+        session_id = request.headers.get("mcp-session-id") or secrets.token_urlsafe(32)
+        last_event_id = request.headers.get("last-event-id")
+        stream = SseStream(self._event_source(server, session_id, last_event_id))
+        response = stream.response()
+        response.set_header("mcp-session-id", session_id)
+        await response(scope, receive, send)
+
+    async def _event_source(
+        self, server: Any, session_id: str, last_event_id: str | None
+    ) -> AsyncIterator[dict[str, Any]]:
+        """The session's events: snapshot baseline on reconnect, then live.
+
+        The baseline (only when the client presented ``Last-Event-ID``) replays
+        the current ``progress.json`` of the session's pending/active tasks —
+        spool reads off the loop via ``run_sync``. The live half follows a hub
+        subscription; the queue is unsubscribed when the stream closes (client
+        gone / task cancelled).
+        """
+        manager = server.tasks
+        if last_event_id is not None:
+            for event in await server.run_sync(lambda: self._baseline(manager, session_id)):
+                yield self._sse_event(event)
+        queue = manager.hub.subscribe(session_id)
+        try:
+            while True:
+                yield self._sse_event(await queue.get())
+        finally:
+            manager.hub.unsubscribe(session_id, queue)
+
+    def _sse_event(self, event: Any) -> dict[str, Any]:
+        """Adapt one hub event into the SSE event dict.
+
+        The WHOLE hub event is the ``data:`` payload (the client gets
+        ``type``/``task_id`` back intact); its ``type`` doubles as the SSE
+        ``event:`` field so clients can listen per kind.
+        """
+        kind = event.get("type") if isinstance(event, dict) else None
+        return {"event": kind, "data": event}
+
+    def _baseline(self, manager: Any, session_id: str) -> list[dict[str, Any]]:
+        """The current progress snapshots of the session's live tasks (sync, pool).
+
+        Settled tasks are not replayed (their result is fetched, not streamed —
+        no durable event log, ratified); tasks without a snapshot yield nothing.
+        """
+        events: list[dict[str, Any]] = []
+        spool = manager.spool
+        for descriptor in spool.list_pending() + spool.list_active(manager.worker_id):
+            if descriptor.get("session_id") != session_id:
+                continue
+            snapshot = spool.read_progress(descriptor["task_id"])
+            if snapshot is not None:
+                events.append(
+                    {"type": "progress", "task_id": descriptor["task_id"], "data": snapshot}
+                )
+        return events
 
     def _jsonrpc_error(self, code: int, message: str, jsonrpc_id: Any) -> dict:
         """Build a JSON-RPC 2.0 error envelope."""

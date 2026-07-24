@@ -59,16 +59,20 @@ from __future__ import annotations
 
 from genro_builders.builder import element
 
+from ..tasks.mixin import TaskConfigElements
 
-class AsgiConfigElements:
+
+class AsgiConfigElements(TaskConfigElements):
     """Element mixin for the ``asgiconfig`` dialect. Grammar only.
 
     The sections are top-level elements built directly on the recipe root;
     a section's kwargs are stored as the node's attributes and read back at
-    materialization time.
+    materialization time. Capability-owned companions are composed explicitly
+    (``TaskConfigElements`` — the ``tasks`` child of ``server``, owned by
+    ``TaskMixin``).
     """
 
-    @element(sub_tags="session")
+    @element(sub_tags="session,tasks")
     def server(self) -> None:
         """Server runtime options: ``host``, ``port``, ``max_threads``, ``storage_key``.
 
@@ -91,8 +95,10 @@ class AsgiConfigElements:
         Configured but resolved empty is an explicit boot error (no silent
         degradation); omit it to run the encrypted mounts dormant.
 
-        Child (server-domain, materialized to a server kwarg): ``session``
-        (the session TTL). The ``_server`` app's identity surface is NOT
+        Children (server-domain, each materialized to a server kwarg):
+        ``session`` (the session TTL) and ``tasks`` (the task backbone —
+        declared by ``TaskConfigElements``, the ``config_grammar`` companion
+        ``TaskMixin`` owns). The ``_server`` app's identity surface is NOT
         configured here — it has its own config-class (``ServerAppConfig``,
         see ``applications/server_app.py``) passed to the handler alongside
         the site recipe.

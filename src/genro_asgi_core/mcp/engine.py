@@ -188,7 +188,9 @@ class McpEngine:
         version = requested if requested in self.SUPPORTED_VERSIONS else self.SUPPORTED_VERSIONS[0]
         return {
             "protocolVersion": version,
-            "capabilities": {"tools": {}},
+            # experimental.push: the host transport's SSE progress channel
+            # (GET + Mcp-Session-Id); the engine itself stays transport-blind.
+            "capabilities": {"tools": {}, "experimental": {"push": {}}},
             "serverInfo": {"name": self.name, "version": self.version},
         }
 

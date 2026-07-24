@@ -74,7 +74,7 @@ from ..application import BaseApplication
 from ..applications.server_app import ServerApplication
 from ..asgi_server import AsgiServer
 from ..db import AsgiDbHandlerBase
-from .configurable import ConfigError, resolve_pointers
+from .configurable import ConfigError, element_kwargs, resolve_pointers
 from .projection import Projection
 
 __all__ = ["ConfigurationHandler"]
@@ -150,6 +150,7 @@ class ConfigurationHandler(BuilderHandler):
             kwargs["storage_key"] = server_attrs["storage_key"]
 
         self._apply_session(projection, kwargs)
+        self._apply_tasks(projection, kwargs)
         self._apply_server_app_config(projection, kwargs)
 
         middleware = projection.middleware_config()
@@ -191,6 +192,19 @@ class ConfigurationHandler(BuilderHandler):
         if node is None:
             return
         kwargs["session_ttl"] = dict(node.fixed_attr_items())["ttl"]
+
+    def _apply_tasks(self, projection: Projection, kwargs: dict[str, Any]) -> None:
+        """Lift the ``server`` section's ``tasks`` child to the ``tasks=`` kwarg.
+
+        The element is declared by ``TaskConfigElements`` — the
+        ``config_grammar`` companion ``TaskMixin`` (the class that peels
+        ``tasks=``) owns. ``element_kwargs`` materializes it strictly:
+        an undeclared child under ``tasks`` is a ``ConfigError``.
+        """
+        node = projection.tasks_node()
+        if node is None:
+            return
+        kwargs["tasks"] = element_kwargs(node, AsgiServer)
 
     def _apply_server_app_config(
         self, projection: Projection, kwargs: dict[str, Any]

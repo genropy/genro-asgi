@@ -108,7 +108,7 @@ class TestInitialize:
 
     async def test_capabilities_and_server_info_shape(self, engine: McpEngine) -> None:
         result = await engine.dispatch({"method": "initialize", "params": {}})
-        assert result["capabilities"] == {"tools": {}}
+        assert result["capabilities"] == {"tools": {}, "experimental": {"push": {}}}
         assert result["serverInfo"] == {"name": "test-server", "version": "9.9.9"}
 
 

@@ -87,7 +87,7 @@ from genro_routes import RoutingClass, route
 from ..auth import AuthMethod, OidcMethod, PasswordMethod
 from ..session import Avatar
 from .openapi import RESOURCES_DIR, OpenApiApplication
-from .server_sections import AuthSection, TokensSection, UsersSection
+from .server_sections import AuthSection, TasksSection, TokensSection, UsersSection
 
 if TYPE_CHECKING:
     from genro_routes import RouterNode
@@ -193,6 +193,7 @@ class ServerApplication(OpenApiApplication):
             self.register_auth_method(OidcMethod(self, method_id, code, provider))
         self.attach_section(UsersSection(self), name="users")
         self.attach_section(TokensSection(self), name="tokens")
+        self.attach_section(TasksSection(self), name="tasks")
 
     @staticmethod
     def _oidc_method_id(code: str) -> str:
