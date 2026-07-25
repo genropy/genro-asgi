@@ -96,7 +96,7 @@ class RoutedApplication(BaseApplication, RoutingClass):
 
     Constructor kwargs peeled here: ``db_name`` — the server database code
     the ``request.db`` seam resolves for this app (``None`` falls back to
-    ``"default"``). The rest flows down the D16 chain (``mount_name`` to
+    ``"default"``). The rest flows down the D16 chain (``code``/``mount`` to
     ``BaseApplication``).
     """
 
@@ -264,26 +264,3 @@ class RoutedApplication(BaseApplication, RoutingClass):
             f["name"] for f in fields if f["kind"] not in ("var_positional", "var_keyword")
         }
         return {k: v for k, v in data.items() if k in param_names}
-
-
-if __name__ == "__main__":
-    from genro_routes import route
-
-    class DemoApp(RoutedApplication):
-        @route()
-        def hello(self, name: str = "world") -> dict[str, str]:
-            return {"hello": name}
-
-    app = DemoApp(mount_name="demo")
-    assert app.mount_name == "demo"
-    assert app.db_name is None
-    node = app.route.node("hello", errors=app.ROUTER_ERRORS)
-    assert node(name="genro") == {"hello": "genro"}
-    assert app.spread_over_params(node, {"name": "x"}) == {"name": "x"}
-    missing = app.route.node("nowhere", errors=app.ROUTER_ERRORS)
-    try:
-        missing()
-    except HTTPNotFound:
-        pass
-    else:
-        raise AssertionError("expected HTTPNotFound")

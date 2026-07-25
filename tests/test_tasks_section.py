@@ -74,7 +74,7 @@ def make_server(tmp_path: Path, avatar: Avatar | None = SUPERADMIN,
                 tasks: Any = True) -> AsgiServer:
     """A real server: TaskApp primary, stamped auth, storage on tmp_path."""
     return AsgiServer(
-        primary=TaskApp(),
+        applications=[TaskApp(mount="")],
         storage=LocalStorage(base_dir=str(tmp_path)),
         tasks=tasks,
         middleware={"stamp": {"avatar": avatar}},

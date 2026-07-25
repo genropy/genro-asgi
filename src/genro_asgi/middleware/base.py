@@ -137,37 +137,3 @@ def build_chain(
     for _order, cls, options in reversed(enabled):
         app = cls(app, server, **options)
     return app
-
-
-if __name__ == "__main__":
-    scope: dict[str, Any] = {"headers": [(b"X-One", b"1"), (b"x-one", b"2")]}
-    assert headers_dict(scope) == {"x-one": "2"}
-    assert scope["_headers"] is headers_dict(scope)
-
-    class OuterMiddleware(BaseMiddleware):
-        middleware_order = 100
-
-    class InnerMiddleware(BaseMiddleware):
-        middleware_order = 900
-
-    async def innermost(scope: Any, receive: Any, send: Any) -> None:
-        return None
-
-    marker = object()
-    chain = build_chain(
-        {"outer": True, "inner": True},
-        innermost,
-        marker,
-        {"inner": InnerMiddleware, "outer": OuterMiddleware},
-    )
-    assert isinstance(chain, OuterMiddleware)
-    assert chain.server is marker
-    inner = chain.app
-    assert isinstance(inner, InnerMiddleware)
-    assert inner.app is innermost
-    try:
-        build_chain({"bogus": True}, innermost, marker, {})
-    except ValueError as error:
-        assert "bogus" in str(error)
-    else:
-        raise AssertionError("expected ValueError on unknown middleware name")

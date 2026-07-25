@@ -91,11 +91,3 @@ class OpenAPIPlugin(BasePlugin):
             metadata["security"] = cfg["security"]
 
         return {"openapi": metadata} if metadata else {}
-
-
-if __name__ == "__main__":
-    from genro_routes import Router
-
-    assert OpenAPIPlugin.plugin_code == "openapi"
-    # Import alone must NOT register the plugin (no import side effect).
-    assert "openapi" not in Router.available_plugins()

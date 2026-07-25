@@ -24,12 +24,14 @@ from genro_routes import route
 
 
 class App(RoutedApplication):
+    mount = ""
+
     @route()
     def sum_sync(self, a: int = 0, b: int = 0) -> dict:
         return {"result": a + b}
 
 
-server = AsgiServer(primary=App(), tasks=True)
+server = AsgiServer(applications=[App()], tasks=True)
 server.serve(host="127.0.0.1", port=8000)
 ```
 

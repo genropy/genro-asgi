@@ -315,7 +315,7 @@ def cookie_token(sent: list[Message]) -> str:
 
 class TestSessionCookieFlow:
     async def test_first_request_sets_cookie(self) -> None:
-        server = SessionServer(primary=EchoApp())
+        server = SessionServer(applications=[EchoApp(mount="")])
         scope, sent = await http_get(server)
         cookie = set_cookie_value(sent)
         assert cookie is not None
@@ -324,7 +324,7 @@ class TestSessionCookieFlow:
         assert response_body(sent) == scope["session"].id.encode()
 
     async def test_returning_cookie_reuses_the_session(self) -> None:
-        server = SessionServer(primary=EchoApp())
+        server = SessionServer(applications=[EchoApp(mount="")])
         _, first = await http_get(server)
         token = cookie_token(first)
         scope2, second = await http_get(server, cookie=f"session_id={token}")
@@ -333,7 +333,7 @@ class TestSessionCookieFlow:
         assert server.session(scope2) is scope2["session"]
 
     async def test_expired_cookie_issues_new_session(self) -> None:
-        server = SessionServer(primary=EchoApp())
+        server = SessionServer(applications=[EchoApp(mount="")])
         _, first = await http_get(server)
         token = cookie_token(first)
         stored = server.session_store.get(token)
@@ -347,27 +347,27 @@ class TestSessionCookieFlow:
         class Plain(MiddlewareMixin, BaseServer):
             pass
 
-        server = Plain(primary=EchoApp())
+        server = Plain(applications=[EchoApp(mount="")])
         scope, sent = await http_get(server)
         assert server.session(scope) is None
         assert response_body(sent) == b"no-session"
         assert set_cookie_value(sent) is None
 
     async def test_explicit_session_false_disarms_the_middleware(self) -> None:
-        server = SessionServer(primary=EchoApp(), middleware={"session": False})
+        server = SessionServer(applications=[EchoApp(mount="")], middleware={"session": False})
         scope, sent = await http_get(server)
         assert scope.get("session") is None
         assert set_cookie_value(sent) is None
 
     async def test_secure_option_adds_secure_cookie_attribute(self) -> None:
-        server = SessionServer(primary=EchoApp(), middleware={"session": {"secure": True}})
+        server = SessionServer(applications=[EchoApp(mount="")], middleware={"session": {"secure": True}})
         _, sent = await http_get(server)
         cookie = set_cookie_value(sent)
         assert cookie is not None
         assert "Secure" in cookie
 
     async def test_default_cookie_has_no_secure_attribute(self) -> None:
-        server = SessionServer(primary=EchoApp())
+        server = SessionServer(applications=[EchoApp(mount="")])
         _, sent = await http_get(server)
         cookie = set_cookie_value(sent)
         assert cookie is not None
@@ -414,8 +414,8 @@ class PromotingApp(BaseApplication):
 
 class TestPromotedSessionCookie:
     async def test_promotion_in_a_first_request_rides_the_new_session_cookie(self) -> None:
-        app = PromotingApp(Avatar("alice", ["admin"]))
-        server = SessionServer(primary=app)
+        app = PromotingApp(Avatar("alice", ["admin"]), mount="")
+        server = SessionServer(applications=[app])
         scope, sent = await http_get(server)
         session_id = scope["session"].id
         assert scope["session"].avatar is not None
@@ -427,8 +427,8 @@ class TestPromotedSessionCookie:
         assert response_body(sent) == session_id.encode()
 
     async def test_promotion_on_a_returning_session_sends_no_cookie(self) -> None:
-        app = PromotingApp(Avatar("bob", ["user"]))
-        server = SessionServer(primary=app)
+        app = PromotingApp(Avatar("bob", ["user"]), mount="")
+        server = SessionServer(applications=[app])
         anonymous = server.session_store.create()
         anonymous.data["cart"] = "kept"
         scope, sent = await http_get(server, cookie=f"session_id={anonymous.id}")
@@ -438,7 +438,7 @@ class TestPromotedSessionCookie:
         assert set_cookie_value(sent) is None  # the client's cookie is still valid
 
     async def test_unchanged_returning_session_still_sends_no_cookie(self) -> None:
-        server = SessionServer(primary=EchoApp())
+        server = SessionServer(applications=[EchoApp(mount="")])
         _, first = await http_get(server)
         token = cookie_token(first)
         _, second = await http_get(server, cookie=f"session_id={token}")

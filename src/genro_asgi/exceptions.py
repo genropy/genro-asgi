@@ -101,17 +101,3 @@ class Redirect(HTTPException):
     ) -> None:
         super().__init__(status, headers=headers)
         self.location = location
-
-
-if __name__ == "__main__":
-    not_found = HTTPNotFound("missing")
-    assert (not_found.status, not_found.detail) == (404, "missing")
-    assert not_found.headers == []
-    assert isinstance(not_found, HTTPException)
-    bad_request = HTTPBadRequest("bad")
-    assert (bad_request.status, bad_request.detail) == (400, "bad")
-    assert isinstance(bad_request, HTTPException)
-    redirect = Redirect("/elsewhere")
-    assert (redirect.status, redirect.location) == (302, "/elsewhere")
-    challenged = HTTPUnauthorized("no", headers=[(b"www-authenticate", b"Bearer")])
-    assert challenged.headers == [(b"www-authenticate", b"Bearer")]

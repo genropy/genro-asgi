@@ -22,7 +22,7 @@ Two base classes cover the two shapes:
 
   ```python
   from genro_asgi import McpApplication
-  app = McpApplication(routing_class=..., mount_name="mcp")
+  app = McpApplication(routing_class=..., code="mcp")
   ```
 
 - **`McpOpenApiApplication`** — a dual-faced application: a REST/OpenAPI face

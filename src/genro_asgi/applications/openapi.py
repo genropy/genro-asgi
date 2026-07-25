@@ -41,7 +41,8 @@ Kwargs peeled by the cooperative ``__init__`` (D16): ``routing_class`` (a
 import path, an alternative to ``routing_class``), ``docs`` (documentation
 style — ``"swagger"`` or ``"off"``) and ``api_name`` (the segment the mounted
 class is attached under, default ``"api"``). The rest flows down the chain
-(``db_name`` to ``RoutedApplication``, ``mount_name`` to ``BaseApplication``).
+(``db_name`` to ``RoutedApplication``, ``code``/``mount`` to
+``BaseApplication``).
 """
 
 from __future__ import annotations
@@ -154,8 +155,8 @@ class OpenApiMeta(RoutingClass):
         app = self.application
         if app.docs_style == "off":
             raise HTTPNotFound("documentation disabled")
-        mount_name = app.mount_name
-        schema_url = f"/{mount_name}/_meta/schema_json" if mount_name else "/_meta/schema_json"
+        mount = app.mount
+        schema_url = f"/{mount}/_meta/schema_json" if mount else "/_meta/schema_json"
         title = app.api_info.get("title", "API")
         template = (RESOURCES_DIR / "swagger.html").read_text()
         return template.format(title=title, schema_url=schema_url)
@@ -168,8 +169,8 @@ class OpenApiMeta(RoutingClass):
         title = info.get("title", type(app).__name__)
         version = info.get("version", "")
         description = info.get("description", "")
-        mount_name = app.mount_name
-        docs_url = f"/{mount_name}/_meta/docs" if mount_name else "/_meta/docs"
+        mount = app.mount
+        docs_url = f"/{mount}/_meta/docs" if mount else "/_meta/docs"
         version_html = f"<p>Version: {version}</p>" if version else ""
         desc_html = f"<p>{description}</p>" if description else ""
         template = (RESOURCES_DIR / "openapi_index.html").read_text()
@@ -179,22 +180,3 @@ class OpenApiMeta(RoutingClass):
             desc_html=desc_html,
             docs_url=docs_url,
         )
-
-
-if __name__ == "__main__":
-    class DemoApi(OpenApiApplication):
-        openapi_info = {"title": "Demo", "version": "1.0.0"}
-
-        @route()
-        def add(self, x: int = 0, y: int = 0) -> dict[str, int]:
-            return {"sum": x + y}
-
-    app = DemoApi()
-    assert app.api_name == "api"
-    assert app.docs_style == "swagger"
-    assert app.api_info["title"] == "Demo"
-    meta = app.route.node("/_meta/schema_json")
-    assert meta.error is None, meta.error
-    doc = meta()
-    assert doc["openapi"] == "3.1.0"
-    assert doc["info"]["title"] == "Demo"

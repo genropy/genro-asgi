@@ -100,27 +100,3 @@ class AuthSection(RoutingClass):
     def descriptors(self) -> list[dict[str, Any]]:
         """The descriptor of every registered method, in registration order."""
         return [method.descriptor() for method in self.methods.values()]
-
-
-if __name__ == "__main__":
-    from types import SimpleNamespace
-
-    from ...auth import PasswordMethod
-
-    application: Any = SimpleNamespace(server="SERVER")
-    section = AuthSection(application)
-    assert section.server == "SERVER"
-    assert section.descriptors() == []
-    method = PasswordMethod(application, "password")
-    section.register(method)
-    assert section.methods == {"password": method}
-    assert section.descriptors() == [method.descriptor()]
-    # Invariant 10: the route-less password method is registry-only, never
-    # attached — the section's router carries no "password" child.
-    assert "password" not in (section.route.nodes(lazy=True).get("routers") or {})
-    try:
-        section.register(PasswordMethod(application, "password"))
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("expected ValueError on a duplicate method_id")

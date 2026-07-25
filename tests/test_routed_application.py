@@ -114,7 +114,7 @@ class StampAuthMiddleware(BaseMiddleware):
 def auth_server(app: RoutedApplication, avatar: Avatar | None) -> AsgiServer:
     """An AsgiServer whose chain stamps ``avatar`` as the request identity."""
     return AsgiServer(
-        primary=app,
+        applications=[app],
         middleware={"stamp": {"avatar": avatar}},
         middleware_registry={"stamp": StampAuthMiddleware},
     )
@@ -178,7 +178,7 @@ class TestDispatch:
     async def test_sync_route_answers_json(
         self, http_request, response_status, response_headers, response_body
     ) -> None:
-        server = AsgiServer(primary=DemoApp())
+        server = AsgiServer(applications=[DemoApp(mount="")])
         sent = await http_request(server, "/hello")
         assert response_status(sent) == 200
         assert response_headers(sent)[b"content-type"] == b"application/json"
@@ -187,13 +187,13 @@ class TestDispatch:
     async def test_async_route_answers_json(
         self, http_request, response_status, response_body
     ) -> None:
-        server = AsgiServer(primary=DemoApp())
+        server = AsgiServer(applications=[DemoApp(mount="")])
         sent = await http_request(server, "/ahello")
         assert response_status(sent) == 200
         assert response_body(sent) == b'{"hello":"async"}'
 
     async def test_query_params_reach_handler_kwargs(self, response_body) -> None:
-        server = AsgiServer(primary=DemoApp())
+        server = AsgiServer(applications=[DemoApp(mount="")])
         scope: Scope = {
             "type": "http",
             "method": "GET",
@@ -215,14 +215,14 @@ class TestDispatch:
     async def test_unknown_path_is_404_via_error_middleware(
         self, http_request, response_status
     ) -> None:
-        server = AsgiServer(primary=DemoApp())
+        server = AsgiServer(applications=[DemoApp(mount="")])
         sent = await http_request(server, "/nowhere")
         assert response_status(sent) == 404
 
     async def test_metadata_media_type_reaches_the_response(
         self, http_request, response_headers, response_body
     ) -> None:
-        server = AsgiServer(primary=DemoApp())
+        server = AsgiServer(applications=[DemoApp(mount="")])
         sent = await http_request(server, "/page")
         assert response_headers(sent)[b"content-type"] == b"text/html; charset=utf-8"
         assert response_body(sent) == b"<h1>hi</h1>"
@@ -230,7 +230,7 @@ class TestDispatch:
     async def test_result_wrapper_metadata_wins(
         self, http_request, response_headers, response_body
     ) -> None:
-        server = AsgiServer(primary=DemoApp())
+        server = AsgiServer(applications=[DemoApp(mount="")])
         sent = await http_request(server, "/wrapped")
         assert response_headers(sent)[b"content-type"] == b"text/html; charset=utf-8"
         assert response_body(sent) == b"<p>meta</p>"
@@ -252,13 +252,13 @@ class TestBodyBinding:
     async def test_json_body_spread_over_params(
         self, json_request, response_status, response_body
     ) -> None:
-        server = AsgiServer(primary=TypedApp())
+        server = AsgiServer(applications=[TypedApp(mount="")])
         sent = await json_request(server, "/add", b'{"x": 1, "y": 2, "extra": 9}')
         assert response_status(sent) == 200
         assert response_body(sent) == b'{"sum":3}'
 
     async def test_body_data_kept_whole_when_declared(self, json_request, response_body) -> None:
-        server = AsgiServer(primary=TypedApp())
+        server = AsgiServer(applications=[TypedApp(mount="")])
         sent = await json_request(server, "/raw", b'{"x": 1}')
         assert response_body(sent) == b'{"body":{"x":1}}'
 
@@ -273,29 +273,29 @@ class TestArgumentErrors:
     """
 
     async def test_uncoercible_typed_arg_is_400(self, query_request, response_status) -> None:
-        server = AsgiServer(primary=TypedApp())
+        server = AsgiServer(applications=[TypedApp(mount="")])
         sent = await query_request(server, "/add", b"x=abc")
         assert response_status(sent) == 400
 
     async def test_unbindable_extra_arg_is_400(self, query_request, response_status) -> None:
-        server = AsgiServer(primary=TypedApp())
+        server = AsgiServer(applications=[TypedApp(mount="")])
         sent = await query_request(server, "/add", b"x=1&y=2&z=99")
         assert response_status(sent) == 400
 
 
 class TestAuth:
     async def test_anonymous_is_403_on_ruled_entry(self, http_request, response_status) -> None:
-        server = auth_server(DemoApp(), avatar=None)
+        server = auth_server(DemoApp(mount=""), avatar=None)
         sent = await http_request(server, "/restricted")
         assert response_status(sent) == 403
 
     async def test_wrong_tags_are_403(self, http_request, response_status) -> None:
-        server = auth_server(DemoApp(), avatar=Avatar("bob", ["viewer"]))
+        server = auth_server(DemoApp(mount=""), avatar=Avatar("bob", ["viewer"]))
         sent = await http_request(server, "/restricted")
         assert response_status(sent) == 403
 
     async def test_matching_tag_is_200(self, http_request, response_status, response_body) -> None:
-        server = auth_server(DemoApp(), avatar=Avatar("alice", ["admin"]))
+        server = auth_server(DemoApp(mount=""), avatar=Avatar("alice", ["admin"]))
         sent = await http_request(server, "/restricted")
         assert response_status(sent) == 200
         assert response_body(sent) == b'{"secret":true}'
@@ -303,14 +303,14 @@ class TestAuth:
     async def test_untagged_entry_stays_public_without_middleware(
         self, http_request, response_status
     ) -> None:
-        server = AsgiServer(primary=DemoApp())
+        server = AsgiServer(applications=[DemoApp(mount="")])
         sent = await http_request(server, "/hello")
         assert response_status(sent) == 200
 
     async def test_ruled_entry_denied_without_middleware(
         self, http_request, response_status
     ) -> None:
-        server = AsgiServer(primary=DemoApp())
+        server = AsgiServer(applications=[DemoApp(mount="")])
         sent = await http_request(server, "/restricted")
         assert response_status(sent) == 403
 
@@ -319,9 +319,9 @@ class TestSubTrees:
     async def test_attached_instance_reachable_under_its_name(
         self, http_request, response_status, response_body
     ) -> None:
-        app = DemoApp()
+        app = DemoApp(mount="")
         app.route.add_branches({"name": "sub", "instance": SubApi()})
-        server = AsgiServer(primary=app)
+        server = AsgiServer(applications=[app])
         sent = await http_request(server, "/sub/ping")
         assert response_status(sent) == 200
         assert response_body(sent) == b'{"sub":true}'
@@ -329,12 +329,12 @@ class TestSubTrees:
 
 class TestExecutionVehicle:
     async def test_sync_handler_runs_through_the_pool(self, http_request, response_body) -> None:
-        server = AsgiServer(primary=DemoApp())
+        server = AsgiServer(applications=[DemoApp(mount="")])
         sent = await http_request(server, "/sync_ident")
         assert int(response_body(sent)) != threading.get_ident()
 
     async def test_async_handler_stays_on_the_loop(self, http_request, response_body) -> None:
-        server = AsgiServer(primary=DemoApp())
+        server = AsgiServer(applications=[DemoApp(mount="")])
         sent = await http_request(server, "/async_ident")
         assert int(response_body(sent)) == threading.get_ident()
 
@@ -350,6 +350,6 @@ class TestAsyncBodyTypeError:
             async def boom(self) -> dict:
                 raise TypeError("async body failure")
 
-        server = AsgiServer(primary=Exploding())
+        server = AsgiServer(applications=[Exploding(mount="")])
         sent = await http_request(server, "/boom")
         assert response_status(sent) == 500

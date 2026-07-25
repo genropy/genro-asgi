@@ -54,25 +54,29 @@ def running_server(server: BaseServer) -> Iterator[int]:
 
 @contextmanager
 def booted() -> Iterator[int]:
-    """A server with a primary and a secondary mounted as ``api`` (both throwaway)."""
-    server = BaseServer(primary=ThrowawayApp(name="primary"))
-    server.mount(ThrowawayApp(name="api", mount_name="api"))
+    """A server with a root app and a secondary mounted as ``api`` (both throwaway)."""
+    server = BaseServer(
+        applications=[
+            ThrowawayApp(mount="", name="root"),
+            ThrowawayApp(name="api", code="api"),
+        ]
+    )
     with running_server(server) as port:
         yield port
 
 
 class TestDemux:
-    def test_root_goes_to_primary(self) -> None:
+    def test_root_goes_to_the_root_app(self) -> None:
         with booted() as port:
             r = httpx.get(f"http://127.0.0.1:{port}/")
             assert r.status_code == 200
-            assert r.text == "primary:/"
+            assert r.text == "root:/"
 
-    def test_unclaimed_first_segment_goes_to_primary(self) -> None:
+    def test_unclaimed_first_segment_goes_to_the_root_app(self) -> None:
         with booted() as port:
             r = httpx.get(f"http://127.0.0.1:{port}/nothing/claimed")
             assert r.status_code == 200
-            assert r.text == "primary:/nothing/claimed"
+            assert r.text == "root:/nothing/claimed"
 
     def test_mounted_first_segment_reaches_its_app_with_path_stripped(self) -> None:
         with booted() as port:
@@ -86,13 +90,17 @@ class TestDemux:
             assert boom.status_code == 500
             healthy = httpx.get(f"http://127.0.0.1:{port}/")
             assert healthy.status_code == 200
-            assert healthy.text == "primary:/"
+            assert healthy.text == "root:/"
 
     async def test_double_slash_before_a_mount_forwards_the_remainder(self) -> None:
         # the forwarded path is rebuilt from the same remainder used to find
         # the segment: //api/x reaches the mount as /x (driven at ASGI level)
-        server = BaseServer(primary=ThrowawayApp(name="primary"))
-        server.mount(ThrowawayApp(name="api", mount_name="api"))
+        server = BaseServer(
+            applications=[
+                ThrowawayApp(mount="", name="root"),
+                ThrowawayApp(name="api", code="api"),
+            ]
+        )
         sent: list[dict[str, object]] = []
 
         async def receive() -> dict[str, object]:
@@ -107,9 +115,57 @@ class TestDemux:
         assert body == b"api:/x"
 
 
+class TestServerOfMountsOnly:
+    """The three branches a server without a root application answers with."""
+
+    async def drive(self, server: BaseServer, path: str, query: bytes = b"") -> dict[str, object]:
+        """Drive one GET at the ASGI level; return the ``http.response.start``."""
+        sent: list[dict[str, object]] = []
+
+        async def receive() -> dict[str, object]:
+            return {"type": "http.request"}
+
+        async def send(message: dict[str, object]) -> None:
+            sent.append(message)
+
+        scope = {"type": "http", "path": path, "query_string": query}
+        await server(scope, receive, send)
+        return next(m for m in sent if m["type"] == "http.response.start")
+
+    def mounts_only(self, **kwargs: object) -> BaseServer:
+        """A server serving ``/api`` and nothing on the root."""
+        return BaseServer(applications=[ThrowawayApp(name="api", code="api")], **kwargs)
+
+    async def test_a_claimed_segment_still_reaches_its_app(self) -> None:
+        start = await self.drive(self.mounts_only(), "/api/echo")
+        assert start["status"] == 200
+
+    async def test_an_unclaimed_path_is_404(self) -> None:
+        start = await self.drive(self.mounts_only(), "/nothing/claimed")
+        assert start["status"] == 404
+
+    async def test_the_root_is_404_without_a_default(self) -> None:
+        start = await self.drive(self.mounts_only(), "/")
+        assert start["status"] == 404
+
+    async def test_the_root_redirects_to_the_default_with_a_307(self) -> None:
+        start = await self.drive(self.mounts_only(default="api"), "/")
+        assert start["status"] == 307
+        assert dict(start["headers"])[b"location"] == b"/api/"
+
+    async def test_the_redirect_carries_the_query_string_over(self) -> None:
+        start = await self.drive(self.mounts_only(default="api"), "/", query=b"q=moka&n=2")
+        assert dict(start["headers"])[b"location"] == b"/api/?q=moka&n=2"
+
+    async def test_an_unclaimed_path_is_404_even_with_a_default(self) -> None:
+        # the default answers the ROOT only: it is not a catch-all
+        start = await self.drive(self.mounts_only(default="api"), "/nothing")
+        assert start["status"] == 404
+
+
 class TestEmptyWebsocket:
     async def test_websocket_connect_is_closed_cleanly(self) -> None:
-        server = BaseServer(primary=ThrowawayApp())
+        server = BaseServer(applications=[ThrowawayApp(mount="")])
         sent: list[dict[str, object]] = []
 
         async def receive() -> dict[str, object]:

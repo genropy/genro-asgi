@@ -140,19 +140,3 @@ class SseStream:
             ],
             media_type="text/event-stream",
         )
-
-
-if __name__ == "__main__":
-    async def demo() -> None:
-        async def events() -> "AsyncIterable[dict[str, Any]]":
-            yield {"id": "1", "event": "progress", "data": {"pct": 10}}
-            yield {"data": "plain line"}
-
-        stream = SseStream(events(), retry_ms=3000)
-        chunks = [chunk async for chunk in stream]
-        for chunk in chunks:
-            print(repr(chunk))
-        assert chunks[0] == b"retry: 3000\n\n"
-        assert b"event: progress" in chunks[1]
-
-    asyncio.run(demo())

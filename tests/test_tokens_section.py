@@ -80,7 +80,7 @@ def make_server(
     if store is _DEFAULT:
         store = MemoryApiKeyStore()
     kwargs: dict[str, Any] = {
-        "primary": BaseApplication(),
+        "applications": [BaseApplication(mount="")],
         "middleware": {"stamp": {"avatar": avatar}},
         "middleware_registry": {"stamp": StampAuthMiddleware},
     }

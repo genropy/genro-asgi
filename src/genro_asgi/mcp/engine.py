@@ -330,39 +330,3 @@ class McpEngine:
             return json.dumps(result, ensure_ascii=False, default=str)
         except (TypeError, ValueError):
             return str(result)
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    from genro_routes import RoutingClass, route
-
-    class Demo(RoutingClass):
-        """Demo service exposing one MCP tool."""
-
-        def __init__(self) -> None:
-            self.route.plug("pydantic")
-            self.route.plug("channel")
-
-        @route(channel_channels="mcp")
-        def add(self, x: int, y: int = 0) -> dict:
-            """Add two numbers."""
-            return {"sum": x + y}
-
-    engine = McpEngine(Demo().route, name="demo")
-    init = asyncio.run(engine.dispatch({"method": "initialize", "params": {}}))
-    assert init["protocolVersion"] == "2025-11-25"
-    tools = asyncio.run(engine.dispatch({"method": "tools/list"}))
-    assert [tool["name"] for tool in tools["tools"]] == ["add"]
-    call = asyncio.run(
-        engine.dispatch(
-            {"method": "tools/call", "params": {"name": "add", "arguments": {"x": 2, "y": 3}}}
-        )
-    )
-    assert call["structuredContent"] == {"sum": 5}
-    bad = asyncio.run(
-        engine.dispatch(
-            {"method": "tools/call", "params": {"name": "add", "arguments": {"x": "nope"}}}
-        )
-    )
-    assert bad["isError"] is True

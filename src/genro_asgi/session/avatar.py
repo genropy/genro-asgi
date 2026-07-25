@@ -53,11 +53,3 @@ class Avatar:
     def data(self) -> Bag:
         """Extensible per-user data as a Bag."""
         return self._data
-
-
-if __name__ == "__main__":
-    explicit = Avatar("alice", ["admin"])
-    assert explicit.identity == "alice"
-    assert explicit.tags == ["admin"]
-    normalized = Avatar("bob", None)
-    assert normalized.tags == []

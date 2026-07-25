@@ -217,25 +217,3 @@ class FileUserStore(UserStore):
     def delete(self, identity: str) -> bool:
         """Remove one user's file. True if it existed, False otherwise."""
         return self._record_node(identity).delete()
-
-
-if __name__ == "__main__":
-    import tempfile
-
-    from cryptography.fernet import Fernet
-
-    base = tempfile.mkdtemp()
-    storage = LocalStorage(base_dir=base)
-    storage.set_encryption_keys(Fernet.generate_key().decode())
-    store = FileUserStore(storage)
-    store.save(
-        {
-            "identity": "admin",
-            "password_hash": store.hash_password("secret"),
-            "tags": ["SUPERADMIN"],
-            "enabled": True,
-        }
-    )
-    print("verify ok:", store.verify("admin", "secret") is not None)
-    print("verify ko:", store.verify("admin", "wrong"))
-    print("all:", [r["identity"] for r in store.load_all()])

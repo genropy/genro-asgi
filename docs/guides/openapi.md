@@ -23,6 +23,7 @@ from genro_routes import route
 
 
 class Shop(OpenApiApplication):
+    mount = ""
     openapi_info = {"title": "Shop API", "version": "1.0.0"}
 
     @route()
@@ -30,7 +31,7 @@ class Shop(OpenApiApplication):
         return {"query": q, "hits": []}
 
 
-server = AsgiServer(primary=Shop(), plugins={"openapi": True, "pydantic": True})
+server = AsgiServer(applications=[Shop()], plugins={"openapi": True, "pydantic": True})
 server.serve(host="127.0.0.1", port=8000)
 ```
 
@@ -48,7 +49,7 @@ server.serve(host="127.0.0.1", port=8000)
 ## The `_meta` URLs
 
 The generated documentation lives under the **`_meta`** prefix (direct mode, when
-the OpenAPI app is the primary):
+the OpenAPI app is on the site root):
 
 - `GET /_meta/schema_json` — the OpenAPI 3.1 document.
 - `GET /_meta/docs` — the Swagger UI (returns `404` if `docs="off"`).
@@ -58,13 +59,13 @@ Your endpoints themselves are served directly, e.g. `GET /search?q=moka`.
 
 ## Direct vs mounted mode
 
-**Direct mode** — the `OpenApiApplication` is the primary; endpoints are at the
-root and meta is at `/_meta/...` (as above).
+**Direct mode** — the `OpenApiApplication` declares `mount = ""`; endpoints are
+at the root and meta is at `/_meta/...` (as above).
 
 **Mounted mode** — the app is placed on a URL prefix:
 
 ```python
-api = OpenApiApplication(mount_name="mount", routing_class=SubApi())
+api = OpenApiApplication(code="mount", routing_class=SubApi())
 ```
 
 - the endpoints are served under `/mount/api/...`

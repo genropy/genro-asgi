@@ -26,7 +26,7 @@ the §5.5 session fallback is live), default OFF. The chain only carries
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from .base import BaseMiddleware
 
@@ -46,30 +46,3 @@ class AuthMiddleware(BaseMiddleware):
         """Resolve the identity via the server and publish it on the scope."""
         scope["auth"] = self.server.authenticate(scope)
         await self.app(scope, receive, send)
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    from ..session.avatar import Avatar
-
-    class _Server:
-        def authenticate(self, scope: Scope) -> Avatar:
-            return Avatar("alice", ["admin"])
-
-    async def demo() -> None:
-        async def inner(scope: Scope, receive: Receive, send: Send) -> None:
-            await send({"type": "http.response.start", "status": 200, "headers": []})
-
-        async def receive() -> Any:
-            return {"type": "http.request"}
-
-        async def send(message: Any) -> None:
-            pass
-
-        middleware = AuthMiddleware(inner, _Server())
-        scope: Scope = {"type": "http", "method": "GET", "path": "/", "headers": []}
-        await middleware(scope, receive, send)
-        assert scope["auth"].identity == "alice"
-
-    asyncio.run(demo())

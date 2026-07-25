@@ -138,22 +138,3 @@ class MemorySessionStore:
             session.meta["last_access"] = meta["last_access"]
             if not session.is_expired():
                 self._sessions[session_id] = session
-
-
-if __name__ == "__main__":
-    store = MemorySessionStore(default_ttl=3600)
-    assert isinstance(store, SessionStore)
-    assert store.create().avatar is None
-    created = store.create(avatar=Avatar("alice", ["admin"]))
-    assert store.get(created.id) is created
-    created.data["k"] = "v"
-    dumped = store.dump()
-    assert dumped[created.id]["avatar"] == {"identity": "alice", "tags": ["admin"]}
-    fresh = MemorySessionStore()
-    fresh.restore(dumped)
-    restored = fresh.get(created.id)
-    assert restored is not None
-    assert restored.avatar is not None and restored.avatar.identity == "alice"
-    assert len(restored.data) == 0
-    store.delete(created.id)
-    assert store.get(created.id) is None

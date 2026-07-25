@@ -162,20 +162,3 @@ class FileSessionStore:
             if not session.is_expired():
                 self._sessions[session_id] = session
                 self._write(session)
-
-
-if __name__ == "__main__":
-    import tempfile
-
-    base = tempfile.mkdtemp()
-    store = FileSessionStore(LocalStorage(base_dir=base))
-    created = store.create(avatar=Avatar("alice", ["admin"]))
-    created.data["k"] = "v"
-    assert store.get(created.id) is created
-    fresh = FileSessionStore(LocalStorage(base_dir=base))
-    survivor = fresh.get(created.id)
-    assert survivor is not None and survivor is not created
-    assert survivor.avatar is not None and survivor.avatar.identity == "alice"
-    assert len(survivor.data) == 0
-    fresh.delete(created.id)
-    assert FileSessionStore(LocalStorage(base_dir=base)).get(created.id) is None

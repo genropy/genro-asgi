@@ -109,30 +109,3 @@ class StreamingResponse:
         async for chunk in self.body_iterator:
             await send({"type": "http.response.body", "body": chunk, "more_body": True})
         await send({"type": "http.response.body", "body": b"", "more_body": False})
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    from .types import Message
-
-    async def demo() -> None:
-        sent: list[Message] = []
-
-        async def send(message: Message) -> None:
-            sent.append(message)
-
-        async def receive() -> Message:
-            return {"type": "http.request"}
-
-        async def chunks() -> "AsyncIterable[bytes]":
-            yield b"one"
-            yield b"two"
-
-        await StreamingResponse(chunks(), media_type="text/plain")({}, receive, send)
-        assert sent[0]["status"] == 200
-        assert [m["body"] for m in sent[1:]] == [b"one", b"two", b""]
-        assert sent[-1]["more_body"] is False
-        print("streamed:", [m.get("body") for m in sent[1:]])
-
-    asyncio.run(demo())

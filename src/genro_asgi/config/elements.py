@@ -35,8 +35,9 @@ Sections and their 1a fate:
 - ``auth`` — the credential config (``basic``/``bearer``/``jwt`` kwargs) handed
   verbatim to ``AuthCore`` via the ``auth=`` server kwarg.
 - ``applications``/``application`` — the app collection keyed by ``code``; the
-  optional ``default`` names the primary (served on ``/``). Each app derives
-  its mount from ``code`` unless it declares ``mount``.
+  optional ``default`` names the target of the 307 from ``/``. Each app
+  derives its mount from ``code`` unless it declares ``mount``, and
+  ``mount=""`` is the site root.
 - ``groups``/``group`` — grammar only (orchestration package).
 - ``databases``/``database`` — grammar only (core 1b).
 - ``plugins``/``plugin`` — router plugins armed onto every routed app
@@ -151,17 +152,18 @@ class AsgiConfigElements(TaskConfigElements):
     @element(sub_tags="application", collection_key="code")
     def applications(self) -> None:
         """Collection of applications, each keyed by its ``code``. The optional
-        ``default`` attribute names the app served as the primary (mount
-        ``/``)."""
+        ``default`` attribute names the application ``/`` **redirects to** (307)
+        when no application answers the site root; it elects nothing."""
 
     @element(sub_tags="*", parent_tags="applications")
     def application(self, app_class: type) -> None:
         """One application: ``code`` (the collection key), ``app_class`` (the
         imported class, REQUIRED — the grammar rejects an application without
-        it), optional ``mount`` plus the app's constructor kwargs. ``mount``
-        defaults to ``code`` for a secondary; the ``default`` app is the primary
-        (mount ``/``). Children are unconstrained (``sub_tags="*"``): the core
-        reads only the app's own attributes and delegates the rest."""
+        it), optional ``mount`` plus the app's constructor kwargs. ``mount`` is
+        the URL prefix and defaults to ``code``; ``mount=""`` is the site root —
+        the one application answering ``/`` and every unclaimed path. Children
+        are unconstrained (``sub_tags="*"``): the core reads only the app's own
+        attributes and delegates the rest."""
 
     @element(sub_tags="*", parent_tags="application")
     def configuration(self) -> None:
@@ -213,20 +215,3 @@ class AsgiConfigElements(TaskConfigElements):
         """OpenAPI metadata: ``title``, ``version``, ``description``. Grammar
         only in core 1a — the OpenAPI application arrives in core 1c; read and
         skipped here."""
-
-
-if __name__ == "__main__":
-    from typing import Any
-
-    from genro_builders.builder import BuilderBase, BuilderHandler
-
-    class _Demo(BuilderBase, AsgiConfigElements):
-        def main(self, root: Any) -> None:
-            root.server(host="127.0.0.1", port=8000)
-            apps = root.applications(default="shop")
-            apps.application(code="shop", app_class=object)
-
-    demo = _Demo(name="config")
-    BuilderHandler().add_builder(demo)
-    tags = [node.node_tag for node in demo.source]
-    assert tags == ["server", "applications"], tags

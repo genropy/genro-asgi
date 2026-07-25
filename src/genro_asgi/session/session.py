@@ -111,27 +111,3 @@ class Session:
             return True
         last_access: float = self.meta["last_access"]
         return bool((time.time() - last_access) > ttl)
-
-
-if __name__ == "__main__":
-    session = Session("tok", avatar=Avatar("alice"), ttl=3600)
-    assert session.id == "tok"
-    assert session.avatar is not None and session.avatar.identity == "alice"
-    assert not session.is_expired()
-    session.meta["last_access"] = time.time() - 10_000
-    assert session.is_expired()
-    anonymous = Session("t2", avatar=None, ttl=0)
-    assert anonymous.avatar is None
-    assert anonymous.is_expired()
-
-    fresh = Session("t3", avatar=None, ttl=3600)
-    assert fresh.dirty is False
-    fresh.touch()  # a read refreshes last_access but does NOT mark dirty
-    assert fresh.dirty is False
-    fresh.data["cart"] = "x"
-    fresh.mark_dirty()  # a data mutation is dirty only when the handler says so
-    assert fresh.dirty is True
-    fresh.clear_dirty()
-    assert fresh.dirty is False
-    fresh.attach_avatar(Avatar("bob"))  # login marks dirty automatically
-    assert fresh.dirty is True

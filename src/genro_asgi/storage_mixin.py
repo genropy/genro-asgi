@@ -89,17 +89,3 @@ class StorageMixin:
     def storage(self) -> LocalStorage:
         """The filesystem storage this server owns (mounts + at-rest encryption)."""
         return self._storage
-
-
-if __name__ == "__main__":
-    from .application import BaseApplication
-    from .server import BaseServer
-
-    class DemoServer(StorageMixin, BaseServer):
-        pass
-
-    server = DemoServer(primary=BaseApplication())
-    assert isinstance(server.storage, LocalStorage)
-    assert server.storage.has_mount("site")
-    assert server.storage.has_mount("secure")
-    assert not hasattr(BaseServer(primary=BaseApplication()), "storage")

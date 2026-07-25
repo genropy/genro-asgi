@@ -167,7 +167,7 @@ def make_server(provider: dict[str, Any] | None = None) -> AsgiServer:
     without it refuses to boot.
     """
     return AsgiServer(
-        primary=BaseApplication(),
+        applications=[BaseApplication(mount="")],
         external_url=EXTERNAL_URL,
         server_app={"oidc": {"google": provider if provider is not None else PROVIDER}},
     )
@@ -229,7 +229,7 @@ def location_query(sent: list[Message]) -> dict[str, list[str]]:
 class TestOidcDescriptor:
     def test_descriptor_shape_and_no_secret_leak(self) -> None:
         server = make_server()
-        app = server.mounts["_server"]
+        app = server.applications["_server"]
         assert isinstance(app, ServerApplication)
         assert app.auth_section is not None
         method = app.auth_section.methods["oidc:google"]
@@ -244,9 +244,23 @@ class TestOidcDescriptor:
         for leak in ("client_id", "issuer", "client_secret"):
             assert leak not in method.descriptor()
 
+    def test_pkce_challenge_matches_the_rfc_7636_vector(self) -> None:
+        # RFC 7636 Appendix B's S256 example: a fixed verifier/challenge pair, so an
+        # implementation that is wrong but self-consistent cannot pass.
+        server = make_server()
+        app = server.applications["_server"]
+        assert isinstance(app, ServerApplication)
+        assert app.auth_section is not None
+        method = app.auth_section.methods["oidc:google"]
+        assert isinstance(method, OidcMethod)
+        assert (
+            method._pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")
+            == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        )
+
     def test_method_owns_routes_and_is_attached(self) -> None:
         server = make_server()
-        app = server.mounts["_server"]
+        app = server.applications["_server"]
         assert isinstance(app, ServerApplication)
         assert app.auth_section is not None
         routers = app.auth_section.route.nodes(lazy=True).get("routers") or {}
@@ -383,7 +397,7 @@ class TestOidcRedirectUri:
         self, mock_discovery: None
     ) -> None:
         server = AsgiServer(
-            primary=BaseApplication(),
+            applications=[BaseApplication(mount="")],
             external_url="https://shop.example.com/",
             server_app={"oidc": {"google": PROVIDER}},
         )
@@ -402,12 +416,12 @@ class TestOidcRedirectUri:
         # error at the first login attempt.
         with pytest.raises(ValueError, match="external_url"):
             AsgiServer(
-                primary=BaseApplication(),
+                applications=[BaseApplication(mount="")],
                 server_app={"oidc": {"google": PROVIDER}},
             )
 
     def test_a_server_without_providers_needs_no_external_url(self) -> None:
-        server = AsgiServer(primary=BaseApplication())
+        server = AsgiServer(applications=[BaseApplication(mount="")])
         assert server.external_url is None
 
 
@@ -416,7 +430,7 @@ class TestOidcDiscoveryLazy:
         # An unreachable issuer must not break server construction: discovery is
         # lazy, never called in __init__ (the offline-boot guarantee).
         server = make_server({"issuer": "https://unreachable.invalid", "client_id": "x"})
-        app = server.mounts["_server"]
+        app = server.applications["_server"]
         assert isinstance(app, ServerApplication)
         assert app.auth_section is not None
         method = app.auth_section.methods["oidc:google"]
@@ -483,7 +497,7 @@ class TestOidcCallback:
             f"/_server/auth/oidc:google/callback?state={state}&code=auth-code",
             cookie=f"session_id={session_id}",
         )
-        app = server.mounts["_server"]
+        app = server.applications["_server"]
         assert isinstance(app, ServerApplication)
         user_store = getattr(server, "user_store", None)
         assert user_store is None  # no user store wired: nothing to touch

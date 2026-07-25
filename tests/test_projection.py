@@ -40,7 +40,7 @@ from genro_asgi.types import Message, Receive, Scope, Send
 
 
 class ShopApp(BaseApplication):
-    """Default primary app: answers ``shop``."""
+    """The ``default`` app: answers ``shop``."""
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -63,7 +63,7 @@ class SiteConfig(AsgiConfigBuilder):
         root.middleware(cors=True)
         root.auth(basic={"admin": {"password": "secret", "tags": "admin"}})
         apps = root.applications(default="shop")
-        apps.application(code="shop", app_class=ShopApp)
+        apps.application(code="shop", mount="", app_class=ShopApp)
         erp = apps.application(code="erp", app_class=ErpApp)
         groups = erp.groups(default="stable")
         groups.group(code="stable", workers=2)
@@ -109,8 +109,8 @@ async def http_get(server: AsgiServer, path: str) -> bytes:
 class TestRootRole:
     def test_root_mounts_both_apps_arms_chain_and_auth(self, handler: ConfigurationHandler):
         server = handler.materialize(role="root")
-        assert isinstance(server.primary, ShopApp)
-        assert set(server.mounts) == {"erp", "_server"}
+        assert isinstance(server.root_application, ShopApp)
+        assert set(server.applications) == {"shop", "erp", "_server"}
         types = chain_types(server)
         assert "CORSMiddleware" in types
         assert "ErrorMiddleware" in types
@@ -126,12 +126,12 @@ class TestRootRole:
 
 
 class TestWorkerRole:
-    def test_worker_hosts_only_its_app_as_primary(self, handler: ConfigurationHandler):
+    def test_worker_hosts_only_its_app_on_the_root(self, handler: ConfigurationHandler):
         server = handler.materialize(role="worker", app="erp")
         assert isinstance(server, AsgiServer)
-        assert isinstance(server.primary, ErpApp)
-        assert server.primary.mount_name == ""
-        assert set(server.mounts) == {"_server"}
+        assert isinstance(server.root_application, ErpApp)
+        assert server.root_application.mount == ""
+        assert set(server.applications) == {"erp", "_server"}
 
     def test_worker_has_no_chain_no_auth_no_listener_address(
         self, handler: ConfigurationHandler
@@ -174,8 +174,8 @@ class TestBatchRole:
     def test_batch_same_section_cut_as_worker(self, handler: ConfigurationHandler):
         server = handler.materialize(role="batch", app="erp")
         assert isinstance(server, AsgiServer)
-        assert isinstance(server.primary, ErpApp)
-        assert set(server.mounts) == {"_server"}
+        assert isinstance(server.root_application, ErpApp)
+        assert set(server.applications) == {"erp", "_server"}
         assert chain_types(server) == []
         assert server.authenticate({"headers": []}) is None
         assert server.config_host is None
@@ -221,16 +221,19 @@ class TestApplicationsErrorBranches:
         with pytest.raises(ValueError, match="ghost"):
             handler.materialize(role="root")
 
-    def test_multiple_apps_without_default_raises(self) -> None:
+    def test_multiple_apps_without_default_serve_their_own_mounts(self) -> None:
+        # No election, so no error: each app answers under its own code and the
+        # site root simply stays unclaimed.
         class NoDefaultConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
                 apps = root.applications()
                 apps.application(code="shop", app_class=ShopApp)
                 apps.application(code="erp", app_class=ErpApp)
 
-        handler = ConfigurationHandler(NoDefaultConfig(name="nodefault"))
-        with pytest.raises(ValueError, match="default"):
-            handler.materialize(role="root")
+        server = ConfigurationHandler(NoDefaultConfig(name="nodefault")).materialize(role="root")
+        assert set(server.applications) == {"shop", "erp", "_server"}
+        assert server.root_application is None
+        assert server.default_application is None
 
 
 class TestVisibleSections:
@@ -257,11 +260,51 @@ class TestVisibleSections:
             )
 
 
+class TestSliceReads:
+    """The slice API itself: what a role's projection reads BEFORE materialization.
+
+    The other classes assert the materialized server; these assert the reads the
+    handler builds it from, so a section that stops reaching the constructor
+    fails here rather than only through its effect.
+    """
+
+    def test_root_slice_reads_server_middleware_and_auth(self, handler: ConfigurationHandler):
+        projection = Projection(handler.builder.source, role="root")
+        assert projection.server_attrs() == {"host": "0.0.0.0", "port": 9200}
+        assert projection.middleware_config() == {"cors": True}
+        assert projection.auth_config() == {
+            "basic": {"admin": {"password": "secret", "tags": "admin"}}
+        }
+
+    def test_root_slice_returns_every_app_and_the_default_code(
+        self, handler: ConfigurationHandler
+    ):
+        nodes, default_code = Projection(handler.builder.source, role="root").applications()
+        assert [dict(node.fixed_attr_items())["code"] for node in nodes] == ["shop", "erp"]
+        assert default_code == "shop"
+
+    def test_worker_slice_hides_server_and_auth_and_disarms_middleware(
+        self, handler: ConfigurationHandler
+    ):
+        projection = Projection(handler.builder.source, role="worker", app="erp")
+        assert projection.server_attrs() == {}
+        assert projection.auth_config() is None
+        assert projection.middleware_config() == {"errors": False, "auth": False, "session": False}
+
+    def test_worker_slice_returns_only_its_own_app_and_no_default(
+        self, handler: ConfigurationHandler
+    ):
+        projection = Projection(handler.builder.source, role="worker", app="erp")
+        nodes, default_code = projection.applications()
+        assert [dict(node.fixed_attr_items())["code"] for node in nodes] == ["erp"]
+        assert default_code is None
+
+
 class TestSameConfigEveryRole:
     def test_one_config_object_serves_every_role(self, handler: ConfigurationHandler):
         root = handler.materialize(role="root")
         worker = handler.materialize(role="worker", app="erp")
         batch = handler.materialize(role="batch", app="shop")
-        assert isinstance(root.primary, ShopApp) and set(root.mounts) == {"erp", "_server"}
-        assert isinstance(worker.primary, ErpApp) and set(worker.mounts) == {"_server"}
-        assert isinstance(batch.primary, ShopApp) and set(batch.mounts) == {"_server"}
+        assert isinstance(root.root_application, ShopApp) and set(root.applications) == {"shop", "erp", "_server"}
+        assert isinstance(worker.root_application, ErpApp) and set(worker.applications) == {"erp", "_server"}
+        assert isinstance(batch.root_application, ShopApp) and set(batch.applications) == {"shop", "_server"}

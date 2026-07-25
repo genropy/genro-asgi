@@ -47,7 +47,7 @@ OIDC_SECRET_ENV_VAR = "GENRO_TEST_OIDC_SECRET"
 
 
 class ShopApp(BaseApplication):
-    """Primary app: answers ``shop``."""
+    """Root app: answers ``shop``."""
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -63,7 +63,7 @@ class ApiApp(BaseApplication):
 
 
 class TwoAppConfig(AsgiConfigBuilder):
-    """Two apps (shop default primary, api secondary), cors + basic auth, host/port.
+    """Two apps (shop on the root, api secondary), cors + basic auth, host/port.
 
     Declares ``external_url`` too — the whole-site recipe of these tests, and a
     site that configures an OIDC provider must name its public base address (the
@@ -76,7 +76,7 @@ class TwoAppConfig(AsgiConfigBuilder):
         root.middleware(cors=True)
         root.auth(basic={"admin": {"password": "secret", "tags": "admin"}})
         apps = root.applications(default="shop")
-        apps.application(code="shop", app_class=ShopApp)
+        apps.application(code="shop", mount="", app_class=ShopApp)
         apps.application(code="api", app_class=ApiApp)
 
 
@@ -116,6 +116,24 @@ async def http_get(server: AsgiServer, path: str) -> bytes:
     return b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
 
 
+async def http_status_headers(
+    server: AsgiServer, path: str
+) -> tuple[int, list[tuple[bytes, bytes]]]:
+    """Drive one GET through ``server``; return its status and response headers."""
+    scope: Scope = {"type": "http", "method": "GET", "path": path, "headers": []}
+    sent: list[Message] = []
+
+    async def receive() -> Message:
+        return {"type": "http.request"}
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    await server(scope, receive, send)
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    return start["status"], start["headers"]
+
+
 class TestMaterialize:
     def test_returns_asgi_server_with_config_host_port(self) -> None:
         server = build_two_app_server()
@@ -123,12 +141,12 @@ class TestMaterialize:
         assert server.config_host == "0.0.0.0"
         assert server.config_port == 9100
 
-    def test_default_app_is_primary_others_are_mounts(self) -> None:
+    def test_default_app_answers_the_root_others_are_mounts(self) -> None:
         server = build_two_app_server()
-        assert isinstance(server.primary, ShopApp)
-        assert server.primary.mount_name == ""
-        assert set(server.mounts) == {"api", "_server"}
-        assert isinstance(server.mounts["api"], ApiApp)
+        assert isinstance(server.root_application, ShopApp)
+        assert server.root_application.mount == ""
+        assert set(server.applications) == {"shop", "api", "_server"}
+        assert isinstance(server.applications["api"], ApiApp)
 
 
 class TestDemux:
@@ -184,7 +202,7 @@ class TestMaxThreads:
             def main(self, root: Any) -> None:
                 root.server(host="127.0.0.1", port=8000, max_threads=2)
                 apps = root.applications(default="shop")
-                apps.application(code="shop", app_class=ShopApp)
+                apps.application(code="shop", mount="", app_class=ShopApp)
 
         server = ConfigurationHandler(SizedPoolConfig(name="sized")).materialize()
         await server.run_sync(lambda: None)
@@ -214,7 +232,7 @@ class TestGrammarValidation:
         class NoDbClassConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
                 apps = root.applications(default="shop")
-                apps.application(code="shop", app_class=ShopApp)
+                apps.application(code="shop", mount="", app_class=ShopApp)
                 dbs = root.databases()
                 dbs.database(code="default")
 
@@ -227,7 +245,7 @@ class TestGrammarValidation:
                 mounts = root.storage()
                 mounts.mount(code="data")
                 apps = root.applications(default="shop")
-                apps.application(code="shop", app_class=ShopApp)
+                apps.application(code="shop", mount="", app_class=ShopApp)
 
         with pytest.raises(ValueError, match="path"):
             ConfigurationHandler(NoPathConfig(name="nopath"))
@@ -239,7 +257,7 @@ class TestSkippedSections:
             def main(self, root: Any) -> None:
                 root.server(host="127.0.0.1", port=8000)
                 apps = root.applications(default="shop")
-                shop = apps.application(code="shop", app_class=ShopApp)
+                shop = apps.application(code="shop", mount="", app_class=ShopApp)
                 groups = shop.groups(default="stable")
                 groups.group(code="stable", workers=2)
                 dbs = root.databases()
@@ -248,20 +266,59 @@ class TestSkippedSections:
 
         server = ConfigurationHandler(OrchestrationConfig(name="orch")).materialize()
         assert isinstance(server, AsgiServer)
-        assert isinstance(server.primary, ShopApp)
-        assert set(server.mounts) == {"_server"}
+        assert isinstance(server.root_application, ShopApp)
+        assert set(server.applications) == {"shop", "_server"}
 
 
 class TestSingleAppNoDefault:
-    def test_lone_app_becomes_primary_without_default(self) -> None:
+    def test_lone_app_answers_its_own_mount_not_the_root(self) -> None:
+        # Nothing elects an application any more: a lone app derives its mount
+        # from its code like every other, so the site root stays unclaimed.
         class OneAppConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
                 apps = root.applications()
                 apps.application(code="only", app_class=ShopApp)
 
         server = ConfigurationHandler(OneAppConfig(name="one")).materialize()
-        assert isinstance(server.primary, ShopApp)
-        assert set(server.mounts) == {"_server"}
+        assert set(server.applications) == {"only", "_server"}
+        assert server.root_application is None
+        assert isinstance(server.application_at("only"), ShopApp)
+
+    def test_lone_app_claims_the_root_by_declaring_an_empty_mount(self) -> None:
+        # The compatibility mechanism: one app served at unchanged URLs.
+        class RootAppConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                apps = root.applications()
+                apps.application(code="only", mount="", app_class=ShopApp)
+
+        server = ConfigurationHandler(RootAppConfig(name="rooted")).materialize()
+        assert isinstance(server.root_application, ShopApp)
+        assert server.root_application.code == "only"
+
+
+class TestDefaultRedirect:
+    async def test_root_redirects_to_the_default_when_nobody_claims_it(self) -> None:
+        class MountsOnlyConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                apps = root.applications(default="shop")
+                apps.application(code="shop", app_class=ShopApp)
+                apps.application(code="api", app_class=ApiApp)
+
+        server = ConfigurationHandler(MountsOnlyConfig(name="mountsonly")).materialize()
+        assert server.root_application is None
+        assert server.default_application is server.applications["shop"]
+        status, headers = await http_status_headers(server, "/")
+        assert status == 307
+        assert dict(headers)[b"location"] == b"/shop/"
+
+    def test_a_default_naming_no_application_is_a_boot_error(self) -> None:
+        class GhostDefaultConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                apps = root.applications(default="ghost")
+                apps.application(code="shop", app_class=ShopApp)
+
+        with pytest.raises(ValueError, match="ghost"):
+            ConfigurationHandler(GhostDefaultConfig(name="ghost")).materialize()
 
 
 def storage_site_config(base_path: Path) -> AsgiConfigBuilder:
@@ -273,7 +330,7 @@ def storage_site_config(base_path: Path) -> AsgiConfigBuilder:
             mounts = root.storage()
             mounts.mount(code="idstore", path=str(base_path))
             apps = root.applications(default="shop")
-            apps.application(code="shop", app_class=ShopApp)
+            apps.application(code="shop", mount="", app_class=ShopApp)
 
     return StorageSiteConfig(name="config")
 
@@ -401,7 +458,7 @@ class TestServerAppLift:
         server = ConfigurationHandler(
             TwoAppConfig(name="config"), LoginSurfaceConfig()
         ).materialize()
-        app = server.mounts["_server"]
+        app = server.applications["_server"]
         assert app.login_policy == {"max_attempts": 3, "backoff": 10}
         assert set(app.oidc_providers) == {"corp", "public"}
         corp = app.oidc_providers["corp"]
@@ -417,7 +474,7 @@ class TestServerAppLift:
         server = ConfigurationHandler(
             TwoAppConfig(name="config"), LoginSurfaceConfig()
         ).materialize()
-        public = server.mounts["_server"].oidc_providers["public"]
+        public = server.applications["_server"].oidc_providers["public"]
         assert public == {
             "issuer": "https://accounts.example.org",
             "client_id": "pub-client",
@@ -427,7 +484,7 @@ class TestServerAppLift:
         }
 
     def test_no_config_leaves_the_bare_app(self) -> None:
-        app = build_two_app_server().mounts["_server"]
+        app = build_two_app_server().applications["_server"]
         assert app.login_policy == {}
         assert app.oidc_providers == {}
 
@@ -486,7 +543,7 @@ class TestServerAppLift:
             TwoAppConfig(name="config"), LoginSurfaceConfig()
         )
         worker = handler.materialize(role="worker", app="shop")
-        app = worker.mounts["_server"]
+        app = worker.applications["_server"]
         assert app.login_policy == {}
         assert app.oidc_providers == {}
 
@@ -498,7 +555,7 @@ class TestSessionTtl:
                 srv = root.server(host="127.0.0.1", port=8000)
                 srv.session(ttl=1234)
                 apps = root.applications(default="shop")
-                apps.application(code="shop", app_class=ShopApp)
+                apps.application(code="shop", mount="", app_class=ShopApp)
 
         server = ConfigurationHandler(SessionConfig(name="config")).materialize()
         assert server.session_store.create().meta["ttl"] == 1234
@@ -510,12 +567,12 @@ class TestConfigurationTag:
             def main(self, root: Any) -> None:
                 root.server(host="127.0.0.1", port=8000)
                 apps = root.applications(default="shop")
-                shop = apps.application(code="shop", app_class=ShopApp)
+                shop = apps.application(code="shop", mount="", app_class=ShopApp)
                 shop.configuration(theme="dark", max_items=10)
 
         server = ConfigurationHandler(ConfiguredAppConfig(name="config")).materialize()
-        assert isinstance(server.primary, ShopApp)
-        assert set(server.mounts) == {"_server"}
+        assert isinstance(server.root_application, ShopApp)
+        assert set(server.applications) == {"shop", "_server"}
 
 
 class TestTasksConfig:
@@ -527,7 +584,7 @@ class TestTasksConfig:
                 srv = root.server(host="127.0.0.1", port=8000)
                 srv.tasks(enabled=False)
                 apps = root.applications(default="shop")
-                apps.application(code="shop", app_class=ShopApp)
+                apps.application(code="shop", mount="", app_class=ShopApp)
 
         server = ConfigurationHandler(TasksOffConfig(name="tasksoff")).materialize()
         assert server.tasks_enabled is False
@@ -540,7 +597,7 @@ class TestTasksConfig:
                 srv = root.server(host="127.0.0.1", port=8000)
                 srv.tasks(tick_seconds=5, mount="site")
                 apps = root.applications(default="shop")
-                apps.application(code="shop", app_class=ShopApp)
+                apps.application(code="shop", mount="", app_class=ShopApp)
 
         server = ConfigurationHandler(TunedConfig(name="tuned")).materialize()
         assert server.tasks_enabled is True                  # enabled defaults on
@@ -548,7 +605,7 @@ class TestTasksConfig:
         assert server.tasks.task_store.mount == "site"       # explicit override
 
     def test_direct_dict_kwarg(self) -> None:
-        server = AsgiServer(primary=ShopApp(),
+        server = AsgiServer(applications=[ShopApp(mount="")],
                             tasks={"enabled": True, "tick_seconds": 3})
         assert server.tasks.scheduler.tick_seconds == 3.0
         assert server.tasks_config == {"tick_seconds": 3}    # enabled peeled away
@@ -560,7 +617,7 @@ class TestTasksConfig:
                 stray = srv.tasks()
                 stray.middleware()          # declared in the dialect, foreign to tasks
                 apps = root.applications(default="shop")
-                apps.application(code="shop", app_class=ShopApp)
+                apps.application(code="shop", mount="", app_class=ShopApp)
 
         handler = ConfigurationHandler(StrayChildConfig(name="stray"))
         with pytest.raises(ConfigError, match="not declared by the config grammar"):

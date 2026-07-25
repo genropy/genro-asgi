@@ -240,21 +240,3 @@ class FileApiKeyStore(ApiKeyStore):
     def delete(self, key_id: str) -> bool:
         """Remove one key's file. True if it existed, False otherwise."""
         return self._record_node(key_id).delete()
-
-
-if __name__ == "__main__":
-    import tempfile
-
-    from cryptography.fernet import Fernet
-
-    base = tempfile.mkdtemp()
-    storage = LocalStorage(base_dir=base)
-    storage.set_encryption_keys(Fernet.generate_key().decode())
-    store = FileApiKeyStore(storage)
-    issued = store.issue("ci-deploy", ["deploy"])
-    print("key:", issued)
-    print("verify ok:", store.verify(issued) is not None)
-    print("verify ko:", store.verify(issued + "x"))
-    key_id = issued.removeprefix(API_KEY_PREFIX).partition("_")[0]
-    store.revoke(key_id)
-    print("revoked:", store.verify(issued))

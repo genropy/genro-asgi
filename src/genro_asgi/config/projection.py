@@ -22,9 +22,10 @@ role (plus ``app=<code>`` for the hosted roles), consumed by
 
 - ``root`` — the public server: every section (``server``, ``middleware``,
   ``auth``, ``storage``, ``applications``, ``databases``, ``plugins``,
-  ``openapi``); every application mounted, the ``default`` one primary.
+  ``openapi``); every application served, ``default`` naming the target of
+  the redirect from ``/``.
 - ``worker`` — the hosted process of ONE application (``app=<code>``
-  required): sees only that application (as primary, no secondaries) plus
+  required): sees only that application, served on the site root, plus
   ``databases``, ``storage`` and ``plugins`` (D15: the transversal pieces it
   needs — storage is survival infrastructure, plugins are router behavior) —
   never the public middleware, never auth or sessions, never the public
@@ -231,16 +232,18 @@ class Projection:
                 result[code] = True
         return result
 
-    def applications(self) -> tuple[Any, list[Any]]:
-        """The role's application cut: ``(primary_node, secondary_nodes)``.
+    def applications(self) -> tuple[list[Any], str | None]:
+        """The role's application cut: ``(app_nodes, default_code)``.
 
-        ``root``: the ``default`` app (or the lone app when ``default`` is
-        omitted) is the primary, every other app a secondary. Hosted roles:
-        ONLY the ``app=`` application, as primary with no secondaries.
+        ``root``: every declared application — each one placed by its own
+        ``mount``, which defaults to its ``code`` — plus the ``applications``
+        section's ``default``, the code ``/`` redirects to. ``default`` elects
+        nothing: an application answers the site root only by declaring
+        ``mount=""``. Hosted roles: ONLY the ``app=`` application, no default.
         """
         apps_node = self.section("applications")
         if apps_node is None:
-            raise ValueError("config declares no applications; a primary application is required")
+            raise ValueError("config declares no applications")
         children = apps_node.value
         app_nodes = list(children) if children is not None else []
         if not app_nodes:
@@ -250,66 +253,9 @@ class Projection:
         if self.app is not None:
             if self.app not in by_code:
                 raise ValueError(f"role {self.role!r} hosts undeclared application {self.app!r}")
-            return by_code[self.app], []
+            return [by_code[self.app]], None
 
         default_code = dict(apps_node.fixed_attr_items()).get("default")
-        if default_code is not None:
-            if default_code not in by_code:
-                raise ValueError(
-                    f"applications default {default_code!r} names no declared application"
-                )
-            primary_node = by_code[default_code]
-        elif len(app_nodes) == 1:
-            primary_node = app_nodes[0]
-        else:
-            raise ValueError("multiple applications but no 'default' names the primary")
-        secondaries = [node for node in app_nodes if node is not primary_node]
-        return primary_node, secondaries
-
-
-if __name__ == "__main__":
-    from genro_builders.builder import BuilderHandler
-
-    from .builder import AsgiConfigBuilder
-
-    class _Recipe(AsgiConfigBuilder):
-        def main(self, root: Any) -> None:
-            root.server(host="127.0.0.1", port=8000)
-            root.middleware(cors=True)
-            root.auth(basic={"admin": {"password": "secret"}})
-            apps = root.applications(default="shop")
-            apps.application(code="shop", app_class=object)
-            apps.application(code="erp", app_class=object)
-
-    recipe = _Recipe(name="config")
-    BuilderHandler().add_builder(recipe)
-
-    root_slice = Projection(recipe.source, role="root")
-    assert root_slice.server_attrs() == {"host": "127.0.0.1", "port": 8000}
-    assert root_slice.middleware_config() == {"cors": True}
-    assert root_slice.auth_config() == {"basic": {"admin": {"password": "secret"}}}
-    primary, secondaries = root_slice.applications()
-    assert dict(primary.fixed_attr_items())["code"] == "shop"
-    assert len(secondaries) == 1
-
-    worker_slice = Projection(recipe.source, role="worker", app="erp")
-    assert worker_slice.server_attrs() == {}
-    assert worker_slice.auth_config() is None
-    assert worker_slice.middleware_config() == {"errors": False, "auth": False, "session": False}
-    primary, secondaries = worker_slice.applications()
-    assert dict(primary.fixed_attr_items())["code"] == "erp"
-    assert secondaries == []
-
-    try:
-        Projection(recipe.source, role="manager")
-    except ValueError as error:
-        assert "manager" in str(error)
-    else:
-        raise AssertionError("expected ValueError on unknown role")
-
-    try:
-        Projection(recipe.source, role="worker")
-    except TypeError:
-        pass
-    else:
-        raise AssertionError("expected TypeError on worker without app=")
+        if default_code is not None and default_code not in by_code:
+            raise ValueError(f"applications default {default_code!r} names no declared application")
+        return app_nodes, default_code

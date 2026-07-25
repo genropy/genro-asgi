@@ -30,6 +30,7 @@ import pytest
 from genro_asgi import BaseApplication, BaseServer, MiddlewareMixin
 from genro_asgi.exceptions import HTTPNotFound, Redirect
 from genro_asgi.middleware import BaseMiddleware
+from genro_asgi.middleware.base import headers_dict
 from genro_asgi.types import Message, Receive, Scope, Send
 
 
@@ -107,11 +108,25 @@ def response_body(sent: list[Message]) -> bytes:
     return b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
 
 
+class TestHeadersDict:
+    """The header helper every middleware shares: latin-1 decode, lowercase, cached."""
+
+    def test_names_are_lowercased_and_the_last_duplicate_wins(self) -> None:
+        scope: Scope = {"headers": [(b"X-One", b"1"), (b"x-one", b"2")]}
+        assert headers_dict(scope) == {"x-one": "2"}
+
+    def test_the_parsed_dict_is_cached_on_the_scope(self) -> None:
+        scope: Scope = {"headers": [(b"X-One", b"1")]}
+        parsed = headers_dict(scope)
+        assert scope["_headers"] is parsed
+        assert headers_dict(scope) is parsed  # second call reuses the cache
+
+
 class TestChainAssembly:
     async def test_chain_invokes_middlewares_in_order(self) -> None:
         calls: list[str] = []
         server = MwServer(
-            primary=RoutedApp(),
+            applications=[RoutedApp(mount="")],
             middleware={
                 "late": {"label": "late", "calls": calls},
                 "early": {"label": "early", "calls": calls},
@@ -125,29 +140,29 @@ class TestChainAssembly:
 
     async def test_unknown_middleware_name_raises(self) -> None:
         with pytest.raises(ValueError, match="bogus"):
-            MwServer(primary=RoutedApp(), middleware={"bogus": True})
+            MwServer(applications=[RoutedApp(mount="")], middleware={"bogus": True})
 
     async def test_false_switch_disables_a_default_middleware(self) -> None:
-        server = MwServer(primary=RoutedApp(), middleware={"errors": False})
+        server = MwServer(applications=[RoutedApp(mount="")], middleware={"errors": False})
         with pytest.raises(RuntimeError, match="boom"):
             await http_get(server, "/boom")
 
 
 class TestErrorMiddleware:
     async def test_http_exception_maps_to_its_status(self) -> None:
-        server = MwServer(primary=RoutedApp())
+        server = MwServer(applications=[RoutedApp(mount="")])
         sent = await http_get(server, "/missing")
         assert response_status(sent) == 404
         assert response_body(sent) == b"nothing here"
 
     async def test_redirect_maps_to_status_and_location(self) -> None:
-        server = MwServer(primary=RoutedApp())
+        server = MwServer(applications=[RoutedApp(mount="")])
         sent = await http_get(server, "/old")
         assert response_status(sent) == 302
         assert response_headers(sent)[b"location"] == b"/new"
 
     async def test_plain_exception_maps_to_500_and_server_survives(self) -> None:
-        server = MwServer(primary=RoutedApp())
+        server = MwServer(applications=[RoutedApp(mount="")])
         boom = await http_get(server, "/boom")
         assert response_status(boom) == 500
         assert response_body(boom) == b"Internal Server Error"
@@ -159,7 +174,7 @@ class TestScopeRouting:
     async def test_lifespan_scope_bypasses_the_chain(self) -> None:
         calls: list[str] = []
         server = MwServer(
-            primary=RoutedApp(),
+            applications=[RoutedApp(mount="")],
             middleware={"early": {"label": "early", "calls": calls}},
             middleware_registry={"early": EarlyMiddleware},
         )
@@ -180,13 +195,13 @@ class TestScopeRouting:
 
 class TestComposition:
     def test_plain_base_server_lacks_the_mixin_attrs(self) -> None:
-        server = BaseServer(primary=RoutedApp())
+        server = BaseServer(applications=[RoutedApp(mount="")])
         assert not hasattr(server, "middleware_chain")
 
     def test_leftover_kwarg_raises_naming_it_through_the_mro(self) -> None:
         with pytest.raises(TypeError, match="bogus"):
-            MwServer(primary=RoutedApp(), bogus=3)
+            MwServer(applications=[RoutedApp(mount="")], bogus=3)
 
     def test_middleware_options_leftover_raises_naming_it(self) -> None:
         with pytest.raises(TypeError, match="bogus"):
-            MwServer(primary=RoutedApp(), middleware={"errors": {"bogus": True}})
+            MwServer(applications=[RoutedApp(mount="")], middleware={"errors": {"bogus": True}})

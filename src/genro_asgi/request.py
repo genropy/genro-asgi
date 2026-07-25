@@ -285,29 +285,3 @@ class Request:
 
     def __repr__(self) -> str:
         return f"<Request id={self._id!r} method={self.method} path={self.path!r}>"
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    async def demo() -> None:
-        async def receive() -> dict[str, Any]:
-            return {"type": "http.request", "body": b'{"n":1}', "more_body": False}
-
-        scope: Scope = {
-            "type": "http",
-            "method": "POST",
-            "path": "/items",
-            "query_string": b"page=2",
-            "headers": [(b"content-type", b"application/json")],
-        }
-        request = Request(scope, receive)
-        await request.init()
-        assert request.method == "POST"
-        assert request.query == {"page": 2}
-        assert request.data == {"n": 1}
-        assert request.handler_kwargs() == {"page": 2, "body_data": {"n": 1}}
-        assert isinstance(request.response, Response)
-        print(request)
-
-    asyncio.run(demo())

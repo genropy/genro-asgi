@@ -340,22 +340,3 @@ class TaskSpool:
         if folder is None:
             return False
         return folder.remove_tree()
-
-
-if __name__ == "__main__":
-    import tempfile
-
-    from genro_asgi.storage import LocalStorage
-
-    with tempfile.TemporaryDirectory() as tmp:
-        spool = TaskSpool(LocalStorage(tmp))
-        desc = new_descriptor("demo_1", owner="alice", mount="shop", node_path="cleanup")
-        spool.create(desc, {"pkeys": [1, 2, 3]})
-        print("pending:", [d["task_id"] for d in spool.list_pending()])
-        spool.assign("demo_1", "w1")
-        print("active on w1:", [d["task_id"] for d in spool.list_active("w1")])
-        spool.write_progress("demo_1", "w1", {"progress": 2, "maximum": 3})
-        print("progress:", spool.read_progress("demo_1"))
-        print("params:", spool.read_params("demo_1"))
-        spool.settle("demo_1", "w1", "ok")
-        print("owner alice:", [(d["task_id"], d["status"]) for d in spool.list_by_owner("alice")])

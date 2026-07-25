@@ -408,33 +408,3 @@ class McpOpenApiApplication(OpenApiApplication):
             await self._transport.handle(scope, receive, send)
         else:
             await super().__call__(scope, receive, send)
-
-
-if __name__ == "__main__":
-    from genro_routes import RoutingClass as _RoutingClass
-    from genro_routes import route as _route
-
-    class _Api(_RoutingClass):
-        @_route()
-        def add(self, x: int = 0, y: int = 0) -> dict:
-            """Add two numbers."""
-            return {"sum": x + y}
-
-    standalone = McpApplication(mcp_name="demo", routing_class=_Api())
-    assert standalone.mcp_engine is not None
-    assert standalone.mcp_engine.name == "demo"
-
-    class _Dual(McpOpenApiApplication):
-        openapi_info = {"title": "Dual", "version": "1.0.0"}
-
-        @_route(channel_channels="mcp,rest")
-        def ping(self, name: str = "x") -> dict:
-            """Ping."""
-            return {"pong": name}
-
-    dual = _Dual()
-    assert dual.mcp_name_segment == "mcp"
-    assert dual.mcp_engine is not None
-    tools = {tool["name"] for tool in dual.mcp_engine.handle_tools_list()["tools"]}
-    assert tools == {"ping"}, tools
-    print("McpApplication + McpOpenApiApplication OK")

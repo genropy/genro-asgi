@@ -250,17 +250,3 @@ class TasksSection(RoutingClass):
         if manager.spool.get(task_id) is None:
             return {"error": f"task not found: {task_id}"}
         return {"task_id": task_id, "result": manager.spool.read_result(task_id)}
-
-
-if __name__ == "__main__":
-    class _Server:
-        tasks_enabled = False
-
-    class _App:
-        server = _Server()
-
-    section = TasksSection(_App())  # type: ignore[arg-type]
-    assert section.list() == TASKS_DISABLED_ERROR
-    assert section.spool_list(owner="alice") == TASKS_DISABLED_ERROR
-    assert section.run_now(code="x") == TASKS_DISABLED_ERROR
-    print("TasksSection disabled shape ok")

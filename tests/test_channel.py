@@ -304,36 +304,36 @@ class TestChannelClient:
 
 class TestCommunicationMixin:
     def test_plain_base_server_lacks_the_attributes(self) -> None:
-        server = BaseServer(primary=BaseApplication())
+        server = BaseServer(applications=[BaseApplication(mount="")])
         assert hasattr(server, "parent_channel") is False
         assert hasattr(server, "children_channel") is False
 
     def test_unarmed_parent_channel_raises(self) -> None:
-        server = ChannelServer(primary=BaseApplication())
+        server = ChannelServer(applications=[BaseApplication(mount="")])
         assert server.parent_armed is False
         with pytest.raises(RuntimeError, match="not armed"):
             server.parent_channel
 
     def test_children_channel_is_unarmed_in_the_minimal_package(self, hub_path) -> None:
-        server = ChannelServer(primary=BaseApplication(), parent=f"uds:{hub_path}")
+        server = ChannelServer(applications=[BaseApplication(mount="")], parent=f"uds:{hub_path}")
         with pytest.raises(RuntimeError, match="not armed"):
             server.children_channel
 
     def test_armed_parent_channel_is_a_channel_client(self, hub_path) -> None:
-        server = ChannelServer(primary=BaseApplication(), parent=f"uds:{hub_path}")
+        server = ChannelServer(applications=[BaseApplication(mount="")], parent=f"uds:{hub_path}")
         assert server.parent_armed is True
         assert isinstance(server.parent_channel, ChannelClient)
         assert server.parent_channel.address == f"uds:{hub_path}"
 
     def test_cooperative_chain_names_leftover_kwargs(self, hub_path) -> None:
         with pytest.raises(TypeError, match="bogus"):
-            ChannelServer(primary=BaseApplication(), parent=f"uds:{hub_path}", bogus=1)
+            ChannelServer(applications=[BaseApplication(mount="")], parent=f"uds:{hub_path}", bogus=1)
 
     async def test_armed_parent_connects_at_startup_disconnects_at_shutdown(
         self, hub, hub_path
     ) -> None:
         events: list[str] = []
-        server = ChannelServer(primary=RecordingApp(events=events), parent=f"uds:{hub_path}")
+        server = ChannelServer(applications=[RecordingApp(mount="", events=events)], parent=f"uds:{hub_path}")
         gate = asyncio.Event()
         queue = [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}]
         sent: list[dict[str, object]] = []
@@ -365,7 +365,7 @@ class TestCommunicationMixin:
     async def test_unreachable_hub_fails_startup_and_no_hook_runs(self, hub_path) -> None:
         # hub_path exists but nothing is bound there: connect retries then fails
         events: list[str] = []
-        server = ChannelServer(primary=RecordingApp(events=events), parent=f"uds:{hub_path}")
+        server = ChannelServer(applications=[RecordingApp(mount="", events=events)], parent=f"uds:{hub_path}")
         server.parent_channel.connect_timeout = 0.2
         queue = [{"type": "lifespan.startup"}]
         sent: list[dict[str, object]] = []
@@ -385,7 +385,7 @@ class TestCommunicationMixin:
         assert events == []  # the child died before any app hook ran
 
     async def test_unarmed_composition_passes_lifespan_straight_through(self) -> None:
-        server = ChannelServer(primary=BaseApplication())
+        server = ChannelServer(applications=[BaseApplication(mount="")])
         queue = [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}]
         sent: list[dict[str, object]] = []
 

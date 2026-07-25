@@ -85,21 +85,3 @@ class WorkPool:
         if self.provisioned:
             self.executor.shutdown(wait=wait)
             self._executor = None
-
-
-if __name__ == "__main__":
-    import threading
-
-    from .application import BaseApplication
-    from .server import BaseServer
-
-    server = BaseServer(primary=BaseApplication())
-    assert server.pool.provisioned is False
-
-    async def main() -> None:
-        name = await server.pool.run(lambda: threading.current_thread().name)
-        assert name.startswith("genro-pool"), name
-        assert server.pool.provisioned is True
-        server.pool.shutdown()
-
-    asyncio.run(main())

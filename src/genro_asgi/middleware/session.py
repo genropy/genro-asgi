@@ -129,36 +129,3 @@ class SessionMiddleware(BaseMiddleware):
 
         await self.app(scope, receive, send_with_cookie)
         self._write_back(session)
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    from ..session.store import MemorySessionStore
-
-    class _Server:
-        def __init__(self) -> None:
-            self.session_store = MemorySessionStore()
-
-    async def demo() -> None:
-        async def inner(scope: Scope, receive: Receive, send: Send) -> None:
-            await send({"type": "http.response.start", "status": 200, "headers": []})
-            await send({"type": "http.response.body", "body": b"ok"})
-
-        async def receive() -> Any:
-            return {"type": "http.request"}
-
-        sent: list[Any] = []
-
-        async def send(message: Any) -> None:
-            sent.append(message)
-
-        middleware = SessionMiddleware(inner, _Server())
-        scope: Scope = {"type": "http", "method": "GET", "path": "/", "headers": []}
-        await middleware(scope, receive, send)
-        start = next(m for m in sent if m["type"] == "http.response.start")
-        cookies = [value for name, value in start["headers"] if name == b"set-cookie"]
-        assert cookies and cookies[0].startswith(b"session_id=")
-        assert "session" in scope
-
-    asyncio.run(demo())

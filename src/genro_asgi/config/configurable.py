@@ -153,33 +153,3 @@ def resolve_pointers(builder: Any, node: Any) -> tuple[Any, dict[str, Any]]:
                 f"{raw!r} resolved empty"
             )
     return value, attrs
-
-
-if __name__ == "__main__":
-    from genro_builders.builder import BuilderBase, BuilderHandler, element
-
-    class VehicleElements:
-        @element(sub_tags="turbo")
-        def vehicle(self) -> None:
-            """One vehicle: attributes plus a ``turbo`` child."""
-
-        @element(sub_tags="", parent_tags="vehicle")
-        def turbo(self) -> None:
-            """Turbo options."""
-
-    class Vehicle:
-        config_grammar = VehicleElements
-
-    class _Demo(BuilderBase, VehicleElements):
-        def main(self, root: Any) -> None:
-            vehicle = root.vehicle(wheels=4)
-            vehicle.turbo(psi=14)
-
-    demo = _Demo(name="config")
-    BuilderHandler().add_builder(demo)
-    vehicle_node = next(iter(demo.source))
-    assert declared_elements(VehicleElements) == {"vehicle", "turbo"}
-    assert element_kwargs(vehicle_node, Vehicle) == {
-        "wheels": 4,
-        "turbo": {"psi": 14},
-    }

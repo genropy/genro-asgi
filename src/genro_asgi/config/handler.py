@@ -37,8 +37,8 @@ Section → constructor kwarg mapping (core 1a):
 - ``auth`` → ``auth=`` (the ``AuthCore`` config, handed verbatim).
 - ``storage`` → ``storage=`` ({code: {path, encrypted}} mounts for the
   ``StorageMixin``); visible to every role.
-- ``applications`` → ``primary=`` (the ``default`` app, mount ``/``) plus the
-  secondary mounts (each mounted after construction; mount defaults to ``code``).
+- ``applications`` → ``applications=`` (the ``default`` app on mount ``""``
+  first, then the secondaries; each app's mount defaults to its ``code``).
 - ``databases`` → one ``db_handler_class(db_class(**params))`` per entry,
   registered on the server by ``code`` (core 1b).
 - ``plugins`` → ``plugins=`` ({code: bool | dict} switches for the
@@ -59,9 +59,9 @@ today's bare ``ServerApplication()``).
 ``materialize(role=..., app=...)`` computes the role's ``Projection`` of the
 built tree (D15) and materializes THAT slice: ``root`` sees every section
 above; the hosted roles (``worker``/``batch``, ``app=<code>`` required) see
-only their application (as primary) plus ``databases`` and ``storage`` — never
-the public
-middleware, never auth or sessions, never the public listener address.
+only their application (on the site root) plus ``databases`` and ``storage`` —
+never the public middleware, never auth or sessions, never the public listener
+address.
 """
 
 from __future__ import annotations
@@ -172,15 +172,15 @@ class ConfigurationHandler(BuilderHandler):
         if plugins is not None:
             kwargs["plugins"] = plugins
 
-        primary, secondaries = self._build_applications(projection)
-        kwargs["primary"] = primary
+        applications, default_code = self._build_applications(projection)
+        kwargs["applications"] = applications
+        if default_code is not None:
+            kwargs["default"] = default_code
 
         if projection.section("openapi") is not None:
             self.logger.debug("config section 'openapi' has no core-1a applier; skipped")
 
         server = AsgiServer(**kwargs)
-        for secondary in secondaries:
-            server.mount(secondary)
         self._build_databases(projection, server)
         return server
 
@@ -306,27 +306,30 @@ class ConfigurationHandler(BuilderHandler):
 
     def _build_applications(
         self, projection: Projection
-    ) -> tuple[BaseApplication, list[BaseApplication]]:
-        """Instantiate the projection's application cut: primary + secondary mounts.
+    ) -> tuple[list[BaseApplication], str | None]:
+        """Instantiate the projection's application cut and its ``default`` code.
 
-        WHICH nodes the role sees (the primary, the secondaries if any) is the
-        projection's call (``Projection.applications``); this method only
-        instantiates them. A secondary's mount defaults to its ``code``.
+        WHICH nodes the role sees is the projection's call
+        (``Projection.applications``); this method only instantiates them. Each
+        application is placed by its own recipe (``mount``, defaulting to its
+        ``code`` — the application resolves that itself), with ONE exception: a
+        hosted role serves its single application on the site root, since a
+        worker's app must answer the same paths the public server gives it.
         """
-        primary_node, secondary_nodes = projection.applications()
-        primary = self._instantiate_app(primary_node, mount_name="")
-        secondaries: list[BaseApplication] = []
-        for node in secondary_nodes:
-            attrs = dict(node.fixed_attr_items())
-            mount = attrs.get("mount") or attrs.get("code") or ""
-            secondaries.append(self._instantiate_app(node, mount_name=str(mount)))
-        return primary, secondaries
+        app_nodes, default_code = projection.applications()
+        hosted = projection.app is not None
+        apps = [
+            self._instantiate_app(node, mount="" if hosted else None) for node in app_nodes
+        ]
+        return apps, default_code
 
-    def _instantiate_app(self, node: Any, mount_name: str) -> BaseApplication:
-        """Instantiate one application node as ``app_class(mount_name=..., **kwargs)``.
+    def _instantiate_app(self, node: Any, mount: str | None = None) -> BaseApplication:
+        """Instantiate one application node as ``app_class(**kwargs)``.
 
-        ``code``/``app_class``/``mount`` are consumed here; the remaining
-        attributes are the app's constructor kwargs. ``app_class`` presence is
+        ``app_class`` is consumed here; every other attribute — ``code`` and
+        ``mount`` included — is a constructor kwarg of the application, which
+        owns their resolution. ``mount`` given here overrides the recipe's (the
+        root app answers ``""`` whatever its code). ``app_class`` presence is
         guaranteed by the grammar (the ``application`` element declares it
         required), so it is popped unconditionally. Any nested section (e.g.
         ``groups``, or the RESERVED opaque ``configuration``) has no core-1a
@@ -334,36 +337,14 @@ class ConfigurationHandler(BuilderHandler):
         """
         attrs = dict(node.fixed_attr_items())
         app_class: type[BaseApplication] = attrs.pop("app_class")
-        attrs.pop("code", None)
-        attrs.pop("mount", None)
+        if mount is not None:
+            attrs["mount"] = mount
         children = node.value
         if children is not None and hasattr(children, "nodes"):
             for child in children:
                 self.logger.debug(
                     "application %r section %r has no core-1a applier; skipped",
-                    mount_name or "/",
+                    attrs.get("code", app_class.__name__),
                     child.node_tag,
                 )
-        return app_class(mount_name=mount_name, **attrs)
-
-
-if __name__ == "__main__":
-    from .builder import AsgiConfigBuilder
-
-    class _Recipe(AsgiConfigBuilder):
-        def main(self, root: Any) -> None:
-            root.server(host="127.0.0.1", port=8000)
-            root.middleware(cors=True)
-            apps = root.applications(default="shop")
-            apps.application(code="shop", app_class=BaseApplication)
-
-    handler = ConfigurationHandler(_Recipe(name="config"))
-    built = handler.materialize()
-    assert isinstance(built, AsgiServer)
-    assert built.config_port == 8000
-    assert built.primary.mount_name == ""
-
-    worker = handler.materialize(role="worker", app="shop")
-    assert isinstance(worker, AsgiServer)
-    assert worker.config_port is None
-    assert worker.authenticate({"headers": []}) is None
+        return app_class(**attrs)

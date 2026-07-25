@@ -55,7 +55,7 @@ class DemoApp(RoutedApplication):
 @pytest.fixture
 def server(tmp_path: Path) -> AsgiServer:
     """A real AsgiServer whose primary is the DemoApp, storage on tmp_path."""
-    return AsgiServer(primary=DemoApp(), storage=LocalStorage(base_dir=str(tmp_path)))
+    return AsgiServer(applications=[DemoApp(mount="")], storage=LocalStorage(base_dir=str(tmp_path)))
 
 
 @pytest.fixture

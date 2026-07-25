@@ -18,7 +18,7 @@ A batch task names its code by ``mount`` + ``node_path`` (the app it lives in,
 and the route path inside that app's router). Running it needs the app instance
 — which needs the whole server (storage, dbs, sibling apps). In this mono-process
 core the server is ALREADY live: the executor binds to it directly and reaches
-the target app through ``server.mounts`` / ``server.primary``. It never serves
+the target app through ``server.application_at``. It never serves
 HTTP; it only resolves and runs handlers. (Distributed execution — a worker
 process that rebuilds the server from a config path — belongs to the
 orchestration package, D22, and is out of scope here.)
@@ -81,20 +81,17 @@ class LocalTaskExecutor:
     def resolve(self, descriptor: dict[str, Any]) -> Any:
         """Return the callable ``RouterNode`` for a task descriptor.
 
-        Looks the app up by ``mount`` in ``server.mounts`` (the primary answers an
-        empty/unmatched mount, mirroring the request demux) and resolves
-        ``node_path`` in that app's router. The node is callable — invoking it runs
-        the handler, no HTTP.
+        Looks the app up by its ``mount`` (``""`` is the root app, exactly as in
+        the request demux) and resolves ``node_path`` in that app's router. The
+        node is callable — invoking it runs the handler, no HTTP.
 
         Raises:
-            LookupError: if ``mount`` names neither a secondary mount nor the primary.
+            LookupError: if no application answers ``mount``.
         """
         mount = descriptor["mount"]
-        app = self.server.mounts.get(mount)
+        app = self.server.application_at(mount)
         if app is None:
-            if mount and mount != self.server.primary.mount_name:
-                raise LookupError(f"no app mounted at {mount!r}")
-            app = self.server.primary
+            raise LookupError(f"no app mounted at {mount!r}")
         return app.route.node(descriptor["node_path"])
 
     async def execute(self, task_id: str, worker_id: str) -> str:
@@ -143,7 +140,3 @@ class LocalTaskExecutor:
         self.server.tasks.hub.publish(
             session_id, {"task_id": descriptor["task_id"], **event}
         )
-
-
-if __name__ == "__main__":
-    pass

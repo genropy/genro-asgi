@@ -51,20 +51,3 @@ class AsgiConfigBuilder(BuilderBase, AsgiConfigElements):
     """
 
     _name = "asgiconfig"
-
-
-if __name__ == "__main__":
-    from typing import Any
-
-    from genro_builders.builder import BuilderHandler
-
-    class _Demo(AsgiConfigBuilder):
-        def main(self, root: Any) -> None:
-            root.server(host="127.0.0.1", port=8000)
-            root.middleware(cors=True)
-            apps = root.applications(default="shop")
-            apps.application(code="shop", app_class=object)
-
-    demo = _Demo(name="config")
-    BuilderHandler().add_builder(demo)
-    assert [node.node_tag for node in demo.source] == ["server", "middleware", "applications"]

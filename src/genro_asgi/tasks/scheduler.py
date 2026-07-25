@@ -124,15 +124,8 @@ class TaskScheduler:
     # -- the live registry --
 
     def _apps(self) -> Any:
-        """Every mounted application (the primary and the secondary mounts).
-
-        The current server has no ``apps`` aggregate: it exposes ``primary`` and
-        ``mounts`` (a dict). The primary is deduped if it is also a mount.
-        """
-        server = self.server
-        seen = dict(server.mounts)
-        seen[server.primary.mount_name] = server.primary
-        return seen.values()
+        """Every application the server serves, in registration order."""
+        return self.server.applications.values()
 
     def scan(self) -> dict[str, dict[str, Any]]:
         """task_name -> {"callable", "metadata"} from every mounted app's tree.
@@ -301,7 +294,3 @@ class TaskScheduler:
             return "started"
         asyncio.run(self._execute(row, info["callable"]))
         return "done"
-
-
-if __name__ == "__main__":
-    pass

@@ -24,6 +24,7 @@ hooks so ordering and error isolation can be asserted.
 from __future__ import annotations
 
 from genro_asgi import BaseApplication, BaseServer
+from genro_asgi.lifespan import Lifespan
 
 
 class SyncRecordingApp(BaseApplication):
@@ -84,61 +85,78 @@ def startup_then_shutdown() -> list[dict[str, object]]:
     return [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}]
 
 
+class TestHandlerWiring:
+    def test_the_handler_holds_the_server_that_built_it(self) -> None:
+        server = BaseServer(applications=[BaseApplication(mount="")])
+        assert Lifespan(server).server is server
+        assert server.lifespan.server is server
+
+
 class TestOrdering:
-    async def test_startup_runs_primary_then_mounts_in_order(self) -> None:
+    async def test_startup_runs_the_applications_in_registration_order(self) -> None:
         events: list[str] = []
-        server = BaseServer(primary=SyncRecordingApp(name="primary", events=events))
-        server.mount(SyncRecordingApp(name="api", mount_name="api", events=events))
-        server.mount(SyncRecordingApp(name="admin", mount_name="admin", events=events))
+        server = BaseServer(
+            applications=[
+                SyncRecordingApp(mount="", name="root", events=events),
+                SyncRecordingApp(name="api", code="api", events=events),
+                SyncRecordingApp(name="admin", code="admin", events=events),
+            ]
+        )
 
         sent = await drive_lifespan(server, startup_then_shutdown())
 
         startup_events = [e for e in events if e.endswith("on_startup")]
-        assert startup_events == ["primary.on_startup", "api.on_startup", "admin.on_startup"]
+        assert startup_events == ["root.on_startup", "api.on_startup", "admin.on_startup"]
         assert {"type": "lifespan.startup.complete"} in sent
 
     async def test_shutdown_runs_in_reverse_order(self) -> None:
         events: list[str] = []
-        server = BaseServer(primary=SyncRecordingApp(name="primary", events=events))
-        server.mount(SyncRecordingApp(name="api", mount_name="api", events=events))
-        server.mount(SyncRecordingApp(name="admin", mount_name="admin", events=events))
+        server = BaseServer(
+            applications=[
+                SyncRecordingApp(mount="", name="root", events=events),
+                SyncRecordingApp(name="api", code="api", events=events),
+                SyncRecordingApp(name="admin", code="admin", events=events),
+            ]
+        )
 
         sent = await drive_lifespan(server, startup_then_shutdown())
 
         shutdown_events = [e for e in events if e.endswith("on_shutdown")]
-        assert shutdown_events == ["admin.on_shutdown", "api.on_shutdown", "primary.on_shutdown"]
+        assert shutdown_events == ["admin.on_shutdown", "api.on_shutdown", "root.on_shutdown"]
         assert {"type": "lifespan.shutdown.complete"} in sent
 
 
 class TestErrorIsolation:
     async def test_raising_sync_startup_hook_does_not_block_others(self) -> None:
         events: list[str] = []
-        server = BaseServer(primary=SyncRecordingApp(name="primary", events=events))
-        server.mount(
-            SyncRecordingApp(name="api", mount_name="api", events=events, raise_on={"on_startup"})
+        server = BaseServer(
+            applications=[
+                SyncRecordingApp(mount="", name="root", events=events),
+                SyncRecordingApp(name="api", code="api", events=events, raise_on={"on_startup"}),
+                SyncRecordingApp(name="admin", code="admin", events=events),
+            ]
         )
-        server.mount(SyncRecordingApp(name="admin", mount_name="admin", events=events))
 
         sent = await drive_lifespan(server, startup_then_shutdown())
 
         startup_events = [e for e in events if e.endswith("on_startup")]
-        assert startup_events == ["primary.on_startup", "admin.on_startup"]
+        assert startup_events == ["root.on_startup", "admin.on_startup"]
         assert {"type": "lifespan.startup.complete"} in sent
         assert {"type": "lifespan.shutdown.complete"} in sent
 
     async def test_raising_async_shutdown_hook_does_not_block_others(self) -> None:
         events: list[str] = []
-        server = BaseServer(primary=AsyncRecordingApp(name="primary", events=events))
-        server.mount(
-            AsyncRecordingApp(
-                name="api", mount_name="api", events=events, raise_on={"on_shutdown"}
-            )
+        server = BaseServer(
+            applications=[
+                AsyncRecordingApp(mount="", name="root", events=events),
+                AsyncRecordingApp(name="api", code="api", events=events, raise_on={"on_shutdown"}),
+                AsyncRecordingApp(name="admin", code="admin", events=events),
+            ]
         )
-        server.mount(AsyncRecordingApp(name="admin", mount_name="admin", events=events))
 
         sent = await drive_lifespan(server, startup_then_shutdown())
 
         shutdown_events = [e for e in events if e.endswith("on_shutdown")]
-        assert shutdown_events == ["admin.on_shutdown", "primary.on_shutdown"]
+        assert shutdown_events == ["admin.on_shutdown", "root.on_shutdown"]
         assert {"type": "lifespan.startup.complete"} in sent
         assert {"type": "lifespan.shutdown.complete"} in sent

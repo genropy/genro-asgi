@@ -36,7 +36,7 @@ explain most of the design decisions you will meet in the code.
 uvicorn
   → AsgiServer                      the server IS the ASGI app
     → middleware chain              errors → cors → auth → session (ordered)
-      → demultiplex                 first path segment → mount, else primary
+      → demultiplex                 first path segment → mount, else root app
         → application               a RoutedApplication (or a subclass)
           → @route handler(**params)
             → Response              buffered, or a StreamingResponse
@@ -55,15 +55,16 @@ genro-asgi separates *what the server owns* from *what an application does*.
 
 `BaseServer` is the common substrate of every server (SPECIFICATION.md §4, D2).
 It owns: one uvicorn loop, one monitored thread pool for blocking work, the
-**primary application** (always present, answers `/` and everything no mount
-claims), the **secondary mounts** (a dict of apps keyed by URL prefix), the
-lifespan (ordered startup/shutdown), and the request registry. At the base,
-`authenticate()` and `session()` answer "nobody / none" — auth and sessions are
-capabilities layered on top, not built into the base.
+**applications** it was composed with (a dict keyed by each app's `code`, plus
+an index by `mount` — the URL prefix each one answers under, `""` being the site
+root), the lifespan (ordered startup/shutdown), and the request registry. At the
+base, `authenticate()` and `session()` answer "nobody / none" — auth and sessions
+are capabilities layered on top, not built into the base.
 
-The one dispatch rule (D3) is: **first path segment → a secondary mount if one
-claims it, otherwise the primary app.** A single-app server is just a base
-server used with only its primary — there is no separate mechanism.
+The one dispatch rule (D3) is: **first path segment → the app mounted there;
+else the app on the site root; else, for `/` with a `default` declared, a 307 to
+it; else 404.** A single-app server is just a base server whose only app sits on
+the root — there is no separate mechanism.
 
 ### AsgiServer
 
@@ -80,9 +81,10 @@ sessions are `None` by design, and whoever fronts it owns them (D1, D6).
 
 ### BaseApplication and RoutedApplication
 
-`BaseApplication` is the app-side contract: an ASGI callable with a
-`mount_name` and a `server` reference assigned once by the owning server at
-attach time (a second assignment raises). `RoutedApplication` wires
+`BaseApplication` is the app-side contract: an ASGI callable with a `code` (its
+identity), a `mount` (the URL prefix it answers under) and a `server` reference
+assigned once by the owning server at attach time (a second assignment raises).
+`RoutedApplication` wires
 [genro-routes](https://pypi.org/project/genro-routes/) into it: handlers are
 `@route`-decorated methods, resolved through the app's own router. The
 `OpenApiApplication`, `McpApplication` and `McpOpenApiApplication` subclasses add

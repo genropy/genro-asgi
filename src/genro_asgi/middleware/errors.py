@@ -181,28 +181,3 @@ class ErrorMiddleware(BaseMiddleware):
         """Forward an exception's ASGI header pairs onto the response."""
         for name, value in getattr(exc, "headers", []):
             response.set_header(name.decode("latin-1"), value.decode("latin-1"))
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    from ..types import Message
-
-    async def demo() -> None:
-        async def raising_app(scope: Scope, receive: Receive, send: Send) -> None:
-            raise HTTPException(404, "missing")
-
-        async def receive() -> Message:
-            return {"type": "http.request"}
-
-        sent: list[Message] = []
-
-        async def send(message: Message) -> None:
-            sent.append(message)
-
-        middleware = ErrorMiddleware(raising_app, None)
-        await middleware({"type": "http", "path": "/"}, receive, send)
-        assert sent[0]["status"] == 404
-        assert sent[1]["body"] == b"missing"
-
-    asyncio.run(demo())

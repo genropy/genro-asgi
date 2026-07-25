@@ -162,22 +162,3 @@ class RequestRegistry:
     def snapshot(self) -> list[RegisteredRequest]:
         """A list of the currently in-flight requests (registration order)."""
         return list(self._in_flight.values())
-
-
-if __name__ == "__main__":
-    from .application import BaseApplication
-    from .server import BaseServer
-
-    server = BaseServer(primary=BaseApplication())
-    registry = server.requests
-    assert registry.current is None
-    assert registry.in_flight == 0
-
-    item = registry.register({"type": "http", "path": "/x"})
-    assert registry.current is item
-    assert registry.in_flight == 1
-    assert registry.snapshot() == [item]
-
-    registry.unregister(item)
-    assert registry.current is None
-    assert registry.in_flight == 0

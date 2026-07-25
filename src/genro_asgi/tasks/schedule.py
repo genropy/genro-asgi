@@ -181,15 +181,3 @@ def next_run(kind: str, spec: Any, after_ts: float) -> float | None:
                 return instant
         return None
     raise ValueError(f"unknown schedule kind: {kind!r}")
-
-
-if __name__ == "__main__":
-    import time
-
-    now = time.time()
-    every = next_run("every", "15m", now)       # every/cron never return None
-    cron = next_run("cron", "0 7 * * 1-5", now)
-    assert every is not None and cron is not None
-    print("every 15m ->", every - now, "s")
-    print("cron 0 7 * * 1-5 ->", datetime.fromtimestamp(cron))
-    print("at [] ->", next_run("at", [], now))

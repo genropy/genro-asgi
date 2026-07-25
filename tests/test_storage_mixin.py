@@ -68,19 +68,19 @@ def chain_types(server: AsgiServer) -> list[str]:
 
 class TestMixinComposition:
     def test_default_storage_is_localstorage_with_predefined_mounts(self) -> None:
-        server = AsgiServer(primary=BaseApplication())
+        server = AsgiServer(applications=[BaseApplication(mount="")])
         assert isinstance(server.storage, LocalStorage)
         assert server.storage.has_mount("site")
         assert server.storage.has_mount("secure")
 
     def test_localstorage_instance_is_adopted_as_is(self, tmp_path: Path) -> None:
         provided = LocalStorage(base_dir=str(tmp_path))
-        server = AsgiServer(primary=BaseApplication(), storage=provided)
+        server = AsgiServer(applications=[BaseApplication(mount="")], storage=provided)
         assert server.storage is provided
 
     def test_dict_config_materializes_mounts(self, tmp_path: Path) -> None:
         server = AsgiServer(
-            primary=BaseApplication(),
+            applications=[BaseApplication(mount="")],
             storage={"data": {"path": str(tmp_path / "data")}},
         )
         node = server.storage.node("data:hello.txt")
@@ -88,13 +88,13 @@ class TestMixinComposition:
         assert node.read_text() == "hi"
 
     def test_base_server_has_no_storage_attribute(self) -> None:
-        assert not hasattr(BaseServer(primary=BaseApplication()), "storage")
+        assert not hasattr(BaseServer(applications=[BaseApplication(mount="")]), "storage")
 
 
 class TestStorageKey:
     def test_storage_key_installs_keys_secure_roundtrip(self, tmp_path: Path, key: str) -> None:
         server = AsgiServer(
-            primary=BaseApplication(),
+            applications=[BaseApplication(mount="")],
             storage=LocalStorage(base_dir=str(tmp_path)),
             storage_key=key,
         )
@@ -108,14 +108,14 @@ class TestStorageKey:
     def test_empty_storage_key_raises_at_construction(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError):
             AsgiServer(
-                primary=BaseApplication(),
+                applications=[BaseApplication(mount="")],
                 storage=LocalStorage(base_dir=str(tmp_path)),
                 storage_key="",
             )
 
     def test_omitted_storage_key_leaves_encryption_dormant(self, tmp_path: Path) -> None:
         server = AsgiServer(
-            primary=BaseApplication(),
+            applications=[BaseApplication(mount="")],
             storage=LocalStorage(base_dir=str(tmp_path)),
         )
         assert not server.storage.encryption_active
@@ -126,7 +126,7 @@ class TestBareMixin:
         class Srv(StorageMixin, BaseServer):
             pass
 
-        server = Srv(primary=BaseApplication())
+        server = Srv(applications=[BaseApplication(mount="")])
         assert isinstance(server.storage, LocalStorage)
 
 

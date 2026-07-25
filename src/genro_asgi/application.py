@@ -16,11 +16,25 @@
 
 ``BaseApplication`` is what the server requires of an app (SPECIFICATION.md
 §4, D7): an ASGI callable (``__call__`` implemented by concrete subclasses)
-with a ``mount_name`` (constructor kwarg, empty for a primary), a ``server``
+with an identity (``code``) and a placement (``mount``), a ``server``
 property assigned exactly once by the owning server at attach time (ownership
 channel, one direction — a second assignment raises ``RuntimeError``), and
 lifecycle hooks ``on_startup``/``on_shutdown`` that subclasses may override
 as sync OR async (the caller detects which at call time).
+
+An application is a triplet **code + instance + mount**. ``code`` names it
+(the key of ``server.applications``); ``mount`` is the URL prefix it answers
+under, and ``""`` is the site root — a legitimate value, never a "missing"
+one. Both are class attributes a subclass sets declaratively and a
+constructor kwarg overrides per instance, so the same class can be installed
+twice under different codes:
+
+.. code-block:: python
+
+    class Shop(RoutedApplication):
+        mount = ""          # this app is a site root by design
+
+    Shop(code="outlet", mount="outlet")
 
 Cooperative init (D16): every class in the family implements
 ``__init__(self, **kwargs)``, peels ITS OWN kwargs and forwards the rest via
@@ -42,12 +56,23 @@ __all__ = ["BaseApplication"]
 class BaseApplication:
     """Base class for applications attached to a ``BaseServer``.
 
-    Constructor kwargs peeled here: ``mount_name`` — the URL prefix under
-    which a server mounts this app as a secondary (empty for a primary).
+    Constructor kwargs peeled here: ``code`` — the application's identity,
+    empty meaning the class name lowercased — and ``mount`` — the URL prefix
+    it answers under, ``None`` meaning the same as the code. Both default to
+    the class attributes below, so a subclass can set them declaratively.
     """
 
+    code: str = ""
+    mount: str | None = None
+
     def __init__(self, **kwargs: Any) -> None:
-        self._mount_name: str = kwargs.pop("mount_name", "")
+        cls = type(self)
+        code: str = kwargs.pop("code", cls.code) or cls.__name__.lower()
+        mount: str | None = kwargs.pop("mount", cls.mount)
+        self.code = code
+        # ``is None`` and never truthiness: ``mount=""`` IS the site root, and
+        # ``mount or code`` would silently move a root app to ``/code``.
+        self.mount = code if mount is None else mount
         self._server: BaseServer | None = None
         if kwargs:
             unexpected = ", ".join(sorted(kwargs))
@@ -55,11 +80,6 @@ class BaseApplication:
                 f"{type(self).__name__}.__init__() got unexpected keyword arguments: {unexpected}"
             )
         super().__init__()
-
-    @property
-    def mount_name(self) -> str:
-        """URL prefix under which this app is mounted (empty for a primary)."""
-        return self._mount_name
 
     @property
     def server(self) -> BaseServer | None:
@@ -82,9 +102,3 @@ class BaseApplication:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """ASGI entry point: concrete applications must implement it."""
         raise NotImplementedError(f"{type(self).__name__} does not implement the ASGI callable")
-
-
-if __name__ == "__main__":
-    app = BaseApplication(mount_name="demo")
-    assert app.mount_name == "demo"
-    assert app.server is None

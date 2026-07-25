@@ -305,34 +305,3 @@ class OpenAPITranslator:
                 }
             )
         return parameters
-
-
-if __name__ == "__main__":
-    scalar_fields = [
-        {"name": "x", "schema": {"type": "integer"}, "required": True, "kind": "positional_or_keyword"},
-        {"name": "n", "schema": {"anyOf": [{"type": "integer"}, {"type": "null"}]}, "required": False, "kind": "positional_or_keyword"},
-    ]
-    assert OpenAPITranslator.guess_http_method(scalar_fields) == "get"
-
-    list_fields = [
-        {"name": "items", "schema": {"type": "array"}, "required": True, "kind": "positional_or_keyword"}
-    ]
-    assert OpenAPITranslator.guess_http_method(list_fields) == "post"
-    assert OpenAPITranslator.guess_http_method([]) == "get"
-    # An untyped / var-keyword field does not force POST.
-    assert OpenAPITranslator.guess_http_method([{"name": "kwargs", "schema": None, "kind": "var_keyword"}]) == "get"
-
-    entry_info = {
-        "doc": "Add two numbers.",
-        "metadata": {},
-        "params": {
-            "schema": {"properties": {"x": {"type": "integer"}}, "required": ["x"]},
-            "fields": scalar_fields,
-        },
-        "result": {"schema": {"type": "object"}, "media_type": None},
-    }
-    path_item, _defs = OpenAPITranslator.entry_info_to_openapi("add", entry_info)
-    assert "get" in path_item
-    assert path_item["get"]["operationId"] == "add"
-    assert any(p["name"] == "x" for p in path_item["get"]["parameters"])
-    assert "responses" in path_item["get"]

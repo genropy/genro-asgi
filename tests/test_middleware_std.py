@@ -65,14 +65,14 @@ class RoutedApp(BaseApplication):
 
 class TestWellKnownMiddleware:
     async def test_probe_path_returns_404(self, http_request, response_status) -> None:
-        server = MwServer(primary=RoutedApp(), middleware={"wellknown": True})
+        server = MwServer(applications=[RoutedApp(mount="")], middleware={"wellknown": True})
         sent = await http_request(server, "/.well-known/probe")
         assert response_status(sent) == 404
 
     async def test_ordinary_path_still_reaches_the_app(
         self, http_request, response_status, response_body
     ) -> None:
-        server = MwServer(primary=RoutedApp(), middleware={"wellknown": True})
+        server = MwServer(applications=[RoutedApp(mount="")], middleware={"wellknown": True})
         sent = await http_request(server, "/")
         assert response_status(sent) == 200
         assert response_body(sent) == b"ok:/"
@@ -82,7 +82,7 @@ class TestCORSMiddleware:
     async def test_preflight_returns_cors_headers(
         self, http_request, response_status, response_headers
     ) -> None:
-        server = MwServer(primary=RoutedApp(), middleware={"cors": True})
+        server = MwServer(applications=[RoutedApp(mount="")], middleware={"cors": True})
         sent = await http_request(
             server, "/", method="OPTIONS", headers=[(b"origin", b"https://example.test")]
         )
@@ -94,7 +94,7 @@ class TestCORSMiddleware:
     async def test_simple_get_carries_allow_origin_header(
         self, http_request, response_status, response_headers
     ) -> None:
-        server = MwServer(primary=RoutedApp(), middleware={"cors": True})
+        server = MwServer(applications=[RoutedApp(mount="")], middleware={"cors": True})
         sent = await http_request(server, "/", headers=[(b"origin", b"https://example.test")])
         assert response_status(sent) == 200
         assert response_headers(sent)[b"access-control-allow-origin"] == b"*"
@@ -102,7 +102,7 @@ class TestCORSMiddleware:
     async def test_credentialed_wildcard_echoes_origin_with_vary(
         self, http_request, response_headers
     ) -> None:
-        server = MwServer(primary=RoutedApp(), middleware={"cors": {"allow_credentials": True}})
+        server = MwServer(applications=[RoutedApp(mount="")], middleware={"cors": {"allow_credentials": True}})
         sent = await http_request(server, "/", headers=[(b"origin", b"https://example.test")])
         headers = response_headers(sent)
         assert headers[b"access-control-allow-origin"] == b"https://example.test"
@@ -113,7 +113,7 @@ class TestCORSMiddleware:
         self, http_request, response_status, response_headers
     ) -> None:
         server = MwServer(
-            primary=RoutedApp(), middleware={"cors": {"allow_origins": ["https://allowed.test"]}}
+            applications=[RoutedApp(mount="")], middleware={"cors": {"allow_origins": ["https://allowed.test"]}}
         )
         sent = await http_request(server, "/", headers=[(b"origin", b"https://foreign.test")])
         assert response_status(sent) == 200
@@ -123,7 +123,7 @@ class TestCORSMiddleware:
         self, http_request, response_status, response_headers
     ) -> None:
         server = MwServer(
-            primary=RoutedApp(), middleware={"cors": {"allow_origins": ["https://allowed.test"]}}
+            applications=[RoutedApp(mount="")], middleware={"cors": {"allow_origins": ["https://allowed.test"]}}
         )
         sent = await http_request(
             server, "/", method="OPTIONS", headers=[(b"origin", b"https://foreign.test")]
@@ -158,7 +158,7 @@ class TestErrorMiddlewareOnResponse:
     async def test_http_exception_wire_shape(
         self, http_request, response_status, response_headers, response_body
     ) -> None:
-        server = MwServer(primary=RaisingApp())
+        server = MwServer(applications=[RaisingApp(mount="")])
         sent = await http_request(server, "/missing")
         assert response_status(sent) == 404
         assert response_headers(sent)[b"content-type"] == b"text/plain; charset=utf-8"
@@ -167,7 +167,7 @@ class TestErrorMiddlewareOnResponse:
     async def test_plain_exception_maps_to_500(
         self, http_request, response_status, response_body
     ) -> None:
-        server = MwServer(primary=RaisingApp())
+        server = MwServer(applications=[RaisingApp(mount="")])
         sent = await http_request(server, "/boom")
         assert response_status(sent) == 500
         assert response_body(sent) == b"Internal Server Error"
@@ -175,7 +175,7 @@ class TestErrorMiddlewareOnResponse:
     async def test_redirect_sets_location_header(
         self, http_request, response_status, response_headers
     ) -> None:
-        server = MwServer(primary=RaisingApp())
+        server = MwServer(applications=[RaisingApp(mount="")])
         sent = await http_request(server, "/old")
         assert response_status(sent) == 302
         assert response_headers(sent)[b"location"] == b"/new"
@@ -183,13 +183,13 @@ class TestErrorMiddlewareOnResponse:
     async def test_exception_headers_are_forwarded(
         self, http_request, response_status, response_headers
     ) -> None:
-        server = MwServer(primary=RaisingApp())
+        server = MwServer(applications=[RaisingApp(mount="")])
         sent = await http_request(server, "/challenge")
         assert response_status(sent) == 401
         assert response_headers(sent)[b"www-authenticate"] == b"Bearer"
 
     async def test_error_after_start_is_reraised_not_double_sent(self) -> None:
-        server = MwServer(primary=StartThenRaiseApp())
+        server = MwServer(applications=[StartThenRaiseApp(mount="")])
         scope: Scope = {"type": "http", "method": "GET", "path": "/", "headers": []}
         sent: list[Message] = []
 
@@ -213,7 +213,7 @@ class TestErrorContentNegotiation:
     async def test_json_accept_gets_error_document(
         self, http_request, response_status, response_headers, response_body
     ) -> None:
-        server = MwServer(primary=RaisingApp())
+        server = MwServer(applications=[RaisingApp(mount="")])
         sent = await http_request(server, "/missing", headers=[(b"accept", b"application/json")])
         assert response_status(sent) == 404
         assert response_headers(sent)[b"content-type"] == b"application/json"
@@ -222,7 +222,7 @@ class TestErrorContentNegotiation:
     async def test_wildcard_accept_gets_error_document(
         self, http_request, response_headers, response_body
     ) -> None:
-        server = MwServer(primary=RaisingApp())
+        server = MwServer(applications=[RaisingApp(mount="")])
         sent = await http_request(server, "/missing", headers=[(b"accept", b"*/*")])
         assert response_headers(sent)[b"content-type"] == b"application/json"
         assert json.loads(response_body(sent)) == {"error": "nothing here"}
@@ -230,7 +230,7 @@ class TestErrorContentNegotiation:
     async def test_html_accept_keeps_text_plain(
         self, http_request, response_headers, response_body
     ) -> None:
-        server = MwServer(primary=RaisingApp())
+        server = MwServer(applications=[RaisingApp(mount="")])
         sent = await http_request(server, "/missing", headers=[(b"accept", b"text/html")])
         assert response_headers(sent)[b"content-type"] == b"text/plain; charset=utf-8"
         assert response_body(sent) == b"nothing here"
@@ -238,7 +238,7 @@ class TestErrorContentNegotiation:
     async def test_no_accept_defaults_text_plain(
         self, http_request, response_headers, response_body
     ) -> None:
-        server = MwServer(primary=RaisingApp())
+        server = MwServer(applications=[RaisingApp(mount="")])
         sent = await http_request(server, "/missing")
         assert response_headers(sent)[b"content-type"] == b"text/plain; charset=utf-8"
         assert response_body(sent) == b"nothing here"
@@ -246,7 +246,7 @@ class TestErrorContentNegotiation:
     async def test_generic_500_json_hides_internal_message(
         self, http_request, response_status, response_body
     ) -> None:
-        server = MwServer(primary=RaisingApp())
+        server = MwServer(applications=[RaisingApp(mount="")])
         sent = await http_request(server, "/boom", headers=[(b"accept", b"application/json")])
         assert response_status(sent) == 500
         assert json.loads(response_body(sent)) == {"error": "Internal Server Error"}
@@ -256,13 +256,13 @@ class TestChallengeNegotiation:
     """Macro 5a Phase 5: a 401 is negotiated when the server has a login surface."""
 
     def test_login_enabled_reflects_registered_method(self) -> None:
-        server = AsgiServer(primary=BaseApplication())
+        server = AsgiServer(applications=[BaseApplication(mount="")])
         assert server.login_enabled is True
 
     async def test_browser_navigation_redirects_to_login_page(
         self, http_request, response_status, response_headers
     ) -> None:
-        server = AsgiServer(primary=RaisingApp())
+        server = AsgiServer(applications=[RaisingApp(mount="")])
         sent = await http_request(server, "/challenge", headers=[(b"accept", b"text/html")])
         assert response_status(sent) == 302
         assert response_headers(sent)[b"location"] == b"/_server/login_page?next=%2Fchallenge"
@@ -270,7 +270,7 @@ class TestChallengeNegotiation:
     async def test_api_caller_gets_login_url_and_challenge_header(
         self, http_request, response_status, response_headers, response_body
     ) -> None:
-        server = AsgiServer(primary=RaisingApp())
+        server = AsgiServer(applications=[RaisingApp(mount="")])
         sent = await http_request(server, "/challenge", headers=[(b"accept", b"application/json")])
         assert response_status(sent) == 401
         assert response_headers(sent)[b"www-authenticate"] == b"Bearer"
@@ -279,13 +279,13 @@ class TestChallengeNegotiation:
     async def test_login_disabled_leaves_401_unchanged(
         self, http_request, response_status, response_headers
     ) -> None:
-        server = MwServer(primary=RaisingApp())
+        server = MwServer(applications=[RaisingApp(mount="")])
         sent = await http_request(server, "/challenge", headers=[(b"accept", b"text/html")])
         assert response_status(sent) == 401
         assert response_headers(sent)[b"www-authenticate"] == b"Bearer"
 
     async def test_browser_redirect_preserves_path_and_query_through_safe_next(self) -> None:
-        server = AsgiServer(primary=RaisingApp())
+        server = AsgiServer(applications=[RaisingApp(mount="")])
         scope: Scope = {
             "type": "http",
             "method": "GET",
@@ -316,7 +316,7 @@ class TestLoggingMiddleware:
             def emit(self, record: logging.LogRecord) -> None:
                 records.append(record.getMessage())
 
-        server = MwServer(primary=RoutedApp(), middleware={"logging": True})
+        server = MwServer(applications=[RoutedApp(mount="")], middleware={"logging": True})
         access_logger = logging.getLogger("genro_asgi.middleware.logging.LoggingMiddleware")
         handler = RecordingHandler()
         access_logger.addHandler(handler)
@@ -359,7 +359,7 @@ class SessionMutatingApp(BaseApplication):
 class TestSessionWriteBack:
     def _server(self) -> tuple[AsgiServer, CountingSessionStore]:
         store = CountingSessionStore()
-        return AsgiServer(primary=SessionMutatingApp(), session_store=store), store
+        return AsgiServer(applications=[SessionMutatingApp(mount="")], session_store=store), store
 
     async def test_read_only_request_does_not_save(self, http_request, response_status) -> None:
         server, store = self._server()
@@ -385,7 +385,7 @@ class TestDisabledByDefault:
     async def test_standard_middlewares_absent_without_switches(
         self, http_request, response_status, response_headers
     ) -> None:
-        server = MwServer(primary=RoutedApp())
+        server = MwServer(applications=[RoutedApp(mount="")])
 
         wellknown_sent = await http_request(server, "/.well-known/probe")
         assert response_status(wellknown_sent) == 200

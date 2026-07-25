@@ -16,8 +16,8 @@
 
 ``Lifespan`` is constructed with the server it manages (dual parent-child:
 ``self.server``, SPECIFICATION.md §4). On ``lifespan.startup`` it runs
-``on_startup`` on the primary first, then on the mounted apps in mount order;
-on ``lifespan.shutdown`` it runs ``on_shutdown`` in REVERSE order. Hooks may
+``on_startup`` on the server's applications in registration order; on
+``lifespan.shutdown`` it runs ``on_shutdown`` in REVERSE order. Hooks may
 be sync or async, detected with ``inspect.iscoroutinefunction`` at call time.
 
 A hook that raises is logged and the sequence CONTINUES: one app's error
@@ -59,7 +59,7 @@ class Lifespan:
                 return
 
     async def startup(self) -> None:
-        """Run ``on_startup``: primary first, then mounts in mount order."""
+        """Run ``on_startup`` in registration order."""
         for app in self._apps():
             await self._run_hook(app, "on_startup")
 
@@ -69,8 +69,8 @@ class Lifespan:
             await self._run_hook(app, "on_shutdown")
 
     def _apps(self) -> list[BaseApplication]:
-        """The primary followed by the mounts, in mount order."""
-        return [self.server.primary, *self.server.mounts.values()]
+        """The server's applications, in registration order."""
+        return list(self.server.applications.values())
 
     async def _run_hook(self, app: BaseApplication, name: str) -> None:
         """Call ``app``'s hook; a raise is logged, the sequence continues."""
@@ -82,16 +82,3 @@ class Lifespan:
                 handler()
         except Exception:
             self._logger.exception("%s.%s raised", type(app).__name__, name)
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    from .application import BaseApplication
-    from .server import BaseServer
-
-    server = BaseServer(primary=BaseApplication())
-    lifespan = Lifespan(server)
-    assert lifespan.server is server
-    asyncio.run(lifespan.startup())
-    asyncio.run(lifespan.shutdown())

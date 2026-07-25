@@ -28,12 +28,14 @@ from genro_routes import route
 
 
 class App(RoutedApplication):
+    mount = ""
+
     @route()
     def index(self) -> dict:
         return {"ok": True}
 
 
-server = AsgiServer(primary=App(), session_store=MemorySessionStore())
+server = AsgiServer(applications=[App()], session_store=MemorySessionStore())
 server.serve(host="127.0.0.1", port=8000)
 ```
 
@@ -58,7 +60,7 @@ Cookie behaviour is controlled through the `session` middleware options:
 
 ```python
 server = AsgiServer(
-    primary=App(),
+    applications=[App()],
     session_store=MemorySessionStore(),
     middleware={"session": {
         "cookie_name": "session_id",

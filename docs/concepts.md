@@ -19,7 +19,7 @@ genro-asgi separates two roles cleanly:
 ### `BaseServer` and `AsgiServer`
 
 `BaseServer` is the minimal substrate every server shares: the uvicorn loop, a
-monitored thread pool for blocking work, the primary app, the secondary mounts,
+monitored thread pool for blocking work, the applications it serves,
 lifespan, and the request registry.
 
 `AsgiServer` is the shipped, batteries-included server. It is a **composition of
@@ -29,7 +29,7 @@ feature, and each feature is turned on through a constructor keyword argument:
 
 ```python
 server = AsgiServer(
-    primary=App(),
+    applications=[App()],
     auth={...},          # arms the auth middleware
     middleware={...},    # arms other middleware
     tasks=True,          # arms the task backbone
@@ -41,30 +41,58 @@ The mixins exist whether or not you configure them — you never subclass to *ad
 a capability, you pass config to *feed* it. This is what "objects always exist,
 backends come from config" means in practice.
 
-### Primary vs mounts
+### Applications: code and mount
 
-A server always has exactly one **primary** application (mandatory) and a
-dictionary of **secondary mounts** keyed by URL prefix (possibly empty).
+There is one category of application, not two. A server is composed with the
+applications it serves, and each one carries both halves of its own identity:
 
-- The **primary** answers `/` and everything no mount claims.
-- A **secondary mount** answers requests whose first path segment matches its
-  mount name.
+- its **`code`** is its name — the key of `server.applications`, defaulting to
+  the class name lowercased;
+- its **`mount`** is the URL prefix it answers under, defaulting to the `code`.
+
+`mount = ""` is the **site root**: that application answers `/` and every path
+no other mount claims. It is a value like any other, not a missing one — and no
+application is obliged to take it.
 
 ```python
-# Conceptual shape: a primary "shop" plus a secondary "api" mount.
-# Requests to /api/... reach the api app; everything else reaches shop.
+class Shop(RoutedApplication):
+    mount = ""          # answers / and everything unclaimed
+
+
+server = AsgiServer(applications=[Shop(), Api(code="api")])
+# GET /orders      → Shop
+# GET /api/orders  → Api, which receives /orders
 ```
+
+Because the code and the placement are distinct, the same class can be served
+twice under different names: `Shop(code="outlet", mount="outlet")`.
 
 ### The one demux rule
 
 There is a single rule for dispatching a request to an application, the same on
 every server:
 
-> **First path segment → secondary mount if one exists with that name,
-> otherwise the primary app.**
+> **First path segment → the application mounted there, if one is;
+> else the application on the site root, if there is one;
+> else, for `/` itself with a `default` declared, a **307** to that
+> application's mount;
+> else **404**.**
 
-Running with only a primary and no mounts is a *usage* of this rule, not a
-different mechanism. There is no second dispatch path to learn.
+A server with one application on the root is a *usage* of this rule, not a
+different mechanism — and so is a server of mounts only, with nothing on the
+root:
+
+```python
+server = AsgiServer(applications=[Api(code="api"), Admin(code="admin")], default="api")
+# GET /api/orders  → Api
+# GET /admin/users → Admin
+# GET /            → 307 to /api/   (no default → 404)
+# GET /anything    → 404            (the default answers the root, it is not a catch-all)
+```
+
+`default` names an application by **code** and redirects `/` to its mount. It
+elects nothing and it is consulted only when the root is unclaimed: 307, so the
+method and the body survive the hop.
 
 ### The automatic `_server` app
 
@@ -168,7 +196,7 @@ Putting it together, here is the path an HTTP request travels:
               ▼
      ┌──────────────────┐
      │  demux on first   │    segment matches a mount?  → that app
-     │  path segment     │    otherwise                → primary app
+     │  path segment     │    else root app / 307 / 404
      └────────┬──────────┘
               ▼
    ┌────────────────────────┐

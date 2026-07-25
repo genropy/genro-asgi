@@ -28,7 +28,7 @@ import sys
 from typing import Any
 
 import pytest
-from genro_routes import RoutingClass, route
+from genro_routes import Router, RoutingClass, route
 from genro_routes.plugins._base_plugin import BasePlugin
 
 from genro_asgi import AsgiServer, OpenAPIPlugin, OpenAPITranslator, RoutedApplication
@@ -137,6 +137,19 @@ class TestArmRouter:
         with pytest.raises(ValueError, match="fixed structure"):
             _MiniServer(plugins={"openapi": False})
 
+    def test_an_extra_name_is_retained_beside_the_fixed_base(self) -> None:
+        # Retention is resolution-time; whether the name can be armed is decided
+        # later by arm_router (see test_unknown_plugin_name_raises).
+        server = _MiniServer(plugins={"logging": True})
+        assert set(server.plugins) == {"pydantic", "openapi", "logging"}
+
+    def test_arming_registers_the_plugin_in_the_router_registry(self) -> None:
+        # The mirror of the subprocess test below: importing does not register,
+        # arming does.
+        server = _MiniServer(plugins={"openapi": True})
+        server.arm_router(_Svc().route)
+        assert "openapi" in Router.available_plugins()
+
     def test_false_leaves_an_extra_plugin_unarmed(self) -> None:
         server = _MiniServer(
             plugins={"customtest": False}, plugin_registry={"customtest": _CustomPlugin}
@@ -168,7 +181,7 @@ class TestConfigDriven:
             def main(self, root: Any) -> None:
                 root.server(host="127.0.0.1", port=8000)
                 apps = root.applications(default="api")
-                apps.application(code="api", app_class=ApiApp)
+                apps.application(code="api", mount="", app_class=ApiApp)
                 plugins = root.plugins()
                 plugins.plugin(code="openapi")
                 plugins.plugin(code="pydantic")
@@ -182,7 +195,7 @@ class TestConfigDriven:
 
     def test_materialize_arms_the_routed_app(self) -> None:
         server = self._handler().materialize()
-        names = {plugin.name for plugin in server.primary.route.iter_plugins()}
+        names = {plugin.name for plugin in server.root_application.route.iter_plugins()}
         assert {"auth", "openapi", "pydantic"} <= names
 
     def test_worker_role_sees_the_plugins_section(self) -> None:
@@ -193,7 +206,7 @@ class TestConfigDriven:
         class Recipe(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
                 apps = root.applications(default="api")
-                apps.application(code="api", app_class=ApiApp)
+                apps.application(code="api", mount="", app_class=ApiApp)
                 plugins = root.plugins()
                 plugins.plugin(code="openapi", security_scheme="ApiKey")
 
@@ -220,16 +233,16 @@ class TestLazyArming:
         assert {plugin.name for plugin in app.route.iter_plugins()} == {"auth"}
 
     def test_mounted_app_arms_on_first_route_access(self) -> None:
-        app = ApiApp()
-        AsgiServer(primary=app, plugins={"openapi": True})
+        app = ApiApp(mount="")
+        AsgiServer(applications=[app], plugins={"openapi": True})
         names = {plugin.name for plugin in app.route.iter_plugins()}
         assert {"auth", "openapi"} <= names
 
     def test_no_plugins_config_still_arms_the_fixed_base(self) -> None:
         # A mixin-equipped server always arms the fixed base (pydantic/openapi)
         # on top of the app's own ``auth`` plug, even with no plugins config.
-        app = ApiApp()
-        AsgiServer(primary=app)
+        app = ApiApp(mount="")
+        AsgiServer(applications=[app])
         assert {plugin.name for plugin in app.route.iter_plugins()} == {
             "auth",
             "pydantic",

@@ -175,8 +175,8 @@ class TestAuthSessionAccessors:
         assert request.session is session
 
     async def test_server_resolved_via_application(self) -> None:
-        app = BaseApplication()
-        server = BaseServer(primary=app)
+        app = BaseApplication(mount="")
+        server = BaseServer(applications=[app])
         request = await make_request(application=app)
         assert request.application is app
         assert request.server is server
@@ -242,7 +242,7 @@ class TestDbPreparationLayer:
     async def test_db_returns_default_handler_and_closes_at_request_end(self) -> None:
         seen: dict[str, Any] = {}
         fake = FakeDb()
-        server = BaseServer(primary=DbApp(seen=seen))
+        server = BaseServer(applications=[DbApp(mount="", seen=seen)])
         server.add_database("default", fake)
 
         await drive(server)
@@ -254,7 +254,7 @@ class TestDbPreparationLayer:
     async def test_db_resolves_named_handler_from_app_db_name(self) -> None:
         seen: dict[str, Any] = {}
         fake = FakeDb()
-        server = BaseServer(primary=DbApp(db_name="shop", seen=seen))
+        server = BaseServer(applications=[DbApp(mount="", db_name="shop", seen=seen)])
         server.add_database("shop", fake)
 
         await drive(server)
@@ -264,7 +264,7 @@ class TestDbPreparationLayer:
 
     async def test_db_is_none_when_code_absent(self) -> None:
         seen: dict[str, Any] = {}
-        server = BaseServer(primary=DbApp(seen=seen))  # no database registered
+        server = BaseServer(applications=[DbApp(mount="", seen=seen)])  # no database registered
 
         await drive(server)
 
@@ -273,7 +273,7 @@ class TestDbPreparationLayer:
     async def test_get_db_does_not_register_cleanup(self) -> None:
         seen: dict[str, Any] = {}
         fake = FakeDb()
-        server = BaseServer(primary=GetDbApp(seen=seen))
+        server = BaseServer(applications=[GetDbApp(mount="", seen=seen)])
         server.add_database("default", fake)
 
         await drive(server)
@@ -283,7 +283,7 @@ class TestDbPreparationLayer:
 
     async def test_get_db_is_none_when_code_absent(self) -> None:
         seen: dict[str, Any] = {}
-        server = BaseServer(primary=GetDbApp(seen=seen))  # nothing registered
+        server = BaseServer(applications=[GetDbApp(mount="", seen=seen)])  # nothing registered
 
         await drive(server)
 

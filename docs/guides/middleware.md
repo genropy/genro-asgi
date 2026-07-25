@@ -47,13 +47,15 @@ from genro_routes import route
 
 
 class App(RoutedApplication):
+    mount = ""
+
     @route()
     def index(self) -> dict:
         return {"ok": True}
 
 
 server = AsgiServer(
-    primary=App(),
+    applications=[App()],
     middleware={
         "cors": True,
         "logging": True,
@@ -68,7 +70,7 @@ server.serve(host="127.0.0.1", port=8000)
 
 ```python
 server = AsgiServer(
-    primary=App(),
+    applications=[App()],
     middleware={"cors": {
         "allow_origins": ["https://example.com"],
         "allow_credentials": True,
@@ -91,7 +93,7 @@ class StampMiddleware(BaseMiddleware):
 
 
 server = AsgiServer(
-    primary=App(),
+    applications=[App()],
     middleware_registry={"stamp": StampMiddleware},
     middleware={"stamp": {...}},
 )

@@ -73,7 +73,7 @@ class MemoryUserStore(UserStore):
 def make_server(with_users: bool = True) -> AsgiServer:
     """A full hand-built server; ``with_users`` seeds alice/wonder on a user store."""
     if not with_users:
-        return AsgiServer(primary=BaseApplication())
+        return AsgiServer(applications=[BaseApplication(mount="")])
     store = MemoryUserStore()
     store.save(
         {
@@ -91,7 +91,7 @@ def make_server(with_users: bool = True) -> AsgiServer:
             "enabled": False,
         }
     )
-    return AsgiServer(primary=BaseApplication(), users=store)
+    return AsgiServer(applications=[BaseApplication(mount="")], users=store)
 
 
 async def drive(
@@ -187,7 +187,7 @@ def make_lockout_server(
         }
     )
     kwargs: dict[str, Any] = {"server_app": {"login": policy}} if policy else {}
-    return AsgiServer(primary=BaseApplication(), users=store, **kwargs), store
+    return AsgiServer(applications=[BaseApplication(mount="")], users=store, **kwargs), store
 
 
 async def login_attempt(
@@ -241,7 +241,7 @@ class TestLoginHappyPath:
                 "enabled": True,
             }
         )
-        server = AsgiServer(primary=BaseApplication(), users=store)
+        server = AsgiServer(applications=[BaseApplication(mount="")], users=store)
         anonymous = server.session_store.create()
         _, sent = await drive(
             server,
@@ -498,7 +498,7 @@ class TestLogout:
 class TestAuthMethodContract:
     def test_password_method_owns_zero_routes(self) -> None:
         server = make_server(with_users=False)
-        app = server.mounts["_server"]
+        app = server.applications["_server"]
         assert isinstance(app, ServerApplication)
         assert app.auth_section is not None
         method = app.auth_section.methods["password"]
@@ -507,7 +507,7 @@ class TestAuthMethodContract:
 
     async def test_password_method_is_never_attached_to_the_routing_tree(self) -> None:
         server = make_server(with_users=False)
-        app = server.mounts["_server"]
+        app = server.applications["_server"]
         assert isinstance(app, ServerApplication)
         assert app.auth_section is not None
         routers = app.auth_section.route.nodes(lazy=True).get("routers") or {}
@@ -527,7 +527,7 @@ class TestAuthMethodContract:
                 return {"ok": "start"}
 
         server = make_server(with_users=False)
-        app = server.mounts["_server"]
+        app = server.applications["_server"]
         assert isinstance(app, ServerApplication)
         assert app.auth_section is not None
         app.register_auth_method(RoutedMethod(app, "routed"))
@@ -536,7 +536,7 @@ class TestAuthMethodContract:
 
     def test_password_method_is_registered_under_the_auth_section(self) -> None:
         server = make_server(with_users=False)
-        app = server.mounts["_server"]
+        app = server.applications["_server"]
         assert isinstance(app, ServerApplication)
         assert isinstance(app.auth_section, AuthSection)
         assert app.sections["auth"] is app.auth_section
@@ -545,9 +545,21 @@ class TestAuthMethodContract:
         assert method.application is app
         assert method.server is server
 
+    def test_auth_section_carries_the_server_and_describes_its_methods(self) -> None:
+        server = make_server(with_users=False)
+        app = server.applications["_server"]
+        assert isinstance(app, ServerApplication)
+        assert isinstance(app.auth_section, AuthSection)
+        assert app.auth_section.server is server
+        # A section with nothing registered describes nothing...
+        assert AuthSection(app).descriptors() == []
+        # ...and the app's own section describes exactly its registered methods.
+        method = app.auth_section.methods["password"]
+        assert app.auth_section.descriptors() == [method.descriptor()]
+
     def test_duplicate_method_id_is_rejected(self) -> None:
         server = make_server(with_users=False)
-        app = server.mounts["_server"]
+        app = server.applications["_server"]
         assert isinstance(app, ServerApplication)
         with pytest.raises(ValueError, match="already registered"):
             app.register_auth_method(PasswordMethod(app, "password"))

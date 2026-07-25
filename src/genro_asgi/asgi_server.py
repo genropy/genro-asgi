@@ -26,12 +26,12 @@ the chain).
 Its cooperative ``__init__`` peels the kwargs the frozen Macro 1
 ``BaseServer`` does not accept — ``host``/``port``/``external_url`` plus
 ``server_app`` (the ``_server`` config-class lift) — and forwards everything
-else (``primary``, ``auth``, ``session_store``/``session_ttl``,
+else (``applications``, ``auth``, ``session_store``/``session_ttl``,
 ``middleware``/``middleware_registry``, ``plugins``/``plugin_registry``,
 ``storage``/``storage_key``, ``parent``) down the D16 chain. The peeled
 ``host``/``port`` become the defaults of ``serve``, so a config-built server
 serves on its configured address unless the caller overrides it;
-``server_app`` travels to ``_mount_server_app``.
+``server_app`` travels to ``_register_server_app``.
 
 ``host``/``port`` are the LISTENER; ``external_url`` is the server's PUBLIC
 base address — the two differ behind a proxy and answer different questions.
@@ -45,9 +45,9 @@ build a value the provider then rejects. Missing it with a provider
 configured is a boot error (``_check_oidc_external_url``), not an opaque
 provider error at the first login.
 
-Once the chain has run, ``__init__`` mounts the automatic ``_server`` app
-(``_mount_server_app``, D4 "automatic, not configured"): a hand-built
-``AsgiServer(primary=...)`` exposes ``/_server/...`` exactly like a
+Once the chain has run, ``__init__`` registers the automatic ``_server`` app
+(``_register_server_app``, D4 "automatic, not configured"): a hand-built
+``AsgiServer(applications=[...])`` exposes ``/_server/...`` exactly like a
 config-materialized one, and ``ConfigurationHandler.materialize`` never
 special-cases it.
 """
@@ -85,8 +85,8 @@ class AsgiServer(
     defaults carried from the config's ``server`` section — ``external_url``,
     the server's public base address (trailing slash stripped), plus
     ``server_app``, the ``_server`` config-class lift forwarded to the
-    auto-mounted app. Every other kwarg flows to the capability mixins and
-    the base (D16 cooperative init).
+    automatically registered app. Every other kwarg flows to the capability
+    mixins and the base (D16 cooperative init).
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -96,24 +96,25 @@ class AsgiServer(
         self._external_url: str | None = external_url.rstrip("/") if external_url else None
         self._server_app_kwargs: dict[str, Any] = kwargs.pop("server_app", {})
         super().__init__(**kwargs)
-        self._mount_server_app()
+        self._register_server_app()
         self._check_oidc_external_url()
 
-    def _mount_server_app(self) -> None:
-        """Mount the automatic ``_server`` app (D4) unless one is already there.
+    def _register_server_app(self) -> None:
+        """Register the automatic ``_server`` app (D4) unless one is already there.
 
-        Runs at the end of ``__init__`` — before any configured secondary is
-        mounted — so the guard only matters for re-invocations (idempotent).
-        The peeled ``server_app`` kwargs (the config-class lift: ``login``
-        policy, ``oidc`` providers) are forwarded here — the app peels them.
+        Runs at the end of ``__init__``, after the composed applications are
+        registered, so the guard only matters when the composition already
+        carries a ``_server`` app (idempotent). The peeled ``server_app``
+        kwargs (the config-class lift: ``login`` policy, ``oidc`` providers)
+        are forwarded here — the app peels them.
         """
-        if "_server" not in self.mounts:
-            self.mount(ServerApplication(**self._server_app_kwargs))
+        if "_server" not in self.applications:
+            self.register_application(ServerApplication(**self._server_app_kwargs))
 
     def _check_oidc_external_url(self) -> None:
         """Refuse to boot when a provider is configured without ``external_url``.
 
-        Runs right after the ``_server`` mount, the first moment both facts are
+        Runs right after the ``_server`` registration, the first moment both facts are
         known — the app carries the configured providers, the server carries its
         public address — and covers the config-materialized and the hand-built
         server with one check. An OIDC provider is handed the ABSOLUTE
@@ -122,7 +123,7 @@ class AsgiServer(
         the server says so loudly instead of failing at the first login attempt
         with a provider-side error.
         """
-        providers = getattr(self.mounts.get("_server"), "oidc_providers", None)
+        providers = getattr(self.applications.get("_server"), "oidc_providers", None)
         if providers and self.external_url is None:
             codes = ", ".join(sorted(providers))
             raise ValueError(
@@ -140,7 +141,7 @@ class AsgiServer(
         body (API). It reflects live state: ``ServerApplication`` registers the
         password method at construction, so its server has a login surface.
         """
-        server_app = self.mounts.get("_server")
+        server_app = self.applications.get("_server")
         section = getattr(server_app, "auth_section", None)
         return bool(section is not None and section.methods)
 
@@ -175,34 +176,3 @@ class AsgiServer(
         resolved_host = host if host is not None else (self.config_host or "127.0.0.1")
         resolved_port = port if port is not None else (self.config_port if self.config_port is not None else 0)
         super().serve(host=resolved_host, port=resolved_port)
-
-
-if __name__ == "__main__":
-    from .application import BaseApplication
-
-    server = AsgiServer(
-        primary=BaseApplication(),
-        host="0.0.0.0",
-        port=9000,
-        external_url="https://shop.example.com/",
-        auth={"basic": {"admin": {"password": "secret", "tags": "admin"}}},
-        middleware={"cors": True},
-    )
-    assert server.config_host == "0.0.0.0"
-    assert server.config_port == 9000
-    assert server.external_url == "https://shop.example.com"  # trailing slash stripped
-    assert server.authenticate({"headers": []}) is None
-    assert server.session({}) is None
-    assert isinstance(server.mounts["_server"], ServerApplication)
-    assert server.login_enabled is True
-
-    # No public address is fine until a provider needs one; with a provider
-    # configured and no external_url the server refuses to boot.
-    assert AsgiServer(primary=BaseApplication()).external_url is None
-    provider = {"issuer": "https://accounts.example.com", "client_id": "abc"}
-    try:
-        AsgiServer(primary=BaseApplication(), server_app={"oidc": {"google": provider}})
-    except ValueError as error:
-        assert "external_url" in str(error)
-    else:
-        raise AssertionError("a configured oidc provider requires external_url")

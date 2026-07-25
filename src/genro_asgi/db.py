@@ -63,22 +63,3 @@ class AsgiDbHandlerBase:
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}({type(self._db).__name__})"
-
-
-if __name__ == "__main__":
-
-    class _DemoDb:
-        def __init__(self, **params: Any) -> None:
-            self.params = params
-
-        def execute(self, sql: str) -> str:
-            return f"ran: {sql}"
-
-        def closeConnection(self) -> None:
-            print("closed")
-
-    handler = AsgiDbHandlerBase(_DemoDb(dbname="shop", host="localhost"))
-    print(handler)
-    print(handler.params)  # proxied attribute
-    print(handler.execute("SELECT"))  # proxied method
-    handler.closeConnection()  # own method, delegates

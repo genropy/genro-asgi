@@ -199,22 +199,3 @@ class TaskManager:
                 await self.server.run_sync(self.server.session_store.purge_expired)
             except Exception:
                 logging.getLogger(__name__).exception("session purge failed")
-
-
-if __name__ == "__main__":
-    from ..application import BaseApplication
-    from ..server import BaseServer
-    from ..storage_mixin import StorageMixin
-
-    class DemoServer(StorageMixin, BaseServer):
-        pass
-
-    async def _demo() -> None:
-        manager = TaskManager(DemoServer(primary=BaseApplication()))
-        assert manager.running is False
-        manager.start()
-        assert manager.running is True
-        await manager.stop()
-        assert manager.running is False
-
-    asyncio.run(_demo())

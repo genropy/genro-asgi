@@ -17,8 +17,8 @@
 ``ServerApplication`` is the server's own application — the system surface
 every server exposes under ``/_server`` without configuring it (D4:
 "automatic, not configured"). ``AsgiServer`` mounts one at the end of its
-``__init__`` (``_mount_server_app``), so a hand-built
-``AsgiServer(primary=...)`` gets it exactly like a config-materialized one;
+``__init__`` (``_register_server_app``), so a hand-built
+``AsgiServer(applications=[...])`` gets it exactly like a config-materialized one;
 ``ConfigurationHandler.materialize`` never special-cases it. The demux finds
 it through the ordinary mount table — there is no dedicated demux logic.
 
@@ -63,17 +63,19 @@ The future internal server (a D8 orchestration concern) is a SUBCLASS that
 overrides what it needs — not a profile flag on this class: no code exists for
 a consumer that does not exist yet.
 
-Kwargs peeled by the cooperative ``__init__`` (D16): ``mount_name`` is FIXED
-to ``"_server"`` — the system mount is a D4 invariant, not a preference, and
-three cross-file references hardcode ``/_server/...`` (``PasswordMethod``'s
-``action``, ``LOGIN_PAGE_URL``, ``login.html``'s fetch). A non-default value
-raises rather than silently 404-ing those references. ``login`` and ``oidc``
+Identity: ``code`` and ``mount`` are both declared ``"_server"`` as class
+attributes — the system mount is a D4 invariant, and three cross-file
+references hardcode ``/_server/...`` (``PasswordMethod``'s ``action``,
+``LOGIN_PAGE_URL``, ``login.html``'s fetch), so moving this app elsewhere
+404s them.
+
+Kwargs peeled by the cooperative ``__init__`` (D16): ``login`` and ``oidc``
 are the values the config-class lift carries (the ``server_app=`` server kwarg,
-forwarded by ``_mount_server_app``): the lockout policy dict and the
+forwarded by ``_register_server_app``): the lockout policy dict and the
 per-``code`` OIDC provider dicts, stored as ``login_policy``/``oidc_providers``
 (consumed by the lockout check and the ``OidcMethod`` registration). The rest
-flows down the chain. A hand-built ``AsgiServer(primary=...)`` passes nothing,
-so the defaults (empty dicts) keep today's bare app.
+flows down the chain. A hand-built ``AsgiServer(applications=[...])`` passes
+nothing, so the defaults (empty dicts) keep today's bare app.
 """
 
 from __future__ import annotations
@@ -175,13 +177,10 @@ class ServerApplication(OpenApiApplication):
         "version": "1.0.0",
     }
     config_class = ServerAppConfig
+    code = "_server"
+    mount = "_server"
 
     def __init__(self, **kwargs: Any) -> None:
-        mount_name = kwargs.setdefault("mount_name", "_server")
-        if mount_name != "_server":
-            raise ValueError(
-                f"ServerApplication mount_name is fixed to '_server', got {mount_name!r}"
-            )
         self._login_policy: dict[str, Any] = kwargs.pop("login", {})
         self._oidc_providers: dict[str, dict[str, Any]] = kwargs.pop("oidc", {})
         self._sections: dict[str, RoutingClass] = {}
@@ -417,32 +416,3 @@ class ServerApplication(OpenApiApplication):
         """
         section = self.auth_section
         return {"methods": section.descriptors() if section is not None else []}
-
-
-if __name__ == "__main__":
-    app = ServerApplication()
-    assert app.mount_name == "_server"
-    # The system mount name is fixed (D4): a non-default value raises.
-    try:
-        ServerApplication(mount_name="system")
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("a non-'_server' mount_name must raise")
-    assert app.docs_style == "swagger"
-    node = app.route.node("/")
-    assert node.error is None, node.error
-    data = node()
-    assert data == {
-        "title": "genro-asgi server endpoints",
-        "sections": ["auth", "tokens", "users"],
-    }
-    assert app.login_methods() == {
-        "methods": [
-            {"id": "password", "kind": "form", "label": "Sign in", "action": "/_server/login"}
-        ]
-    }
-    assert app.login() == {"error": "Identity and password are required"}
-    # login's credentialed path needs the dispatch-injected request; it is
-    # covered end-to-end (store absent, invalid creds, success) by test_login_flow.py.
-    assert "<title>Sign in</title>" in app.login_page()

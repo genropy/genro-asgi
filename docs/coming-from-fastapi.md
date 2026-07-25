@@ -33,7 +33,7 @@ served as REST, as an OpenAPI schema, and as MCP tools without being rewritten.
 
 | Task | FastAPI / Starlette | genro-asgi |
 |------|---------------------|------------|
-| Create the app | `app = FastAPI()` | subclass `RoutedApplication` (or `OpenApiApplication`); build `AsgiServer(primary=App())` |
+| Create the app | `app = FastAPI()` | subclass `RoutedApplication` (or `OpenApiApplication`); build `AsgiServer(applications=[App()])` |
 | Define a route | `@app.get("/greet")` on a function | `@route()` on a **method** (name = URL segment), imported from `genro_routes` |
 | Path / query params | function args + `Path`/`Query` | method args bind to the query string, typed, with defaults |
 | Request body / validation | pydantic model as a param | the `pydantic` plugin (`plugins={"pydantic": True}`) |
@@ -78,6 +78,7 @@ from genro_routes import route
 
 
 class Shop(OpenApiApplication):
+    mount = ""
     openapi_info = {"title": "Shop API", "version": "1.0.0"}
 
     @route()
@@ -85,7 +86,7 @@ class Shop(OpenApiApplication):
         return {"query": q, "hits": []}
 
 
-server = AsgiServer(primary=Shop(), plugins={"openapi": True, "pydantic": True})
+server = AsgiServer(applications=[Shop()], plugins={"openapi": True, "pydantic": True})
 server.serve(host="127.0.0.1", port=8000)
 ```
 

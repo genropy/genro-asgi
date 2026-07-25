@@ -252,27 +252,3 @@ class Response:
         if self.status_code == 500:
             logging.getLogger(__name__).exception("Handler error: %s", error)
         self.set_result({"error": str(error)})
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    from .types import Message
-
-    async def demo() -> None:
-        sent: list[Message] = []
-
-        async def send(message: Message) -> None:
-            sent.append(message)
-            print(f"Sent: {message['type']}")
-
-        async def receive() -> Message:
-            return {"type": "http.request", "body": b""}
-
-        response = Response(content="Hello!", media_type="text/plain")
-        await response({}, receive, send)
-        assert sent[0]["status"] == 200
-        assert sent[1]["body"] == b"Hello!"
-        print(f"Headers: {sent[0]['headers']}")
-
-    asyncio.run(demo())

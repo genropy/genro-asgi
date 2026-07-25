@@ -145,25 +145,3 @@ class PasswordMethod(AuthMethod):
         route (``action``); ``label`` names the form for the page.
         """
         return {**super().descriptor(), "label": "Sign in", "action": "/_server/login"}
-
-
-if __name__ == "__main__":
-    from types import SimpleNamespace
-
-    application = SimpleNamespace(server="SERVER")
-    method = PasswordMethod(application, "password")
-    assert method.method_id == "password"
-    assert method.kind == "form"
-    assert method.server == "SERVER"
-    assert method.descriptor() == {
-        "id": "password",
-        "kind": "form",
-        "label": "Sign in",
-        "action": "/_server/login",
-    }
-    assert safe_next_path("/app/page") == "/app/page"
-    assert safe_next_path("//evil.example") == "/"
-    assert safe_next_path("https://evil.example") == "/"
-    assert safe_next_path("\\evil") == "/"
-    assert safe_next_path(None) == "/"
-    assert safe_next_path("", default="/home") == "/home"

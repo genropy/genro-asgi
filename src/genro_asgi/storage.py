@@ -580,12 +580,3 @@ class LocalStorage:
                 path = "/".join(path_parts)
 
         return LocalStorageNode(self, mount, path)
-
-
-if __name__ == "__main__":
-    storage = LocalStorage()
-    storage.add_mount({"name": "test", "type": "local", "path": "/tmp"})
-    probe = storage.node("test:test_file.txt")
-    print(f"fullpath: {probe.fullpath}")
-    print(f"exists: {probe.exists}")
-    print(f"mimetype: {probe.mimetype}")

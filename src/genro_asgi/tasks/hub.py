@@ -88,16 +88,3 @@ class EventHub:
             if queue.full():
                 queue.get_nowait()
             queue.put_nowait(event)
-
-
-if __name__ == "__main__":
-    async def _demo() -> None:
-        hub = EventHub()
-        hub.publish("s1", {"type": "progress", "value": 1})     # no subscriber: no-op
-        q = hub.subscribe("s1")
-        hub.publish("s1", {"type": "progress", "value": 2})
-        assert (await q.get()) == {"type": "progress", "value": 2}
-        hub.unsubscribe("s1", q)
-        assert "s1" not in hub._subscribers
-
-    asyncio.run(_demo())

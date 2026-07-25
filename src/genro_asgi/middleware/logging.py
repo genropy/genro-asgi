@@ -87,34 +87,3 @@ class LoggingMiddleware(BaseMiddleware):
 
         duration = (time.perf_counter() - start) * 1000
         self.logger.log(self._level, "-> %s %s (%.1fms)", request_info, status_code, duration)
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    async def demo() -> None:
-        records: list[str] = []
-
-        class RecordingHandler(logging.Handler):
-            def emit(self, record: logging.LogRecord) -> None:
-                records.append(record.getMessage())
-
-        async def inner_app(scope: Scope, receive: Receive, send: Send) -> None:
-            await send({"type": "http.response.start", "status": 200, "headers": []})
-            await send({"type": "http.response.body", "body": b"ok"})
-
-        async def receive() -> Any:
-            return {"type": "http.request"}
-
-        async def send(message: Any) -> None:
-            pass
-
-        middleware = LoggingMiddleware(inner_app, None)
-        middleware.logger.addHandler(RecordingHandler())
-        middleware.logger.setLevel(logging.INFO)
-        await middleware({"type": "http", "method": "GET", "path": "/", "headers": []}, receive, send)
-        assert len(records) == 2
-        assert records[0].startswith("<- GET /")
-        assert records[1].startswith("-> GET / 200")
-
-    asyncio.run(demo())

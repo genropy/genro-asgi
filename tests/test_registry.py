@@ -113,7 +113,7 @@ class TestRegisteredRequest:
 
 class TestEmptyRegistry:
     def test_fresh_registry_is_empty(self) -> None:
-        server = BaseServer(primary=BaseApplication())
+        server = BaseServer(applications=[BaseApplication(mount="")])
         assert server.requests.current is None
         assert server.requests.in_flight == 0
         assert server.requests.snapshot() == []
@@ -125,7 +125,7 @@ class TestConcurrentRequests:
     ) -> None:
         barrier = asyncio.Barrier(2)
         observed: dict[int, dict[str, Any]] = {}
-        server = BaseServer(primary=RendezvousApp(barrier=barrier, observed=observed))
+        server = BaseServer(applications=[RendezvousApp(mount="", barrier=barrier, observed=observed)])
 
         await asyncio.gather(drive(server, "/a"), drive(server, "/b"))
 
@@ -141,7 +141,7 @@ class TestConcurrentRequests:
     async def test_snapshot_lists_the_in_flight_records(self) -> None:
         barrier = asyncio.Barrier(2)
         observed: dict[int, dict[str, Any]] = {}
-        server = BaseServer(primary=RendezvousApp(barrier=barrier, observed=observed))
+        server = BaseServer(applications=[RendezvousApp(mount="", barrier=barrier, observed=observed)])
 
         await asyncio.gather(drive(server, "/a"), drive(server, "/b"))
 
@@ -154,7 +154,7 @@ class TestConcurrentRequests:
     async def test_registry_is_empty_after_both_complete(self) -> None:
         barrier = asyncio.Barrier(2)
         observed: dict[int, dict[str, Any]] = {}
-        server = BaseServer(primary=RendezvousApp(barrier=barrier, observed=observed))
+        server = BaseServer(applications=[RendezvousApp(mount="", barrier=barrier, observed=observed)])
 
         await asyncio.gather(drive(server, "/a"), drive(server, "/b"))
 
@@ -165,7 +165,7 @@ class TestConcurrentRequests:
 
 class TestErrorPath:
     async def test_request_is_unregistered_even_when_handler_raises(self) -> None:
-        server = BaseServer(primary=RaisingApp())
+        server = BaseServer(applications=[RaisingApp(mount="")])
         with pytest.raises(RuntimeError, match="boom"):
             await drive(server, "/boom")
         assert server.requests.in_flight == 0
@@ -173,7 +173,7 @@ class TestErrorPath:
 
     async def test_cleanups_drained_even_when_handler_raises(self) -> None:
         ran: list[str] = []
-        server = BaseServer(primary=CleanupThenRaiseApp(ran=ran))
+        server = BaseServer(applications=[CleanupThenRaiseApp(mount="", ran=ran)])
         with pytest.raises(RuntimeError, match="boom"):
             await drive(server, "/boom")
         assert ran == ["cleanup"]  # the finally drained the cleanup despite the raise

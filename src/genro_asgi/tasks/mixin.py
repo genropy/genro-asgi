@@ -159,27 +159,3 @@ class TaskMixin:
             await super().__call__(scope, replaying_receive, send)
         finally:
             await manager.stop()
-
-
-if __name__ == "__main__":
-    from ..application import BaseApplication
-    from ..server import BaseServer
-    from ..storage_mixin import StorageMixin
-
-    class DemoServer(TaskMixin, StorageMixin, BaseServer):
-        pass
-
-    armed = DemoServer(primary=BaseApplication())
-    assert armed.tasks_enabled is True
-    manager = armed.tasks                       # built lazily here
-    assert isinstance(manager, TaskManager)
-    assert armed.tasks is manager               # same instance on re-access
-
-    disabled = DemoServer(primary=BaseApplication(), tasks=False)
-    assert disabled.tasks_enabled is False
-    try:
-        disabled.tasks
-    except RuntimeError as error:
-        assert "disabled" in str(error)
-
-    assert not hasattr(BaseServer(primary=BaseApplication()), "tasks_enabled")

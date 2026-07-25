@@ -101,19 +101,19 @@ class TestAsgiDbHandlerBase:
 
 class TestDatabaseRegistry:
     def test_add_database_registers_by_code(self) -> None:
-        server = BaseServer(primary=BaseApplication())
+        server = BaseServer(applications=[BaseApplication(mount="")])
         handler = AsgiDbHandlerBase(FakeDb())
         server.add_database("shop", handler)
         assert server.databases == {"shop": handler}
 
     def test_add_database_duplicate_code_raises(self) -> None:
-        server = BaseServer(primary=BaseApplication())
+        server = BaseServer(applications=[BaseApplication(mount="")])
         server.add_database("shop", AsgiDbHandlerBase(FakeDb()))
         with pytest.raises(ValueError):
             server.add_database("shop", AsgiDbHandlerBase(FakeDb()))
 
     def test_databases_empty_by_default(self) -> None:
-        assert BaseServer(primary=BaseApplication()).databases == {}
+        assert BaseServer(applications=[BaseApplication(mount="")]).databases == {}
 
 
 # --- config-driven materialization ---

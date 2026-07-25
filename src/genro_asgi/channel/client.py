@@ -207,33 +207,3 @@ class ChannelClient:
                 await result
         except Exception:
             self._logger.exception("Channel callback %r failed", callback)
-
-
-if __name__ == "__main__":
-    import tempfile
-
-    async def demo() -> None:
-        sock = os.path.join(tempfile.mkdtemp(prefix="gnrchan_"), "hub.sock")
-        received: list[Frame] = []
-
-        async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-            stream = FrameStream(reader, writer)
-            while True:
-                frame = await stream.read()
-                if frame is None:
-                    break
-                received.append(frame)
-            await stream.close()
-
-        hub = await asyncio.start_unix_server(handle, path=sock)
-        client = ChannelClient(f"uds:{sock}", "demo_01")
-        await client.connect()
-        await client.send(path="/events/hello", data={"n": 1})
-        await asyncio.sleep(0.1)
-        await client.close()
-        hub.close()
-        await hub.wait_closed()
-        for frame in received:
-            print(f"{frame.method} {frame.path} {frame.data}")
-
-    asyncio.run(demo())

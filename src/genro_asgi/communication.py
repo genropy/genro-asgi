@@ -123,29 +123,3 @@ class CommunicationMixin:
             await super().__call__(scope, replaying_receive, send)
         finally:
             await self.parent_channel.close()
-
-
-if __name__ == "__main__":
-    from .application import BaseApplication
-    from .server import BaseServer
-
-    class DemoServer(CommunicationMixin, BaseServer):
-        pass
-
-    unarmed = DemoServer(primary=BaseApplication())
-    assert unarmed.parent_armed is False
-    try:
-        unarmed.parent_channel
-    except RuntimeError as error:
-        assert "not armed" in str(error)
-    else:
-        raise AssertionError("expected RuntimeError on unarmed parent_channel")
-    armed = DemoServer(primary=BaseApplication(), parent="uds:/tmp/hub.sock")
-    assert armed.parent_armed is True
-    assert armed.parent_channel.address == "uds:/tmp/hub.sock"
-    try:
-        armed.children_channel
-    except RuntimeError as error:
-        assert "not armed" in str(error)
-    else:
-        raise AssertionError("expected RuntimeError on unarmed children_channel")

@@ -162,23 +162,3 @@ class FrameStream:
             await self.writer.wait_closed()
         except (BrokenPipeError, ConnectionResetError):
             pass
-
-
-if __name__ == "__main__":
-    import socket
-
-    async def demo() -> None:
-        left, right = socket.socketpair()
-        reader_l, writer_l = await asyncio.open_connection(sock=left)
-        reader_r, writer_r = await asyncio.open_connection(sock=right)
-        one = FrameStream(reader_l, writer_l)
-        two = FrameStream(reader_r, writer_r)
-        await one.write(Frame(method=REGISTER_METHOD, path=REGISTER_PATH, data={"name": "demo"}))
-        frame = await two.read()
-        assert frame is not None
-        print(f"{frame.method} {frame.path} {frame.data}")
-        await one.close()
-        assert await two.read() is None
-        await two.close()
-
-    asyncio.run(demo())

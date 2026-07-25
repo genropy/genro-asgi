@@ -31,7 +31,7 @@ from .throwaway_app import ThrowawayApp
 
 def make_server() -> BaseServer:
     """A server with a throwaway primary — enough to exercise the pool."""
-    return BaseServer(primary=ThrowawayApp(name="primary"))
+    return BaseServer(applications=[ThrowawayApp(mount="", name="primary")])
 
 
 class TestDispatch:
@@ -53,7 +53,7 @@ class TestDispatch:
 
 class TestMaxThreads:
     async def test_max_threads_reaches_the_executor(self) -> None:
-        server = BaseServer(primary=ThrowawayApp(name="primary"), max_threads=2)
+        server = BaseServer(applications=[ThrowawayApp(mount="", name="primary")], max_threads=2)
         await server.run_sync(lambda: None)
         assert server.pool.executor._max_workers == 2
 

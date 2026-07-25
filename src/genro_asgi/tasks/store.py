@@ -225,27 +225,3 @@ class FileTaskStore(TaskStore):
             return []
         lines = node.read_text().splitlines()
         return [json.loads(line) for line in lines[-limit:] if line.strip()]
-
-
-if __name__ == "__main__":
-    import tempfile
-
-    from ..storage import LocalStorage
-
-    with tempfile.TemporaryDirectory() as tmp:
-        store = FileTaskStore(LocalStorage(tmp))
-        store.save(
-            {
-                "code": "demo",
-                "task_name": "demo",
-                "target_kind": "task",
-                "kwargs": {},
-                "kind": "every",
-                "spec": "15m",
-                "enabled": True,
-                "next_run_ts": 0.0,
-            }
-        )
-        print("due:", [r["code"] for r in store.due_rows(1.0)])
-        store.append_log("demo", {"outcome": "ok"})
-        print("log:", store.read_log("demo"))

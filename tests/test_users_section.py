@@ -81,7 +81,7 @@ def make_server(avatar: Avatar | None, store: Any = _DEFAULT_STORE) -> AsgiServe
     if store is _DEFAULT_STORE:
         store = MemoryUserStore()
     kwargs: dict[str, Any] = {
-        "primary": BaseApplication(),
+        "applications": [BaseApplication(mount="")],
         "middleware": {"stamp": {"avatar": avatar}},
         "middleware_registry": {"stamp": StampAuthMiddleware},
     }

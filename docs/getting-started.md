@@ -49,6 +49,8 @@ from genro_routes import route
 
 
 class Hello(RoutedApplication):
+    mount = ""          # this app answers the site root
+
     @route()
     def index(self) -> dict[str, str]:
         return {"hello": "world"}
@@ -59,7 +61,7 @@ class Hello(RoutedApplication):
 
 
 if __name__ == "__main__":
-    server = AsgiServer(primary=Hello())
+    server = AsgiServer(applications=[Hello()])
     server.serve(host="127.0.0.1", port=8000)
 ```
 
@@ -86,7 +88,7 @@ HTTP/1.1 404 Not Found
 
 Every line above earns its place. Here is what each one does.
 
-### The primary application
+### The application
 
 ```python
 class Hello(RoutedApplication):
@@ -131,13 +133,14 @@ before your method runs.
 ### Building and serving
 
 ```python
-server = AsgiServer(primary=Hello())
+server = AsgiServer(applications=[Hello()])
 server.serve(host="127.0.0.1", port=8000)
 ```
 
-`AsgiServer(primary=...)` builds the server. The **primary** application is
-mandatory — it answers `/` and every path no mounted app claims. Omitting it is
-an error.
+`AsgiServer(applications=[...])` builds the server with the applications it
+serves. Each application carries its own placement in its `mount`, and
+`mount = ""` is the site root: that app answers `/` and every path no other
+mount claims.
 
 `server.serve(host=..., port=...)` boots a programmatic uvicorn loop and
 **blocks** until the process stops. The server object *is* the ASGI application

@@ -49,10 +49,10 @@ class ConcreteApp(AlphaMixin, BetaMixin, BaseApplication):
 
 class TestCooperativeChain:
     def test_each_layer_receives_its_kwargs(self):
-        app = ConcreteApp(alpha=1, beta=2, mount_name="demo")
+        app = ConcreteApp(alpha=1, beta=2, code="demo")
         assert app.alpha == 1
         assert app.beta == 2
-        assert app.mount_name == "demo"
+        assert app.code == "demo"
 
     def test_leftover_kwarg_raises_naming_it(self):
         with pytest.raises(TypeError, match="bogus"):
@@ -60,60 +60,100 @@ class TestCooperativeChain:
 
     def test_server_leftover_kwarg_raises_naming_it(self):
         with pytest.raises(TypeError, match="bogus"):
-            BaseServer(primary=BaseApplication(), bogus=3)
+            BaseServer(applications=[BaseApplication(mount="")], bogus=3)
 
 
 class TestOwnershipChannel:
     def test_server_is_none_until_attached(self):
         assert BaseApplication().server is None
 
-    def test_primary_attach_assigns_server(self):
-        primary = BaseApplication()
-        server = BaseServer(primary=primary)
-        assert primary.server is server
+    def test_registration_assigns_server(self):
+        root = BaseApplication(mount="")
+        server = BaseServer(applications=[root])
+        assert root.server is server
 
-    def test_mount_assigns_server_and_registers_by_mount_name(self):
-        server = BaseServer(primary=BaseApplication())
-        api = BaseApplication(mount_name="api")
-        server.mount(api)
+    def test_registration_indexes_by_code(self):
+        api = BaseApplication(code="api")
+        server = BaseServer(applications=[BaseApplication(mount=""), api])
         assert api.server is server
-        assert server.mounts["api"] is api
+        assert server.applications["api"] is api
 
     def test_second_assignment_raises(self):
-        primary = BaseApplication()
-        BaseServer(primary=primary)
+        root = BaseApplication(mount="")
+        BaseServer(applications=[root])
         with pytest.raises(RuntimeError):
-            BaseServer(primary=primary)
+            BaseServer(applications=[root])
 
-    def test_mounting_on_a_second_server_raises(self):
-        api = BaseApplication(mount_name="api")
-        BaseServer(primary=BaseApplication()).mount(api)
+    def test_serving_the_same_app_on_a_second_server_raises(self):
+        api = BaseApplication(code="api")
+        BaseServer(applications=[api])
         with pytest.raises(RuntimeError):
-            BaseServer(primary=BaseApplication()).mount(api)
+            BaseServer(applications=[api])
+
+
+class TestApplicationIdentity:
+    def test_code_defaults_to_the_class_name_lowercased(self):
+        assert BaseApplication().code == "baseapplication"
+
+    def test_mount_defaults_to_the_code(self):
+        app = BaseApplication(code="api")
+        assert app.mount == "api"
+        assert BaseServer(applications=[app]).application_at("api") is app
+
+    def test_an_empty_mount_is_the_root_not_a_missing_value(self):
+        # ``mount=""`` IS the site root: reading it as "unset" would silently
+        # move the app to ``/<code>``.
+        root = BaseApplication(code="shop", mount="")
+        server = BaseServer(applications=[root])
+        assert root.mount == ""
+        assert server.root_application is root
+        assert server.application_at("") is root
+        assert server.application_at("shop") is None
+
+    def test_class_attributes_are_the_defaults(self):
+        class Fixed(BaseApplication):
+            code = "fixed"
+            mount = "elsewhere"
+
+        assert (Fixed().code, Fixed().mount) == ("fixed", "elsewhere")
+        overridden = Fixed(code="other", mount="")
+        assert (overridden.code, overridden.mount) == ("other", "")
 
 
 class TestServerContract:
-    def test_missing_primary_raises(self):
-        with pytest.raises(TypeError, match="primary"):
-            BaseServer()
-
-    def test_duplicate_mount_name_raises(self):
-        server = BaseServer(primary=BaseApplication())
-        server.mount(BaseApplication(mount_name="api"))
+    def test_duplicate_code_raises(self):
         with pytest.raises(ValueError, match="api"):
-            server.mount(BaseApplication(mount_name="api"))
+            BaseServer(applications=[BaseApplication(code="api"), BaseApplication(code="api")])
 
-    def test_mount_without_mount_name_raises(self):
-        server = BaseServer(primary=BaseApplication())
-        with pytest.raises(ValueError, match="mount_name"):
-            server.mount(BaseApplication())
+    def test_duplicate_mount_raises(self):
+        with pytest.raises(ValueError, match="'api'"):
+            BaseServer(
+                applications=[
+                    BaseApplication(code="one", mount="api"),
+                    BaseApplication(code="two", mount="api"),
+                ]
+            )
+
+    def test_a_server_of_mounts_only_has_no_root_application(self):
+        server = BaseServer(applications=[BaseApplication(code="api")])
+        assert server.root_application is None
+        assert server.default_application is None
+
+    def test_a_default_naming_no_served_application_raises(self):
+        with pytest.raises(ValueError, match="ghost"):
+            BaseServer(applications=[BaseApplication(code="api")], default="ghost")
+
+    def test_the_default_is_read_back_as_the_application(self):
+        api = BaseApplication(code="api")
+        server = BaseServer(applications=[api], default="api")
+        assert server.default_application is api
 
     def test_authenticate_answers_nobody(self):
-        server = BaseServer(primary=BaseApplication())
+        server = BaseServer(applications=[BaseApplication(mount="")])
         assert server.authenticate(None) is None
 
     def test_session_answers_none(self):
-        server = BaseServer(primary=BaseApplication())
+        server = BaseServer(applications=[BaseApplication(mount="")])
         assert server.session(None) is None
 
 

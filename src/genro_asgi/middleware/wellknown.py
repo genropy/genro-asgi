@@ -51,34 +51,3 @@ class WellKnownMiddleware(BaseMiddleware):
 
     def _is_probe(self, path: str) -> bool:
         return path in self.PROBE_PATHS or path.startswith(self.WELL_KNOWN_PREFIX)
-
-
-if __name__ == "__main__":
-    import asyncio
-    from typing import Any
-
-    async def demo() -> None:
-        async def inner_app(scope: Scope, receive: Receive, send: Send) -> None:
-            await send({"type": "http.response.start", "status": 200, "headers": []})
-            await send({"type": "http.response.body", "body": b"ok"})
-
-        async def receive() -> Any:
-            return {"type": "http.request"}
-
-        sent: list[Any] = []
-
-        async def send(message: Any) -> None:
-            sent.append(message)
-
-        middleware = WellKnownMiddleware(inner_app, None)
-        try:
-            await middleware({"type": "http", "path": "/robots.txt"}, receive, send)
-        except HTTPNotFound:
-            pass
-        else:
-            raise AssertionError("expected HTTPNotFound for /robots.txt")
-
-        await middleware({"type": "http", "path": "/"}, receive, send)
-        assert sent[0]["status"] == 200
-
-    asyncio.run(demo())

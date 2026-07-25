@@ -16,8 +16,9 @@ run, and throw away.
 
 ## What it does
 
-- **Serves applications** — a required primary app answers `/`, secondary apps
-  mount on URL prefixes; the server demultiplexes on the first path segment.
+- **Serves applications** — each app declares its `mount`, the URL prefix it
+  answers under (`""` is the site root); the server demultiplexes on the first
+  path segment.
 - **Routes requests** — handlers are `@route`-decorated methods on your
   application class; query and body parameters bind to the signature, typed.
 - **Authenticates** — basic / bearer / JWT credentials, API keys (`gak_…`),
@@ -55,6 +56,8 @@ from genro_routes import route
 
 
 class Hello(RoutedApplication):
+    mount = ""          # this app answers the site root
+
     @route()
     def index(self) -> dict[str, str]:
         return {"hello": "world"}
@@ -65,7 +68,7 @@ class Hello(RoutedApplication):
 
 
 if __name__ == "__main__":
-    server = AsgiServer(primary=Hello())
+    server = AsgiServer(applications=[Hello()])
     server.serve(host="127.0.0.1", port=8000)
 ```
 
@@ -96,6 +99,7 @@ from genro_routes import route
 
 
 class Shop(OpenApiApplication):
+    mount = ""
     openapi_info = {"title": "Shop API", "version": "1.0.0"}
 
     @route()
@@ -103,7 +107,7 @@ class Shop(OpenApiApplication):
         return {"query": q, "hits": []}
 
 
-server = AsgiServer(primary=Shop(), plugins={"openapi": True, "pydantic": True})
+server = AsgiServer(applications=[Shop()], plugins={"openapi": True, "pydantic": True})
 server.serve(port=8000)
 ```
 

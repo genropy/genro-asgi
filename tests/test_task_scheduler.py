@@ -75,8 +75,10 @@ def _clear_marks() -> None:
 @pytest.fixture
 def server(tmp_path: Path) -> AsgiServer:
     """A real AsgiServer: DemoApp primary + MountApp mounted, storage on tmp_path."""
-    srv = AsgiServer(primary=DemoApp(), storage=LocalStorage(base_dir=str(tmp_path)))
-    srv.mount(MountApp(mount_name="extra"))
+    srv = AsgiServer(
+        applications=[DemoApp(mount=""), MountApp(code="extra")],
+        storage=LocalStorage(base_dir=str(tmp_path)),
+    )
     return srv
 
 
@@ -88,7 +90,7 @@ def scheduler(server: AsgiServer) -> TaskScheduler:
 class TestScan:
     """The routing tree is the live registry."""
 
-    def test_scan_collects_tasks_from_primary_and_mounts(self, server: AsgiServer) -> None:
+    def test_scan_collects_tasks_from_every_application(self, server: AsgiServer) -> None:
         registry = scheduler(server).scan()
         assert {"cleanup", "report", "boom", "slow", "mounted"} <= set(registry)
         assert callable(registry["cleanup"]["callable"])
@@ -102,7 +104,7 @@ class TestScan:
             @route(task="twin")
             def two(self) -> None: ...
 
-        srv = AsgiServer(primary=Dup(), storage=LocalStorage(base_dir=str(tmp_path)))
+        srv = AsgiServer(applications=[Dup(mount="")], storage=LocalStorage(base_dir=str(tmp_path)))
         assert "twin" not in srv.tasks.scheduler.scan()   # both excluded, no silent pick
 
 

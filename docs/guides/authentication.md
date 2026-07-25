@@ -31,6 +31,8 @@ AUTH = {
 
 
 class App(RoutedApplication):
+    mount = ""
+
     @route()
     def public(self) -> dict:
         return {"open": True}
@@ -40,7 +42,7 @@ class App(RoutedApplication):
         return {"classified": True}
 
 
-server = AsgiServer(primary=App(), auth=AUTH)
+server = AsgiServer(applications=[App()], auth=AUTH)
 server.serve(host="127.0.0.1", port=8000)
 ```
 
@@ -119,7 +121,7 @@ PROVIDER = {
     "tags": [],
 }
 server = AsgiServer(
-    primary=App(),
+    applications=[App()],
     external_url="https://shop.example.com",
     server_app={"oidc": {"google": PROVIDER}},
 )

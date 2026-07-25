@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The base server: primary app, secondary mounts, ASGI dispatch, uvicorn boot.
+"""The base server: the applications it serves, ASGI dispatch, uvicorn boot.
 
 ``BaseServer`` is the common substrate of every server (SPECIFICATION.md §4,
-D2): it REQUIRES the primary application (``primary=`` kwarg; missing raises
-``TypeError``) and keeps secondary applications in a mounts dict keyed by
-``mount_name`` — the one demux mechanism of D3. At the base,
+D2): it is composed with its applications (``applications=`` kwarg, a list)
+and keeps them in a dict keyed by each app's ``code``, plus a private index by
+``mount`` — the one demux mechanism of D3. The set of applications is fixed at
+construction; registration is internal. At the base,
 ``authenticate()`` answers nobody (``None``) and ``session()`` answers none
 (``None``). It owns exactly one thread pool (D2): ``run_sync()`` dispatches a
 blocking handler onto it via ``loop.run_in_executor`` while async handlers stay
@@ -25,25 +26,27 @@ on the loop; the pool is provisioned lazily on first use and torn down at
 shutdown.
 
 As an ASGI callable, ``__call__`` dispatches on the scope type: ``http`` runs
-the D3 demux (first path segment → matching mount with that segment stripped,
-otherwise the primary with the full path); ``websocket`` runs ``on_websocket``,
+the D3 demux — first path segment → the app mounted there with that segment
+stripped; else the app on the site root with the full path; else a 307 from
+``/`` to the declared ``default``; else 404 — ``websocket`` runs
+``on_websocket``,
 whose DEFAULT is the empty socket of D7 (accepts nothing, closes cleanly with
 code 1000); ``lifespan`` runs the ``Lifespan`` handler (ordered startup,
 reverse shutdown, error isolation). Each http dispatch is registered in the
 ``RequestRegistry`` (``requests``) for the span of the request — the current
 request and the in-flight picture. ``serve()`` boots uvicorn programmatically.
 
-Cooperative init (D16): peels its own kwargs (``primary``, ``max_threads``)
-and, as the end of the chain, raises ``TypeError`` naming any leftover kwargs.
-Mixins go BEFORE ``BaseServer`` in the MRO.
+Cooperative init (D16): peels its own kwargs (``applications``,
+``max_threads``) and, as the end of the chain, raises ``TypeError`` naming any
+leftover kwargs. Mixins go BEFORE ``BaseServer`` in the MRO.
 
-Ownership channel (one direction): attaching the primary and ``mount()`` both
-assign ``app.server = self``; the app-side setter enforces exactly-once.
+Ownership channel (one direction): registering an application assigns
+``app.server = self``; the app-side setter enforces exactly-once.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 import uvicorn
 
@@ -51,26 +54,27 @@ from .application import BaseApplication
 from .lifespan import Lifespan
 from .pool import WorkPool
 from .registry import RequestRegistry
+from .response import Response
 
 if TYPE_CHECKING:
-    from .types import Receive, Scope, Send
+    from .types import ASGIApp, Receive, Scope, Send
 
 __all__ = ["BaseServer"]
 
 
 class BaseServer:
-    """Base server owning the primary application and the secondary mounts.
+    """Base server owning the applications it was composed with.
 
-    Constructor kwargs peeled here: ``primary`` — the always-present primary
-    application (D2), answering ``/`` and everything no mount claims — and
-    ``max_threads`` — the pool's worker count, handed to ``WorkPool``
-    (``None`` keeps the stdlib default).
+    Constructor kwargs peeled here: ``applications`` — the applications this
+    server serves — ``default`` — the ``code`` of the application ``/``
+    redirects to when nothing answers the root (an unknown code raises
+    ``ValueError``) — and ``max_threads`` — the pool's worker count, handed to
+    ``WorkPool`` (``None`` keeps the stdlib default).
     """
 
     def __init__(self, **kwargs: Any) -> None:
-        if "primary" not in kwargs:
-            raise TypeError(f"{type(self).__name__} requires a primary application (primary=...)")
-        primary: BaseApplication = kwargs.pop("primary")
+        applications: Iterable[BaseApplication] = kwargs.pop("applications", ())
+        default: str | None = kwargs.pop("default", None)
         max_threads: int | None = kwargs.pop("max_threads", None)
         if kwargs:
             unexpected = ", ".join(sorted(kwargs))
@@ -78,39 +82,63 @@ class BaseServer:
                 f"{type(self).__name__}.__init__() got unexpected keyword arguments: {unexpected}"
             )
         super().__init__()
-        self._primary = primary
-        self._mounts: dict[str, BaseApplication] = {}
+        self._applications: dict[str, BaseApplication] = {}
+        self._by_mount: dict[str, BaseApplication] = {}
         self._databases: dict[str, Any] = {}
         self._uvicorn: uvicorn.Server | None = None
         self._pool = WorkPool(self, max_threads=max_threads)
         self._lifespan = Lifespan(self)
         self._registry = RequestRegistry(self)
-        primary.server = self
+        for app in applications:
+            self.register_application(app)
+        self._default = default
+        if default is not None and default not in self.applications:
+            raise ValueError(f"default names no served application: {default!r}")
 
     @property
-    def primary(self) -> BaseApplication:
-        """The primary application: answers ``/`` and the unclaimed rest."""
-        return self._primary
+    def applications(self) -> dict[str, BaseApplication]:
+        """The served applications keyed by their ``code``."""
+        return self._applications
 
     @property
-    def mounts(self) -> dict[str, BaseApplication]:
-        """Secondary applications keyed by ``mount_name`` (may be empty)."""
-        return self._mounts
+    def root_application(self) -> BaseApplication | None:
+        """The application on the site root (``mount == ""``), ``None`` if there is none.
 
-    def mount(self, app: BaseApplication) -> None:
-        """Register ``app`` as a secondary mount keyed by its ``mount_name``.
-
-        Assigns the ownership channel (``app.server = self``). A secondary
-        without a ``mount_name`` cannot be demuxed and a claimed name cannot
-        be claimed twice: both raise ``ValueError``.
+        It answers ``/`` and every path no other mount claims. A server of
+        mounts only has none: then ``/`` redirects to the ``default`` if one is
+        declared, and an unclaimed path is a 404.
         """
-        name = app.mount_name
-        if not name:
-            raise ValueError("a secondary application requires a non-empty mount_name")
-        if name in self.mounts:
-            raise ValueError(f"mount_name already claimed: {name}")
+        return self.application_at("")
+
+    @property
+    def default_application(self) -> BaseApplication | None:
+        """The application ``/`` redirects to, ``None`` if no ``default`` was declared.
+
+        It elects nothing: the redirect is the whole of its meaning, and it is
+        only consulted when no application answers the root.
+        """
+        return self.applications[self._default] if self._default is not None else None
+
+    def application_at(self, mount: str) -> BaseApplication | None:
+        """The application answering under the URL prefix ``mount`` (``None`` if none)."""
+        return self._by_mount.get(mount)
+
+    def register_application(self, app: BaseApplication) -> None:
+        """Register ``app`` under its ``code`` and its ``mount``.
+
+        Assigns the ownership channel (``app.server = self``). Internal: the
+        set of applications is fixed at construction, so the callers are
+        ``__init__`` and the composition layers building a server. A claimed
+        code and a claimed mount both raise ``ValueError``.
+        """
+        mount = app.code if app.mount is None else app.mount
+        if app.code in self.applications:
+            raise ValueError(f"application code already claimed: {app.code}")
+        if mount in self._by_mount:
+            raise ValueError(f"mount already claimed: {mount!r}")
         app.server = self
-        self.mounts[name] = app
+        self.applications[app.code] = app
+        self._by_mount[mount] = app
 
     @property
     def databases(self) -> dict[str, Any]:
@@ -182,24 +210,45 @@ class BaseServer:
         else:
             raise ValueError(f"unsupported ASGI scope type: {scope_type}")
 
-    def demux(self, scope: Scope) -> tuple[BaseApplication, Scope]:
-        """D3 demux: pick the app for an http scope and the scope it receives.
+    def demux(self, scope: Scope) -> tuple[ASGIApp, Scope]:
+        """D3 demux: pick what answers an http scope, and the scope it receives.
 
-        First path segment matching a mount → that app, with the segment
-        stripped from ``path`` (the forwarded path is rebuilt from the same
-        remainder used to find the segment, so ``//api/x`` forwards ``/x``);
-        anything else (including ``/``) → the primary with the full path
-        unchanged.
+        One rule, four branches: the first path segment matching a mount → that
+        app, with the segment stripped from ``path`` (the forwarded path is
+        rebuilt from the same remainder used to find the segment, so ``//api/x``
+        forwards ``/x``); else the application on the site root, with the full
+        path unchanged; else, for ``/`` itself with a ``default`` declared, a
+        **307** to that application's mount carrying the query string over;
+        else **404**. ``/`` on a server WITH a root application matches its
+        empty mount in the first branch, which forwards the same ``/``.
         """
         path = scope["path"]
         rest = path.lstrip("/")
         segment, _, remainder = rest.partition("/")
-        app = self.mounts.get(segment)
-        if app is None:
-            return self.primary, scope
-        sub_scope = dict(scope)
-        sub_scope["path"] = "/" + remainder
-        return app, sub_scope
+        app = self.application_at(segment)
+        if app is not None:
+            sub_scope = dict(scope)
+            sub_scope["path"] = "/" + remainder
+            return app, sub_scope
+        root = self.root_application
+        if root is not None:
+            return root, scope
+        default = self.default_application if not rest else None
+        if default is not None:
+            return self.redirect_to_default(default, scope), scope
+        return Response(content="Not Found", status_code=404, media_type="text/plain"), scope
+
+    def redirect_to_default(self, app: BaseApplication, scope: Scope) -> Response:
+        """A 307 to ``app``'s mount, preserving the query string.
+
+        307 and not 301/302: the method and the body must survive the hop, so a
+        ``POST /`` reaches the default application as a POST.
+        """
+        location = f"/{app.mount}/"
+        query = scope.get("query_string", b"")
+        if query:
+            location = f"{location}?{query.decode('latin-1')}"
+        return Response(status_code=307, headers={"location": location})
 
     async def on_websocket(self, scope: Scope, receive: Receive, send: Send) -> None:
         """The empty websocket socket (D7): consume the connect, close cleanly.
@@ -229,12 +278,3 @@ class BaseServer:
         """
         self._uvicorn = uvicorn.Server(uvicorn.Config(self, host=host, port=port))
         self._uvicorn.run()
-
-
-if __name__ == "__main__":
-    server = BaseServer(primary=BaseApplication())
-    server.mount(BaseApplication(mount_name="api"))
-    assert server.primary.server is server
-    assert "api" in server.mounts
-    assert server.authenticate(None) is None
-    assert server.session(None) is None

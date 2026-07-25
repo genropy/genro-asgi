@@ -66,27 +66,3 @@ class SessionMixin:
     def session(self, request: Any) -> Any:
         """The session attached to the request scope, or ``None`` if none."""
         return request.get("session") if request is not None else None
-
-
-
-if __name__ == "__main__":
-    from ..application import BaseApplication
-    from ..middleware import MiddlewareMixin
-    from ..server import BaseServer
-    from .avatar import Avatar
-
-    class DemoServer(SessionMixin, MiddlewareMixin, BaseServer):
-        pass
-
-    server = DemoServer(primary=BaseApplication())
-    assert isinstance(server.session_store, SessionStore)
-    assert server.session({"session": "S"}) == "S"
-    assert server.session({}) is None
-    assert BaseServer(primary=BaseApplication()).session({}) is None
-
-    anonymous = server.session_store.create()
-    anonymous.data["cart"] = "kept"
-    # login seam via the request facade: attach the avatar to the session in place
-    anonymous.attach_avatar(Avatar("alice", ["admin"]))
-    assert anonymous.avatar is not None and anonymous.avatar.identity == "alice"
-    assert anonymous.data["cart"] == "kept"  # same session, same id — the cart survives

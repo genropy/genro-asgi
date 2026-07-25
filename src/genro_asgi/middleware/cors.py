@@ -139,33 +139,3 @@ class CORSMiddleware(BaseMiddleware):
         headers = headers + self._preflight_headers
         await send({"type": "http.response.start", "status": 200, "headers": headers})
         await send({"type": "http.response.body", "body": b""})
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    async def demo() -> None:
-        async def inner_app(scope: Scope, receive: Receive, send: Send) -> None:
-            await send({"type": "http.response.start", "status": 200, "headers": []})
-            await send({"type": "http.response.body", "body": b"ok"})
-
-        async def receive() -> Any:
-            return {"type": "http.request"}
-
-        sent: list[Any] = []
-
-        async def send(message: Any) -> None:
-            sent.append(message)
-
-        middleware = CORSMiddleware(inner_app, None)
-        scope: Scope = {
-            "type": "http",
-            "method": "GET",
-            "path": "/",
-            "headers": [(b"origin", b"https://example.test")],
-        }
-        await middleware(scope, receive, send)
-        start = next(m for m in sent if m["type"] == "http.response.start")
-        assert dict(start["headers"])[b"access-control-allow-origin"] == b"*"
-
-    asyncio.run(demo())

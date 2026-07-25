@@ -49,8 +49,10 @@ class Primary(RoutedApplication):
 @pytest.fixture
 def server(tmp_path: Path) -> AsgiServer:
     """A real server: Primary + McpApplication at ``/mcp``, storage on tmp_path."""
-    srv = AsgiServer(primary=Primary(), storage=LocalStorage(base_dir=str(tmp_path)))
-    srv.mount(McpApplication(mount_name="mcp"))
+    srv = AsgiServer(
+        applications=[Primary(mount=""), McpApplication(code="mcp")],
+        storage=LocalStorage(base_dir=str(tmp_path)),
+    )
     return srv
 
 
@@ -111,9 +113,11 @@ class TestSessionId:
             await conn.close()
 
     async def test_get_without_tasks_is_405(self, tmp_path: Path) -> None:
-        srv = AsgiServer(primary=Primary(), tasks=False,
-                         storage=LocalStorage(base_dir=str(tmp_path)))
-        srv.mount(McpApplication(mount_name="mcp"))
+        srv = AsgiServer(
+            applications=[Primary(mount=""), McpApplication(code="mcp")],
+            tasks=False,
+            storage=LocalStorage(base_dir=str(tmp_path)),
+        )
         sent = await drive(srv, "/mcp", method="GET")
         start = next(m for m in sent if m["type"] == "http.response.start")
         assert start["status"] == 405
