@@ -74,7 +74,12 @@ class TaskConfigElements:
     """
 
     @element(sub_tags="*", parent_tags="server")
-    def tasks(self) -> None:
+    def tasks(
+        self,
+        enabled: bool = True,
+        tick_seconds: float | None = None,
+        mount: str | None = None,
+    ) -> None:
         """The task backbone: ``enabled`` (bool, default True — the on/off
         switch), ``tick_seconds`` (float — the scheduler tick), ``mount``
         (str — explicit task-store mount, overriding the by-keys choice).

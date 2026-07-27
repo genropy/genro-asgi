@@ -124,22 +124,31 @@ class ServerAppConfigElements:
         time; configured-but-empty is a boot error."""
 
     @element(sub_tags="")
-    def users(self) -> None:
+    def users(self, mount: str | None = None, prefix: str | None = None) -> None:
         """Identity store descriptor: ``{mount, prefix}`` (or omitted for the
         default) — the ``users=`` kwarg ``AuthMixin`` peels."""
 
     @element(sub_tags="")
-    def tokens(self) -> None:
+    def tokens(self, mount: str | None = None, prefix: str | None = None) -> None:
         """Api-key store descriptor: ``{mount, prefix}`` — the ``tokens=`` kwarg
         ``AuthMixin`` peels."""
 
     @element(sub_tags="")
-    def login(self) -> None:
+    def login(self, max_attempts: int | None = None, backoff: float | None = None) -> None:
         """Login-surface policy: lockout tuning (``max_attempts``, ``backoff``)
         — the ``login=`` kwarg ``ServerApplication`` peels (``server_app`` lift)."""
 
     @element(sub_tags="")
-    def oidc(self) -> None:
+    def oidc(
+        self,
+        code: str | None = None,
+        issuer: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        scopes: str | None = None,
+        identity_claim: str | None = None,
+        tags: list | None = None,
+    ) -> None:
         """One OIDC provider (repeatable, keyed by ``code``): ``issuer``,
         ``client_id``, ``client_secret`` (a ``^pointer``, optional — public
         client), ``scopes``, ``identity_claim``, ``tags`` — folded into the

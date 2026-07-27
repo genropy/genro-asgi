@@ -59,6 +59,8 @@ application classes are imported by the recipe and passed as objects::
 
 from __future__ import annotations
 
+from typing import Any
+
 from genro_builders.builder import element
 
 from ..tasks.mixin import TaskConfigElements
@@ -75,7 +77,14 @@ class AsgiConfigElements(TaskConfigElements):
     """
 
     @element(sub_tags="session,tasks")
-    def server(self) -> None:
+    def server(
+        self,
+        host: str | None = None,
+        port: int | None = None,
+        external_url: str | None = None,
+        max_threads: int | None = None,
+        storage_key: str | None = None,
+    ) -> None:
         """Server runtime options: ``host``, ``port``, ``external_url``,
         ``max_threads``, ``storage_key``.
 
@@ -124,13 +133,28 @@ class AsgiConfigElements(TaskConfigElements):
         application."""
 
     @element(sub_tags="")
-    def middleware(self) -> None:
+    def middleware(
+        self,
+        errors: bool | dict | None = None,
+        wellknown: bool | dict | None = None,
+        logging: bool | dict | None = None,
+        cors: bool | dict | None = None,
+        auth: bool | dict | None = None,
+        session: bool | dict | None = None,
+    ) -> None:
         """Global middleware switches: one ``{name: bool | dict}`` kwarg per
         middleware. A dict value enables the middleware and becomes its
-        constructor options."""
+        constructor options. The names are the core's own registry
+        (``middleware.default_registry()``); one registered through
+        ``middleware_registry=`` is not configurable here."""
 
     @element(sub_tags="")
-    def auth(self) -> None:
+    def auth(
+        self,
+        basic: bool | dict | None = None,
+        bearer: bool | dict | None = None,
+        jwt: bool | dict | None = None,
+    ) -> None:
         """Credential config: ``basic``/``bearer``/``jwt`` kwargs handed
         verbatim to ``AuthCore`` through the server's ``auth=`` kwarg."""
 
@@ -142,7 +166,7 @@ class AsgiConfigElements(TaskConfigElements):
         it), unlike ``middleware``/``auth`` which stay root-only."""
 
     @element(sub_tags="", parent_tags="storage")
-    def mount(self, path: str) -> None:
+    def mount(self, path: str, code: str | None = None, encrypted: bool = False) -> None:
         """One storage mount: ``code`` (the collection key), ``path`` (the
         filesystem path, relative to the server base dir unless absolute,
         REQUIRED — the grammar rejects a mount without it) and optional
@@ -150,13 +174,19 @@ class AsgiConfigElements(TaskConfigElements):
         the server's ``storage_key``)."""
 
     @element(sub_tags="application", collection_key="code")
-    def applications(self) -> None:
+    def applications(self, default: str | None = None) -> None:
         """Collection of applications, each keyed by its ``code``. The optional
         ``default`` attribute names the application ``/`` **redirects to** (307)
         when no application answers the site root; it elects nothing."""
 
     @element(sub_tags="*", parent_tags="applications")
-    def application(self, app_class: type) -> None:
+    def application(
+        self,
+        app_class: type,
+        code: str | None = None,
+        mount: str | None = None,
+        **app_kwargs: Any,
+    ) -> None:
         """One application: ``code`` (the collection key), ``app_class`` (the
         imported class, REQUIRED — the grammar rejects an application without
         it), optional ``mount`` plus the app's constructor kwargs. ``mount`` is
@@ -166,7 +196,7 @@ class AsgiConfigElements(TaskConfigElements):
         attributes and delegates the rest."""
 
     @element(sub_tags="*", parent_tags="application")
-    def configuration(self) -> None:
+    def configuration(self, **options: Any) -> None:
         """The application's own configuration (RESERVED tag): opaque to the
         core, which reads and skips it — the site dialect never validates an
         app's internal grammar (distributed configuration). Today it carries
@@ -174,13 +204,19 @@ class AsgiConfigElements(TaskConfigElements):
         the app's own dialect is a future macro."""
 
     @element(sub_tags="group", collection_key="code", parent_tags="application")
-    def groups(self) -> None:
+    def groups(self, default: str | None = None) -> None:
         """Collection of worker groups for a multi-worker application, keyed by
-        ``code``. Grammar only in core 1a — materialized by the orchestration
+        ``code``; the optional ``default`` names the group used when none is
+        asked for. Grammar only in core 1a — materialized by the orchestration
         package; read and skipped here."""
 
     @element(sub_tags="", parent_tags="groups")
-    def group(self) -> None:
+    def group(
+        self,
+        code: str | None = None,
+        workers: int | None = None,
+        python: str | None = None,
+    ) -> None:
         """One worker group: ``code`` (the collection key), ``workers`` (the
         pool size) and optional ``python`` (the interpreter). Grammar only in
         core 1a."""
@@ -192,7 +228,13 @@ class AsgiConfigElements(TaskConfigElements):
         skipped here."""
 
     @element(sub_tags="", parent_tags="databases")
-    def database(self, db_class: type) -> None:
+    def database(
+        self,
+        db_class: type,
+        code: str | None = None,
+        db_handler_class: type | None = None,
+        **params: Any,
+    ) -> None:
         """One database: ``code`` (the registry key), ``db_class`` (REQUIRED —
         the grammar rejects a database without it) and its connection kwargs.
         Grammar only in core 1a."""
@@ -205,13 +247,18 @@ class AsgiConfigElements(TaskConfigElements):
         role — a worker hosting an app needs the same router behavior."""
 
     @element(sub_tags="", parent_tags="plugins")
-    def plugin(self) -> None:
+    def plugin(self, code: str | None = None, enabled: bool = True, **options: Any) -> None:
         """One router plugin: ``code`` (the collection key), optional
         ``enabled`` (bool, default True — set False to leave it unarmed) and
         arbitrary options handed to ``router.plug(code, **options)``."""
 
     @element(sub_tags="")
-    def openapi(self) -> None:
+    def openapi(
+        self,
+        title: str | None = None,
+        version: str | None = None,
+        description: str | None = None,
+    ) -> None:
         """OpenAPI metadata: ``title``, ``version``, ``description``. Grammar
         only in core 1a — the OpenAPI application arrives in core 1c; read and
         skipped here."""

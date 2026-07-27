@@ -21,10 +21,10 @@ walks the built ``source`` tree, turns the sections into constructor kwargs
 riding the D16 cooperative chain, instantiates ``AsgiServer(**kwargs)`` and
 mounts the secondary apps. No post-hoc mutation of server state.
 
-It subclasses ``genro_builders``' ``BuilderHandler`` only to run the recipe
-(``add_builder`` → the builder's ``create``); the configuration is read back by
-walking the ``SourceBag`` directly (``node.node_tag`` /
-``node.fixed_attr_items()``), never through a renderer.
+It owns the config builders and runs each recipe (``create`` — the builder's
+own ``setup`` seeds its datastore, ``main`` builds the tree); the
+configuration is read back by walking the ``SourceBag`` directly
+(``node.node_tag`` / ``node.fixed_attr_items()``), never through a renderer.
 
 Section → constructor kwarg mapping (core 1a):
 
@@ -69,8 +69,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from genro_builders.builder import BuilderHandler
-
 from ..application import BaseApplication
 from ..applications.server_app import ServerApplication
 from ..asgi_server import AsgiServer
@@ -81,19 +79,21 @@ from .projection import Projection
 __all__ = ["ConfigurationHandler"]
 
 
-class ConfigurationHandler(BuilderHandler):
+class ConfigurationHandler:
     """Owns the ``AsgiConfigBuilder`` recipe and materializes an ``AsgiServer``."""
 
     def __init__(self, builder: Any, *app_configs: Any) -> None:
-        super().__init__()
         self._builder = builder
         self._logger = logging.getLogger(f"{__name__}.{type(self).__name__}")
         self._server_app_config = self._claim_app_configs(app_configs)
-        self.add_builder(builder, self._server_app_config)
+        # Each builder is autonomous: its own flat datastore, seeded by its
+        # own ``setup``. The site recipe runs first, then the app configs.
+        self.builder.create()
+        self.server_app_config.create()
 
     @property
     def builder(self) -> Any:
-        """The mounted configuration builder (its recipe already run)."""
+        """The configuration builder (its recipe already run)."""
         return self._builder
 
     @property

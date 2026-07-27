@@ -27,7 +27,7 @@ from typing import Any
 
 import pytest
 from genro_bag.resolvers import EnvResolver
-from genro_builders.builder import BuilderBase, BuilderHandler, abstract, container, element
+from genro_builders.builder import BuilderBase, abstract, container, element
 
 from genro_asgi.config.configurable import (
     ConfigError,
@@ -43,7 +43,7 @@ class VehicleElements:
     """Companion grammar of ``Vehicle``."""
 
     @element(sub_tags="")
-    def wheels(self) -> None:
+    def wheels(self, count: int | None = None, size: int | None = None) -> None:
         """Wheel options."""
 
     @abstract(sub_tags="")
@@ -55,7 +55,7 @@ class CarElements(VehicleElements):
     """Companion grammar of ``Car`` — inherits ``wheels``, adds ``engine``."""
 
     @element(sub_tags="")
-    def engine(self) -> None:
+    def engine(self, cc: int | None = None) -> None:
         """Engine options."""
 
     @container
@@ -68,7 +68,7 @@ class BoatElements:
     """Foreign grammar: ``anchor`` is NOT part of the Car chain."""
 
     @element(sub_tags="")
-    def anchor(self) -> None:
+    def anchor(self, weight: int | None = None) -> None:
         """Anchor options."""
 
 
@@ -76,11 +76,11 @@ class SiteElements:
     """Root elements of the fictional site recipe."""
 
     @element(sub_tags="*")
-    def car(self) -> None:
+    def car(self, color: str | None = None, doors: int | None = None) -> None:
         """One car: attributes plus children from Car's grammar."""
 
     @element(sub_tags="*", parent_tags="car")
-    def rack(self) -> None:
+    def rack(self, rails: int | None = None) -> None:
         """A car child that may carry children of its own."""
 
 
@@ -139,7 +139,7 @@ class RackCarElements(CarElements):
     """Companion declaring ``rack`` so NestedChildRecipe fails on depth, not tag."""
 
     @element(sub_tags="*", parent_tags="car")
-    def rack(self) -> None:
+    def rack(self, rails: int | None = None) -> None:
         """Same tag as SiteElements.rack, declared by this chain too."""
 
 
@@ -153,7 +153,7 @@ class SecretElements:
     """Grammar of the pointer recipes."""
 
     @element(sub_tags="")
-    def vault(self) -> None:
+    def vault(self, password: str | None = None, label: str | None = None) -> None:
         """Vault: secrets arrive as ``^`` pointers."""
 
 
@@ -178,9 +178,9 @@ class SecretValueRecipe(BuilderBase, SecretElements):
 
 
 def build(recipe_class: type) -> Any:
-    """Run a recipe: construct the builder and mount it on a fresh handler."""
+    """Run a recipe: construct the builder and create it (setup + main)."""
     builder = recipe_class(name="config")
-    BuilderHandler().add_builder(builder)
+    builder.create()
     return builder
 
 
