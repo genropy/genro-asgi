@@ -16,9 +16,9 @@
 
 Two layers: the capability mixin (``storage=``/``storage_key=`` peeled by
 ``AsgiServer``, the plain ``BaseServer`` never gaining a ``storage`` attribute)
-and the config path (a recipe's ``storage`` section materialized into the
-server's ``LocalStorage``, visible to the hosted ``worker`` role while
-middleware/auth stay disarmed).
+and the config path (a recipe's ``storage`` section reaching the server's
+``LocalStorage`` through ``AsgiServer(config=...)``, an explicit kwarg still
+winning over the configured one).
 """
 
 from __future__ import annotations
@@ -34,7 +34,6 @@ from genro_asgi import (
     AsgiServer,
     BaseApplication,
     BaseServer,
-    ConfigurationHandler,
     LocalStorage,
     StorageMixin,
 )
@@ -136,13 +135,12 @@ class TestConfigDriven:
 
         class StorageConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                root.server(host="127.0.0.1", port=8000)
-                mounts = root.storage()
-                mounts.mount(code="data", path=str(data_dir))
-                apps = root.applications(default="shop")
-                apps.application(code="shop", app_class=ShopApp)
+                cfg = root.configuration()
+                cfg.server(host="127.0.0.1", port=8000)
+                cfg.storage().mount(code="data", path=str(data_dir))
+                cfg.applications(default="shop").application(code="shop", app_class=ShopApp)
 
-        server = ConfigurationHandler(StorageConfig(name="cfg")).materialize()
+        server = AsgiServer(config=StorageConfig)
         node = server.storage.node("data:file.txt")
         node.write_text("x")
         assert node.read_text() == "x"
@@ -152,30 +150,28 @@ class TestConfigDriven:
 
         class StorageConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                root.server(host="127.0.0.1", port=8000, storage_key=key)
-                mounts = root.storage()
-                mounts.mount(code="site", path=str(secure_root))
-                apps = root.applications(default="shop")
-                apps.application(code="shop", app_class=ShopApp)
+                cfg = root.configuration()
+                cfg.server(host="127.0.0.1", port=8000, storage_key=key)
+                cfg.storage().mount(code="site", path=str(secure_root))
+                cfg.applications(default="shop").application(code="shop", app_class=ShopApp)
 
-        server = ConfigurationHandler(StorageConfig(name="cfg")).materialize()
+        server = AsgiServer(config=StorageConfig)
         assert server.storage.encryption_active
 
-    def test_worker_retains_storage_section_middleware_disarmed(self, tmp_path: Path) -> None:
+    def test_explicit_kwarg_wins_over_the_configured_one(self, tmp_path: Path) -> None:
         data_dir = tmp_path / "data"
+        override_dir = tmp_path / "override"
 
         class StorageConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                root.server(host="127.0.0.1", port=8000)
-                root.middleware(cors=True)
-                mounts = root.storage()
-                mounts.mount(code="data", path=str(data_dir))
-                apps = root.applications(default="shop")
-                apps.application(code="shop", app_class=ShopApp)
+                cfg = root.configuration()
+                cfg.server(host="127.0.0.1", port=8000)
+                cfg.storage().mount(code="data", path=str(data_dir))
+                cfg.applications(default="shop").application(code="shop", app_class=ShopApp)
 
-        handler = ConfigurationHandler(StorageConfig(name="cfg"))
-        worker = handler.materialize(role="worker", app="shop")
-        node = worker.storage.node("data:w.txt")
-        node.write_text("w")
-        assert node.read_text() == "w"
-        assert "CORSMiddleware" not in chain_types(worker)
+        server = AsgiServer(
+            config=StorageConfig, storage={"only": {"path": str(override_dir)}}
+        )
+        assert server.storage.node("only:w.txt") is not None
+        with pytest.raises(ValueError, match="data"):
+            server.storage.node("data:w.txt")

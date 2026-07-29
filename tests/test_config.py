@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Config tests (Macro 2 Phase 6): dialect → ConfigurationHandler → AsgiServer.
+"""Config tests: the ``asgiconfig`` dialect, the read door, the self-configuring server.
 
-A recipe subclasses ``AsgiConfigBuilder`` and declares the whole-site sections;
-``ConfigurationHandler(recipe).materialize()`` MATERIALIZES an ``AsgiServer``
-(no live-server mutation — the phase's recorded divergence from the old repo).
-Requests are driven at the ASGI level (no uvicorn), the same style as
-``test_session.py``.
+A recipe subclasses ``AsgiConfigBuilder`` and declares the site sections under
+one ``configuration`` root; ``AsgiServer(config=source)`` builds its own
+``ConfigurationHandler`` over that source, derives its kwargs from it and stays
+reachable as ``server.config``. Requests are driven at the ASGI level (no
+uvicorn), the same style as ``test_session.py``.
 """
 
 from __future__ import annotations
@@ -34,10 +34,9 @@ from genro_asgi import (
     AsgiConfigBuilder,
     AsgiServer,
     BaseApplication,
+    ConfigError,
     ConfigurationHandler,
 )
-from genro_asgi.applications.server_app import ServerAppConfig
-from genro_asgi.config.configurable import ConfigError
 from genro_asgi.exceptions import HTTPUnauthorized
 from genro_asgi.middleware.base import BaseMiddleware
 from genro_asgi.types import Message, Receive, Scope, Send
@@ -72,17 +71,22 @@ class TwoAppConfig(AsgiConfigBuilder):
     """
 
     def main(self, root: Any) -> None:
-        root.server(host="0.0.0.0", port=9100, external_url="https://shop.example.com")
-        root.middleware(cors=True)
-        root.auth(basic={"admin": {"password": "secret", "tags": "admin"}})
-        apps = root.applications(default="shop")
+        cfg = root.configuration()
+        cfg.server(host="0.0.0.0", port=9100, external_url="https://shop.example.com")
+        cfg.middleware(cors=True)
+        self.authentication_section(cfg)
+        self.applications_section(cfg)
+
+    def authentication_section(self, cfg: Any) -> None:
+        """One Basic user, handed to ``AuthCore`` through ``credentials``."""
+        creds = cfg.authentication().credentials()
+        creds.basic_user(username="admin", password="secret", tags="admin")
+
+    def applications_section(self, cfg: Any) -> None:
+        """``shop`` claims the site root, ``api`` answers its own mount."""
+        apps = cfg.applications(default="shop")
         apps.application(code="shop", mount="", app_class=ShopApp)
         apps.application(code="api", app_class=ApiApp)
-
-
-def build_two_app_server() -> AsgiServer:
-    """Materialize the two-app server from a fresh recipe instance."""
-    return ConfigurationHandler(TwoAppConfig(name="config")).materialize()
 
 
 def chain_types(server: AsgiServer) -> list[str]:
@@ -134,38 +138,84 @@ async def http_status_headers(
     return start["status"], start["headers"]
 
 
-class TestMaterialize:
-    def test_returns_asgi_server_with_config_host_port(self) -> None:
-        server = build_two_app_server()
-        assert isinstance(server, AsgiServer)
+class TestSelfConfiguringServer:
+    def test_server_section_reaches_the_serve_defaults(self) -> None:
+        server = AsgiServer(config=TwoAppConfig)
         assert server.config_host == "0.0.0.0"
         assert server.config_port == 9100
+        assert server.external_url == "https://shop.example.com"
 
     def test_default_app_answers_the_root_others_are_mounts(self) -> None:
-        server = build_two_app_server()
+        server = AsgiServer(config=TwoAppConfig)
         assert isinstance(server.root_application, ShopApp)
         assert server.root_application.mount == ""
         assert set(server.applications) == {"shop", "api", "_server"}
         assert isinstance(server.applications["api"], ApiApp)
 
+    def test_a_bare_server_has_no_configuration(self) -> None:
+        assert AsgiServer(applications=[ShopApp(mount="")]).config is None
+
+    def test_the_handler_stays_reachable_as_the_read_door(self) -> None:
+        server = AsgiServer(config=TwoAppConfig)
+        assert isinstance(server.config, ConfigurationHandler)
+        assert server.config("server.host") == "0.0.0.0"
+        assert server.config("server.port") == 9100
+
+    def test_an_explicit_kwarg_wins_over_the_configured_one(self) -> None:
+        server = AsgiServer(config=TwoAppConfig, port=0)
+        assert server.config_port == 0
+        assert server.config_host == "0.0.0.0"       # untouched kwargs still apply
+
+    def test_a_recipe_instance_is_accepted(self) -> None:
+        assert AsgiServer(config=TwoAppConfig(name="site")).config_port == 9100
+
+    def test_a_ready_handler_is_adopted_as_is(self) -> None:
+        handler = ConfigurationHandler(TwoAppConfig)
+        server = AsgiServer(config=handler)
+        assert server.config is handler
+
+    def test_a_config_py_path_is_loaded(self, tmp_path: Path) -> None:
+        module = tmp_path / "config.py"
+        module.write_text(
+            "from genro_asgi.config import AsgiConfigBuilder\n"
+            "\n"
+            "\n"
+            "class ServerConfiguration(AsgiConfigBuilder):\n"
+            "    def main(self, root):\n"
+            "        cfg = root.configuration()\n"
+            "        cfg.server(host='127.0.0.1', port=8123)\n"
+        )
+        server = AsgiServer(config=module)
+        assert server.config_port == 8123
+        assert set(server.applications) == {"_server"}
+
 
 class TestDemux:
     async def test_serves_both_apps(self) -> None:
-        server = build_two_app_server()
+        server = AsgiServer(config=TwoAppConfig)
         assert await http_get(server, "/") == b"shop"
         assert await http_get(server, "/api") == b"api"
 
 
 class TestMiddlewareChain:
     def test_chain_contains_cors_and_errors(self) -> None:
-        types = chain_types(build_two_app_server())
+        types = chain_types(AsgiServer(config=TwoAppConfig))
         assert "CORSMiddleware" in types
         assert "ErrorMiddleware" in types
 
+    def test_an_explicit_switch_off_survives_the_read(self) -> None:
+        class NoCorsConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                cfg = root.configuration()
+                cfg.middleware(cors=False)
+                cfg.applications().application(code="shop", mount="", app_class=ShopApp)
 
-class TestAuth:
-    def test_authenticate_verifies_configured_basic(self) -> None:
-        server = build_two_app_server()
+        assert "CORSMiddleware" not in chain_types(AsgiServer(config=NoCorsConfig))
+
+
+class TestCredentials:
+    def test_basic_user_is_verified_by_the_auth_core(self) -> None:
+        server = AsgiServer(config=TwoAppConfig)
         scope: Scope = {"headers": basic_header("admin", "secret")}
         avatar = server.authenticate(scope)
         assert avatar is not None
@@ -173,15 +223,53 @@ class TestAuth:
         assert "admin" in avatar.tags
 
     def test_wrong_password_raises_unauthorized(self) -> None:
-        server = build_two_app_server()
+        server = AsgiServer(config=TwoAppConfig)
         scope: Scope = {"headers": basic_header("admin", "wrong")}
         with pytest.raises(HTTPUnauthorized):
             server.authenticate(scope)
 
+    def test_bearer_token_is_verified_by_its_identity(self) -> None:
+        class BearerConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                cfg = root.configuration()
+                creds = cfg.authentication().credentials()
+                creds.bearer_token(identity="svc", token="sk_live_xyz", tags="api")
+                cfg.applications().application(code="shop", mount="", app_class=ShopApp)
+
+        server = AsgiServer(config=BearerConfig)
+        scope: Scope = {"headers": [(b"authorization", b"Bearer sk_live_xyz")]}
+        avatar = server.authenticate(scope)
+        assert avatar is not None
+        assert avatar.identity == "svc"
+        assert avatar.tags == ["api"]
+
+    def test_jwt_entries_stay_an_ordered_list(self) -> None:
+        class JwtConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                cfg = root.configuration()
+                creds = cfg.authentication().credentials()
+                creds.jwt(name="hmac", secret="topsecret")
+                creds.jwt(name="rsa", public_key="PUBKEY", algorithm="RS256")
+                cfg.applications().application(code="shop", mount="", app_class=ShopApp)
+
+        entries = ConfigurationHandler(JwtConfig).auth_entries()
+        assert [entry["name"] for entry in entries["jwt"]] == ["hmac", "rsa"]
+        assert entries["jwt"][0]["algorithm"] == "HS256"        # signature default
+        assert entries["jwt"][1]["public_key"] == "PUBKEY"
+
+    def test_no_credentials_section_arms_no_backend(self) -> None:
+        class BareConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                root.configuration().applications().application(
+                    code="shop", mount="", app_class=ShopApp
+                )
+
+        assert ConfigurationHandler(BareConfig).auth_entries() is None
+
 
 class TestSession:
     async def test_session_attached_after_a_request(self) -> None:
-        server = build_two_app_server()
+        server = AsgiServer(config=TwoAppConfig)
         scope: Scope = {"type": "http", "method": "GET", "path": "/", "headers": []}
         sent: list[Message] = []
 
@@ -195,16 +283,26 @@ class TestSession:
         assert scope.get("session") is not None
         assert server.session(scope) is scope["session"]
 
+    def test_session_child_reaches_the_store_ttl(self) -> None:
+        class SessionConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                cfg = root.configuration()
+                cfg.server(host="127.0.0.1", port=8000).session(ttl=1234)
+                cfg.applications().application(code="shop", mount="", app_class=ShopApp)
+
+        server = AsgiServer(config=SessionConfig)
+        assert server.session_store.create().meta["ttl"] == 1234
+
 
 class TestMaxThreads:
     async def test_recipe_max_threads_reaches_the_pool(self) -> None:
         class SizedPoolConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                root.server(host="127.0.0.1", port=8000, max_threads=2)
-                apps = root.applications(default="shop")
-                apps.application(code="shop", mount="", app_class=ShopApp)
+                cfg = root.configuration()
+                cfg.server(host="127.0.0.1", port=8000, max_threads=2)
+                cfg.applications().application(code="shop", mount="", app_class=ShopApp)
 
-        server = ConfigurationHandler(SizedPoolConfig(name="sized")).materialize()
+        server = AsgiServer(config=SizedPoolConfig)
         await server.run_sync(lambda: None)
         assert server.pool.executor._max_workers == 2
 
@@ -213,73 +311,87 @@ class TestGrammarValidation:
     def test_unknown_tag_raises(self) -> None:
         class BadConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                root.server(host="127.0.0.1", port=8000)
-                root.nonexistent(foo=1)
+                root.configuration().nonexistent(foo=1)
 
         with pytest.raises(AttributeError):
-            ConfigurationHandler(BadConfig(name="bad"))
+            ConfigurationHandler(BadConfig)
+
+    def test_a_section_outside_the_root_is_rejected(self) -> None:
+        class LooseConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                root.server(host="127.0.0.1")
+
+        with pytest.raises(ValueError, match="parent_tags"):
+            ConfigurationHandler(LooseConfig)
 
     def test_application_without_app_class_rejected_by_grammar(self) -> None:
         class NoClassConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                apps = root.applications()
-                apps.application(code="shop")
+                root.configuration().applications().application(code="shop")
 
         with pytest.raises(ValueError, match="app_class"):
-            ConfigurationHandler(NoClassConfig(name="noclass"))
-
-    def test_database_without_db_class_rejected_by_grammar(self) -> None:
-        class NoDbClassConfig(AsgiConfigBuilder):
-            def main(self, root: Any) -> None:
-                apps = root.applications(default="shop")
-                apps.application(code="shop", mount="", app_class=ShopApp)
-                dbs = root.databases()
-                dbs.database(code="default")
-
-        with pytest.raises(ValueError, match="db_class"):
-            ConfigurationHandler(NoDbClassConfig(name="nodbclass"))
+            ConfigurationHandler(NoClassConfig)
 
     def test_mount_without_path_rejected_by_grammar(self) -> None:
         class NoPathConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                mounts = root.storage()
-                mounts.mount(code="data")
-                apps = root.applications(default="shop")
-                apps.application(code="shop", mount="", app_class=ShopApp)
+                root.configuration().storage().mount(code="data")
 
         with pytest.raises(ValueError, match="path"):
-            ConfigurationHandler(NoPathConfig(name="nopath"))
+            ConfigurationHandler(NoPathConfig)
+
+    def test_an_empty_application_code_is_a_boot_error(self) -> None:
+        # code="" would file the subtree under an empty label while the app
+        # registers under its class-name fallback: the read door would then
+        # never reach the written values, so the fold refuses to boot.
+        class EmptyCodeConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                cfg = root.configuration()
+                cfg.applications().application(code="", mount="", app_class=ShopApp)
+
+        with pytest.raises(ConfigError, match="non-empty"):
+            AsgiServer(config=EmptyCodeConfig)
+
+    def test_a_second_server_section_is_rejected(self) -> None:
+        class TwiceConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                cfg = root.configuration()
+                cfg.server(host="127.0.0.1")
+                cfg.server(host="0.0.0.0")
+
+        with pytest.raises(ValueError):
+            ConfigurationHandler(TwiceConfig)
 
 
 class TestSkippedSections:
-    def test_groups_databases_openapi_materialize_without_error(self) -> None:
+    def test_openapi_and_databases_boot_without_error(self) -> None:
         class OrchestrationConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                root.server(host="127.0.0.1", port=8000)
-                apps = root.applications(default="shop")
-                shop = apps.application(code="shop", mount="", app_class=ShopApp)
-                groups = shop.groups(default="stable")
-                groups.group(code="stable", workers=2)
-                dbs = root.databases()
-                dbs.database(code="default", db_class=object)
-                root.openapi(title="Demo", version="1.0")
+                cfg = root.configuration()
+                cfg.server(host="127.0.0.1", port=8000)
+                cfg.applications(default="shop").application(
+                    code="shop", mount="", app_class=ShopApp
+                )
+                cfg.databases().database(code="default", db_class=object)
+                cfg.openapi(title="Demo", version="1.0")
 
-        server = ConfigurationHandler(OrchestrationConfig(name="orch")).materialize()
-        assert isinstance(server, AsgiServer)
+        server = AsgiServer(config=OrchestrationConfig)
         assert isinstance(server.root_application, ShopApp)
         assert set(server.applications) == {"shop", "_server"}
+        assert server.config("openapi.title") == "Demo"
 
 
 class TestSingleAppNoDefault:
     def test_lone_app_answers_its_own_mount_not_the_root(self) -> None:
-        # Nothing elects an application any more: a lone app derives its mount
-        # from its code like every other, so the site root stays unclaimed.
+        # Nothing elects an application: a lone app derives its mount from its
+        # code like every other, so the site root stays unclaimed.
         class OneAppConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                apps = root.applications()
-                apps.application(code="only", app_class=ShopApp)
+                root.configuration().applications().application(
+                    code="only", app_class=ShopApp
+                )
 
-        server = ConfigurationHandler(OneAppConfig(name="one")).materialize()
+        server = AsgiServer(config=OneAppConfig)
         assert set(server.applications) == {"only", "_server"}
         assert server.root_application is None
         assert isinstance(server.application_at("only"), ShopApp)
@@ -288,10 +400,11 @@ class TestSingleAppNoDefault:
         # The compatibility mechanism: one app served at unchanged URLs.
         class RootAppConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                apps = root.applications()
-                apps.application(code="only", mount="", app_class=ShopApp)
+                root.configuration().applications().application(
+                    code="only", mount="", app_class=ShopApp
+                )
 
-        server = ConfigurationHandler(RootAppConfig(name="rooted")).materialize()
+        server = AsgiServer(config=RootAppConfig)
         assert isinstance(server.root_application, ShopApp)
         assert server.root_application.code == "only"
 
@@ -300,11 +413,11 @@ class TestDefaultRedirect:
     async def test_root_redirects_to_the_default_when_nobody_claims_it(self) -> None:
         class MountsOnlyConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                apps = root.applications(default="shop")
+                apps = root.configuration().applications(default="shop")
                 apps.application(code="shop", app_class=ShopApp)
                 apps.application(code="api", app_class=ApiApp)
 
-        server = ConfigurationHandler(MountsOnlyConfig(name="mountsonly")).materialize()
+        server = AsgiServer(config=MountsOnlyConfig)
         assert server.root_application is None
         assert server.default_application is server.applications["shop"]
         status, headers = await http_status_headers(server, "/")
@@ -314,151 +427,118 @@ class TestDefaultRedirect:
     def test_a_default_naming_no_application_is_a_boot_error(self) -> None:
         class GhostDefaultConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                apps = root.applications(default="ghost")
-                apps.application(code="shop", app_class=ShopApp)
+                root.configuration().applications(default="ghost").application(
+                    code="shop", app_class=ShopApp
+                )
 
         with pytest.raises(ValueError, match="ghost"):
-            ConfigurationHandler(GhostDefaultConfig(name="ghost")).materialize()
+            AsgiServer(config=GhostDefaultConfig)
 
 
-def storage_site_config(base_path: Path) -> AsgiConfigBuilder:
+def storage_site_config(base_path: Path) -> type[AsgiConfigBuilder]:
     """A site recipe with a plain ``idstore`` storage mount (for store wiring)."""
 
     class StorageSiteConfig(AsgiConfigBuilder):
+        def setup(self, data: Any) -> None:
+            """The mount path travels through the datastore, not a closure."""
+            data["base_path"] = str(base_path)
+
         def main(self, root: Any) -> None:
-            root.server(host="127.0.0.1", port=8000)
-            mounts = root.storage()
-            mounts.mount(code="idstore", path=str(base_path))
-            apps = root.applications(default="shop")
-            apps.application(code="shop", mount="", app_class=ShopApp)
+            cfg = root.configuration()
+            cfg.server(host="127.0.0.1", port=8000)
+            cfg.storage().mount(code="idstore", path=self.data["base_path"])
+            cfg.applications(default="shop").application(
+                code="shop", mount="", app_class=ShopApp
+            )
+            self.identity_section(cfg)
 
-    return StorageSiteConfig(name="config")
+        def identity_section(self, cfg: Any) -> None:
+            """Bootstrap admin plus both identity stores on ``idstore``."""
+            auth = cfg.authentication()
+            auth.admin_password(EnvResolver(ADMIN_PW_ENV_VAR))
+            auth.users(mount="idstore", prefix="users")
+            auth.tokens(mount="idstore", prefix="api_keys")
 
-
-class IdentityServerAppConfig(ServerAppConfig):
-    """A ``_server`` config: admin password by ``^pointer`` plus both stores."""
-
-    def setup(self, data: Any) -> None:
-        data["admin_pw"] = EnvResolver(ADMIN_PW_ENV_VAR)
-
-    def main(self, root: Any) -> None:
-        root.admin_password("^admin_pw")
-        root.users(mount="idstore", prefix="users")
-        root.tokens(mount="idstore", prefix="api_keys")
+    return StorageSiteConfig
 
 
-class TestServerAppConfigClass:
-    """The ``_server`` app's config-class: claim, lift, defaults (design 2026-07-23)."""
+class TestIdentitySection:
+    """``authentication`` → the identity kwargs ``AuthMixin`` peels."""
 
-    def test_no_config_uses_the_default_base(self) -> None:
-        handler = ConfigurationHandler(TwoAppConfig(name="config"))
-        assert isinstance(handler.server_app_config, ServerAppConfig)
-        server = handler.materialize()
+    def test_no_identity_configured_leaves_the_stores_unwired(self) -> None:
+        server = AsgiServer(config=TwoAppConfig)
         assert server.user_store is None
         assert server.api_key_store is None
 
-    def test_claimed_config_lifts_identity_kwargs(
+    def test_stores_and_bootstrap_admin_reach_the_server(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv(ADMIN_PW_ENV_VAR, "s3cret")
-        handler = ConfigurationHandler(
-            storage_site_config(tmp_path), IdentityServerAppConfig()
-        )
-        server = handler.materialize()
+        server = AsgiServer(config=storage_site_config(tmp_path))
         assert server.user_store is not None
         assert server.api_key_store is not None
         admin = server.user_store.get("admin")
         assert admin is not None
         assert "SUPERADMIN" in admin["tags"]
 
-    def test_admin_password_literal_is_a_boot_error(self, tmp_path: Path) -> None:
-        class LiteralConfig(ServerAppConfig):
+    def test_admin_password_literal_is_rejected_by_the_grammar(self) -> None:
+        class LiteralConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                root.admin_password("plain-secret")
+                root.configuration().authentication().admin_password("plain-secret")
 
-        handler = ConfigurationHandler(storage_site_config(tmp_path), LiteralConfig())
-        with pytest.raises(ConfigError, match="\\^pointer"):
-            handler.materialize()
+        with pytest.raises(ValueError, match="node_value"):
+            AsgiServer(config=LiteralConfig)
 
-    def test_admin_password_pointer_resolving_empty_is_a_boot_error(
+    def test_admin_password_resolving_empty_is_a_boot_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv(ADMIN_PW_ENV_VAR, raising=False)
-        handler = ConfigurationHandler(
-            storage_site_config(tmp_path), IdentityServerAppConfig()
-        )
         with pytest.raises(ConfigError, match="resolved empty"):
-            handler.materialize()
+            AsgiServer(config=storage_site_config(tmp_path))
 
-    def test_duplicate_tag_in_config_is_a_boot_error(self, tmp_path: Path) -> None:
-        class DoubledConfig(ServerAppConfig):
+    def test_a_second_users_element_is_rejected_by_the_grammar(self) -> None:
+        class DoubledConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                root.users(mount="one")
-                root.users(mount="two")
+                auth = root.configuration().authentication()
+                auth.users(mount="one")
+                auth.users(mount="two")
 
-        handler = ConfigurationHandler(storage_site_config(tmp_path), DoubledConfig())
-        with pytest.raises(ConfigError, match="duplicate 'users'"):
-            handler.materialize()
-
-    def test_unclaimed_app_config_is_a_boot_error(self) -> None:
-        with pytest.raises(ConfigError, match="no application claims it"):
-            ConfigurationHandler(TwoAppConfig(name="config"), TwoAppConfig(name="other"))
-
-    def test_duplicate_server_config_is_a_boot_error(self) -> None:
-        with pytest.raises(ConfigError, match="duplicate config"):
-            ConfigurationHandler(
-                TwoAppConfig(name="config"),
-                ServerAppConfig(name="first"),
-                ServerAppConfig(name="second"),
-            )
-
-    def test_hosted_role_never_lifts_identity(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv(ADMIN_PW_ENV_VAR, "s3cret")
-        handler = ConfigurationHandler(
-            storage_site_config(tmp_path), IdentityServerAppConfig()
-        )
-        worker = handler.materialize(role="worker", app="shop")
-        assert worker.user_store is None
-        assert worker.api_key_store is None
+        with pytest.raises(ValueError):
+            ConfigurationHandler(DoubledConfig)
 
 
-class LoginSurfaceConfig(ServerAppConfig):
-    """A ``_server`` config: lockout policy plus two OIDC providers."""
+class LoginSurfaceConfig(TwoAppConfig):
+    """The two-app site plus a lockout policy and two OIDC providers."""
 
-    def setup(self, data: Any) -> None:
-        data["oidc_secret"] = EnvResolver(OIDC_SECRET_ENV_VAR)
-
-    def main(self, root: Any) -> None:
-        root.login(max_attempts=3, backoff=10)
-        root.oidc(
+    def authentication_section(self, cfg: Any) -> None:
+        """The login surface: policy, one confidential and one public provider."""
+        auth = cfg.authentication()
+        auth.login(max_attempts=3, backoff=10)
+        oidc = auth.oidc()
+        oidc.provider(
             code="corp",
             issuer="https://idp.example.com",
             client_id="corp-client",
-            client_secret="^oidc_secret",
+            client_secret=EnvResolver(OIDC_SECRET_ENV_VAR),
             scopes="openid profile",
             identity_claim="preferred_username",
             tags=["staff"],
         )
-        root.oidc(
+        oidc.provider(
             code="public",
             issuer="https://accounts.example.org",
             client_id="pub-client",
         )
 
 
-class TestServerAppLift:
-    """The login-surface lift: ``login()``/``oidc()`` → ``server_app=`` → the app."""
+class TestLoginSurface:
+    """``authentication.login``/``.oidc`` → ``server_app=`` → the ``_server`` app."""
 
-    def test_lift_reaches_the_server_app(
+    def test_the_login_surface_reaches_the_server_app(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv(OIDC_SECRET_ENV_VAR, "oidc-s3cret")
-        server = ConfigurationHandler(
-            TwoAppConfig(name="config"), LoginSurfaceConfig()
-        ).materialize()
-        app = server.applications["_server"]
+        app = AsgiServer(config=LoginSurfaceConfig).applications["_server"]
         assert app.login_policy == {"max_attempts": 3, "backoff": 10}
         assert set(app.oidc_providers) == {"corp", "public"}
         corp = app.oidc_providers["corp"]
@@ -467,15 +547,12 @@ class TestServerAppLift:
         assert corp["identity_claim"] == "preferred_username"
         assert corp["tags"] == ["staff"]
 
-    def test_oidc_defaults_apply_per_provider(
+    def test_provider_defaults_apply_per_provider(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv(OIDC_SECRET_ENV_VAR, "oidc-s3cret")
-        server = ConfigurationHandler(
-            TwoAppConfig(name="config"), LoginSurfaceConfig()
-        ).materialize()
-        public = server.applications["_server"].oidc_providers["public"]
-        assert public == {
+        app = AsgiServer(config=LoginSurfaceConfig).applications["_server"]
+        assert app.oidc_providers["public"] == {
             "issuer": "https://accounts.example.org",
             "client_id": "pub-client",
             "scopes": "openid email profile",
@@ -483,110 +560,43 @@ class TestServerAppLift:
             "tags": [],
         }
 
-    def test_no_config_leaves_the_bare_app(self) -> None:
-        app = build_two_app_server().applications["_server"]
+    def test_no_login_section_leaves_the_bare_app(self) -> None:
+        app = AsgiServer(config=TwoAppConfig).applications["_server"]
         assert app.login_policy == {}
         assert app.oidc_providers == {}
 
-    def test_client_secret_literal_is_a_boot_error(self) -> None:
-        class LiteralSecretConfig(ServerAppConfig):
+    def test_a_provider_without_a_code_is_rejected_by_the_collection(self) -> None:
+        class NoCodeConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                root.oidc(
-                    code="corp",
-                    issuer="https://idp.example.com",
-                    client_id="corp-client",
-                    client_secret="plain-secret",
+                root.configuration().authentication().oidc().provider(
+                    issuer="https://idp.example.com", client_id="x"
                 )
 
-        handler = ConfigurationHandler(
-            TwoAppConfig(name="config"), LiteralSecretConfig()
-        )
-        with pytest.raises(ConfigError, match="\\^pointer"):
-            handler.materialize()
+        with pytest.raises(ValueError, match="code"):
+            ConfigurationHandler(NoCodeConfig)
 
-    def test_client_secret_pointer_resolving_empty_is_a_boot_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.delenv(OIDC_SECRET_ENV_VAR, raising=False)
-        handler = ConfigurationHandler(
-            TwoAppConfig(name="config"), LoginSurfaceConfig()
-        )
-        with pytest.raises(ConfigError, match="resolved empty"):
-            handler.materialize()
-
-    def test_duplicate_oidc_code_is_a_boot_error(self) -> None:
-        class DoubledCodeConfig(ServerAppConfig):
+    def test_a_duplicate_provider_code_is_rejected_by_the_collection(self) -> None:
+        class DoubledCodeConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                root.oidc(code="corp", issuer="https://a.example.com", client_id="a")
-                root.oidc(code="corp", issuer="https://b.example.com", client_id="b")
+                oidc = root.configuration().authentication().oidc()
+                oidc.provider(code="corp", issuer="https://a.example.com", client_id="a")
+                oidc.provider(code="corp", issuer="https://b.example.com", client_id="b")
 
-        handler = ConfigurationHandler(
-            TwoAppConfig(name="config"), DoubledCodeConfig()
-        )
-        with pytest.raises(ConfigError, match="duplicate oidc code"):
-            handler.materialize()
-
-    def test_missing_oidc_code_is_a_boot_error(self) -> None:
-        class NoCodeConfig(ServerAppConfig):
-            def main(self, root: Any) -> None:
-                root.oidc(issuer="https://idp.example.com", client_id="x")
-
-        handler = ConfigurationHandler(TwoAppConfig(name="config"), NoCodeConfig())
-        with pytest.raises(ConfigError, match="'code'"):
-            handler.materialize()
-
-    def test_hosted_role_never_lifts_the_login_surface(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv(OIDC_SECRET_ENV_VAR, "oidc-s3cret")
-        handler = ConfigurationHandler(
-            TwoAppConfig(name="config"), LoginSurfaceConfig()
-        )
-        worker = handler.materialize(role="worker", app="shop")
-        app = worker.applications["_server"]
-        assert app.login_policy == {}
-        assert app.oidc_providers == {}
-
-
-class TestSessionTtl:
-    def test_session_child_reaches_the_store_ttl(self) -> None:
-        class SessionConfig(AsgiConfigBuilder):
-            def main(self, root: Any) -> None:
-                srv = root.server(host="127.0.0.1", port=8000)
-                srv.session(ttl=1234)
-                apps = root.applications(default="shop")
-                apps.application(code="shop", mount="", app_class=ShopApp)
-
-        server = ConfigurationHandler(SessionConfig(name="config")).materialize()
-        assert server.session_store.create().meta["ttl"] == 1234
-
-
-class TestConfigurationTag:
-    def test_configuration_subtree_is_read_and_skipped(self) -> None:
-        class ConfiguredAppConfig(AsgiConfigBuilder):
-            def main(self, root: Any) -> None:
-                root.server(host="127.0.0.1", port=8000)
-                apps = root.applications(default="shop")
-                shop = apps.application(code="shop", mount="", app_class=ShopApp)
-                shop.configuration(theme="dark", max_items=10)
-
-        server = ConfigurationHandler(ConfiguredAppConfig(name="config")).materialize()
-        assert isinstance(server.root_application, ShopApp)
-        assert set(server.applications) == {"shop", "_server"}
+        with pytest.raises(ValueError, match="corp"):
+            ConfigurationHandler(DoubledCodeConfig)
 
 
 class TestTasksConfig:
-    """The ``tasks()`` child of ``server`` lifts to the ``tasks=`` kwarg (Phase 7)."""
+    """The ``tasks()`` child of ``server`` lifts to the ``tasks=`` kwarg."""
 
     def test_tasks_disabled_via_recipe(self) -> None:
         class TasksOffConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                srv = root.server(host="127.0.0.1", port=8000)
-                srv.tasks(enabled=False)
-                apps = root.applications(default="shop")
-                apps.application(code="shop", mount="", app_class=ShopApp)
+                cfg = root.configuration()
+                cfg.server(host="127.0.0.1", port=8000).tasks(enabled=False)
+                cfg.applications().application(code="shop", mount="", app_class=ShopApp)
 
-        server = ConfigurationHandler(TasksOffConfig(name="tasksoff")).materialize()
+        server = AsgiServer(config=TasksOffConfig)
         assert server.tasks_enabled is False
         with pytest.raises(RuntimeError, match="disabled"):
             server.tasks
@@ -594,12 +604,11 @@ class TestTasksConfig:
     def test_tuning_reaches_scheduler_and_store(self) -> None:
         class TunedConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                srv = root.server(host="127.0.0.1", port=8000)
-                srv.tasks(tick_seconds=5, mount="site")
-                apps = root.applications(default="shop")
-                apps.application(code="shop", mount="", app_class=ShopApp)
+                cfg = root.configuration()
+                cfg.server(host="127.0.0.1", port=8000).tasks(tick_seconds=5, mount="site")
+                cfg.applications().application(code="shop", mount="", app_class=ShopApp)
 
-        server = ConfigurationHandler(TunedConfig(name="tuned")).materialize()
+        server = AsgiServer(config=TunedConfig)
         assert server.tasks_enabled is True                  # enabled defaults on
         assert server.tasks.scheduler.tick_seconds == 5.0
         assert server.tasks.task_store.mount == "site"       # explicit override
@@ -610,15 +619,82 @@ class TestTasksConfig:
         assert server.tasks.scheduler.tick_seconds == 3.0
         assert server.tasks_config == {"tick_seconds": 3}    # enabled peeled away
 
-    def test_unknown_child_under_tasks_is_config_error(self) -> None:
+    def test_a_child_under_tasks_is_rejected_by_the_grammar(self) -> None:
         class StrayChildConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                srv = root.server(host="127.0.0.1", port=8000)
-                stray = srv.tasks()
-                stray.middleware()          # declared in the dialect, foreign to tasks
-                apps = root.applications(default="shop")
-                apps.application(code="shop", mount="", app_class=ShopApp)
+                cfg = root.configuration()
+                cfg.server(host="127.0.0.1", port=8000).tasks().middleware()
 
-        handler = ConfigurationHandler(StrayChildConfig(name="stray"))
-        with pytest.raises(ConfigError, match="not declared by the config grammar"):
-            handler.materialize()
+        with pytest.raises(ValueError, match="parent"):
+            ConfigurationHandler(StrayChildConfig)
+
+
+class ParametrizedShop(ShopApp):
+    """An app whose grammar is the inherited minimal one (``parameters``)."""
+
+    code = "shop"
+
+
+class TestMountedAppGrammar:
+    """``application(app_class=...)`` mounts ``app_class.grammar`` for the subtree."""
+
+    def test_the_apps_own_subtree_is_read_through_the_handler(self) -> None:
+        class ParamConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                cfg = root.configuration()
+                cfg.server(host="127.0.0.1", port=8000)
+                shop = cfg.applications(default="shop").application(
+                    code="shop", mount="", app_class=ParametrizedShop
+                )
+                shop.parameters(theme="dark", max_items=10)
+
+        server = AsgiServer(config=ParamConfig)
+        assert server.config("applications.shop.parameters.theme") == "dark"
+        assert server.config("applications.shop.parameters.max_items") == 10
+
+    def test_the_envelope_attributes_are_the_apps_constructor_kwargs(self) -> None:
+        class KwargConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                root.configuration().applications().application(
+                    code="outlet", mount="outlet", app_class=ShopApp
+                )
+
+        server = AsgiServer(config=KwargConfig)
+        assert server.applications["outlet"].mount == "outlet"
+
+    def test_an_undeclared_child_of_the_mounted_grammar_raises(self) -> None:
+        class StrayConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                shop = root.configuration().applications().application(
+                    code="shop", mount="", app_class=ShopApp
+                )
+                shop.catalog(title="x")
+
+        with pytest.raises(AttributeError):
+            ConfigurationHandler(StrayConfig)
+
+
+class TestReadStack:
+    """The four layers, on this dialect."""
+
+    def test_written_value_wins(self) -> None:
+        assert ConfigurationHandler(TwoAppConfig)("server.port") == 9100
+
+    def test_signature_default_is_resolved_at_read_time(self) -> None:
+        class ProviderConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                root.configuration().authentication().oidc().provider(
+                    code="corp", issuer="https://idp.example.com"
+                )
+
+        handler = ConfigurationHandler(ProviderConfig)
+        assert handler("authentication.oidc.corp.scopes") == "openid email profile"
+
+    def test_call_site_default_applies_to_an_unwritten_value(self) -> None:
+        handler = ConfigurationHandler(TwoAppConfig)
+        assert handler("server.max_threads", default=7) == 7
+
+    def test_a_missing_path_is_a_noisy_key_error(self) -> None:
+        handler = ConfigurationHandler(TwoAppConfig)
+        with pytest.raises(KeyError, match="server.tls"):
+            handler("server.tls")

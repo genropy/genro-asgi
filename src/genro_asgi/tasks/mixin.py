@@ -29,11 +29,11 @@ stashes the rest as ``tasks_config`` for the manager to apply. Storage/session
 are on when their mixin is present, so tasks matches: a composed ``AsgiServer``
 runs the worker loop out of the box.
 
-``TaskConfigElements`` is the ``config_grammar`` companion (D16: the element is
-declared by the class that peels the kwarg). The site recipe composes it
-explicitly (``config/elements.py``) so ``server(...).tasks(enabled=,
-tick_seconds=, mount=)`` lifts to this mixin's ``tasks=`` kwarg through
-``element_kwargs`` — which enforces strict-unknown children (``ConfigError``).
+``TaskGrammar`` is this mixin's grammar companion (D16: the element is declared
+by the class that peels the kwarg). The server's grammar composes it explicitly
+(``config/elements.py``) so ``server(...).tasks(enabled=, tick_seconds=,
+mount=)`` lifts to this mixin's ``tasks=`` kwarg — the element is a void one, so
+a stray child is rejected at the recipe line by the grammar itself.
 
 The manager is built LAZILY on first ``tasks`` access, never in ``__init__``: the
 cooperative chain runs ``TaskMixin.__init__`` (composed after ``StorageMixin``) from
@@ -55,6 +55,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from genro_bag import BagResolver
 from genro_builders.builder import element
 
 from .manager import TaskManager
@@ -62,29 +63,28 @@ from .manager import TaskManager
 if TYPE_CHECKING:
     from ..types import Message, Receive, Scope, Send
 
-__all__ = ["TaskMixin", "TaskConfigElements"]
+__all__ = ["TaskGrammar", "TaskMixin"]
 
 
-class TaskConfigElements:
-    """Config elements owned by ``TaskMixin`` (its ``config_grammar`` companion).
+class TaskGrammar:
+    """Config grammar owned by ``TaskMixin`` (the class that peels ``tasks=``).
 
-    Recipes compose this mixin explicitly (``config/elements.py``) — no
-    auto-discovery. ``element_kwargs`` validates children against it
-    (strict-unknown → ``ConfigError``).
+    The server's grammar composes this mixin explicitly
+    (``config/elements.py``) — no auto-discovery.
     """
 
-    @element(sub_tags="*", parent_tags="server")
+    @element(sub_tags="", parent_tags="server")
     def tasks(
         self,
         enabled: bool = True,
-        tick_seconds: float | None = None,
-        mount: str | None = None,
+        tick_seconds: float | BagResolver = None,
+        mount: str | BagResolver = None,
     ) -> None:
-        """The task backbone: ``enabled`` (bool, default True — the on/off
-        switch), ``tick_seconds`` (float — the scheduler tick), ``mount``
-        (str — explicit task-store mount, overriding the by-keys choice).
-        Server-domain, so it lives under ``server``. The attributes lift to
-        the server's ``tasks=`` kwarg as a dict."""
+        """The task backbone: ``enabled`` (default True — the on/off switch),
+        ``tick_seconds`` (the scheduler tick), ``mount`` (explicit task-store
+        mount, overriding the by-keys choice). Server-domain, so it lives under
+        ``server``. The attributes lift to the server's ``tasks=`` kwarg as a
+        dict."""
 
 
 class TaskMixin:
@@ -96,7 +96,7 @@ class TaskMixin:
     starts/stops its worker loop around the ASGI ``lifespan`` protocol.
     """
 
-    config_grammar = TaskConfigElements
+    grammar: type = TaskGrammar
 
     def __init__(self, **kwargs: Any) -> None:
         tasks: Any = kwargs.pop("tasks", True)

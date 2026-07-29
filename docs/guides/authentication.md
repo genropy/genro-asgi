@@ -136,11 +136,37 @@ and mean nothing to an outside caller. Configuring a provider **without**
 `external_url` is a boot error: the server refuses to start rather than fail at
 the first login attempt with a provider-side error.
 
-In a config recipe it lives on the `server` section:
+In a config recipe, `external_url` lives on the `server` section and the
+providers are a keyed collection under `authentication`:
 
 ```python
-root.server(host="127.0.0.1", port=8000, external_url="https://shop.example.com")
+from genro_asgi.config import AsgiConfigBuilder
+from genro_bag.resolvers import EnvResolver
+
+class ServerConfiguration(AsgiConfigBuilder):
+    def main(self, root):
+        cfg = root.configuration()
+        cfg.server(host="127.0.0.1", port=8000, external_url="https://shop.example.com")
+        self.authentication_section(cfg)
+
+    def authentication_section(self, cfg):
+        """The login surface: one OIDC provider, its secret from the environment."""
+        auth = cfg.authentication()
+        auth.oidc().provider(
+            code="google",
+            issuer="https://accounts.example.com",
+            client_id="client-123",
+            client_secret=EnvResolver("GOOGLE_CLIENT_SECRET"),
+            identity_claim="email",
+        )
 ```
+
+Each provider is addressed by its `code` — `authentication.oidc.google` — and
+the `client_secret` is an `EnvResolver` (from `genro_bag.resolvers`) read at read
+time, so the secret never sits in the recipe. The same section carries
+`admin_password` (a resolver, never a literal — a literal is a boot error),
+`login(max_attempts=…, backoff=…)` and the `credentials` block that replaces the
+`auth=` dict when the server is configured rather than hand-built.
 
 - `GET /_server/auth/oidc:google/start?next=...` → `302` (PKCE S256).
 - `GET /_server/auth/oidc:google/callback?...` → token exchange, avatar attach,

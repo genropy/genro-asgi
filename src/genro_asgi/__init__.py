@@ -14,7 +14,7 @@
 
 """Minimal ASGI server core: the base server and the app-side contract."""
 
-from .application import BaseApplication
+from .application import ApplicationGrammar, BaseApplication
 from .applications import (
     McpApplication,
     McpOpenApiApplication,
@@ -36,7 +36,12 @@ from .auth import (
 )
 from .channel import ChannelClient, Frame, FrameStream
 from .communication import CommunicationMixin
-from .config import AsgiConfigBuilder, ConfigurationHandler, Projection
+from .config import (
+    AsgiConfigBuilder,
+    AsgiServerGrammar,
+    ConfigError,
+    ConfigurationHandler,
+)
 from .db import AsgiDbHandlerBase
 from .exceptions import (
     HTTPBadRequest,
@@ -65,14 +70,17 @@ from .session import (
 )
 from .storage import LocalStorage, LocalStorageNode, StorageNode
 from .storage_mixin import StorageMixin
+from .tasks import TaskGrammar
 from .types import ASGIApp, Message, Receive, Scope, Send
 
 __all__ = [
     "ASGIApp",
     "ApiKeyStore",
+    "ApplicationGrammar",
     "AsgiConfigBuilder",
     "AsgiDbHandlerBase",
     "AsgiServer",
+    "AsgiServerGrammar",
     "AuthCore",
     "AuthMethod",
     "AuthMixin",
@@ -83,6 +91,7 @@ __all__ = [
     "BaseServer",
     "ChannelClient",
     "CommunicationMixin",
+    "ConfigError",
     "ConfigurationHandler",
     "FileApiKeyStore",
     "FileSessionStore",
@@ -109,7 +118,6 @@ __all__ = [
     "OpenApiApplication",
     "PasswordMethod",
     "PluginMixin",
-    "Projection",
     "Receive",
     "Redirect",
     "RegisteredRequest",
@@ -125,6 +133,7 @@ __all__ = [
     "SessionStore",
     "StorageMixin",
     "StorageNode",
+    "TaskGrammar",
     "UserStore",
     "__version__",
     "router_openapi",

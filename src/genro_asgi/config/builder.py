@@ -12,42 +12,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""AsgiConfigBuilder — the ``asgiconfig`` builder dialect (D15).
+"""AsgiConfigBuilder — the ``asgiconfig`` dialect: contrib/config + the server's grammar.
 
-The user subclasses ``AsgiConfigBuilder`` in a ``config.py`` and overrides
-``main(self, root)`` (the recipe). ``ConfigurationHandler`` mounts the builder,
-runs the recipe and MATERIALIZES an ``AsgiServer`` by walking the built tree —
-unlike the markup dialects (HTML, SVG) there is no renderer: the configuration
-is read back directly from the ``SourceBag`` (``node.node_tag`` /
-``node.fixed_attr_items()``).
+The dialect is the contrib configuration builder (``ConfigBuilder``: the
+``configuration`` root, the four-layer read contract, the XML render) composed
+with the grammar the server class declares (``AsgiServer.grammar``). A site
+subclasses it in a ``config.py`` and overrides ``main(self, root)``; the runtime
+reads the built tree through ``ConfigurationHandler`` and nothing else.
 
-Example ``config.py``::
+Recipes orchestrate in ``main`` and delegate each section to a method taking the
+PARENT node, so a section stays small enough to read at a glance::
 
     from genro_asgi.config import AsgiConfigBuilder
     from myshop.app import Application as Shop
 
     class ServerConfiguration(AsgiConfigBuilder):
         def main(self, root):
-            root.server(host="127.0.0.1", port=8000)
-            root.middleware(cors=True)
-            apps = root.applications(default="shop")
-            apps.application(code="shop", app_class=Shop)
+            cfg = root.configuration()
+            self.server_section(cfg)
+            cfg.applications(default="shop").application(code="shop", app_class=Shop)
+
+        def server_section(self, cfg):
+            '''The listener and the session TTL.'''
+            cfg.server(host="127.0.0.1", port=8000).session(ttl=3600)
 """
 
 from __future__ import annotations
 
-from genro_builders.builder import BuilderBase
+from genro_builders.contrib.config import ConfigBuilder
 
-from .elements import AsgiConfigElements
+from .elements import AsgiServerGrammar
 
 __all__ = ["AsgiConfigBuilder"]
 
 
-class AsgiConfigBuilder(BuilderBase, AsgiConfigElements):
-    """Server-configuration dialect: grammar from ``AsgiConfigElements``.
-
-    Carries no renderer — the configuration is walked back out of the built
-    ``source`` tree by ``ConfigurationHandler.materialize``.
-    """
+class AsgiConfigBuilder(ConfigBuilder, AsgiServerGrammar):
+    """Configuration dialect of genro-asgi: contrib layout + ``AsgiServerGrammar``."""
 
     _name = "asgiconfig"

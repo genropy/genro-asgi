@@ -12,339 +12,301 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""ConfigurationHandler — owns the config builder and MATERIALIZES a server.
+"""ConfigurationHandler — the server's read door on its configuration.
 
-DIVERGENCE from the old repo (recorded per the phase plan): the old
-``AsgiConfigRenderer`` mutated a LIVE server through ``apply_configuration``;
-this handler MATERIALIZES a fresh ``AsgiServer`` instead — ``materialize()``
-walks the built ``source`` tree, turns the sections into constructor kwargs
-riding the D16 cooperative chain, instantiates ``AsgiServer(**kwargs)`` and
-mounts the secondary apps. No post-hoc mutation of server state.
+A contrib ``ConfigHandler`` subclass: it inherits the callable four-layer read
+stack (written value → signature default → call-site ``default=`` → noisy
+``KeyError``) and adds the section→kwargs mapping helpers ``AsgiServer.__init__``
+consumes. It NEVER builds a server: the server builds ITS OWN handler
+(``AsgiServer(config=source)``) and asks these helpers for its kwargs, so there
+is one direction of dependency and no materializer.
 
-It owns the config builders and runs each recipe (``create`` — the builder's
-own ``setup`` seeds its datastore, ``main`` builds the tree); the
-configuration is read back by walking the ``SourceBag`` directly
-(``node.node_tag`` / ``node.fixed_attr_items()``), never through a renderer.
+The helpers read the tree by two rules, and the grammar decides which applies:
 
-Section → constructor kwarg mapping (core 1a):
+- a node with a CLOSED signature is read attribute by attribute THROUGH the
+  handler itself, so the element's signature defaults and any resolver sitting
+  in an attribute are honored (``server``, ``provider``, ``mount``, ...);
+- a node with OPEN ``**kwargs`` has no signature to consult, so its attributes
+  are read in bulk through ``builder.runtime_values`` — resolvers resolved,
+  everything else verbatim (``application``, ``plugin``, ``database``).
 
-- ``server`` → ``host``/``port`` (the ``AsgiServer.serve`` defaults),
-  ``external_url`` (the public base address, required by a configured OIDC
-  provider) plus ``max_threads`` (the ``WorkPool`` size, peeled by
-  ``BaseServer``) and ``storage_key`` (the ``StorageMixin`` encryption key);
-  its ``session`` child → ``session_ttl`` (server-domain).
-- ``middleware`` → ``middleware=`` ({name: bool | dict} switches).
-- ``auth`` → ``auth=`` (the ``AuthCore`` config, handed verbatim).
-- ``storage`` → ``storage=`` ({code: {path, encrypted}} mounts for the
-  ``StorageMixin``); visible to every role.
-- ``applications`` → ``applications=`` (the ``default`` app on mount ``""``
-  first, then the secondaries; each app's mount defaults to its ``code``).
-- ``databases`` → one ``db_handler_class(db_class(**params))`` per entry,
-  registered on the server by ``code`` (core 1b).
-- ``plugins`` → ``plugins=`` ({code: bool | dict} switches for the
-  ``PluginMixin``); visible to every role.
-- ``openapi``/nested ``groups``/nested ``configuration`` → read and SKIPPED
-  with a debug log (valid config for other roles/macros — ``configuration``
-  is the app's own opaque subtree, consumed at runtime — not an error).
+Section → constructor kwarg:
 
-App config-classes: the constructor takes the site recipe FIRST plus any
-app-config builders (``ConfigurationHandler(site, MyServerAppConfig(...))``).
-Each extra builder is claimed by the application it configures via class
-identity — today only ``_server`` (``ServerApplication.config_class``); a
-builder nobody claims is a boot error. The claimed config's values
-(``admin_password``/``users``/``tokens``) LIFT to the server constructor
-kwargs (root role only); without one the base default applies (empty recipe,
-today's bare ``ServerApplication()``).
-
-``materialize(role=..., app=...)`` computes the role's ``Projection`` of the
-built tree (D15) and materializes THAT slice: ``root`` sees every section
-above; the hosted roles (``worker``/``batch``, ``app=<code>`` required) see
-only their application (on the site root) plus ``databases`` and ``storage`` —
-never the public middleware, never auth or sessions, never the public listener
-address.
+- ``server`` → ``host``/``port``/``external_url``/``max_threads``/
+  ``storage_key``, its ``session`` child → ``session_ttl``, its ``tasks``
+  child → ``tasks``.
+- ``middleware`` → ``middleware`` ({name: bool | dict} switches).
+- ``authentication`` → ``admin_password``/``users``/``tokens`` (the store
+  kwargs ``AuthMixin`` peels), ``auth`` (the ``AuthCore`` entries folded from
+  ``credentials``) and ``server_app`` (``login`` + ``oidc``, forwarded to the
+  ``_server`` application).
+- ``storage`` → ``storage`` ({code: {path, encrypted}} mounts).
+- ``applications`` → ``applications``/``default`` (each entry an
+  ``(app_class, kwargs)`` pair the server instantiates).
+- ``databases`` → one descriptor per entry, registered by the server after the
+  cooperative chain has run.
+- ``plugins`` → ``plugins`` ({code: bool | dict} switches).
+- ``openapi`` → no core-1a consumer; read and skipped.
 """
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
-from ..application import BaseApplication
-from ..applications.server_app import ServerApplication
-from ..asgi_server import AsgiServer
-from ..db import AsgiDbHandlerBase
-from .configurable import ConfigError, element_kwargs, resolve_pointers
-from .projection import Projection
+from genro_builders.contrib.config import ConfigHandler
 
-__all__ = ["ConfigurationHandler"]
+__all__ = ["ConfigError", "ConfigurationHandler"]
 
 
-class ConfigurationHandler:
-    """Owns the ``AsgiConfigBuilder`` recipe and materializes an ``AsgiServer``."""
+class ConfigError(Exception):
+    """A configuration recipe names something the runtime cannot honor."""
 
-    def __init__(self, builder: Any, *app_configs: Any) -> None:
-        self._builder = builder
-        self._logger = logging.getLogger(f"{__name__}.{type(self).__name__}")
-        self._server_app_config = self._claim_app_configs(app_configs)
-        # Each builder is autonomous: its own flat datastore, seeded by its
-        # own ``setup``. The site recipe runs first, then the app configs.
-        self.builder.create()
-        self.server_app_config.create()
 
-    @property
-    def builder(self) -> Any:
-        """The configuration builder (its recipe already run)."""
-        return self._builder
+class ConfigurationHandler(ConfigHandler):
+    """Read door over an ``asgiconfig`` tree, plus the section→kwargs mapping."""
 
-    @property
-    def server_app_config(self) -> Any:
-        """The ``_server`` app's config builder (the claimed one or the default)."""
-        return self._server_app_config
+    def server_kwargs(self) -> dict[str, Any]:
+        """The ``server`` section as server kwargs, its children lifted.
 
-    def _claim_app_configs(self, app_configs: tuple[Any, ...]) -> Any:
-        """Match each extra builder to the application it configures.
-
-        The core knows ONE app by construction: ``_server`` — the claim is by
-        class identity (``ServerApplication.config_class``, D4/D26), no name
-        registry. A builder no application claims is an explicit boot error;
-        so is a second config for the same app. No config at all = the base
-        default (empty recipe → today's bare ``ServerApplication()``).
+        ``session`` becomes ``session_ttl`` and ``tasks`` becomes the ``tasks``
+        tuning dict: both are server-domain (sessions and the task backbone live
+        on the server), so their values lift to the kwargs the owning mixins
+        peel while the config keeps them under ``server`` where they belong.
         """
-        claimed = None
-        for config in app_configs:
-            if not isinstance(config, ServerApplication.config_class):
-                raise ConfigError(
-                    f"app-config builder {type(config).__name__!r}: "
-                    "no application claims it"
-                )
-            if claimed is not None:
-                raise ConfigError("duplicate config for the '_server' application")
-            claimed = config
-        return claimed if claimed is not None else ServerApplication.config_class()
-
-    @property
-    def logger(self) -> logging.Logger:
-        """This handler's instance logger."""
-        return self._logger
-
-    def materialize(self, role: str = "root", app: str | None = None) -> AsgiServer:
-        """Build a fresh ``AsgiServer`` from the (config, role) projection (D15).
-
-        Computes the role's ``Projection`` of the built section tree, maps each
-        visible section to its constructor kwarg, instantiates ``AsgiServer``
-        and mounts the secondary apps. The hosted roles (``worker``/``batch``)
-        name their application with ``app=<code>``. Sections with no core-1a
-        applier are read and skipped with a debug log.
-        """
-        projection = Projection(self.builder.source, role=role, app=app)
-        self.logger.debug("materializing role %r app %r", role, app)
-        kwargs: dict[str, Any] = {}
-
-        server_attrs = projection.server_attrs()
-        if "host" in server_attrs:
-            kwargs["host"] = server_attrs["host"]
-        if "port" in server_attrs:
-            kwargs["port"] = server_attrs["port"]
-        if "external_url" in server_attrs:
-            kwargs["external_url"] = server_attrs["external_url"]
-        if "max_threads" in server_attrs:
-            kwargs["max_threads"] = server_attrs["max_threads"]
-        if "storage_key" in server_attrs:
-            kwargs["storage_key"] = server_attrs["storage_key"]
-
-        self._apply_session(projection, kwargs)
-        self._apply_tasks(projection, kwargs)
-        self._apply_server_app_config(projection, kwargs)
-
-        middleware = projection.middleware_config()
-        if middleware is not None:
-            kwargs["middleware"] = middleware
-
-        auth = projection.auth_config()
-        if auth is not None:
-            kwargs["auth"] = auth
-
-        storage = projection.storage_config()
-        if storage is not None:
-            kwargs["storage"] = storage
-
-        plugins = projection.plugins_config()
-        if plugins is not None:
-            kwargs["plugins"] = plugins
-
-        applications, default_code = self._build_applications(projection)
-        kwargs["applications"] = applications
-        if default_code is not None:
-            kwargs["default"] = default_code
-
-        if projection.section("openapi") is not None:
-            self.logger.debug("config section 'openapi' has no core-1a applier; skipped")
-
-        server = AsgiServer(**kwargs)
-        self._build_databases(projection, server)
-        return server
-
-    def _apply_session(self, projection: Projection, kwargs: dict[str, Any]) -> None:
-        """Lift the ``server`` section's ``session`` child to ``session_ttl``.
-
-        ``session`` is server-domain (sessions live on the server), so its
-        ``ttl`` attribute becomes the ``session_ttl`` server kwarg. Absent for
-        hosted roles (they never see ``server``).
-        """
-        node = projection.session_node()
-        if node is None:
-            return
-        kwargs["session_ttl"] = dict(node.fixed_attr_items())["ttl"]
-
-    def _apply_tasks(self, projection: Projection, kwargs: dict[str, Any]) -> None:
-        """Lift the ``server`` section's ``tasks`` child to the ``tasks=`` kwarg.
-
-        The element is declared by ``TaskConfigElements`` — the
-        ``config_grammar`` companion ``TaskMixin`` (the class that peels
-        ``tasks=``) owns. ``element_kwargs`` materializes it strictly:
-        an undeclared child under ``tasks`` is a ``ConfigError``.
-        """
-        node = projection.tasks_node()
-        if node is None:
-            return
-        kwargs["tasks"] = element_kwargs(node, AsgiServer)
-
-    def _apply_server_app_config(
-        self, projection: Projection, kwargs: dict[str, Any]
-    ) -> None:
-        """Lift the ``_server`` config-class values to the server kwargs.
-
-        Walks the claimed config builder's source (the base default is empty —
-        nothing lifts): ``admin_password`` is a ``^pointer`` node value (a
-        literal is a boot error — secrets stay out of recipes; resolved-empty
-        is a boot error via ``resolve_pointers``), ``users``/``tokens`` are
-        ``{mount, prefix}`` store descriptors. All three become the identity
-        kwargs ``AuthMixin`` peels: the stores live on the server (Phase 3),
-        so the VALUES lift while the config keeps the app's shape. The login
-        surface lifts as ONE kwarg instead — ``server_app`` = ``login`` policy
-        attrs plus the ``oidc`` providers folded per ``code`` — forwarded to
-        ``ServerApplication`` at mount time (the app peels what its config
-        declared). Root-only: the identity surface belongs to the public
-        process (D6). A repeated tag is a boot error (D16 strictness — a
-        silently winning last node is never acceptable for identity config);
-        ``oidc`` repeats by design, keyed by ``code`` (a repeated code is the
-        boot error).
-        """
-        if projection.role != "root":
-            return
-        config = self.server_app_config
-        server_app: dict[str, Any] = {}
-        oidc: dict[str, dict[str, Any]] = {}
-        seen: set[str] = set()
-        for node in config.source:
-            if node.node_tag == "oidc":
-                code, provider = self._fold_oidc_node(config, node)
-                if code in oidc:
-                    raise ConfigError(
-                        f"duplicate oidc code {code!r} in the '_server' configuration"
-                    )
-                oidc[code] = provider
-                continue
-            if node.node_tag in seen:
-                raise ConfigError(
-                    f"duplicate '{node.node_tag}' in the '_server' configuration"
-                )
-            seen.add(node.node_tag)
-            if node.node_tag == "admin_password":
-                raw = node.value
-                if not (isinstance(raw, str) and raw.startswith("^")):
-                    raise ConfigError(
-                        "'_server' admin_password must be a ^pointer, not a literal"
-                    )
-                value, _attrs = resolve_pointers(config, node)
-                kwargs["admin_password"] = value
-            elif node.node_tag == "login":
-                server_app["login"] = dict(node.fixed_attr_items())
-            else:
-                kwargs[node.node_tag] = dict(node.fixed_attr_items())
-        if oidc:
-            server_app["oidc"] = oidc
-        if server_app:
-            kwargs["server_app"] = server_app
-
-    def _fold_oidc_node(self, config: Any, node: Any) -> tuple[str, dict[str, Any]]:
-        """One ``oidc()`` element → the ``(code, provider)`` pair of the lift.
-
-        ``client_secret`` follows the ``admin_password`` rule: configured as a
-        literal is a boot error (secrets stay out of recipes), resolved-empty
-        is a boot error via ``resolve_pointers``; absent is fine (public
-        client). ``code`` is the collection key — missing is a boot error.
-        Provider defaults land here: ``scopes``/``identity_claim``/``tags``.
-        """
-        secret = dict(node.fixed_attr_items()).get("client_secret")
-        if secret is not None and node.pointer_type(secret) != "^":
-            raise ConfigError(
-                "'_server' oidc client_secret must be a ^pointer, not a literal"
+        kwargs = self.closed_attrs(
+            "server", "host", "port", "external_url", "max_threads", "storage_key"
+        )
+        if self.node("server.session") is not None:
+            kwargs["session_ttl"] = self("server.session.ttl")
+        if self.node("server.tasks") is not None:
+            kwargs["tasks"] = self.closed_attrs(
+                "server.tasks", "enabled", "tick_seconds", "mount"
             )
-        _value, attrs = resolve_pointers(config, node)
-        code = attrs.pop("code", None)
-        if not code:
-            raise ConfigError("'_server' oidc element requires a 'code' attribute")
-        attrs.setdefault("scopes", "openid email profile")
-        attrs.setdefault("identity_claim", "email")
-        attrs.setdefault("tags", [])
-        return code, attrs
+        return kwargs
 
-    def _build_databases(self, projection: Projection, server: AsgiServer) -> None:
-        """Materialize the ``databases`` section: build and register each handler.
+    def middleware_config(self) -> dict[str, Any] | None:
+        """The ``middleware`` switches, or ``None`` when the section is absent
+        (the composition's own defaults then apply)."""
+        if self.node("middleware") is None:
+            return None
+        return self.closed_attrs(
+            "middleware", "errors", "wellknown", "logging", "cors", "auth", "session"
+        )
 
-        Per D15 letter, each ``database`` entry becomes
-        ``db_handler_class(db_class(**params))``, registered on ``server`` by
-        its ``code``. The ``db_class`` is user-provided (imported in the
-        recipe) — the core never imports db drivers.
+    def identity_kwargs(self) -> dict[str, Any]:
+        """The identity STORE kwargs of ``authentication`` (``AuthMixin`` peels them).
+
+        ``admin_password`` is the ``admin_password`` node's VALUE, which a
+        resolver must supply — the grammar rejects a literal at the recipe
+        line (secrets stay out of recipes). Resolving empty is a boot error
+        (the recipe promised a secret that does not exist — an empty bootstrap
+        password would arm a passwordless SUPERADMIN), and so is resolving to
+        a non-string. ``users``/``tokens`` are ``{mount, prefix}`` descriptors.
         """
-        for code, attrs in projection.databases_config().items():
-            db_class = attrs["db_class"]
-            db_handler_class = attrs["db_handler_class"] or AsgiDbHandlerBase
-            handler = db_handler_class(db_class(**attrs["params"]))
-            server.add_database(code, handler)
+        kwargs: dict[str, Any] = {}
+        password_node = self.node("authentication.admin_password")
+        if password_node is not None:
+            kwargs["admin_password"] = self.admin_password(password_node)
+        for tag in ("users", "tokens"):
+            if self.node(f"authentication.{tag}") is not None:
+                kwargs[tag] = self.closed_attrs(f"authentication.{tag}", "mount", "prefix")
+        return kwargs
 
-    def _build_applications(
-        self, projection: Projection
-    ) -> tuple[list[BaseApplication], str | None]:
-        """Instantiate the projection's application cut and its ``default`` code.
+    def admin_password(self, node: Any) -> str:
+        """The bootstrap password carried by ``node``, resolved to a non-empty string.
 
-        WHICH nodes the role sees is the projection's call
-        (``Projection.applications``); this method only instantiates them. Each
-        application is placed by its own recipe (``mount``, defaulting to its
-        ``code`` — the application resolves that itself), with ONE exception: a
-        hosted role serves its single application on the site root, since a
-        worker's app must answer the same paths the public server gives it.
+        The grammar already rejects a literal at the recipe line
+        (``node_value: BagResolver``); here we validate what the resolver
+        actually DELIVERED at boot.
         """
-        app_nodes, default_code = projection.applications()
-        hosted = projection.app is not None
-        apps = [
-            self._instantiate_app(node, mount="" if hosted else None) for node in app_nodes
-        ]
-        return apps, default_code
+        value = node.value
+        if not value:
+            raise ConfigError("authentication.admin_password resolved empty")
+        if not isinstance(value, str):
+            raise ConfigError("authentication.admin_password must resolve to a string")
+        return value
 
-    def _instantiate_app(self, node: Any, mount: str | None = None) -> BaseApplication:
-        """Instantiate one application node as ``app_class(**kwargs)``.
+    def auth_entries(self) -> dict[str, Any] | None:
+        """The ``credentials`` children folded into the ``AuthCore`` sections.
 
-        ``app_class`` is consumed here; every other attribute — ``code`` and
-        ``mount`` included — is a constructor kwarg of the application, which
-        owns their resolution. ``mount`` given here overrides the recipe's (the
-        root app answers ``""`` whatever its code). ``app_class`` presence is
-        guaranteed by the grammar (the ``application`` element declares it
-        required), so it is popped unconditionally. Any nested section (e.g.
-        ``groups``, or the RESERVED opaque ``configuration``) has no core-1a
-        applier and is skipped with a debug log.
+        ``basic_user`` entries are keyed by ``username`` and ``bearer_token``
+        entries by ``identity`` — the keys ``AuthCore`` reads back as the
+        authenticated identity — while ``jwt`` entries stay an ORDERED list (the
+        first verifier that verifies wins). ``None`` when nothing is configured:
+        the server then arms no header backend.
         """
-        attrs = dict(node.fixed_attr_items())
-        app_class: type[BaseApplication] = attrs.pop("app_class")
-        if mount is not None:
-            attrs["mount"] = mount
-        children = node.value
-        if children is not None and hasattr(children, "nodes"):
-            for child in children:
-                self.logger.debug(
-                    "application %r section %r has no core-1a applier; skipped",
-                    attrs.get("code", app_class.__name__),
-                    child.node_tag,
+        node = self.node("authentication.credentials")
+        if node is None:
+            return None
+        basic: dict[str, Any] = {}
+        bearer: dict[str, Any] = {}
+        jwt: list[dict[str, Any]] = []
+        for child in node.value:
+            path = f"authentication.credentials.{child.label}"
+            if child.node_tag == "basic_user":
+                attrs = self.closed_attrs(path, "username", "password", "tags")
+                basic[attrs.pop("username")] = attrs
+            elif child.node_tag == "bearer_token":
+                attrs = self.closed_attrs(path, "identity", "token", "tags")
+                bearer[attrs.pop("identity")] = attrs
+            else:
+                jwt.append(
+                    self.closed_attrs(
+                        path, "name", "secret", "public_key", "algorithm", "tags"
+                    )
                 )
-        return app_class(**attrs)
+        entries = {"basic": basic, "bearer": bearer, "jwt": jwt}
+        return {name: value for name, value in entries.items() if value} or None
+
+    def server_app_kwargs(self) -> dict[str, Any]:
+        """The LOGIN surface of ``authentication`` → the ``_server`` app's kwargs.
+
+        ``login`` is the lockout policy and ``oidc`` the providers keyed by
+        ``code``. These values belong to the application that peels them, so
+        they travel as ONE server kwarg (``server_app``) forwarded at mount time
+        instead of being lifted onto the server itself.
+        """
+        kwargs: dict[str, Any] = {}
+        if self.node("authentication.login") is not None:
+            kwargs["login"] = self.closed_attrs(
+                "authentication.login", "max_attempts", "backoff"
+            )
+        providers = self.oidc_providers()
+        if providers:
+            kwargs["oidc"] = providers
+        return kwargs
+
+    def oidc_providers(self) -> dict[str, dict[str, Any]]:
+        """The ``oidc`` providers as ``{code: attrs}``, defaults applied.
+
+        ``scopes`` and ``identity_claim`` come from the element's signature, so
+        every provider carries them whether the recipe wrote them or not;
+        ``tags`` defaults to the empty list here (a mutable signature default is
+        never declared).
+        """
+        node = self.node("authentication.oidc")
+        if node is None:
+            return {}
+        providers: dict[str, dict[str, Any]] = {}
+        for child in node.value:
+            attrs = self.closed_attrs(
+                f"authentication.oidc.{child.label}",
+                "issuer",
+                "client_id",
+                "client_secret",
+                "scopes",
+                "identity_claim",
+                "tags",
+            )
+            attrs.setdefault("tags", [])
+            providers[child.label] = attrs
+        return providers
+
+    def storage_config(self) -> dict[str, Any] | None:
+        """The ``storage`` mounts as ``{code: {path, encrypted}}``, or ``None``
+        when the section is absent (the composition builds a default
+        ``LocalStorage``)."""
+        node = self.node("storage")
+        if node is None:
+            return None
+        return {
+            child.label: self.closed_attrs(f"storage.{child.label}", "path", "encrypted")
+            for child in node.value
+        }
+
+    def plugins_config(self) -> dict[str, bool | dict[str, Any]] | None:
+        """The ``plugins`` switches as ``{code: bool | dict}``, or ``None`` when
+        the section is absent (the composition arms no extra plugin).
+
+        A plugin maps to ``False`` when ``enabled`` is explicitly false, to its
+        remaining options when it carries any, else to ``True``.
+        """
+        node = self.node("plugins")
+        if node is None:
+            return None
+        switches: dict[str, bool | dict[str, Any]] = {}
+        for child in node.value:
+            options = self.open_attrs(child)
+            options.pop("code", None)
+            enabled = options.pop("enabled", True)
+            if not enabled:
+                switches[child.label] = False
+            else:
+                switches[child.label] = options or True
+        return switches
+
+    def applications(self) -> tuple[list[tuple[type, dict[str, Any]]], str | None]:
+        """The declared applications as ``(app_class, kwargs)`` pairs, plus ``default``.
+
+        Every attribute of the envelope except ``app_class`` is a constructor
+        kwarg of the application — ``code`` and ``mount`` included, since the app
+        owns their resolution. The mounted subtree is NOT passed: an application
+        reads its own configuration back through the handler
+        (``applications.<code>.<path>``), it never receives a slice of the tree.
+        """
+        node = self.node("applications")
+        if node is None:
+            return [], None
+        entries: list[tuple[type, dict[str, Any]]] = []
+        for child in node.value:
+            if not child.label:
+                raise ConfigError(
+                    "applications: 'code' must be a non-empty string — an empty "
+                    "code files the subtree under a label the application's own "
+                    "read door can never reach"
+                )
+            kwargs = self.open_attrs(child)
+            entries.append((kwargs.pop("app_class"), kwargs))
+        return entries, self("applications.default", default=None)
+
+    def databases(self) -> list[dict[str, Any]]:
+        """The ``databases`` descriptors as ``{code, db_class, db_handler_class, params}``.
+
+        ``db_handler_class`` is ``None`` when the recipe omits it (the server
+        substitutes its default) and ``params`` are the remaining connection
+        kwargs handed to ``db_class(**params)``.
+        """
+        node = self.node("databases")
+        if node is None:
+            return []
+        descriptors: list[dict[str, Any]] = []
+        for child in node.value:
+            params = self.open_attrs(child)
+            params.pop("code", None)
+            descriptors.append(
+                {
+                    "code": child.label,
+                    "db_class": params.pop("db_class"),
+                    "db_handler_class": params.pop("db_handler_class", None),
+                    "params": params,
+                }
+            )
+        return descriptors
+
+    def node(self, path: str) -> Any:
+        """The node at ``path`` (relative to the root element), or ``None``."""
+        return self.builder.source.get_node(f"{self.root_label}.{path}")
+
+    def closed_attrs(self, path: str, *names: str) -> dict[str, Any]:
+        """Read ``names`` at ``path`` through the read stack, skipping the absent.
+
+        One four-layer read per attribute, so a resolver sitting in an attribute
+        resolves and the element's signature defaults apply. ``None`` means
+        "not configured and no default" and is left out — the consumer's own
+        default then applies.
+        """
+        attrs: dict[str, Any] = {}
+        for name in names:
+            value = self(f"{path}.{name}", default=None)
+            if value is not None:
+                attrs[name] = value
+        return attrs
+
+    def open_attrs(self, node: Any) -> dict[str, Any]:
+        """Every attribute ``node`` carries, resolvers resolved.
+
+        The read for elements whose signature is OPEN (``**kwargs``): there is
+        no declared attribute list to walk and no signature default to consult,
+        so the node's own attributes are the whole truth.
+        """
+        return dict(self.builder.runtime_values(node)[1])

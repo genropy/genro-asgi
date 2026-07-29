@@ -96,8 +96,41 @@ one decorated method can serve REST and MCP at once.
 Every `AsgiServer` auto-mounts a `ServerApplication` at `/_server` (D4). It
 exposes the server's own management surface — login, users, tokens, tasks —
 under `/_server/…`, and its OpenAPI schema at `/_server/_meta/schema_json`. It
-is *automatic, not configured*: a hand-built server has it exactly like a
-config-materialized one.
+is *automatic, not configured*: a hand-built server has it exactly like one
+built from a configuration (`AsgiServer(config=…)`).
+
+## Configuration: the server reads its own
+
+A configuration is a **recipe** — a subclass of `AsgiConfigBuilder` whose `main`
+opens the `configuration` root and delegates each section to its own method —
+and the server builds its own read door over it:
+
+```python
+from genro_asgi import AsgiServer
+from genro_asgi.config import AsgiConfigBuilder
+
+class ServerConfiguration(AsgiConfigBuilder):
+    def main(self, root):
+        cfg = root.configuration()
+        cfg.server(host="127.0.0.1", port=8000)
+
+server = AsgiServer(config=ServerConfiguration)
+```
+
+`AsgiServer(config=…)` accepts a recipe class, a recipe instance, a path to a
+`config.py`, or a ready configuration handler (see the
+[configuration API](../api/config.rst)). The handler is exposed as
+`server.config` and is **callable by path** — `server.config("server.host")` —
+over a four-layer read stack: the written value, the element signature's
+default, the call-site `default=`, then a noisy `KeyError`. Explicit
+constructor kwargs win over configured ones, per kwarg.
+
+Values that come from outside the recipe are **resolvers in place**: you store a
+`genro_bag.resolvers.EnvResolver` where the value would go and it resolves at
+read time, so the runtime always consumes the environment's current value. An
+application reads its own subtree through `app.config(path)`, which prefixes
+`applications.<code>.` and delegates to the same door — an app holds an address
+in the tree, never a slice of it.
 
 ## Where to go next
 

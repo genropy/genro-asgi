@@ -15,9 +15,10 @@
 """Plugin system tests (Macro 4 Phase 5).
 
 Covers the ``PluginMixin`` server capability (default registry, registry
-extension, ``arm_router``), the config-driven arming through ``materialize()``,
-the no-import-side-effect guarantee (checked in a fresh subprocess so it is
-order-independent) and the ported OpenAPI translator + ``router_openapi``.
+extension, ``arm_router``), the config-driven arming through
+``AsgiServer(config=...)``, the no-import-side-effect guarantee (checked in a
+fresh subprocess so it is order-independent) and the ported OpenAPI translator +
+``router_openapi``.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ from genro_routes import Router, RoutingClass, route
 from genro_routes.plugins._base_plugin import BasePlugin
 
 from genro_asgi import AsgiServer, OpenAPIPlugin, OpenAPITranslator, RoutedApplication
-from genro_asgi.config import AsgiConfigBuilder, ConfigurationHandler
+from genro_asgi.config import AsgiConfigBuilder
 from genro_asgi.plugin_mixin import PluginMixin, default_plugin_registry
 from genro_asgi.plugins import router_openapi
 
@@ -175,42 +176,43 @@ class TestArmRouter:
             server.arm_router(svc.route)
 
 
+class PluginsConfig(AsgiConfigBuilder):
+    """Two plugins armed, one explicitly disabled."""
+
+    def main(self, root: Any) -> None:
+        cfg = root.configuration()
+        cfg.server(host="127.0.0.1", port=8000)
+        cfg.applications(default="api").application(code="api", mount="", app_class=ApiApp)
+        self.plugins_section(cfg)
+
+    def plugins_section(self, cfg: Any) -> None:
+        """``enabled=False`` leaves a plugin unarmed."""
+        plugins = cfg.plugins()
+        plugins.plugin(code="openapi")
+        plugins.plugin(code="pydantic")
+        plugins.plugin(code="logging", enabled=False)
+
+
 class TestConfigDriven:
-    def _handler(self) -> ConfigurationHandler:
-        class Recipe(AsgiConfigBuilder):
-            def main(self, root: Any) -> None:
-                root.server(host="127.0.0.1", port=8000)
-                apps = root.applications(default="api")
-                apps.application(code="api", mount="", app_class=ApiApp)
-                plugins = root.plugins()
-                plugins.plugin(code="openapi")
-                plugins.plugin(code="pydantic")
-                plugins.plugin(code="logging", enabled=False)
-
-        return ConfigurationHandler(Recipe(name="config"))
-
-    def test_materialized_server_carries_the_plugins_config(self) -> None:
-        server = self._handler().materialize()
+    def test_configured_server_carries_the_plugins_config(self) -> None:
+        server = AsgiServer(config=PluginsConfig)
         assert server.plugins == {"openapi": {}, "pydantic": {}}
 
-    def test_materialize_arms_the_routed_app(self) -> None:
-        server = self._handler().materialize()
+    def test_configured_server_arms_the_routed_app(self) -> None:
+        server = AsgiServer(config=PluginsConfig)
         names = {plugin.name for plugin in server.root_application.route.iter_plugins()}
         assert {"auth", "openapi", "pydantic"} <= names
-
-    def test_worker_role_sees_the_plugins_section(self) -> None:
-        worker = self._handler().materialize(role="worker", app="api")
-        assert worker.plugins == {"openapi": {}, "pydantic": {}}
 
     def test_plugin_options_map_to_a_dict(self) -> None:
         class Recipe(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                apps = root.applications(default="api")
-                apps.application(code="api", mount="", app_class=ApiApp)
-                plugins = root.plugins()
-                plugins.plugin(code="openapi", security_scheme="ApiKey")
+                cfg = root.configuration()
+                cfg.applications(default="api").application(
+                    code="api", mount="", app_class=ApiApp
+                )
+                cfg.plugins().plugin(code="openapi", security_scheme="ApiKey")
 
-        server = ConfigurationHandler(Recipe(name="config")).materialize()
+        server = AsgiServer(config=Recipe)
         # openapi is fixed; the config tunes it. pydantic stays in the base.
         assert server.plugins == {"openapi": {"security_scheme": "ApiKey"}, "pydantic": {}}
 

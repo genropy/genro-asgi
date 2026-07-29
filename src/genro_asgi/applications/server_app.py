@@ -18,9 +18,9 @@
 every server exposes under ``/_server`` without configuring it (D4:
 "automatic, not configured"). ``AsgiServer`` mounts one at the end of its
 ``__init__`` (``_register_server_app``), so a hand-built
-``AsgiServer(applications=[...])`` gets it exactly like a config-materialized one;
-``ConfigurationHandler.materialize`` never special-cases it. The demux finds
-it through the ordinary mount table — there is no dedicated demux logic.
+``AsgiServer(applications=[...])`` gets it exactly like a configured one; no
+configuration path special-cases it. The demux finds it through the ordinary
+mount table — there is no dedicated demux logic.
 
 It extends ``OpenApiApplication`` (REST + OpenAPI; the MCP face on
 ``_server`` is out of this wave), so ``/_server/_meta/`` carries the usual
@@ -42,7 +42,8 @@ schema/docs/index endpoints, and adds:
   ``login`` enforces the store-backed lockout (REVIEW #9): the per-identity
   failure counter (``failed_attempts``/``last_failed_at``) rides the UserStore
   record with exponential backoff; the policy comes from the config's
-  ``login()`` element (``login_policy``, defaults 5 attempts / 30s base).
+  ``authentication.login`` element (``login_policy``, defaults 5 attempts /
+  30s base).
 
 Handlers stay PURE: they return values and never touch cookies or an ambient
 request/response (the old ``self.server.request`` idiom must never be
@@ -69,13 +70,14 @@ references hardcode ``/_server/...`` (``PasswordMethod``'s ``action``,
 ``LOGIN_PAGE_URL``, ``login.html``'s fetch), so moving this app elsewhere
 404s them.
 
-Kwargs peeled by the cooperative ``__init__`` (D16): ``login`` and ``oidc``
-are the values the config-class lift carries (the ``server_app=`` server kwarg,
-forwarded by ``_register_server_app``): the lockout policy dict and the
-per-``code`` OIDC provider dicts, stored as ``login_policy``/``oidc_providers``
-(consumed by the lockout check and the ``OidcMethod`` registration). The rest
-flows down the chain. A hand-built ``AsgiServer(applications=[...])`` passes
-nothing, so the defaults (empty dicts) keep today's bare app.
+Kwargs peeled by the cooperative ``__init__`` (D16): ``login`` and ``oidc`` are
+the login-surface values of the configuration's ``authentication`` section (the
+``server_app=`` server kwarg, forwarded by ``_register_server_app``): the lockout
+policy dict and the per-``code`` OIDC provider dicts, stored as
+``login_policy``/``oidc_providers`` (consumed by the lockout check and the
+``OidcMethod`` registration). The rest flows down the chain. A hand-built
+``AsgiServer(applications=[...])`` passes nothing, so the defaults (empty dicts)
+keep today's bare app.
 """
 
 from __future__ import annotations
@@ -83,7 +85,6 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from genro_builders.builder import BuilderBase, element
 from genro_routes import RoutingClass, route
 
 from ..auth import AuthMethod, OidcMethod, PasswordMethod
@@ -96,80 +97,10 @@ if TYPE_CHECKING:
 
     from ..request import Request
 
-__all__ = ["ServerAppConfig", "ServerAppConfigElements", "ServerApplication"]
+__all__ = ["ServerApplication"]
 
 LOCKOUT_MAX_ATTEMPTS = 5
 LOCKOUT_BACKOFF_SECONDS = 30.0
-
-
-class ServerAppConfigElements:
-    """Config grammar of ``ServerApplication`` — the dialect of its config-class.
-
-    NOT composed into the site dialect: an application's configuration is a
-    SEPARATE builder (distributed config), and ``_server``'s is the one the
-    core knows how to mount by construction. Declares the identity surface:
-    ``admin_password`` (a ``^pointer`` node value) plus ``users()``/``tokens()``
-    store descriptors. All three are LIFTED to the SERVER constructor kwargs
-    (``AuthMixin`` peels them): the stores live on the server (Phase 3) — the
-    config keeps the app's shape, the runtime stays where it is. The login
-    surface (``login()`` policy, ``oidc()`` providers) lifts as the single
-    ``server_app=`` server kwarg instead: those values belong to THIS app,
-    which peels them when ``AsgiServer`` forwards them at mount time.
-    """
-
-    @element(sub_tags="")
-    def admin_password(self) -> None:
-        """The SUPERADMIN bootstrap password as a ``^pointer`` node value —
-        never a literal (secrets stay out of recipes). Resolved at materialize
-        time; configured-but-empty is a boot error."""
-
-    @element(sub_tags="")
-    def users(self, mount: str | None = None, prefix: str | None = None) -> None:
-        """Identity store descriptor: ``{mount, prefix}`` (or omitted for the
-        default) — the ``users=`` kwarg ``AuthMixin`` peels."""
-
-    @element(sub_tags="")
-    def tokens(self, mount: str | None = None, prefix: str | None = None) -> None:
-        """Api-key store descriptor: ``{mount, prefix}`` — the ``tokens=`` kwarg
-        ``AuthMixin`` peels."""
-
-    @element(sub_tags="")
-    def login(self, max_attempts: int | None = None, backoff: float | None = None) -> None:
-        """Login-surface policy: lockout tuning (``max_attempts``, ``backoff``)
-        — the ``login=`` kwarg ``ServerApplication`` peels (``server_app`` lift)."""
-
-    @element(sub_tags="")
-    def oidc(
-        self,
-        code: str | None = None,
-        issuer: str | None = None,
-        client_id: str | None = None,
-        client_secret: str | None = None,
-        scopes: str | None = None,
-        identity_claim: str | None = None,
-        tags: list | None = None,
-    ) -> None:
-        """One OIDC provider (repeatable, keyed by ``code``): ``issuer``,
-        ``client_id``, ``client_secret`` (a ``^pointer``, optional — public
-        client), ``scopes``, ``identity_claim``, ``tags`` — folded into the
-        ``oidc=`` kwarg ``ServerApplication`` peels (``server_app`` lift)."""
-
-
-class ServerAppConfig(BuilderBase, ServerAppConfigElements):
-    """The ``_server`` app's config-class: the base IS the default.
-
-    ``main()`` declares nothing, so materializing the base yields today's bare
-    ``ServerApplication()`` — no configuration, no regression. A site
-    personalizes ``_server`` by subclassing this in its ``config.py`` and
-    passing the subclass to ``ConfigurationHandler`` alongside the site
-    recipe; the handler claims it by class identity
-    (``ServerApplication.config_class``), no name registry.
-    """
-
-    _name = "server_app"
-
-    def main(self, root: Any) -> None:
-        """Default ``_server`` configuration: nothing to declare."""
 
 
 class ServerApplication(OpenApiApplication):
@@ -185,7 +116,6 @@ class ServerApplication(OpenApiApplication):
         "title": "genro-asgi server endpoints",
         "version": "1.0.0",
     }
-    config_class = ServerAppConfig
     code = "_server"
     mount = "_server"
 
@@ -215,7 +145,7 @@ class ServerApplication(OpenApiApplication):
 
     @property
     def login_policy(self) -> dict[str, Any]:
-        """The lockout policy from the config's ``login()`` element (may be empty)."""
+        """The lockout policy from ``authentication.login`` (may be empty)."""
         return self._login_policy
 
     @property

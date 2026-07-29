@@ -768,3 +768,48 @@ documentation-umbrella parts of Q4 are unaffected.)
 The historical Q4/D22 entries above are kept verbatim as the record of why
 `-core` was originally chosen; this decision is the correction that cites
 them, per §1 (history is never rewritten).
+
+### Ratified 2026-07-29 (config layer refounded on genro-builders contrib/config)
+
+**D-config — the configuration layer is the contrib `config` dialect, the
+server reads itself, and values resolve in place.**
+(Supersedes the *materialization* half of **D15**, 2026-07-19; D15's premise —
+one config describes the whole site — stands unchanged.)
+
+- The dialect is **`AsgiConfigBuilder(ConfigBuilder, AsgiServerGrammar)`** over
+  genro-builders 0.22 `contrib/config`: one `configuration` root, overridden
+  with the full closed section list, every section a singleton (`[0:1]`) so
+  every path is stable and hand-writable. The grammar a class speaks is its
+  class attribute `.grammar` (`AsgiServer.grammar`,
+  `BaseApplication.grammar = ApplicationGrammar`), and an `application` mounts
+  its app's own grammar by reference (`app_class:grammar`).
+- **The server is self-configuring**: `AsgiServer(config=source)` builds its own
+  `ConfigurationHandler` in `__init__`, derives its constructor kwargs from it,
+  instantiates the configured applications and registers the configured
+  databases. Explicitly passed kwargs win over configured ones, wholesale per
+  kwarg. The door is exposed read-only as `server.config`, callable by path over
+  the inherited four-layer read stack (written value → element signature default
+  → call-site `default=` → noisy `KeyError`); an application reads its own
+  subtree through `app.config(path)`, which prefixes `applications.<code>.` and
+  delegates to that same door.
+- **Resolvers replace `^pointer`**: a value that comes from outside is a
+  `BagResolver` (`EnvResolver`, …) stored where the value would go, resolved at
+  READ time. The pointer model resolved once at materialization and silently
+  dropped whole layers — `storage_key` was the case that proved it — so
+  `resolve_pointers` and `configurable.py` are deleted with the idiom.
+- **`materialize()` and `Projection` are removed**, and with them `role=`, the
+  `app=` projection parameter and the multi-builder claim machinery
+  (`ServerAppConfig`, `config_class`, `_claim_app_configs`). There is one
+  direction of dependency: the server builds its handler and asks it for
+  values; nothing builds a server from a config. D15's per-role projection is
+  superseded — one process reads its own configuration — and the D15 sketch's
+  `app_class="pkg:Class"` strings become imported classes.
+- **The `auth` section and the separate `_server` config-class dissolve into one
+  `authentication` section**: `admin_password` (a resolver — a literal string is
+  a boot error), `users`/`tokens`, `login`, `oidc` as a keyed collection of
+  `provider(code=…)`, and `credentials` (`basic_user`/`bearer_token`/`jwt`)
+  folded by the handler into the exact dicts `AuthCore` already consumes.
+  `AuthCore` itself is not touched: only how its values travel changes.
+- The `_server` app remains **automatic, not configured** (D4): the
+  `authentication` login surface reaches it as forwarded kwargs at mount time.
+- Pins: `genro-builders>=0.22.0`, `genro-bag>=0.20.0`.

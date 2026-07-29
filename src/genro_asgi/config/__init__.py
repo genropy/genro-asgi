@@ -12,17 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Configuration package: the ``asgiconfig`` dialect and its materializer.
+"""Configuration package: the ``asgiconfig`` dialect and the server's read door.
 
 A ``config.py`` defines a ``ServerConfiguration`` (subclass of
-``AsgiConfigBuilder``) whose recipe declares the whole-site sections (D15).
-``ConfigurationHandler`` mounts it, runs the recipe and MATERIALIZES an
-``AsgiServer`` from the built tree.
+``AsgiConfigBuilder``) whose recipe declares the site sections;
+``AsgiServer(config=...)`` builds its own ``ConfigurationHandler`` over that
+source and reads every value through it.
 """
 
 from .builder import AsgiConfigBuilder
-from .elements import AsgiConfigElements
-from .handler import ConfigurationHandler
-from .projection import Projection
+from .elements import AsgiServerGrammar
+from .handler import ConfigError, ConfigurationHandler
 
-__all__ = ["AsgiConfigBuilder", "AsgiConfigElements", "ConfigurationHandler", "Projection"]
+__all__ = [
+    "AsgiConfigBuilder",
+    "AsgiServerGrammar",
+    "ConfigError",
+    "ConfigurationHandler",
+]

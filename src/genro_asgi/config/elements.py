@@ -12,135 +12,144 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""AsgiConfigElements — grammar for the ``asgiconfig`` dialect (D15).
+"""AsgiServerGrammar — the configuration grammar of ``AsgiServer``.
 
-The config recipe describes the WHOLE site (D15), even where core 1a does not
-materialize every section. Each ``@element`` is a top-level section built
-directly on the recipe root (``root.server(...)``, ``root.applications(...)``);
-there is no enclosing ``config`` node. A section's kwargs become the node's
-attributes (read back by ``ConfigurationHandler.materialize`` via
-``node.node_tag`` / ``node.fixed_attr_items()``).
+The grammar the server class exposes as ``AsgiServer.grammar``: one
+``configuration`` root (the contrib ``ConfigBuilder`` element, OVERRIDDEN here
+with the full closed section list) whose sections describe the whole site.
+Every section is a singleton (``[0:1]``), so labels are clean and every path is
+stable and hand-writable: ``configuration.server``,
+``configuration.authentication.oidc.<code>``,
+``configuration.applications.<code>``.
 
-Sections and their 1a fate:
+Authoring conventions inherited from contrib/config:
 
-- ``server`` — runtime options (``host``, ``port``, ``external_url``,
-  ``max_threads``, ``storage_key``). ``host``/``port`` feed
-  ``AsgiServer.serve``; ``external_url`` is the server's public base address
-  (the OIDC ``redirect_uri`` prefix); ``max_threads`` sizes the server's thread
-  pool (peeled by ``BaseServer``, handed to ``WorkPool``); ``storage_key``
-  installs at-rest encryption on the server's storage (core 1b).
+- attributes are ANNOTATED, so their signature defaults reach the read stack of
+  ``ConfigurationHandler`` (an unannotated parameter never enters
+  ``call_args_validations``);
+- an attribute whose value may come from outside (env, file, url) is annotated
+  ``<type> | BagResolver`` and receives the resolver IN PLACE — there are no
+  ``^pointer`` strings in this dialect;
+- the recipe orchestrates in ``main`` and delegates each section to a method
+  taking the PARENT node.
+
+Sections:
+
+- ``server`` — the runtime options (``host``, ``port``, ``external_url``,
+  ``max_threads``, ``storage_key``) plus the server-domain children ``session``
+  (the session TTL) and ``tasks`` (declared by ``TaskGrammar``, the class that
+  peels ``tasks=``).
 - ``middleware`` — one ``{name: bool | dict}`` switch per middleware.
-- ``storage`` — mounts of the server's ``LocalStorage`` (core 1b); visible to
-  every role (survival infrastructure).
-- ``auth`` — the credential config (``basic``/``bearer``/``jwt`` kwargs) handed
-  verbatim to ``AuthCore`` via the ``auth=`` server kwarg.
-- ``applications``/``application`` — the app collection keyed by ``code``; the
-  optional ``default`` names the target of the 307 from ``/``. Each app
-  derives its mount from ``code`` unless it declares ``mount``, and
-  ``mount=""`` is the site root.
-- ``groups``/``group`` — grammar only (orchestration package).
-- ``databases``/``database`` — grammar only (core 1b).
-- ``plugins``/``plugin`` — router plugins armed onto every routed app
-  (``PluginMixin``); visible to every role (a worker needs the same router
-  behavior).
-- ``openapi`` — grammar only (core 1c).
+- ``authentication`` — the whole identity surface: the bootstrap
+  ``admin_password``, the ``users``/``tokens`` store descriptors, the ``login``
+  lockout policy, the ``oidc`` provider collection and the ``credentials``
+  handed to ``AuthCore``.
+- ``storage`` — the mounts of the server's ``LocalStorage``.
+- ``applications`` — the app collection keyed by ``code``; each entry MOUNTS
+  the grammar its ``app_class`` carries.
+- ``databases`` — one descriptor per database handler.
+- ``plugins`` — the router plugins armed on every routed app.
+- ``openapi`` — the OpenAPI metadata (grammar only in core 1a).
 
 A recipe subclasses ``AsgiConfigBuilder`` and overrides ``main(self, root)``;
-application classes are imported by the recipe and passed as objects::
+application classes are imported and passed as objects::
 
     from myshop.app import Application as Shop
 
-    def main(self, root):
-        root.server(host="127.0.0.1", port=8000)
-        root.middleware(cors=True)
-        apps = root.applications(default="shop")
-        apps.application(code="shop", app_class=Shop)
+    class ServerConfiguration(AsgiConfigBuilder):
+        def main(self, root):
+            cfg = root.configuration()
+            cfg.server(host="127.0.0.1", port=8000)
+            cfg.middleware(cors=True)
+            cfg.applications(default="shop").application(code="shop", app_class=Shop)
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from genro_bag import BagResolver
 from genro_builders.builder import element
 
-from ..tasks.mixin import TaskConfigElements
+from ..tasks.mixin import TaskGrammar
 
 
-class AsgiConfigElements(TaskConfigElements):
-    """Element mixin for the ``asgiconfig`` dialect. Grammar only.
+class AsgiServerGrammar(TaskGrammar):
+    """Configuration grammar of ``AsgiServer``: the site layout, reading elsewhere.
 
-    The sections are top-level elements built directly on the recipe root;
-    a section's kwargs are stored as the node's attributes and read back at
-    materialization time. Capability-owned companions are composed explicitly
-    (``TaskConfigElements`` — the ``tasks`` child of ``server``, owned by
-    ``TaskMixin``).
+    Grammar only — the runtime reads the built tree through
+    ``ConfigurationHandler``, never through this class. Capability-owned
+    companions are composed explicitly (``TaskGrammar`` — the ``tasks`` child of
+    ``server``, owned by ``TaskMixin``).
     """
 
-    @element(sub_tags="session,tasks")
+    @element(
+        sub_tags=(
+            "server[0:1],middleware[0:1],authentication[0:1],storage[0:1],"
+            "applications[0:1],databases[0:1],plugins[0:1],openapi[0:1]"
+        ),
+        node_label="configuration",
+    )
+    def configuration(self) -> None:
+        """Root element of the configuration document (one per recipe).
+
+        Overrides the contrib root with the full section list of this dialect.
+        Each section is a singleton, so its label IS its tag and every path
+        below it is stable.
+        """
+
+    @element(parent_tags="configuration", sub_tags="session[0:1],tasks[0:1]")
     def server(
         self,
-        host: str | None = None,
-        port: int | None = None,
-        external_url: str | None = None,
-        max_threads: int | None = None,
-        storage_key: str | None = None,
+        host: str | BagResolver = None,
+        port: int | BagResolver = None,
+        external_url: str | BagResolver = None,
+        max_threads: int | BagResolver = None,
+        storage_key: str | BagResolver = None,
     ) -> None:
-        """Server runtime options: ``host``, ``port``, ``external_url``,
-        ``max_threads``, ``storage_key``.
+        """Server runtime options.
 
         ``host``/``port`` become the defaults of ``AsgiServer.serve``.
 
-        ``external_url`` (str, optional) is the server's PUBLIC base address —
-        what the server calls itself when it hands its own URL to a third party
+        ``external_url`` is the server's PUBLIC base address — what the server
+        calls itself when it hands its own URL to a third party
         (``https://shop.example.com``; a trailing slash is stripped). It is not
         the listener: behind a proxy the bind address and the public address
         differ, and only the latter is meaningful to an outside caller. Required
-        when an ``oidc()`` provider is configured — the provider is given an
+        when an ``oidc`` provider is configured — the provider is given an
         absolute ``redirect_uri`` — and a boot error when missing there.
 
-        ``max_threads`` sizes the server's thread pool: ``BaseServer`` peels
-        it and hands it to ``WorkPool`` (omitted, the stdlib default
+        ``max_threads`` sizes the server's thread pool: ``BaseServer`` peels it
+        and hands it to ``WorkPool`` (omitted, the stdlib default
         ``min(32, cpu + 4)`` applies).
 
-        ``storage_key`` (str, optional) installs at-rest encryption on the
-        server's storage (comma-separated Fernet keys — first encrypts, all
-        decrypt for rotation). Pass the secret as a ``^pointer`` to an
-        ``EnvResolver`` so it stays out of the recipe, never a literal::
+        ``storage_key`` installs at-rest encryption on the server's storage
+        (comma-separated Fernet keys — the first encrypts, all decrypt, for
+        rotation). Give it a resolver so the secret stays out of the recipe::
 
-            def setup(self, data):
-                data["storage_key"] = EnvResolver("GENRO_STORAGE_KEY")
+            def server_section(self, cfg):
+                cfg.server(host="127.0.0.1", port=8000,
+                           storage_key=EnvResolver("GENRO_STORAGE_KEY"))
 
-            def main(self, root):
-                root.server(host="127.0.0.1", port=8000, storage_key="^storage_key")
-
-        Configured but resolved empty is an explicit boot error (no silent
-        degradation); omit it to run the encrypted mounts dormant.
-
-        Children (server-domain, each materialized to a server kwarg):
-        ``session`` (the session TTL) and ``tasks`` (the task backbone —
-        declared by ``TaskConfigElements``, the ``config_grammar`` companion
-        ``TaskMixin`` owns). The ``_server`` app's identity surface is NOT
-        configured here — it has its own config-class (``ServerAppConfig``,
-        see ``applications/server_app.py``) passed to the handler alongside
-        the site recipe.
+        Children are server-domain: ``session`` (the session TTL) and ``tasks``
+        (the task backbone, declared by ``TaskGrammar``).
         """
 
-    @element(sub_tags="", parent_tags="server")
+    @element(parent_tags="server", sub_tags="")
     def session(self, ttl: int) -> None:
         """Session options: ``ttl`` (seconds, REQUIRED — the grammar rejects a
-        session without it) → the server's ``session_ttl`` kwarg (the default
-        store's TTL). Server-domain, so it lives under ``server``, not under an
-        application."""
+        session without it) → the server's ``session_ttl`` kwarg. Server-domain,
+        so it lives under ``server``, not under an application."""
 
-    @element(sub_tags="")
+    @element(parent_tags="configuration", sub_tags="")
     def middleware(
         self,
-        errors: bool | dict | None = None,
-        wellknown: bool | dict | None = None,
-        logging: bool | dict | None = None,
-        cors: bool | dict | None = None,
-        auth: bool | dict | None = None,
-        session: bool | dict | None = None,
+        errors: bool | dict = None,
+        wellknown: bool | dict = None,
+        logging: bool | dict = None,
+        cors: bool | dict = None,
+        auth: bool | dict = None,
+        session: bool | dict = None,
     ) -> None:
         """Global middleware switches: one ``{name: bool | dict}`` kwarg per
         middleware. A dict value enables the middleware and becomes its
@@ -148,116 +157,197 @@ class AsgiConfigElements(TaskConfigElements):
         (``middleware.default_registry()``); one registered through
         ``middleware_registry=`` is not configurable here."""
 
-    @element(sub_tags="")
-    def auth(
+    @element(
+        parent_tags="configuration",
+        sub_tags=(
+            "admin_password[0:1],users[0:1],tokens[0:1],"
+            "login[0:1],oidc[0:1],credentials[0:1]"
+        ),
+        node_label="authentication",
+    )
+    def authentication(self) -> None:
+        """The server's whole identity surface.
+
+        Both the identity STORES (``admin_password``, ``users``, ``tokens`` →
+        the kwargs ``AuthMixin`` peels) and the LOGIN surface (``login``,
+        ``oidc`` → forwarded to the ``_server`` application) are configured
+        here: one section for one subject, whichever object consumes the value.
+        """
+
+    @element(parent_tags="authentication", sub_tags="")
+    def admin_password(self, node_value: BagResolver = None) -> None:
+        """The SUPERADMIN bootstrap password as the NODE VALUE, supplied by a
+        resolver — never a literal (secrets stay out of recipes; the signature
+        rejects a literal at the recipe line). Resolving empty, or to anything
+        but a string, is a boot error."""
+
+    @element(parent_tags="authentication", sub_tags="")
+    def users(self, mount: str = None, prefix: str = None) -> None:
+        """Identity store descriptor: ``{mount, prefix}`` (or empty for the
+        default) — the ``users=`` kwarg ``AuthMixin`` peels."""
+
+    @element(parent_tags="authentication", sub_tags="")
+    def tokens(self, mount: str = None, prefix: str = None) -> None:
+        """Api-key store descriptor: ``{mount, prefix}`` — the ``tokens=`` kwarg
+        ``AuthMixin`` peels."""
+
+    @element(parent_tags="authentication", sub_tags="")
+    def login(self, max_attempts: int = None, backoff: float = None) -> None:
+        """Login-surface policy: lockout tuning (``max_attempts``, ``backoff``)
+        — forwarded to ``ServerApplication``, which peels ``login=``."""
+
+    @element(
+        parent_tags="authentication",
+        sub_tags="provider",
+        collection_key="code",
+        node_label="oidc",
+    )
+    def oidc(self) -> None:
+        """Collection of OIDC providers, each labelled by its ``code`` — stable
+        paths ``authentication.oidc.<code>``."""
+
+    @element(parent_tags="oidc", sub_tags="")
+    def provider(
         self,
-        basic: bool | dict | None = None,
-        bearer: bool | dict | None = None,
-        jwt: bool | dict | None = None,
+        code: str,
+        issuer: str = None,
+        client_id: str = None,
+        client_secret: str | BagResolver = None,
+        scopes: str = "openid email profile",
+        identity_claim: str = "email",
+        tags: str | list = None,
     ) -> None:
-        """Credential config: ``basic``/``bearer``/``jwt`` kwargs handed
-        verbatim to ``AuthCore`` through the server's ``auth=`` kwarg."""
+        """One OIDC provider: ``code`` (the collection key, REQUIRED),
+        ``issuer``, ``client_id``, ``client_secret`` (optional — a public client
+        has none; give it a resolver), plus the defaulted ``scopes``,
+        ``identity_claim`` and ``tags``."""
 
-    @element(sub_tags="mount", collection_key="code")
+    @element(
+        parent_tags="authentication",
+        sub_tags="basic_user,bearer_token,jwt",
+        node_label="credentials",
+    )
+    def credentials(self) -> None:
+        """The header credentials handed to ``AuthCore``.
+
+        Three repeatable children, one per backend. They are NOT a keyed
+        collection: the three tags key differently (``username``, ``identity``,
+        nothing at all for ``jwt``, which is an ordered list), so the handler
+        folds them into ``AuthCore``'s own shapes by reading each child.
+        """
+
+    @element(parent_tags="credentials", sub_tags="")
+    def basic_user(
+        self,
+        username: str,
+        password: str | BagResolver = None,
+        tags: str = None,
+    ) -> None:
+        """One HTTP Basic user: ``username`` (REQUIRED — the ``AuthCore`` key),
+        ``password`` (give it a resolver) and comma-separated ``tags``."""
+
+    @element(parent_tags="credentials", sub_tags="")
+    def bearer_token(
+        self,
+        identity: str,
+        token: str | BagResolver = None,
+        tags: str = None,
+    ) -> None:
+        """One static Bearer token: ``identity`` (REQUIRED — the identity the
+        token authenticates as), ``token`` (give it a resolver) and
+        comma-separated ``tags``."""
+
+    @element(parent_tags="credentials", sub_tags="")
+    def jwt(
+        self,
+        name: str = None,
+        secret: str | BagResolver = None,
+        public_key: str | BagResolver = None,
+        algorithm: str = "HS256",
+        tags: str = None,
+    ) -> None:
+        """One JWT verifier (repeatable, an ORDERED list — the first that
+        verifies wins): ``secret`` (shared HMAC material, the only kind that may
+        also SIGN) or ``public_key`` (verify only), the ``algorithm``, an
+        optional ``name`` and comma-separated ``tags``."""
+
+    @element(parent_tags="configuration", sub_tags="mount", collection_key="code")
     def storage(self) -> None:
-        """Collection of storage mounts, each keyed by ``code``. Materialized in
-        core 1b as the server's ``LocalStorage`` (one ``add_mount`` per child).
-        Visible to EVERY role (survival infrastructure — the spool lives on
-        it), unlike ``middleware``/``auth`` which stay root-only."""
+        """Collection of storage mounts, each labelled by its ``code``.
+        Materialized as the server's ``LocalStorage`` (one ``add_mount`` per
+        child)."""
 
-    @element(sub_tags="", parent_tags="storage")
-    def mount(self, path: str, code: str | None = None, encrypted: bool = False) -> None:
+    @element(parent_tags="storage", sub_tags="")
+    def mount(self, path: str, code: str = None, encrypted: bool = False) -> None:
         """One storage mount: ``code`` (the collection key), ``path`` (the
         filesystem path, relative to the server base dir unless absolute,
         REQUIRED — the grammar rejects a mount without it) and optional
-        ``encrypted`` (bool, default False — encrypt at rest, which requires
-        the server's ``storage_key``)."""
+        ``encrypted`` (encrypt at rest, which requires the server's
+        ``storage_key``)."""
 
-    @element(sub_tags="application", collection_key="code")
-    def applications(self, default: str | None = None) -> None:
-        """Collection of applications, each keyed by its ``code``. The optional
-        ``default`` attribute names the application ``/`` **redirects to** (307)
+    @element(parent_tags="configuration", sub_tags="application", collection_key="code")
+    def applications(self, default: str = None) -> None:
+        """Collection of applications, each labelled by its ``code``. The
+        optional ``default`` names the application ``/`` **redirects to** (307)
         when no application answers the site root; it elects nothing."""
 
-    @element(sub_tags="*", parent_tags="applications")
+    @element(parent_tags="applications", _meta={"subbuilder": "app_class:grammar"})
     def application(
         self,
         app_class: type,
-        code: str | None = None,
-        mount: str | None = None,
+        code: str = None,
+        mount: str = None,
         **app_kwargs: Any,
     ) -> None:
-        """One application: ``code`` (the collection key), ``app_class`` (the
-        imported class, REQUIRED — the grammar rejects an application without
-        it), optional ``mount`` plus the app's constructor kwargs. ``mount`` is
-        the URL prefix and defaults to ``code``; ``mount=""`` is the site root —
-        the one application answering ``/`` and every unclaimed path. Children
-        are unconstrained (``sub_tags="*"``): the core reads only the app's own
-        attributes and delegates the rest."""
+        """One application, and the MOUNT POINT of its own grammar.
 
-    @element(sub_tags="*", parent_tags="application")
-    def configuration(self, **options: Any) -> None:
-        """The application's own configuration (RESERVED tag): opaque to the
-        core, which reads and skips it — the site dialect never validates an
-        app's internal grammar (distributed configuration). Today it carries
-        free attributes; the machinery that fills and mounts its subtree with
-        the app's own dialect is a future macro."""
+        ``app_class`` (the imported class, REQUIRED) carries the grammar
+        governing this node's children (``app_class.grammar``, subbuilder by
+        reference): the site dialect never validates an app's internal
+        vocabulary, the app itself declares it. ``code`` is the collection key,
+        ``mount`` the URL prefix (defaulting to ``code``; ``mount=""`` is the
+        site root — the one application answering ``/`` and every unclaimed
+        path). Remaining kwargs are the app's own constructor kwargs and stay
+        open — the envelope's attributes belong to THIS grammar, only its
+        children live in the mounted one.
+        """
 
-    @element(sub_tags="group", collection_key="code", parent_tags="application")
-    def groups(self, default: str | None = None) -> None:
-        """Collection of worker groups for a multi-worker application, keyed by
-        ``code``; the optional ``default`` names the group used when none is
-        asked for. Grammar only in core 1a — materialized by the orchestration
-        package; read and skipped here."""
-
-    @element(sub_tags="", parent_tags="groups")
-    def group(
-        self,
-        code: str | None = None,
-        workers: int | None = None,
-        python: str | None = None,
-    ) -> None:
-        """One worker group: ``code`` (the collection key), ``workers`` (the
-        pool size) and optional ``python`` (the interpreter). Grammar only in
-        core 1a."""
-
-    @element(sub_tags="database", collection_key="code")
+    @element(parent_tags="configuration", sub_tags="database", collection_key="code")
     def databases(self) -> None:
-        """Collection of database descriptors, each keyed by ``code``. Grammar
-        only in core 1a — the server-side handlers arrive in core 1b; read and
-        skipped here."""
+        """Collection of database descriptors, each labelled by its ``code``."""
 
-    @element(sub_tags="", parent_tags="databases")
+    @element(parent_tags="databases", sub_tags="")
     def database(
         self,
         db_class: type,
-        code: str | None = None,
-        db_handler_class: type | None = None,
+        code: str = None,
+        db_handler_class: type = None,
         **params: Any,
     ) -> None:
         """One database: ``code`` (the registry key), ``db_class`` (REQUIRED —
-        the grammar rejects a database without it) and its connection kwargs.
-        Grammar only in core 1a."""
+        the grammar rejects a database without it), the optional
+        ``db_handler_class`` (``AsgiDbHandlerBase`` when omitted) and the
+        connection kwargs handed to ``db_class(**params)``. The ``db_class`` is
+        user-provided — the core never imports db drivers."""
 
-    @element(sub_tags="plugin", collection_key="code")
+    @element(parent_tags="configuration", sub_tags="plugin", collection_key="code")
     def plugins(self) -> None:
-        """Collection of router plugins, each keyed by ``code``. Materialized as
-        the server's ``plugins=`` switches (``PluginMixin``): the server arms
-        every enabled plugin onto each routed app it hosts. Visible to EVERY
-        role — a worker hosting an app needs the same router behavior."""
+        """Collection of router plugins, each labelled by its ``code``.
+        Materialized as the server's ``plugins=`` switches (``PluginMixin``):
+        the server arms every enabled plugin onto each routed app it hosts."""
 
-    @element(sub_tags="", parent_tags="plugins")
-    def plugin(self, code: str | None = None, enabled: bool = True, **options: Any) -> None:
+    @element(parent_tags="plugins", sub_tags="")
+    def plugin(self, code: str = None, enabled: bool = True, **options: Any) -> None:
         """One router plugin: ``code`` (the collection key), optional
-        ``enabled`` (bool, default True — set False to leave it unarmed) and
-        arbitrary options handed to ``router.plug(code, **options)``."""
+        ``enabled`` (set False to leave it unarmed) and arbitrary options handed
+        to ``router.plug(code, **options)``."""
 
-    @element(sub_tags="")
+    @element(parent_tags="configuration", sub_tags="")
     def openapi(
         self,
-        title: str | None = None,
-        version: str | None = None,
-        description: str | None = None,
+        title: str = None,
+        version: str = None,
+        description: str = None,
     ) -> None:
         """OpenAPI metadata: ``title``, ``version``, ``description``. Grammar
         only in core 1a — the OpenAPI application arrives in core 1c; read and

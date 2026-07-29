@@ -23,15 +23,25 @@ base ``Lifespan``). The future internal (worker) server simply composes the SAME
 base WITHOUT the auth mixin (D6 by construction — the base never learned about
 the chain).
 
-Its cooperative ``__init__`` peels the kwargs the frozen Macro 1
-``BaseServer`` does not accept — ``host``/``port``/``external_url`` plus
-``server_app`` (the ``_server`` config-class lift) — and forwards everything
-else (``applications``, ``auth``, ``session_store``/``session_ttl``,
+The server is SELF-CONFIGURING: ``AsgiServer(config=source)`` builds its own
+read door — a ``ConfigurationHandler`` over a ``config.py`` path, a recipe class,
+a recipe instance or a ready handler — derives its constructor kwargs from it and
+then runs the ordinary D16 cooperative chain. Nothing materializes a server from
+the outside; the class that needs the values reads them. Explicitly passed
+kwargs WIN over the configured ones, wholesale per kwarg
+(``AsgiServer(config=Recipe, port=0)`` serves the recipe's site on an
+OS-assigned port), and the handler stays reachable as ``server.config`` — the
+read door applications delegate to. A bare ``AsgiServer(...)`` has
+``config is None`` and behaves exactly as before.
+
+Its cooperative ``__init__`` peels the kwargs the frozen Macro 1 ``BaseServer``
+does not accept — ``host``/``port``/``external_url`` plus ``server_app`` (the
+login-surface values of the ``authentication`` section) — and forwards
+everything else (``applications``, ``auth``, ``session_store``/``session_ttl``,
 ``middleware``/``middleware_registry``, ``plugins``/``plugin_registry``,
 ``storage``/``storage_key``, ``parent``) down the D16 chain. The peeled
-``host``/``port`` become the defaults of ``serve``, so a config-built server
-serves on its configured address unless the caller overrides it;
-``server_app`` travels to ``_register_server_app``.
+``host``/``port`` become the defaults of ``serve``, so a configured server
+serves on its configured address unless the caller overrides it.
 
 ``host``/``port`` are the LISTENER; ``external_url`` is the server's PUBLIC
 base address — the two differ behind a proxy and answer different questions.
@@ -48,17 +58,23 @@ provider error at the first login.
 Once the chain has run, ``__init__`` registers the automatic ``_server`` app
 (``_register_server_app``, D4 "automatic, not configured"): a hand-built
 ``AsgiServer(applications=[...])`` exposes ``/_server/...`` exactly like a
-config-materialized one, and ``ConfigurationHandler.materialize`` never
-special-cases it.
+configured one, and no configuration path special-cases it. The configured
+databases are registered right after, over the live server.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+
+from genro_builders.builder import BuilderBase
 
 from .applications.server_app import ServerApplication
 from .auth import AuthMixin
 from .communication import CommunicationMixin
+from .config.elements import AsgiServerGrammar
+from .config.handler import ConfigurationHandler
+from .db import AsgiDbHandlerBase
 from .middleware import MiddlewareMixin
 from .plugin_mixin import PluginMixin
 from .server import BaseServer
@@ -67,6 +83,8 @@ from .storage_mixin import StorageMixin
 from .tasks import TaskMixin
 
 __all__ = ["AsgiServer"]
+
+ConfigSource = str | Path | type | BuilderBase | ConfigurationHandler
 
 
 class AsgiServer(
@@ -81,15 +99,20 @@ class AsgiServer(
 ):
     """The shipped composition: communication + auth + sessions + chain + plugins + storage + base.
 
-    Constructor kwargs peeled here: ``host`` and ``port`` — the ``serve``
-    defaults carried from the config's ``server`` section — ``external_url``,
-    the server's public base address (trailing slash stripped), plus
-    ``server_app``, the ``_server`` config-class lift forwarded to the
-    automatically registered app. Every other kwarg flows to the capability
+    Constructor kwargs peeled here: ``config`` — the configuration source this
+    server reads itself from — ``host`` and ``port`` (the ``serve`` defaults),
+    ``external_url`` (the public base address, trailing slash stripped) and
+    ``server_app`` (the login-surface values forwarded to the automatically
+    registered ``_server`` app). Every other kwarg flows to the capability
     mixins and the base (D16 cooperative init).
     """
 
-    def __init__(self, **kwargs: Any) -> None:
+    grammar: type = AsgiServerGrammar
+
+    def __init__(self, config: ConfigSource | None = None, **kwargs: Any) -> None:
+        self._config = self._build_config(config)
+        if self.config is not None:
+            kwargs = {**self._configured_kwargs(self.config), **kwargs}
         self._config_host: str | None = kwargs.pop("host", None)
         self._config_port: int | None = kwargs.pop("port", None)
         external_url: str | None = kwargs.pop("external_url", None)
@@ -98,6 +121,69 @@ class AsgiServer(
         super().__init__(**kwargs)
         self._register_server_app()
         self._check_oidc_external_url()
+        if self.config is not None:
+            self._register_configured_databases(self.config)
+
+    def _build_config(self, config: ConfigSource | None) -> ConfigurationHandler | None:
+        """The read door over ``config``: a ready handler passes through, anything
+        else (a ``config.py`` path, a recipe class, a recipe instance) is wrapped
+        in one. ``None`` — a hand-built server — has no configuration at all."""
+        if config is None or isinstance(config, ConfigurationHandler):
+            return config
+        return ConfigurationHandler(config)
+
+    def _configured_kwargs(self, config: ConfigurationHandler) -> dict[str, Any]:
+        """The constructor kwargs the configuration declares.
+
+        One helper of the read door per section, each mapped to the kwarg the
+        owning class peels; a section the recipe omits contributes nothing, so
+        the composition's own defaults apply. ``applications`` are instantiated
+        HERE — the recipe named the classes and their kwargs, and a recipe error
+        surfaces as a boot error instead of a broken server.
+        """
+        kwargs: dict[str, Any] = config.server_kwargs()
+        kwargs.update(config.identity_kwargs())
+        for name, value in (
+            ("middleware", config.middleware_config()),
+            ("auth", config.auth_entries()),
+            ("storage", config.storage_config()),
+            ("plugins", config.plugins_config()),
+        ):
+            if value is not None:
+                kwargs[name] = value
+        server_app = config.server_app_kwargs()
+        if server_app:
+            kwargs["server_app"] = server_app
+        entries, default = config.applications()
+        kwargs["applications"] = [app_class(**app_kwargs) for app_class, app_kwargs in entries]
+        if default is not None:
+            kwargs["default"] = default
+        return kwargs
+
+    def _register_configured_databases(self, config: ConfigurationHandler) -> None:
+        """Build and register the configured database handlers over the live server.
+
+        Each descriptor becomes ``db_handler_class(db_class(**params))``,
+        registered by its ``code``; the default handler class is
+        ``AsgiDbHandlerBase``. It runs after the cooperative chain because
+        ``add_database`` needs the server, not its kwargs.
+        """
+        for descriptor in config.databases():
+            db_class = descriptor["db_class"]
+            handler_class = descriptor["db_handler_class"] or AsgiDbHandlerBase
+            self.add_database(
+                descriptor["code"], handler_class(db_class(**descriptor["params"]))
+            )
+
+    @property
+    def config(self) -> ConfigurationHandler | None:
+        """The read door over this server's configuration (``None`` when built bare).
+
+        Callable as ``server.config("server.host")`` — the four-layer read stack
+        of the ``ConfigurationHandler`` — and the door applications delegate to
+        with their own ``applications.<code>.`` prefix.
+        """
+        return self._config
 
     def _register_server_app(self) -> None:
         """Register the automatic ``_server`` app (D4) unless one is already there.
@@ -105,8 +191,8 @@ class AsgiServer(
         Runs at the end of ``__init__``, after the composed applications are
         registered, so the guard only matters when the composition already
         carries a ``_server`` app (idempotent). The peeled ``server_app``
-        kwargs (the config-class lift: ``login`` policy, ``oidc`` providers)
-        are forwarded here — the app peels them.
+        kwargs (the ``authentication`` login surface: ``login`` policy, ``oidc``
+        providers) are forwarded here — the app peels them.
         """
         if "_server" not in self.applications:
             self.register_application(ServerApplication(**self._server_app_kwargs))
@@ -116,12 +202,12 @@ class AsgiServer(
 
         Runs right after the ``_server`` registration, the first moment both facts are
         known — the app carries the configured providers, the server carries its
-        public address — and covers the config-materialized and the hand-built
-        server with one check. An OIDC provider is handed the ABSOLUTE
-        ``redirect_uri`` it must send the browser back to; without a public base
-        address that URI cannot be built, so the configuration is incomplete and
-        the server says so loudly instead of failing at the first login attempt
-        with a provider-side error.
+        public address — and covers the configured and the hand-built server with
+        one check. An OIDC provider is handed the ABSOLUTE ``redirect_uri`` it
+        must send the browser back to; without a public base address that URI
+        cannot be built, so the configuration is incomplete and the server says
+        so loudly instead of failing at the first login attempt with a
+        provider-side error.
         """
         providers = getattr(self.applications.get("_server"), "oidc_providers", None)
         if providers and self.external_url is None:

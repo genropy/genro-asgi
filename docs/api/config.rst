@@ -1,18 +1,10 @@
 Configuration
 =============
 
-The config builder, the configuration handler, and the config-as-data
-machinery (elements, projection).
+The ``asgiconfig`` dialect (the recipe you write), the grammar it speaks, and
+the read door the runtime reads it through.
 
 .. automodule:: genro_asgi.config.builder
-   :members:
-   :show-inheritance:
-
-.. automodule:: genro_asgi.config.handler
-   :members:
-   :show-inheritance:
-
-.. automodule:: genro_asgi.config.configurable
    :members:
    :show-inheritance:
 
@@ -20,7 +12,7 @@ machinery (elements, projection).
    :members:
    :show-inheritance:
 
-.. automodule:: genro_asgi.config.projection
+.. automodule:: genro_asgi.config.handler
    :members:
    :show-inheritance:
 

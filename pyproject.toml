@@ -28,8 +28,8 @@ classifiers = [
 
 dependencies = [
     "uvicorn>=0.30",
-    "genro-bag>=0.19.0",
-    "genro-builders>=0.21.0",
+    "genro-bag>=0.20.0",
+    "genro-builders>=0.22.0",
     "genro-tytx>=0.10.0",
     "genro-routes>=0.29.0",
     "pyjwt>=2.0",
@@ -146,14 +146,26 @@ disable_error_code = ["attr-defined", "union-attr"]
 module = "genro_asgi.tasks.executor"
 disable_error_code = ["attr-defined"]
 
+# Grammar element signatures declare what an attribute ACCEPTS, and `= None`
+# means "attribute absent" rather than a value: the annotation is what builders
+# reads into call_args_validations, so implicit Optional is the idiom here —
+# widening to `| None` would change the dtype builders infers from the signature.
+# (`implicit_optional = true` cannot cover this: mypy applies it to plain
+# annotations only, never to explicit unions like `str | BagResolver`.)
+[[tool.mypy.overrides]]
+module = "genro_asgi.config.elements"
+disable_error_code = ["assignment"]
+
 # TaskMixin forwards __init__/__call__ cooperatively to the next class in the
 # MRO (composed BEFORE BaseServer, D16 — same misc category as
 # CommunicationMixin) and builds TaskManager(self): mypy sees the mixin's
 # static self as object/TaskMixin, not the BaseServer the composition always
 # supplies at runtime. The dynamic-mixin category the parent policy anticipates.
+# TaskGrammar's element signatures share config.elements' implicit-Optional
+# idiom (`assignment`, see that block's comment).
 [[tool.mypy.overrides]]
 module = "genro_asgi.tasks.mixin"
-disable_error_code = ["misc", "arg-type"]
+disable_error_code = ["misc", "arg-type", "assignment"]
 
 # TaskManager reaches server.storage / server.session_store — attributes present
 # only when StorageMixin / SessionMixin are composed (which the running server

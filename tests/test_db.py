@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """DB handler tests (core 1b Phase 6): ``AsgiDbHandlerBase`` proxy, the server
-registry, and config materialization of the ``databases`` section.
+registry, and the ``databases`` section of a configured server.
 """
 
 from __future__ import annotations
@@ -28,7 +28,6 @@ from genro_asgi import (
     AsgiServer,
     BaseApplication,
     BaseServer,
-    ConfigurationHandler,
 )
 
 
@@ -116,7 +115,7 @@ class TestDatabaseRegistry:
         assert BaseServer(applications=[BaseApplication(mount="")]).databases == {}
 
 
-# --- config-driven materialization ---
+# --- the databases section of a configured server ---
 
 
 class ShopApp(BaseApplication):
@@ -127,17 +126,23 @@ class TwoDatabaseConfig(AsgiConfigBuilder):
     """A recipe with two ``database`` entries over ``FakeDb``."""
 
     def main(self, root: Any) -> None:
-        root.server(host="127.0.0.1", port=8000)
-        apps = root.applications(default="shop")
-        apps.application(code="shop", app_class=ShopApp)
-        dbs = root.databases()
+        cfg = root.configuration()
+        cfg.server(host="127.0.0.1", port=8000)
+        cfg.applications(default="shop").application(code="shop", app_class=ShopApp)
+        self.databases_section(cfg)
+
+    def databases_section(self, cfg: Any) -> None:
+        """Two handlers: the default one and an explicit ``db_handler_class``."""
+        dbs = cfg.databases()
         dbs.database(code="shop", db_class=FakeDb, dbname="shop")
-        dbs.database(code="reports", db_class=FakeDb, db_handler_class=AsgiDbHandlerBase, dbname="ro")
+        dbs.database(
+            code="reports", db_class=FakeDb, db_handler_class=AsgiDbHandlerBase, dbname="ro"
+        )
 
 
-class TestDatabasesMaterialization:
-    def test_materialize_registers_both_handlers(self) -> None:
-        server = ConfigurationHandler(TwoDatabaseConfig(name="config")).materialize()
+class TestConfiguredDatabases:
+    def test_configured_server_registers_both_handlers(self) -> None:
+        server = AsgiServer(config=TwoDatabaseConfig)
         assert isinstance(server, AsgiServer)
         assert set(server.databases) == {"shop", "reports"}
         shop = server.databases["shop"]
@@ -147,19 +152,13 @@ class TestDatabasesMaterialization:
         reports = server.databases["reports"]
         assert reports.params == {"dbname": "ro"}
 
-    def test_worker_projection_retains_databases_section(self) -> None:
-        handler = ConfigurationHandler(TwoDatabaseConfig(name="config"))
-        worker = handler.materialize(role="worker", app="shop")
-        assert set(worker.databases) == {"shop", "reports"}
-
     def test_database_missing_db_class_raises(self) -> None:
         class MissingDbClassConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                root.server(host="127.0.0.1", port=8000)
-                apps = root.applications(default="shop")
-                apps.application(code="shop", app_class=ShopApp)
-                dbs = root.databases()
-                dbs.database(code="shop")
+                cfg = root.configuration()
+                cfg.server(host="127.0.0.1", port=8000)
+                cfg.applications(default="shop").application(code="shop", app_class=ShopApp)
+                cfg.databases().database(code="shop")
 
         with pytest.raises(ValueError):
-            ConfigurationHandler(MissingDbClassConfig(name="config")).materialize()
+            AsgiServer(config=MissingDbClassConfig)
