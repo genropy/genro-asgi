@@ -22,7 +22,8 @@ always exist and are fed by **config data** rather than switched on structurally
 There is no dependency-injection container: a handler reaches what it needs
 through the object graph (its application, the server, the request), not through
 declared dependencies. You start the server by calling `.serve()` from your own
-entry point — there is no dedicated command-line launcher.
+entry point, or with the `genro-asgi` command
+(see [the CLI guide](guides/cli.md)).
 
 The other pivotal difference is that routing is **protocol-neutral**. In FastAPI a
 path operation is an HTTP thing. In genro-asgi a `@route` describes an operation
@@ -46,6 +47,7 @@ served as REST, as an OpenAPI schema, and as MCP tools without being rewritten.
 | Mount a sub-app | `app.mount("/api", subapp)` | secondary mounts (dict by URL prefix); demux on first path segment |
 | OpenAPI / Swagger | automatic at `/docs`, `/openapi.json` | `OpenApiApplication` + plugins; `/_meta/docs`, `/_meta/schema_json` |
 | Start the server | `uvicorn.run(app, ...)` / `uvicorn app:app` | `server.serve(host=..., port=...)` (programmatic uvicorn, blocking) |
+| Start it from a shell | `fastapi run main.py` / `uvicorn main:app --reload` | `genro-asgi serve ./config.py [--reload]` |
 | WebSocket / streaming | `WebSocket`, `StreamingResponse` | `StreamingResponse` (from `genro_asgi.streaming`), `SseStream` (from `genro_asgi.sse`) |
 | Tools for an AI agent | (not built in) | `@route(channel_channels="mcp")` on an `McpApplication` / `McpOpenApiApplication` |
 
@@ -105,10 +107,16 @@ endpoint and an MCP tool.
   collaborators through the object graph — the application holds `self.server`, the
   request holds `self.application`. If you lean heavily on FastAPI's DI for
   wiring, that pattern does not port; you compose objects instead.
-- **No dedicated CLI.** There is no `genro-asgi serve` command and no `.run()`
-  method. You write a Python entry point that builds the server and calls
-  `.serve()`, which boots a programmatic uvicorn loop and blocks. `port=0` asks the
-  OS for a free port (useful in tests).
+- **The CLI serves a config, not an app object.** `fastapi run main.py` and
+  `uvicorn main:app` both point at an ASGI callable in a module. `genro-asgi
+  serve ./config.py` points at a **configuration recipe** — the file declaring
+  the whole site — and the server builds itself from it; `genro-asgi serve
+  application=./hello.py:Hello` is the closer analogue, for when there is one
+  application and no config. The registry (`--name`, then `apps`/`stop`/`remove`)
+  has no FastAPI counterpart. There is still no `.run()` method: programmatically
+  you build the server and call `.serve()`, which boots a uvicorn loop and blocks
+  (`port=0` asks the OS for a free port, useful in tests). See
+  [the CLI guide](guides/cli.md).
 - **Routing is protocol-neutral by design.** A `@route` is not inherently an HTTP
   operation. That is the reason REST, OpenAPI and MCP share one route tree — and
   the reason a method only becomes an MCP tool when you opt it in with

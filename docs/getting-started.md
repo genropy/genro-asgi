@@ -146,9 +146,11 @@ mount claims.
 **blocks** until the process stops. The server object *is* the ASGI application
 handed to uvicorn — there is no separate app callable to wire up.
 
-> There is no `.run()` method and there is no command-line launcher. You start
-> the server by calling `.serve()` from your own Python entry point. Passing
-> `port=0` lets the OS assign a free port, which is handy in tests.
+> There is no `.run()` method: you start the server by calling `.serve()` from
+> your own Python entry point. Passing `port=0` lets the OS assign a free port,
+> which is handy in tests. If you would rather not write an entry point at all,
+> the `genro-asgi` command boots a server from a `config.py` or from a single
+> application class — see [the CLI guide](guides/cli.md).
 
 ## Responding with JSON or HTML
 

@@ -55,6 +55,9 @@ docs = [
     "myst-parser>=2.0",
 ]
 
+[project.scripts]
+genro-asgi = "genro_asgi.__main__:main"
+
 [project.urls]
 Homepage = "https://github.com/genropy/genro-asgi"
 Repository = "https://github.com/genropy/genro-asgi"

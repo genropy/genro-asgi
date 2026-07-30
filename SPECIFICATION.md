@@ -813,3 +813,46 @@ one config describes the whole site — stands unchanged.)
 - The `_server` app remains **automatic, not configured** (D4): the
   `authentication` login surface reaches it as forwarded kwargs at mount time.
 - Pins: `genro-builders>=0.22.0`, `genro-bag>=0.20.0`.
+
+### Ratified 2026-07-30 (the `genro-asgi` command)
+
+**D-cli — the package ships a command-line launcher; a `config.py` plus
+`genro-asgi serve` is a complete deployment unit.**
+(Supersedes no ratified decision: the absence of a CLI was a *consequence* of the
+spec-first rewrite starting from the core, never a decision on the merits. W2c,
+decided 2026-07-25.)
+
+- The console entry is **`genro-asgi = "genro_asgi.__main__:main"`**, built on
+  stdlib `argparse` — no new dependency. Subcommands: `serve`, `apps`,
+  `stop <name>`, `remove <name>`; `serve` options `--host`, `--port`,
+  `--reload`, `--name`. Exit codes: 0 success, 2 usage, 1 runtime error on one
+  stderr line.
+- **`serve <source>` resolves in three steps**: an `application=<target>`
+  assignment (quickstart — the class is instantiated with no arguments and
+  handed to `AsgiServer(applications=[...])`), an existing `.py` path (handed to
+  `AsgiServer(config=<absolute path>)`), otherwise a registered name.
+  The **config.py contract is the contrib handler's own** — "must define
+  exactly one `ConfigBuilder` subclass", which in a genro-asgi recipe is an
+  `AsgiConfigBuilder` — and the command ships **no loader of its own**: the
+  handler's error surfaces unchanged. The command puts the config file's
+  directory on `sys.path` before loading it (a config.py imports its sibling
+  modules; `python -m` grants the working directory, the console script does
+  not — the launcher makes the two invocations equivalent). Explicit
+  `--host`/`--port` travel as `AsgiServer` kwargs, so D-config's "explicit kwarg
+  wins, wholesale per kwarg" rule does the precedence and the command computes
+  nothing.
+- **The registry is a pointer store, never a copy**: `~/.genroasgi/apps/<name>.json`
+  holds the source string and the given options, `run/<name>.pid` the pid.
+  Relaunching by name always runs the current code. A pidfile is **never
+  trusted** — missing, unreadable or naming a dead process all read as "not
+  running" — so a crashed server shows as stopped, not as a phantom.
+- **`--workers` is excluded**: multi-process supervision is genro-juggler's
+  territory. `--debug` is excluded as well (never discussed on the merits).
+  `--role`/`--app` have no meaning since D-config removed `Projection`.
+- **Two derogations from the coding rules, confined to `__main__.py`**: one
+  module-level function (`factory`) and state in the environment
+  (`GENRO_ASGI_LAUNCHER`, one JSON object: one source key plus explicitly-given
+  host/port only). Both are forced by uvicorn's reload supervisor, which accepts
+  only an import string and starts a fresh process per restart — nothing of the
+  parent survives except the environment. Neither leaves this module, and the
+  core (`server.py`, `asgi_server.py`) is untouched by the whole feature.

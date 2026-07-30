@@ -16,6 +16,7 @@ mcp
 tasks
 streaming
 middleware
+cli
 ```
 
 ## The guides
@@ -35,6 +36,9 @@ middleware
   `StreamingResponse` and Server-Sent Events with `SseStream`.
 - **[Middleware](middleware.md)** — the built-in chain, its order and defaults,
   how to arm each stage, and how to register a custom middleware.
+- **[The `genro-asgi` command](cli.md)** — boot a server from a `config.py` or a
+  single application, manage the named ones with `apps`/`stop`/`remove`, and
+  reload on source changes.
 
 ## How each guide is structured
 
