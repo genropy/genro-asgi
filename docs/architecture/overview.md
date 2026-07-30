@@ -132,6 +132,9 @@ application reads its own subtree through `app.config(path)`, which prefixes
 `applications.<code>.` and delegates to the same door — an app holds an address
 in the tree, never a slice of it.
 
+The how-to — writing the recipe, the resolvers, the read stack, an application's
+own grammar — is the [Configuration guide](../guides/configuration.md).
+
 ## Where to go next
 
 - [Getting started](../getting-started.md) — install and run.

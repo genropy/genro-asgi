@@ -67,6 +67,10 @@ class ServerConfiguration(AsgiConfigBuilder):
         cfg.applications().application(code="hello", app_class=Hello)
 ```
 
+What a recipe can contain — the sections, the resolvers that keep secrets out of
+it, and how the server reads it back — is the subject of
+[Configuration](configuration.md).
+
 The command puts the config file's own directory on `sys.path` before loading
 it, so `from hello import Hello` resolves regardless of how the command is
 invoked or from where.
