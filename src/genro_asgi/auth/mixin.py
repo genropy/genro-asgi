@@ -24,8 +24,8 @@ uses, so composing the mixins arms header auth with no user action while an
 explicit ``middleware={"auth": False}`` still wins.
 
 It also wires the server's identity stores. ``users=`` and ``tokens=`` each take
-a config dict (``{mount, prefix}``, defaulting to ``secure:users`` /
-``secure:api_keys``) OR a ready store instance; ``admin_password=`` seeds the
+a config dict (``{mount, prefix}``, defaulting to ``site:users`` /
+``site:api_keys``) OR a ready store instance; ``admin_password=`` seeds the
 bootstrap admin. The stores are built AFTER ``super().__init__()`` returns — by
 then the cooperative chain has run and ``self.storage`` exists, since AuthMixin
 precedes StorageMixin in the MRO. The ``user_store`` / ``api_key_store``

@@ -33,6 +33,8 @@ import jwt
 import pytest
 from cryptography.fernet import Fernet
 
+from tests.storage_support import site_storage
+
 from genro_asgi import (
     ApiKeyStore,
     AsgiServer,
@@ -43,7 +45,6 @@ from genro_asgi import (
     BaseServer,
     FileApiKeyStore,
     FileUserStore,
-    LocalStorage,
     Session,
     SessionMixin,
     UserStore,
@@ -403,9 +404,8 @@ class TestWithoutAuthMixin:
 
 
 def encrypted_server(tmp_path, **kwargs) -> AsgiServer:
-    """An ``AsgiServer`` over an encrypted ``secure`` storage mount, for store wiring."""
-    storage = LocalStorage(base_dir=tmp_path)
-    storage.set_encryption_keys(Fernet.generate_key().decode())
+    """An ``AsgiServer`` whose site storage carries key material, for store wiring."""
+    storage = site_storage(tmp_path, storage_key=Fernet.generate_key().decode())
     return AsgiServer(applications=[BaseApplication(mount="")], storage=storage, **kwargs)
 
 
@@ -429,8 +429,8 @@ class TestStoreWiring:
         server.user_store.save(
             {"identity": "bob", "password_hash": "x", "tags": [], "enabled": True}
         )
-        node = server.storage.node("secure:people/bob.json")
-        assert node.exists
+        node = server.storage.node("site:people/bob.json")
+        assert node.exists()
 
     def test_ready_instance_is_passed_through(self) -> None:
         store = MemoryUserStore()

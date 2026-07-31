@@ -14,10 +14,10 @@
 
 """Tests for tasks.store (core 1e Phase 4): the persistent schedule store.
 
-Real objects, no mocks: a real ``LocalStorage`` on ``tmp_path``, one JSON per
-schedule + one capped JSONL log per task. Covers the round-trip, the concrete
-filter/upsert/update logic on the base contract, the log cap, and the
-``secure``-vs-``site`` mount choice driven by ``encryption_active``.
+Real objects, no mocks: a real one-mount ``StorageManager`` on ``tmp_path``, one
+JSON per schedule + one capped JSONL log per task. Covers the round-trip, the
+concrete filter/upsert/update logic on the base contract, the log cap, and the
+mount choice — ``site`` by default, the ``tasks(mount=...)`` override otherwise.
 """
 
 from __future__ import annotations
@@ -26,9 +26,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from cryptography.fernet import Fernet
 
-from genro_asgi.storage import LocalStorage
+from tests.storage_support import site_storage
+
 from genro_asgi.tasks.store import LOG_CAP, FileTaskStore
 
 
@@ -52,8 +52,8 @@ def record(code: str, next_run_ts: float | None = 0.0, enabled: bool = True) -> 
 
 @pytest.fixture
 def store(tmp_path: Path) -> FileTaskStore:
-    """A FileTaskStore over plain storage (no keys -> ``site`` mount)."""
-    return FileTaskStore(LocalStorage(base_dir=str(tmp_path)))
+    """A FileTaskStore over the default ``site`` mount (schedules are plain data)."""
+    return FileTaskStore(site_storage(tmp_path))
 
 
 class TestRoundTrip:
@@ -162,17 +162,19 @@ class TestLog:
 
 
 class TestMountChoice:
-    """The store lives on ``site`` without keys, ``secure`` with keys installed."""
+    """The store lives on ``site`` unless the ``tasks(mount=...)`` override names another."""
 
-    def test_plain_mount_without_keys(self, tmp_path: Path) -> None:
-        store = FileTaskStore(LocalStorage(base_dir=str(tmp_path)))
+    def test_default_mount_is_site(self, tmp_path: Path) -> None:
+        store = FileTaskStore(site_storage(tmp_path))
         assert store.mount == "site"
 
-    def test_secure_mount_with_keys(self, tmp_path: Path) -> None:
-        storage = LocalStorage(base_dir=str(tmp_path))
-        storage.set_encryption_keys(Fernet.generate_key().decode())
-        store = FileTaskStore(storage)
-        assert store.mount == "secure"
-        store.save(record("secret"))
-        got = store.get("secret")                # round-trips through the cipher
-        assert got is not None and got["code"] == "secret"
+    def test_explicit_mount_override_wins(self, tmp_path: Path) -> None:
+        (tmp_path / "vault").mkdir()
+        storage = site_storage(tmp_path)
+        storage.add_mount(
+            {"name": "vault", "protocol": "local", "base_path": str(tmp_path / "vault")}
+        )
+        store = FileTaskStore(storage, mount="vault")
+        assert store.mount == "vault"
+        store.save(record("scheduled"))
+        assert (tmp_path / "vault" / "tasks" / "scheduled.json").exists()

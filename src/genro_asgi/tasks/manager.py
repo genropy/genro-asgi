@@ -25,7 +25,7 @@ fire-and-forget worker loop for the whole process. It owns:
 - ``executor`` — the ``LocalTaskExecutor`` bound to the live server;
 - ``hub`` — the in-memory ``EventHub`` (the live progress courier for Phase 6);
 - ``scheduler`` — the ``TaskScheduler`` (the recurring loop, over ``task_store``);
-- ``task_store`` — the ``FileTaskStore`` (persistent schedules, ``secure`` when keys);
+- ``task_store`` — the ``FileTaskStore`` (persistent schedules, over ``site:tasks``);
 - ``worker_id`` — the single logical worker of the mono-process core (``"local"``).
 
 ``start()``/``stop()`` are the lifecycle the server's lifespan hook calls

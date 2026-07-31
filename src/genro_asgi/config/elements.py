@@ -36,7 +36,7 @@ Authoring conventions inherited from contrib/config:
 Sections:
 
 - ``server`` — the runtime options (``host``, ``port``, ``external_url``,
-  ``max_threads``, ``storage_key``) plus the server-domain children ``session``
+  ``max_threads``) plus the server-domain children ``session``
   (the session TTL) and ``tasks`` (declared by ``TaskGrammar``, the class that
   peels ``tasks=``).
 - ``middleware`` — one ``{name: bool | dict}`` switch per middleware.
@@ -44,7 +44,8 @@ Sections:
   ``admin_password``, the ``users``/``tokens`` store descriptors, the ``login``
   lockout policy, the ``oidc`` provider collection and the ``credentials``
   handed to ``AuthCore``.
-- ``storage`` — the mounts of the server's ``LocalStorage``.
+- ``storage`` — the mount point of genro-storage's own grammar: the mounts of
+  the server's ``StorageManager``, plus the section's ``storage_key``.
 - ``applications`` — the app collection keyed by ``code``; each entry MOUNTS
   the grammar its ``app_class`` carries.
 - ``databases`` — one descriptor per database handler.
@@ -105,7 +106,6 @@ class AsgiServerGrammar(TaskGrammar):
         port: int | BagResolver = None,
         external_url: str | BagResolver = None,
         max_threads: int | BagResolver = None,
-        storage_key: str | BagResolver = None,
     ) -> None:
         """Server runtime options.
 
@@ -122,14 +122,6 @@ class AsgiServerGrammar(TaskGrammar):
         ``max_threads`` sizes the server's thread pool: ``BaseServer`` peels it
         and hands it to ``WorkPool`` (omitted, the stdlib default
         ``min(32, cpu + 4)`` applies).
-
-        ``storage_key`` installs at-rest encryption on the server's storage
-        (comma-separated Fernet keys — the first encrypts, all decrypt, for
-        rotation). Give it a resolver so the secret stays out of the recipe::
-
-            def server_section(self, cfg):
-                cfg.server(host="127.0.0.1", port=8000,
-                           storage_key=EnvResolver("GENRO_STORAGE_KEY"))
 
         Children are server-domain: ``session`` (the session TTL) and ``tasks``
         (the task backbone, declared by ``TaskGrammar``).
@@ -271,19 +263,39 @@ class AsgiServerGrammar(TaskGrammar):
         also SIGN) or ``public_key`` (verify only), the ``algorithm``, an
         optional ``name`` and comma-separated ``tags``."""
 
-    @element(parent_tags="configuration", sub_tags="mount", collection_key="code")
-    def storage(self) -> None:
-        """Collection of storage mounts, each labelled by its ``code``.
-        Materialized as the server's ``LocalStorage`` (one ``add_mount`` per
-        child)."""
+    @element(parent_tags="configuration", _meta={"subbuilder": "app:grammar"})
+    def storage(self, app: type, storage_key: str | BagResolver = None) -> None:
+        """The server's storage, and the MOUNT POINT of genro-storage's grammar.
 
-    @element(parent_tags="storage", sub_tags="")
-    def mount(self, path: str, code: str = None, encrypted: bool = False) -> None:
-        """One storage mount: ``code`` (the collection key), ``path`` (the
-        filesystem path, relative to the server base dir unless absolute,
-        REQUIRED — the grammar rejects a mount without it) and optional
-        ``encrypted`` (encrypt at rest, which requires the server's
-        ``storage_key``)."""
+        This dialect declares NO storage vocabulary of its own: ``app``
+        (``StorageManager``, REQUIRED — the subbuilder reference reads the call
+        site, so it cannot be defaulted in the signature) carries the grammar
+        governing this node's children, and the mounts are written in
+        genro-storage's own words — one element per protocol, the tag IS the
+        protocol. The elements hang DIRECTLY under this node: the envelope is
+        transparent to containment, so the foreign ``mounts`` collection is not
+        part of the recipe.
+
+        ``storage_key`` is the at-rest key material of the whole section
+        (comma-separated Fernet keys — the first encrypts, all decrypt, for
+        rotation), and belongs here rather than on ``server`` because it is
+        meaningless without the mounts it unlocks. Give it a resolver so the
+        secret stays out of the recipe — a resolver, never a lambda, since a
+        callback does not serialize::
+
+            from genro_bag.resolvers import EnvResolver
+            from genro_storage import StorageManager
+
+            def storage_section(self, cfg):
+                s = cfg.storage(app=StorageManager,
+                                storage_key=EnvResolver("GENRO_STORAGE_KEY"))
+                s.local(name="site", base_path=".")
+                s.s3(name="uploads", bucket="shop-media",
+                     default_encrypted="shopspa")
+
+        Omitted entirely, the server builds its default manager: the single
+        ``site:`` mount on the deployment directory.
+        """
 
     @element(parent_tags="configuration", sub_tags="application", collection_key="code")
     def applications(self, default: str = None) -> None:

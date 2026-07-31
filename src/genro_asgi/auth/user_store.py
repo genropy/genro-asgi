@@ -31,10 +31,11 @@ Contract (clients depend on this, never on files or SQL — a future
         verify(identity, password) -> dict | None   # full record on success, None otherwise
 
 ``FileUserStore`` is the filesystem backend: one JSON file per user at
-``<mount>:<prefix>/<identity>.json`` over the Phase 1 storage nodes. It defaults
-to the encrypted ``secure`` mount, so records are ciphertext at rest; without
-installed key material that mount hard-fails (D5 — no plain-text fallback). All
-I/O is synchronous (core 1b ratified: async callers wrap in ``server.run_sync()``).
+``<mount>:<prefix>/<identity>.json`` over genro-storage nodes, defaulting to
+``site:users``. Every record is written ``encrypted=True``: credentials are
+ciphertext at rest, and without installed key material the write hard-fails
+(D5 — no plain-text fallback). All I/O is synchronous (core 1b ratified: async
+callers wrap in ``server.run_sync()``).
 
 The record::
 
@@ -70,7 +71,7 @@ import json
 import os
 from typing import Any
 
-from ..storage import LocalStorage, LocalStorageNode
+from genro_storage import StorageManager, StorageNode
 
 __all__ = ["UserStore", "FileUserStore"]
 
@@ -154,33 +155,34 @@ class UserStore:
 
 
 class FileUserStore(UserStore):
-    """One JSON file per user over a storage mount (encrypted ``secure`` by default).
+    """One JSON file per user over a storage mount, written encrypted at rest.
 
-    Like ``FileSessionStore`` it holds the shared ``LocalStorage`` (dual
-    relationship) and never raw paths — the mount decides encryption at rest.
-    Records live at ``<mount>:<prefix>/<identity>.json``.
+    Like ``FileSessionStore`` it holds the shared ``StorageManager`` (dual
+    relationship) and never raw paths. Records live at
+    ``<mount>:<prefix>/<identity>.json`` and are always written
+    ``encrypted=True`` — the write site declares it, not the mount.
     """
 
     __slots__ = ("_storage", "_mount", "_prefix")
 
     def __init__(
         self,
-        storage: LocalStorage,
-        mount: str = "secure",
+        storage: StorageManager,
+        mount: str = "site",
         prefix: str = "users",
     ) -> None:
-        """Bind the store to a storage ``mount``/``prefix`` (default ``secure:users``)."""
+        """Bind the store to a storage ``mount``/``prefix`` (default ``site:users``)."""
         self._storage = storage
         self._mount = mount
         self._prefix = prefix
 
     # ── persistence helpers ────────────────────────────────────────────
 
-    def _dir_node(self) -> LocalStorageNode:
+    def _dir_node(self) -> StorageNode:
         """The ``<mount>:<prefix>`` directory node."""
         return self._storage.node(f"{self._mount}:{self._prefix}")
 
-    def _record_node(self, identity: str) -> LocalStorageNode:
+    def _record_node(self, identity: str) -> StorageNode:
         """The node for one user's JSON file on the configured mount."""
         return self._storage.node(f"{self._mount}:{self._prefix}/{identity}.json")
 
@@ -189,7 +191,7 @@ class FileUserStore(UserStore):
     def load_all(self) -> list[dict[str, Any]]:
         """Read every ``*.json`` record under ``<mount>:<prefix>/``."""
         directory = self._dir_node()
-        if not directory.isdir:
+        if not directory.is_dir():
             return []
         records: list[dict[str, Any]] = []
         for child in directory.children():
@@ -200,20 +202,25 @@ class FileUserStore(UserStore):
     def get(self, identity: str) -> dict[str, Any] | None:
         """Read one user's record, or None if the file does not exist."""
         node = self._record_node(identity)
-        if not node.exists:
+        if not node.exists():
             return None
         result: dict[str, Any] = json.loads(node.read_text())
         return result
 
     def save(self, record: dict[str, Any]) -> None:
-        """Persist ``record`` through its storage node (encryption is the mount's concern).
+        """Persist ``record`` encrypted at rest through its storage node.
 
         The record's ``identity`` is its file key: one file per user, written via
-        the node's public ``write_text``.
+        the node's public ``write_text`` with ``encrypted=True`` — credentials
+        never land in plain text.
         """
         node = self._record_node(record["identity"])
-        node.write_text(json.dumps(record, indent=2))
+        node.write_text(json.dumps(record, indent=2), encrypted=True)
 
     def delete(self, identity: str) -> bool:
         """Remove one user's file. True if it existed, False otherwise."""
-        return self._record_node(identity).delete()
+        node = self._record_node(identity)
+        if not node.exists():
+            return False
+        node.delete()
+        return True

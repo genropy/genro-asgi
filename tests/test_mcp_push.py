@@ -32,8 +32,9 @@ from typing import Any
 import pytest
 from genro_routes import route
 
+from tests.storage_support import site_storage
+
 from genro_asgi import AsgiServer, McpApplication, RoutedApplication
-from genro_asgi.storage import LocalStorage
 from genro_asgi.tasks import new_descriptor
 from genro_asgi.types import Message, Scope
 
@@ -51,7 +52,7 @@ def server(tmp_path: Path) -> AsgiServer:
     """A real server: Primary + McpApplication at ``/mcp``, storage on tmp_path."""
     srv = AsgiServer(
         applications=[Primary(mount=""), McpApplication(code="mcp")],
-        storage=LocalStorage(base_dir=str(tmp_path)),
+        storage=site_storage(tmp_path),
     )
     return srv
 
@@ -116,7 +117,7 @@ class TestSessionId:
         srv = AsgiServer(
             applications=[Primary(mount=""), McpApplication(code="mcp")],
             tasks=False,
-            storage=LocalStorage(base_dir=str(tmp_path)),
+            storage=site_storage(tmp_path),
         )
         sent = await drive(srv, "/mcp", method="GET")
         start = next(m for m in sent if m["type"] == "http.response.start")

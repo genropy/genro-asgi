@@ -18,12 +18,11 @@ The routing tree declares tasks (the live registry); the store remembers the
 SCHEDULES: when each one runs, whether it is enabled, what happened last time.
 Filesystem on the storage layer behind a small contract — one JSON per schedule
 record at ``tasks/<code>.json``, one capped JSONL log per task at
-``tasks/logs/<task_name>.jsonl``. The mount is chosen exactly as the other
-server stores' data of record: the encrypted ``secure`` mount when key material
-is installed, else the plain ``site`` mount with a warning (distinct from the
-task SPOOL, which is always ``site`` — spool data are transient service state,
-task RECORDS may carry schedule kwargs worth encrypting). A future Db-backed
-store swaps behind the same contract.
+``tasks/logs/<task_name>.jsonl``. Records live plain on the ``site`` mount
+(overridable with the ``tasks(mount=...)`` config element): a schedule is
+operational data, not a credential — it shares the deployment tree with the
+task SPOOL, and only the credential stores declare ``encrypted=True`` at their
+write sites. A future Db-backed store swaps behind the same contract.
 
 The record::
 
@@ -50,17 +49,15 @@ construction (core 1b): async callers dispatch store calls via ``server.run_sync
 from __future__ import annotations
 
 import json
-import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ..storage import LocalStorage, LocalStorageNode
+    from genro_storage import StorageManager, StorageNode
 
 __all__ = ["TaskStore", "FileTaskStore"]
 
-SECURE_MOUNT = "secure"
-PLAIN_MOUNT = "site"
+DEFAULT_MOUNT = "site"
 TASKS_DIR = "tasks"
 LOG_CAP = 200  # JSONL lines kept per task
 
@@ -131,47 +128,46 @@ class FileTaskStore(TaskStore):
     """One JSON per schedule + one JSONL log per task, on the storage layer.
 
     Note:
-        The store holds the shared ``LocalStorage`` instance (dual relationship:
-        ``self.storage``), never raw paths — the mount decides encryption at rest.
+        The store holds the shared ``StorageManager`` instance (dual relationship:
+        ``self.storage``), never raw paths. Schedules are operational data, not
+        credentials: they are written plain.
     """
 
     __slots__ = ("storage", "_mount")
 
-    def __init__(self, storage: LocalStorage, mount: str | None = None) -> None:
+    def __init__(self, storage: StorageManager, mount: str | None = None) -> None:
         """Bind the store to the server's storage service.
 
         Args:
-            storage: The server's LocalStorage; task files live on its
-                ``secure`` mount when keys are installed, else ``site``.
+            storage: The server's StorageManager; task files live under
+                ``<mount>:tasks/``.
             mount: Explicit mount override (the ``tasks(mount=...)`` config
-                element); ``None`` keeps the automatic by-keys choice.
+                element); ``None`` keeps the default ``site``.
         """
         self.storage = storage
         self._mount = mount
 
     @property
     def mount(self) -> str:
-        """The task-files mount: the explicit override, else by installed keys."""
-        if self._mount is not None:
-            return self._mount
-        return SECURE_MOUNT if self.storage.encryption_active else PLAIN_MOUNT
+        """The task-files mount: the explicit override, else ``site``."""
+        return self._mount if self._mount is not None else DEFAULT_MOUNT
 
-    def _tasks_node(self) -> LocalStorageNode:
+    def _tasks_node(self) -> StorageNode:
         """The ``<mount>:tasks`` directory node."""
         return self.storage.node(f"{self.mount}:{TASKS_DIR}")
 
-    def _record_node(self, code: str) -> LocalStorageNode:
+    def _record_node(self, code: str) -> StorageNode:
         """The node for one schedule's JSON file."""
         return self.storage.node(f"{self.mount}:{TASKS_DIR}/{code}.json")
 
-    def _log_node(self, task_name: str) -> LocalStorageNode:
+    def _log_node(self, task_name: str) -> StorageNode:
         """The node for one task's JSONL log."""
         return self.storage.node(f"{self.mount}:{TASKS_DIR}/logs/{task_name}.jsonl")
 
     def load_all(self) -> list[dict[str, Any]]:
         """Read every ``*.json`` record under ``<mount>:tasks/``."""
         directory = self._tasks_node()
-        if not directory.isdir:
+        if not directory.is_dir():
             return []
         records: list[dict[str, Any]] = []
         for child in directory.children():
@@ -182,13 +178,13 @@ class FileTaskStore(TaskStore):
     def get(self, code: str) -> dict[str, Any] | None:
         """Read one schedule's record, or None if the file does not exist."""
         node = self._record_node(code)
-        if not node.exists:
+        if not node.exists():
             return None
         result: dict[str, Any] = json.loads(node.read_text())
         return result
 
     def save(self, record: dict[str, Any]) -> None:
-        """Persist ``record`` through the storage node, warning if unencrypted.
+        """Persist ``record`` through the storage node.
 
         ``code`` is the file identity. ``created_at`` is kept from the existing
         record on update; ``updated_at`` is refreshed on every write.
@@ -201,27 +197,27 @@ class FileTaskStore(TaskStore):
             "created_at", now
         )
         record["updated_at"] = now
-        if not self.storage.encryption_active:
-            logging.getLogger(__name__).warning(
-                "storage_key not configured: task record %r persisted unencrypted", code
-            )
         node.write_text(json.dumps(record, indent=2))
 
     def delete(self, code: str) -> bool:
         """Remove one schedule's file. True if it existed, False otherwise."""
-        return self._record_node(code).delete()
+        node = self._record_node(code)
+        if not node.exists():
+            return False
+        node.delete()
+        return True
 
     def append_log(self, task_name: str, entry: dict[str, Any]) -> None:
         """Append one JSONL line, rewriting with only the last LOG_CAP lines."""
         node = self._log_node(task_name)
-        lines = node.read_text().splitlines() if node.exists else []
+        lines = node.read_text().splitlines() if node.exists() else []
         lines.append(json.dumps(entry))
         node.write_text("\n".join(lines[-LOG_CAP:]) + "\n")
 
     def read_log(self, task_name: str, limit: int = LOG_CAP) -> list[dict[str, Any]]:
         """The task's most recent ``limit`` entries, oldest first."""
         node = self._log_node(task_name)
-        if not node.exists:
+        if not node.exists():
             return []
         lines = node.read_text().splitlines()
         return [json.loads(line) for line in lines[-limit:] if line.strip()]

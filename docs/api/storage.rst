@@ -1,12 +1,9 @@
 Storage
 =======
 
-The storage mixin and the local filesystem storage with its mount system.
+The storage mixin: the ``genro_storage.StorageManager`` the server owns, its
+mounts and its at-rest key material.
 
 .. automodule:: genro_asgi.storage_mixin
-   :members:
-   :show-inheritance:
-
-.. automodule:: genro_asgi.storage
    :members:
    :show-inheritance:

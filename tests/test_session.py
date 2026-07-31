@@ -29,12 +29,13 @@ import time
 
 import pytest
 
+from tests.storage_support import site_storage
+
 from genro_asgi import (
     Avatar,
     BaseApplication,
     BaseServer,
     FileSessionStore,
-    LocalStorage,
     MemorySessionStore,
     Session,
     SessionMixin,
@@ -59,7 +60,7 @@ def _file_factory(tmp_path):
     """A factory building fresh ``FileSessionStore``s over one shared tmp mount."""
 
     def make(**kwargs):
-        return FileSessionStore(LocalStorage(base_dir=str(tmp_path)), **kwargs)
+        return FileSessionStore(site_storage(tmp_path), **kwargs)
 
     return make
 
@@ -141,9 +142,9 @@ class TestSessionStoreContract:
 
 class TestFileSessionStore:
     def test_session_survives_a_new_store_on_the_same_mount(self, tmp_path) -> None:
-        store = FileSessionStore(LocalStorage(base_dir=str(tmp_path)))
+        store = FileSessionStore(site_storage(tmp_path))
         created = store.create(avatar=Avatar("carol", ["ops"]))
-        fresh = FileSessionStore(LocalStorage(base_dir=str(tmp_path)))
+        fresh = FileSessionStore(site_storage(tmp_path))
         restored = fresh.get(created.id)
         assert restored is not None
         assert restored is not created
@@ -152,36 +153,36 @@ class TestFileSessionStore:
         assert len(restored.data) == 0
 
     def test_save_persists_an_attached_avatar_to_disk(self, tmp_path) -> None:
-        store = FileSessionStore(LocalStorage(base_dir=str(tmp_path)))
+        store = FileSessionStore(site_storage(tmp_path))
         created = store.create()  # anonymous
         created.attach_avatar(Avatar("dave", ["admin"]))
         store.save(created)  # the write-back seam
-        fresh = FileSessionStore(LocalStorage(base_dir=str(tmp_path)))
+        fresh = FileSessionStore(site_storage(tmp_path))
         restored = fresh.get(created.id)
         assert restored is not None
         assert restored.avatar is not None and restored.avatar.identity == "dave"
         assert restored.avatar.tags == ["admin"]
 
     def test_corrupted_session_file_raises(self, tmp_path) -> None:
-        storage = LocalStorage(base_dir=str(tmp_path))
+        storage = site_storage(tmp_path)
         store = FileSessionStore(storage)
         created = store.create()
         storage.node(f"site:sessions/{created.id}.json").write_text("not-json{{{")
-        fresh = FileSessionStore(LocalStorage(base_dir=str(tmp_path)))
+        fresh = FileSessionStore(site_storage(tmp_path))
         with pytest.raises(json.JSONDecodeError):
             fresh.get(created.id)
 
     def test_delete_removes_the_file(self, tmp_path) -> None:
-        storage = LocalStorage(base_dir=str(tmp_path))
+        storage = site_storage(tmp_path)
         store = FileSessionStore(storage)
         created = store.create()
-        assert storage.node(f"site:sessions/{created.id}.json").exists
+        assert storage.node(f"site:sessions/{created.id}.json").exists()
         store.delete(created.id)
-        assert not storage.node(f"site:sessions/{created.id}.json").exists
+        assert not storage.node(f"site:sessions/{created.id}.json").exists()
 
     def test_get_with_traversal_session_id_raises(self, tmp_path) -> None:
         """A crafted cookie id may not read a file planted outside the prefix (Phase 10)."""
-        storage = LocalStorage(base_dir=str(tmp_path))
+        storage = site_storage(tmp_path)
         store = FileSessionStore(storage)
         now = time.time()
         planted = {
@@ -189,12 +190,12 @@ class TestFileSessionStore:
             "avatar": {"identity": "intruder", "tags": ["SUPERADMIN"]},
         }
         storage.node("site:secret.json").write_text(json.dumps(planted))
-        with pytest.raises(ValueError, match="escapes mount 'site'"):
+        with pytest.raises(ValueError, match="traversal"):
             store.get("../secret")
 
     def test_delete_with_traversal_session_id_raises(self, tmp_path) -> None:
-        store = FileSessionStore(LocalStorage(base_dir=str(tmp_path)))
-        with pytest.raises(ValueError, match="escapes mount 'site'"):
+        store = FileSessionStore(site_storage(tmp_path))
+        with pytest.raises(ValueError, match="traversal"):
             store.delete("../secret")
 
 

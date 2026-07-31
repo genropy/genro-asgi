@@ -74,11 +74,10 @@ from genro_bag.resolvers import EnvResolver
 
 
 def server_section(self, cfg):
-    """Port and storage key belong to the host, not to the recipe."""
+    """The port belongs to the host, not to the recipe."""
     cfg.server(
         host="127.0.0.1",
         port=EnvResolver("SHOP_PORT", dtype="L"),
-        storage_key=EnvResolver("SHOP_STORAGE_KEY"),
     )
 ```
 
@@ -115,6 +114,45 @@ tuned = AsgiServer(config=ServerConfiguration, port=9000)
 tuned.config("server.port")   # 8000 — the recipe still says what it said
 tuned.config_port             # 9000 — what the server will bind
 ```
+
+## Layered defaults: `BaseConfiguration` and `default_config`
+
+A site recipe never stands alone: the handler the server builds layers it over
+parent recipes, lowest first, the site always last and winning (attribute by
+attribute — a section that sets only `port` inherits everything else).
+
+1. **`BaseConfiguration`** — the package's shipped defaults, as a recipe. It
+   declares the default storage layout (the single `site:` mount on the
+   deployment directory) and exposes one hook per concern, so the minimal
+   deployment is a subclass that sets what deviates:
+
+   ```python
+   from genro_bag.resolvers import EnvResolver
+   from genro_asgi import BaseConfiguration
+
+
+   class Site(BaseConfiguration):
+       storage_key = EnvResolver("STORAGE_KEY")   # everything else inherited
+   ```
+
+2. **The defaults file** — a recipe the deployment host owns, layered between
+   the package defaults and the site. Where it comes from is declared by the
+   site recipe itself, through the `default_config` class attribute:
+
+   | `default_config` | meaning |
+   |---|---|
+   | unset (or `True`) | `<home>/config.py`, layered only when the file exists |
+   | `False` | no defaults file — the site sits straight on `BaseConfiguration` |
+   | a path | THAT file; a missing path is a loud `ConfigError` at boot |
+
+3. **The site recipe** — always the top layer.
+
+`<home>` is genro-asgi's own directory — the registry, the pids, the defaults
+file — and resolves as: explicit `base_dir` argument → the **`GENRO_ASGI_HOME`**
+environment variable → `~/.genroasgi`. The variable is how a container or a
+virtualenv gets an isolated home (`GENRO_ASGI_HOME=$VIRTUAL_ENV/.genroasgi`);
+nothing is inferred from the environment beyond it. The test suite pins it to
+an empty per-test directory, so tests never read a developer's real home.
 
 ## Reading it back
 
@@ -193,7 +231,7 @@ the children live in the mounted one. An undeclared child is a boot error.
 One line each; the deep dives live in their own guides.
 
 - **`server`** — `host`, `port`, `external_url` (the PUBLIC address, not the
-  listener), `max_threads`, `storage_key`, plus the children `session` (its
+  listener), `max_threads`, plus the children `session` (its
   `ttl`) and `tasks` (see [Background tasks](tasks.md)).
 - **`middleware`** — one `{name: bool | dict}` switch per middleware; a dict
   enables it and becomes its options (see [Middleware](middleware.md)).
@@ -201,8 +239,9 @@ One line each; the deep dives live in their own guides.
   `admin_password`, the `users`/`tokens` stores, the `login` lockout policy, the
   `oidc` providers and the header `credentials`. The grammar of each is in
   [Authentication](authentication.md).
-- **`storage`** — the mounts of the server's `LocalStorage`, one `mount` per
-  code, each optionally `encrypted`.
+- **`storage`** — the mount point of [genro-storage](https://pypi.org/project/genro-storage/)'s
+  own grammar: `storage_key` plus one child per mount, written in genro-storage's
+  words (see [The storage section](#the-storage-section)).
 - **`applications`** — the app collection keyed by `code`, with the optional
   `default` naming who `/` redirects to.
 - **`databases`** — one descriptor per database: `db_class` and its connection
@@ -210,6 +249,41 @@ One line each; the deep dives live in their own guides.
 - **`plugins`** — the router plugins armed on every routed app.
 - **`openapi`** — `title`, `version`, `description` (see
   [OpenAPI & Swagger](openapi.md)).
+
+## The storage section
+
+The server's storage is a `genro_storage.StorageManager`, and this dialect
+declares **no storage vocabulary of its own**: `storage` is a mount point for
+genro-storage's grammar. `app=StorageManager` carries that grammar (required —
+the subbuilder reference reads the call site, so it cannot be defaulted), and
+the mounts hang directly under the section, one element per protocol, the tag
+being the protocol:
+
+```python
+from genro_bag.resolvers import EnvResolver
+from genro_storage import StorageManager
+
+
+def storage_section(self, cfg):
+    """One local tree for the site, one bucket for uploads."""
+    s = cfg.storage(app=StorageManager, storage_key=EnvResolver("SHOP_STORAGE_KEY"))
+    s.local(name="site", base_path="/srv/shop")
+    s.s3(name="uploads", bucket="shop-media", default_encrypted="shopspa")
+```
+
+Omit the section entirely and the server builds its default manager: the single
+`site:` mount on the deployment directory (the process cwd). The mount must
+already exist — a recipe naming a missing directory is a boot error.
+
+`site:` is where the server's own state lands, all in one tree: `site:users` and
+`site:api_keys` (written `encrypted=True`), `site:sessions`, `site:tasks` and
+`site:batches` (plain). Encryption is declared per **write**, not per mount, and
+what lands on disk is self-describing — an envelope whose first line starts
+`#GNRE1:` — so reads declare nothing.
+
+Outside a recipe the same three shapes reach the constructor as `storage=`:
+`None` for the default `site:` mount, a ready `StorageManager` to adopt, or
+genro-storage's own `list[dict]` of mount configurations.
 
 ## A complete recipe
 
@@ -223,6 +297,7 @@ class ServerConfiguration(AsgiConfigBuilder):
         self.server_section(cfg)
         cfg.middleware(cors=True, logging=True)
         self.authentication_section(cfg)
+        self.storage_section(cfg)
         self.applications_section(cfg)
 
     def server_section(self, cfg):
@@ -231,8 +306,14 @@ class ServerConfiguration(AsgiConfigBuilder):
             host="127.0.0.1",
             port=EnvResolver("SHOP_PORT", dtype="L"),
             external_url="https://shop.example.com",
-            storage_key=EnvResolver("SHOP_STORAGE_KEY"),
         ).session(ttl=3600)
+
+    def storage_section(self, cfg):
+        """The site tree, and the key that unlocks what is encrypted in it."""
+        cfg.storage(
+            app=StorageManager,
+            storage_key=EnvResolver("SHOP_STORAGE_KEY"),
+        ).local(name="site", base_path="/srv/shop")
 
     def authentication_section(self, cfg):
         """The bootstrap secret comes from the environment, never from here."""
@@ -249,7 +330,15 @@ class ServerConfiguration(AsgiConfigBuilder):
 
 ## How to verify it
 
-With `SHOP_PORT=8123`, `SHOP_STORAGE_KEY` (a Fernet key) and
+First create the storage anchors — the recipe names `/srv/shop`, and a local
+mount whose directory does not exist is a boot error (the rule stated in the
+storage section above), so the recipe fails before any read without this step:
+
+```bash
+mkdir -p /srv/shop
+```
+
+Then, with `SHOP_PORT=8123`, `SHOP_STORAGE_KEY` (a Fernet key) and
 `SHOP_ADMIN_PASSWORD` (the bootstrap secret) exported, build the server and
 read it back through both doors:
 
@@ -282,10 +371,14 @@ True
   it — a recipe is code you commit.
 - **`dtype=` or you get a string.** `port=EnvResolver("SHOP_PORT")` without
   `dtype="L"` hands the server `"8123"`.
-- **`admin_password` needs somewhere to write.** The bootstrap admin lands in
-  the identity store, which sits on the `secure` mount — encrypted by
-  definition — so a recipe with an `admin_password` and no `storage_key` fails
-  at boot with `encrypted mount requires installed keys`.
+- **`admin_password` needs a key, not just somewhere to write.** The bootstrap
+  admin lands in the identity store under `site:users`, which writes
+  `encrypted=True`, so a recipe with an `admin_password` and no `storage_key`
+  fails at the write with genro-storage's `Cannot encrypt for encryption domain
+  '': it requires installed key material`.
+- **`storage_key` lives on `storage`, not on `server`.** It is meaningless
+  without the mounts it unlocks; a recipe still passing it to `cfg.server(...)`
+  is a boot error naming the attribute.
 - **`mount=""` is the site root, and it is not the same as `mount=None`.**
   Omitted, the mount defaults to the `code`; empty, the app answers `/` and every
   unclaimed path.

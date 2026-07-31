@@ -39,11 +39,11 @@ for low-entropy passwords, see ``UserStore``). The full key exists in clear
 only once, as ``issue``'s return value.
 
 ``FileApiKeyStore`` is the filesystem backend: one JSON file per key at
-``<mount>:<prefix>/<key_id>.json`` over the Phase 1 storage nodes. It defaults
-to the encrypted ``secure`` mount, so records are ciphertext at rest; without
-installed key material that mount hard-fails (D5 — no plain-text fallback).
-All I/O is synchronous (core 1b ratified: async callers wrap in
-``server.run_sync()``).
+``<mount>:<prefix>/<key_id>.json`` over genro-storage nodes, defaulting to
+``site:api_keys``. Every record is written ``encrypted=True``: credentials are
+ciphertext at rest, and without installed key material the write hard-fails
+(D5 — no plain-text fallback). All I/O is synchronous (core 1b ratified: async
+callers wrap in ``server.run_sync()``).
 
 The record::
 
@@ -73,7 +73,7 @@ import secrets
 import time
 from typing import Any
 
-from ..storage import LocalStorage, LocalStorageNode
+from genro_storage import StorageManager, StorageNode
 
 __all__ = ["ApiKeyStore", "FileApiKeyStore"]
 
@@ -177,33 +177,34 @@ class ApiKeyStore:
 
 
 class FileApiKeyStore(ApiKeyStore):
-    """One JSON file per key over a storage mount (encrypted ``secure`` by default).
+    """One JSON file per key over a storage mount, written encrypted at rest.
 
-    Like ``FileUserStore`` it holds the shared ``LocalStorage`` (dual
-    relationship) and never raw paths — the mount decides encryption at rest.
-    Records live at ``<mount>:<prefix>/<key_id>.json``.
+    Like ``FileUserStore`` it holds the shared ``StorageManager`` (dual
+    relationship) and never raw paths. Records live at
+    ``<mount>:<prefix>/<key_id>.json`` and are always written
+    ``encrypted=True`` — the write site declares it, not the mount.
     """
 
     __slots__ = ("_storage", "_mount", "_prefix")
 
     def __init__(
         self,
-        storage: LocalStorage,
-        mount: str = "secure",
+        storage: StorageManager,
+        mount: str = "site",
         prefix: str = "api_keys",
     ) -> None:
-        """Bind the store to a storage ``mount``/``prefix`` (default ``secure:api_keys``)."""
+        """Bind the store to a storage ``mount``/``prefix`` (default ``site:api_keys``)."""
         self._storage = storage
         self._mount = mount
         self._prefix = prefix
 
     # ── persistence helpers ────────────────────────────────────────────
 
-    def _dir_node(self) -> LocalStorageNode:
+    def _dir_node(self) -> StorageNode:
         """The ``<mount>:<prefix>`` directory node."""
         return self._storage.node(f"{self._mount}:{self._prefix}")
 
-    def _record_node(self, key_id: str) -> LocalStorageNode:
+    def _record_node(self, key_id: str) -> StorageNode:
         """The node for one key's JSON file on the configured mount."""
         return self._storage.node(f"{self._mount}:{self._prefix}/{key_id}.json")
 
@@ -212,7 +213,7 @@ class FileApiKeyStore(ApiKeyStore):
     def load_all(self) -> list[dict[str, Any]]:
         """Read every ``*.json`` record under ``<mount>:<prefix>/``."""
         directory = self._dir_node()
-        if not directory.isdir:
+        if not directory.is_dir():
             return []
         records: list[dict[str, Any]] = []
         for child in directory.children():
@@ -223,20 +224,25 @@ class FileApiKeyStore(ApiKeyStore):
     def get(self, key_id: str) -> dict[str, Any] | None:
         """Read one key's record, or None if the file does not exist."""
         node = self._record_node(key_id)
-        if not node.exists:
+        if not node.exists():
             return None
         result: dict[str, Any] = json.loads(node.read_text())
         return result
 
     def save(self, record: dict[str, Any]) -> None:
-        """Persist ``record`` through its storage node (encryption is the mount's concern).
+        """Persist ``record`` encrypted at rest through its storage node.
 
         The record's ``key_id`` is its file key: one file per key, written via
-        the node's public ``write_text``.
+        the node's public ``write_text`` with ``encrypted=True`` — credentials
+        never land in plain text.
         """
         node = self._record_node(record["key_id"])
-        node.write_text(json.dumps(record, indent=2))
+        node.write_text(json.dumps(record, indent=2), encrypted=True)
 
     def delete(self, key_id: str) -> bool:
         """Remove one key's file. True if it existed, False otherwise."""
-        return self._record_node(key_id).delete()
+        node = self._record_node(key_id)
+        if not node.exists():
+            return False
+        node.delete()
+        return True

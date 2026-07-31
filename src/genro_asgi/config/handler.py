@@ -32,15 +32,15 @@ The helpers read the tree by two rules, and the grammar decides which applies:
 
 Section → constructor kwarg:
 
-- ``server`` → ``host``/``port``/``external_url``/``max_threads``/
-  ``storage_key``, its ``session`` child → ``session_ttl``, its ``tasks``
-  child → ``tasks``.
+- ``server`` → ``host``/``port``/``external_url``/``max_threads``, its
+  ``session`` child → ``session_ttl``, its ``tasks`` child → ``tasks``.
 - ``middleware`` → ``middleware`` ({name: bool | dict} switches).
 - ``authentication`` → ``admin_password``/``users``/``tokens`` (the store
   kwargs ``AuthMixin`` peels), ``auth`` (the ``AuthCore`` entries folded from
   ``credentials``) and ``server_app`` (``login`` + ``oidc``, forwarded to the
   ``_server`` application).
-- ``storage`` → ``storage`` ({code: {path, encrypted}} mounts).
+- ``storage`` → ``storage`` (genro-storage's own ``list[dict]`` of mounts) and
+  ``storage_key`` (the section's at-rest key material).
 - ``applications`` → ``applications``/``default`` (each entry an
   ``(app_class, kwargs)`` pair the server instantiates).
 - ``databases`` → one descriptor per entry, registered by the server after the
@@ -73,9 +73,7 @@ class ConfigurationHandler(ConfigHandler):
         on the server), so their values lift to the kwargs the owning mixins
         peel while the config keeps them under ``server`` where they belong.
         """
-        kwargs = self.closed_attrs(
-            "server", "host", "port", "external_url", "max_threads", "storage_key"
-        )
+        kwargs = self.closed_attrs("server", "host", "port", "external_url", "max_threads")
         if self.node("server.session") is not None:
             kwargs["session_ttl"] = self("server.session.ttl")
         if self.node("server.tasks") is not None:
@@ -202,17 +200,33 @@ class ConfigurationHandler(ConfigHandler):
             providers[child.label] = attrs
         return providers
 
-    def storage_config(self) -> dict[str, Any] | None:
-        """The ``storage`` mounts as ``{code: {path, encrypted}}``, or ``None``
-        when the section is absent (the composition builds a default
-        ``LocalStorage``)."""
+    def storage_config(self) -> tuple[list[dict[str, Any]], str | None] | None:
+        """The ``storage`` section as ``(mounts, storage_key)``, or ``None`` when it
+        is absent (the composition builds its default manager).
+
+        The subtree is written in genro-storage's grammar, so it is flattened
+        GENERICALLY into that library's ``list[dict]``: the tag IS the protocol
+        and every attribute rides through as-is (``name`` among them — the
+        envelope is transparent to containment, so the children carry auto
+        labels and their key lives in the attribute the foreign grammar
+        declares). This dialect knows no storage vocabulary to translate.
+
+        A section carrying only its ``storage_key`` and no mount is legitimate —
+        "the default layout, plus this key" — so it yields an EMPTY mount list
+        rather than an error; the composition reads that as "use the default
+        ``site:`` mount". With ``BaseConfiguration`` layered underneath the
+        merged tree normally carries the ``site`` mount anyway, so this is the
+        shape a handler built without parents produces.
+        """
         node = self.node("storage")
         if node is None:
             return None
-        return {
-            child.label: self.closed_attrs(f"storage.{child.label}", "path", "encrypted")
-            for child in node.value
-        }
+        mounts: list[dict[str, Any]] = []
+        for child in node.value or ():
+            mount = self.open_attrs(child)
+            mount["protocol"] = child.node_tag
+            mounts.append(mount)
+        return mounts, self("storage.storage_key", default=None)
 
     def plugins_config(self) -> dict[str, bool | dict[str, Any]] | None:
         """The ``plugins`` switches as ``{code: bool | dict}``, or ``None`` when

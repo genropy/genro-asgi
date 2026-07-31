@@ -73,6 +73,7 @@ from .applications.server_app import ServerApplication
 from .auth import AuthMixin
 from .communication import CommunicationMixin
 from .config.elements import AsgiServerGrammar
+from .config.default_config import DefaultConfig
 from .config.handler import ConfigurationHandler
 from .db import AsgiDbHandlerBase
 from .middleware import MiddlewareMixin
@@ -127,10 +128,24 @@ class AsgiServer(
     def _build_config(self, config: ConfigSource | None) -> ConfigurationHandler | None:
         """The read door over ``config``: a ready handler passes through, anything
         else (a ``config.py`` path, a recipe class, a recipe instance) is wrapped
-        in one. ``None`` — a hand-built server — has no configuration at all."""
+        in one over the parent layers. ``None`` — a hand-built server — has no
+        configuration at all.
+
+        The site recipe is the TOP layer: ``DefaultConfig.parents_for()`` puts the
+        package defaults under it, plus the defaults source the recipe itself
+        declares (``default_config``). A handler handed in ready-made keeps
+        whatever layering it was built with — its owner already decided.
+
+        A ``config.py`` path is imported ONCE, here: the loaded class both
+        answers ``default_config`` and becomes the handler's source, so a
+        module-body side effect fires a single time per boot and the class the
+        parents were computed from is the class the handler builds."""
         if config is None or isinstance(config, ConfigurationHandler):
             return config
-        return ConfigurationHandler(config)
+        defaults = DefaultConfig()
+        if isinstance(config, (str, Path)):
+            config = defaults.recipe_class(config)
+        return ConfigurationHandler(config, parents=defaults.parents_for(config))
 
     def _configured_kwargs(self, config: ConfigurationHandler) -> dict[str, Any]:
         """The constructor kwargs the configuration declares.
@@ -146,11 +161,13 @@ class AsgiServer(
         for name, value in (
             ("middleware", config.middleware_config()),
             ("auth", config.auth_entries()),
-            ("storage", config.storage_config()),
             ("plugins", config.plugins_config()),
         ):
             if value is not None:
                 kwargs[name] = value
+        storage = config.storage_config()
+        if storage is not None:
+            kwargs["storage"], kwargs["storage_key"] = storage
         server_app = config.server_app_kwargs()
         if server_app:
             kwargs["server_app"] = server_app

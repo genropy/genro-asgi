@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from genro_storage import StorageManager
+from genro_storage.exceptions import StorageConfigError
 from cryptography.fernet import Fernet
 from genro_bag.resolvers import EnvResolver
 from genro_builders.builder import element
@@ -147,6 +149,7 @@ class TestStorageKeyFromTheEnvironment:
     ) -> None:
         monkeypatch.setenv(STORAGE_KEY_ENV_VAR, key)
         vault_dir = tmp_path / "vault"
+        vault_dir.mkdir()
 
         class VaultConfig(AsgiConfigBuilder):
             def setup(self, data: Any) -> None:
@@ -155,13 +158,12 @@ class TestStorageKeyFromTheEnvironment:
 
             def main(self, root: Any) -> None:
                 cfg = root.configuration()
-                cfg.server(
-                    host="127.0.0.1",
-                    port=8000,
+                cfg.server(host="127.0.0.1", port=8000)
+                cfg.storage(
+                    app=StorageManager,
                     storage_key=EnvResolver(STORAGE_KEY_ENV_VAR),
-                )
-                cfg.storage().mount(
-                    code="vault", path=self.data["vault_path"], encrypted=True
+                ).local(
+                    name="vault", base_path=self.data["vault_path"], default_encrypted=True
                 )
                 cfg.applications().application(code="shop", mount="", app_class=ShopApp)
 
@@ -180,17 +182,17 @@ class TestStorageKeyFromTheEnvironment:
         class EmptyKeyConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
                 cfg = root.configuration()
-                cfg.server(
-                    host="127.0.0.1",
-                    port=8000,
+                cfg.server(host="127.0.0.1", port=8000)
+                cfg.storage(
+                    app=StorageManager,
                     storage_key=EnvResolver(STORAGE_KEY_ENV_VAR, default=""),
-                )
+                ).memory(name="scratch")
                 cfg.applications().application(code="shop", mount="", app_class=ShopApp)
 
         # An empty string is NOT "missing": the recipe promised an encryption
         # key, so a resolution that yields nothing is a boot error, never a
         # silent downgrade to plaintext.
-        with pytest.raises(ValueError, match="resolved empty"):
+        with pytest.raises(StorageConfigError, match="empty key material"):
             AsgiServer(config=EmptyKeyConfig)
 
 

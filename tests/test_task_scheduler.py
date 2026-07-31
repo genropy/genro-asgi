@@ -29,11 +29,32 @@ from pathlib import Path
 import pytest
 from genro_routes import route
 
+from tests.storage_support import site_storage
+
 from genro_asgi import AsgiServer, RoutedApplication
-from genro_asgi.storage import LocalStorage
 from genro_asgi.tasks.scheduler import TaskScheduler
 
 RUN_MARKS: list[str] = []
+
+
+async def settle(predicate, timeout: float = 5.0, interval: float = 0.02) -> None:
+    """Wait until ``predicate()`` is truthy, sampling every ``interval`` seconds.
+
+    The spawned ``_execute`` task crosses two thread-pool hops plus a storage
+    write, so a fixed sleep is a race by construction. While polling, ANY
+    exception counts as "not yet" — a store record read mid-write raises
+    ``JSONDecodeError`` — but the caller's own asserts run after this returns,
+    so a condition that never converges still fails loudly on the real check.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        try:
+            if predicate():
+                return
+        except Exception:
+            pass
+        await asyncio.sleep(interval)
 
 
 class DemoApp(RoutedApplication):
@@ -77,7 +98,7 @@ def server(tmp_path: Path) -> AsgiServer:
     """A real AsgiServer: DemoApp primary + MountApp mounted, storage on tmp_path."""
     srv = AsgiServer(
         applications=[DemoApp(mount=""), MountApp(code="extra")],
-        storage=LocalStorage(base_dir=str(tmp_path)),
+        storage=site_storage(tmp_path),
     )
     return srv
 
@@ -104,7 +125,7 @@ class TestScan:
             @route(task="twin")
             def two(self) -> None: ...
 
-        srv = AsgiServer(applications=[Dup(mount="")], storage=LocalStorage(base_dir=str(tmp_path)))
+        srv = AsgiServer(applications=[Dup(mount="")], storage=site_storage(tmp_path))
         assert "twin" not in srv.tasks.scheduler.scan()   # both excluded, no silent pick
 
 
@@ -144,8 +165,9 @@ class TestTick:
         sch = scheduler(server)
         sch.sync_defaults(sch.scan(), now=0.0)          # creates cleanup at 1.0
         await sch.tick()                                # now >> 1.0 -> due
-        # let the spawned _execute task settle
-        await asyncio.sleep(0.05)
+        # The log append is _execute's LAST write (record first, log after),
+        # so a non-empty log implies every earlier assertion target is settled.
+        await settle(lambda: sch.store.read_log("cleanup"))
         rec = sch.store.get("cleanup")
         assert rec is not None and rec["last_outcome"] == "ok"
         assert "cleanup" in RUN_MARKS
@@ -155,7 +177,7 @@ class TestTick:
         sch = scheduler(server)
         sch.sync_defaults(sch.scan(), now=0.0)
         await sch.tick()
-        await asyncio.sleep(0.05)
+        await settle(lambda: (sch.store.get("boom") or {}).get("last_outcome"))
         rec = sch.store.get("boom")
         assert rec is not None and rec["last_outcome"] == "error"
         assert "scheduled boom" in rec["last_error"]
@@ -164,7 +186,7 @@ class TestTick:
         sch = scheduler(server)
         sch.sync_defaults(sch.scan(), now=0.0)
         await sch.tick()
-        await asyncio.sleep(0.05)
+        await settle(lambda: "slow" in RUN_MARKS)
         assert "slow" in RUN_MARKS
 
     async def test_no_overlap(self, server: AsgiServer) -> None:
@@ -205,7 +227,7 @@ class TestRunNow:
         try:
             sch.sync_defaults(sch.scan(), now=0.0)
             assert sch.run_now("cleanup") == "started"
-            await asyncio.sleep(0.05)
+            await settle(lambda: "cleanup" in RUN_MARKS)
             assert "cleanup" in RUN_MARKS
         finally:
             await sch.stop()

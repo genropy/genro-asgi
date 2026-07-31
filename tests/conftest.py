@@ -19,17 +19,36 @@ request through a composed server's ``__call__`` and read the recorded
 messages without re-declaring the boilerplate: ``http_request`` runs one
 request and returns the ``send`` messages; ``response_status`` /
 ``response_headers`` / ``response_body`` read that message list.
+
+``genro_asgi_home`` is autouse: no test ever reads the developer's real
+``~/.genroasgi``, whose ``config.py`` would otherwise layer itself under every
+``AsgiServer(config=...)`` built here.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+from pathlib import Path
 from typing import Callable
 
 import pytest
 
+from genro_asgi.config import HOME_ENV
 from genro_asgi.types import Message, Scope
+
+
+@pytest.fixture(autouse=True)
+def genro_asgi_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Autouse: point ``GENRO_ASGI_HOME`` at an empty per-test directory.
+
+    A test that WANTS a defaults recipe writes its own ``config.py`` in the
+    returned directory; every other test gets a home with nothing in it.
+    """
+    home = tmp_path / "genroasgi_home"
+    home.mkdir()
+    monkeypatch.setenv(HOME_ENV, str(home))
+    return home
 
 
 @pytest.fixture

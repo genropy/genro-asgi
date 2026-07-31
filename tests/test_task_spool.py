@@ -14,7 +14,7 @@
 
 """Tests for TaskSpool (core 1e Phase 1): the folder-move task model.
 
-Real filesystem (LocalStorage on tmp_path), no mocks. Covers the descriptor
+Real filesystem (a one-mount ``StorageManager`` on tmp_path), no mocks. Covers the descriptor
 shape, the create → assign → progress → settle lifecycle, the folder positions
 behind each state, cancel/result round-trips, terminal invariants (re-settle
 raises), owner/status queries and purge.
@@ -25,18 +25,21 @@ from typing import Any
 
 import pytest
 
-from genro_asgi.storage import LocalStorage
+from genro_storage import StorageManager
+
+from tests.storage_support import site_storage
+
 from genro_asgi.tasks import STATUSES, TaskSpool, new_descriptor
 
 
 @pytest.fixture
-def storage(tmp_path: Path) -> LocalStorage:
-    """A LocalStorage rooted in tmp_path (the spool uses the predefined 'site' mount)."""
-    return LocalStorage(base_dir=tmp_path)
+def storage(tmp_path: Path) -> StorageManager:
+    """Storage rooted in tmp_path (the spool lives on the 'site' mount)."""
+    return site_storage(tmp_path)
 
 
 @pytest.fixture
-def spool(storage: LocalStorage) -> TaskSpool:
+def spool(storage: StorageManager) -> TaskSpool:
     """A TaskSpool bound to the temporary storage."""
     return TaskSpool(storage)
 

@@ -18,11 +18,10 @@ A batch task is a FOLDER on storage; its STATE is its POSITION in the tree. The
 sender (an app handler, or the scheduler) creates the folder under ``pending/``;
 the manager MOVES it into the assigned worker's folder; the worker runs it and
 MOVES it to ``terminated/`` or ``aborted/``. A move is the only state transition
-— atomic on one mount (``LocalStorageNode.move_to``, a plain ``Path.rename``).
+— one mount, one ``StorageNode.move_to``.
 
 Layout (all on the plain ``site`` mount — these are service data, never secrets,
-so NO encryption; distinct from the task STORE, which goes ``secure`` when keys
-are installed)::
+so NO encryption, exactly like the task STORE alongside it)::
 
     batches/
       pending/<task_id>/            sender writes here; the manager polls it
@@ -57,7 +56,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ..storage import LocalStorage, LocalStorageNode
+    from genro_storage import StorageManager, StorageNode
 
 __all__ = ["TaskSpool", "new_descriptor", "STATUSES"]
 
@@ -118,49 +117,49 @@ class TaskSpool:
     """The file spool: create in pending, move between states, read progress/cancel.
 
     Note:
-        Holds the shared ``LocalStorage`` (dual relationship: ``self.storage``),
+        Holds the shared ``StorageManager`` (dual relationship: ``self.storage``),
         never raw paths. All I/O is plain synchronous storage calls.
     """
 
     __slots__ = ("storage",)
 
-    def __init__(self, storage: LocalStorage) -> None:
+    def __init__(self, storage: StorageManager) -> None:
         """Bind the spool to the server's storage service (the ``site`` mount)."""
         self.storage = storage
 
     # -- folder addressing --
 
-    def _task_node(self, status: str, task_id: str, worker_id: str | None = None) -> LocalStorageNode:
+    def _task_node(self, status: str, task_id: str, worker_id: str | None = None) -> StorageNode:
         """The folder node of ``task_id`` in ``status`` (worker_id only for ACTIVE)."""
         if status == ACTIVE:
             return self.storage.node(f"{MOUNT}:{ROOT}/{ACTIVE}/{worker_id}/{task_id}")
         return self.storage.node(f"{MOUNT}:{ROOT}/{status}/{task_id}")
 
-    def _state_dir(self, *parts: str) -> LocalStorageNode:
+    def _state_dir(self, *parts: str) -> StorageNode:
         """A state directory node (e.g. ``pending/`` or ``active/<worker_id>/``)."""
         return self.storage.node(f"{MOUNT}:{ROOT}/" + "/".join(parts))
 
     # -- I/O helpers --
 
-    def _read_json(self, node: LocalStorageNode) -> dict[str, Any] | None:
-        if not node.exists:
+    def _read_json(self, node: StorageNode) -> dict[str, Any] | None:
+        if not node.exists():
             return None
         return json.loads(node.read_text())
 
-    def _write_json(self, node: LocalStorageNode, data: dict[str, Any]) -> None:
+    def _write_json(self, node: StorageNode, data: dict[str, Any]) -> None:
         node.write_text(json.dumps(data, indent=2))
 
-    def _find_folder(self, task_id: str) -> LocalStorageNode | None:
+    def _find_folder(self, task_id: str) -> StorageNode | None:
         """Locate a task's folder in whatever state it currently sits (or None)."""
         for status in (PENDING, TERMINATED, ABORTED):
             node = self._task_node(status, task_id)
-            if node.exists:
+            if node.exists():
                 return node
         active_root = self._state_dir(ACTIVE)
-        if active_root.isdir:
+        if active_root.is_dir():
             for worker_dir in active_root.children():
                 candidate = worker_dir.child(task_id)
-                if candidate.exists:
+                if candidate.exists():
                     return candidate
         return None
 
@@ -196,12 +195,12 @@ class TaskSpool:
         """The descriptors of ``worker_id``'s active tasks (that worker's queue)."""
         return self._list_descriptors(self._state_dir(ACTIVE, worker_id))
 
-    def _list_descriptors(self, directory: LocalStorageNode) -> list[dict[str, Any]]:
-        if not directory.isdir:
+    def _list_descriptors(self, directory: StorageNode) -> list[dict[str, Any]]:
+        if not directory.is_dir():
             return []
         result: list[dict[str, Any]] = []
         for folder in directory.children():
-            if folder.isdir:
+            if folder.is_dir():
                 descriptor = self._read_json(folder.child(DESCRIPTOR_FILE))
                 if descriptor is not None:
                     result.append(descriptor)
@@ -219,7 +218,7 @@ class TaskSpool:
             LookupError: if the task is not in ``pending``.
         """
         src = self._task_node(PENDING, task_id)
-        if not src.exists:
+        if not src.exists():
             raise LookupError(f"task not pending: {task_id}")
         descriptor = self._read_json(src.child(DESCRIPTOR_FILE)) or {}
         descriptor.update(status=ACTIVE, worker_id=worker_id, started_ts=_now())
@@ -240,7 +239,7 @@ class TaskSpool:
             LookupError: if the task is not active on ``worker_id``.
         """
         src = self._task_node(ACTIVE, task_id, worker_id)
-        if not src.exists:
+        if not src.exists():
             raise LookupError(f"task not active on {worker_id}: {task_id}")
         target_status = TERMINATED if outcome == "ok" else ABORTED
         descriptor = self._read_json(src.child(DESCRIPTOR_FILE)) or {}
@@ -274,7 +273,7 @@ class TaskSpool:
     def is_cancelled(self, task_id: str) -> bool:
         """True if a ``cancel`` marker is present (the worker checks at each tick)."""
         folder = self._find_folder(task_id)
-        return folder is not None and folder.child(CANCEL_FILE).exists
+        return folder is not None and folder.child(CANCEL_FILE).exists()
 
     def write_result(self, task_id: str, worker_id: str, data: Any) -> None:
         """Persist the batch result in the task folder (pickled)."""
@@ -287,7 +286,7 @@ class TaskSpool:
         if folder is None:
             return None
         node = folder.child(RESULT_FILE)
-        if not node.exists:
+        if not node.exists():
             return None
         return pickle.loads(node.read_bytes())
 
@@ -317,11 +316,11 @@ class TaskSpool:
         """
         if status == ACTIVE:
             active_root = self._state_dir(ACTIVE)
-            if not active_root.isdir:
+            if not active_root.is_dir():
                 return []
             result: list[dict[str, Any]] = []
             for worker_dir in active_root.children():
-                if worker_dir.isdir:
+                if worker_dir.is_dir():
                     result.extend(self._list_descriptors(worker_dir))
             return result
         return self._list_descriptors(self._state_dir(status))
@@ -339,4 +338,5 @@ class TaskSpool:
         folder = self._find_folder(task_id)
         if folder is None:
             return False
-        return folder.remove_tree()
+        folder.delete()
+        return True

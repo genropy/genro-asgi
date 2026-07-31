@@ -27,8 +27,10 @@ import base64
 from pathlib import Path
 from typing import Any
 
+from cryptography.fernet import Fernet
 import pytest
 from genro_bag.resolvers import EnvResolver
+from genro_storage import StorageManager
 
 from genro_asgi import (
     AsgiConfigBuilder,
@@ -37,8 +39,11 @@ from genro_asgi import (
     ConfigError,
     ConfigurationHandler,
 )
+from genro_asgi.__main__ import AppsRegistry
+from genro_asgi.config import HOME_ENV, BaseConfiguration, DefaultConfig
 from genro_asgi.exceptions import HTTPUnauthorized
 from genro_asgi.middleware.base import BaseMiddleware
+from genro_asgi.storage_mixin import DEFAULT_SITE_MOUNT
 from genro_asgi.types import Message, Receive, Scope, Send
 
 ADMIN_PW_ENV_VAR = "GENRO_TEST_ADMIN_PW"
@@ -332,13 +337,26 @@ class TestGrammarValidation:
         with pytest.raises(ValueError, match="app_class"):
             ConfigurationHandler(NoClassConfig)
 
-    def test_mount_without_path_rejected_by_grammar(self) -> None:
-        class NoPathConfig(AsgiConfigBuilder):
+    def test_a_mount_without_base_path_is_rejected_by_the_foreign_grammar(self) -> None:
+        # The storage subtree is validated by genro-storage's own signatures,
+        # not by this dialect: the error comes from THERE.
+        class NoBasePathConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                root.configuration().storage().mount(code="data")
+                root.configuration().storage(app=StorageManager).local(name="data")
 
-        with pytest.raises(ValueError, match="path"):
-            ConfigurationHandler(NoPathConfig)
+        with pytest.raises(ValueError, match="base_path"):
+            ConfigurationHandler(NoBasePathConfig)
+
+    def test_storage_without_app_is_rejected_by_the_grammar(self) -> None:
+        # ``app`` cannot be defaulted in the signature: the subbuilder
+        # reference reads the CALL SITE, so an omitted ``app`` would silently
+        # leave the node a leaf of this dialect. It is required instead.
+        class NoAppConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                root.configuration().storage()
+
+        with pytest.raises(ValueError, match="app"):
+            ConfigurationHandler(NoAppConfig)
 
     def test_an_empty_application_code_is_a_boot_error(self) -> None:
         # code="" would file the subtree under an empty label while the app
@@ -436,7 +454,7 @@ class TestDefaultRedirect:
 
 
 def storage_site_config(base_path: Path) -> type[AsgiConfigBuilder]:
-    """A site recipe with a plain ``idstore`` storage mount (for store wiring)."""
+    """A site recipe with an ``idstore`` mount and the key the credential stores need."""
 
     class StorageSiteConfig(AsgiConfigBuilder):
         def setup(self, data: Any) -> None:
@@ -446,7 +464,9 @@ def storage_site_config(base_path: Path) -> type[AsgiConfigBuilder]:
         def main(self, root: Any) -> None:
             cfg = root.configuration()
             cfg.server(host="127.0.0.1", port=8000)
-            cfg.storage().mount(code="idstore", path=self.data["base_path"])
+            cfg.storage(
+                app=StorageManager, storage_key=Fernet.generate_key().decode()
+            ).local(name="idstore", base_path=self.data["base_path"])
             cfg.applications(default="shop").application(
                 code="shop", mount="", app_class=ShopApp
             )
@@ -460,6 +480,42 @@ def storage_site_config(base_path: Path) -> type[AsgiConfigBuilder]:
             auth.tokens(mount="idstore", prefix="api_keys")
 
     return StorageSiteConfig
+
+
+class TestStorageSection:
+    """``storage`` → genro-storage's own ``list[dict]`` plus the section key."""
+
+    def test_the_section_flattens_to_genro_storage_configuration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GENRO_TEST_STORAGE_KEY", "k1,k2")
+
+        class StorageConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                self.storage_section(root.configuration())
+
+            def storage_section(self, cfg: Any) -> None:
+                s = cfg.storage(
+                    app=StorageManager,
+                    storage_key=EnvResolver("GENRO_TEST_STORAGE_KEY"),
+                )
+                s.local(name="site", base_path=".")
+                s.s3(name="uploads", bucket="shop-media", default_encrypted="shopspa")
+
+        mounts, storage_key = ConfigurationHandler(StorageConfig).storage_config()
+        assert storage_key == "k1,k2"
+        assert mounts == [
+            {"name": "site", "protocol": "local", "base_path": "."},
+            {
+                "name": "uploads",
+                "protocol": "s3",
+                "bucket": "shop-media",
+                "default_encrypted": "shopspa",
+            },
+        ]
+
+    def test_no_storage_section_leaves_the_default_manager(self) -> None:
+        assert ConfigurationHandler(TwoAppConfig).storage_config() is None
 
 
 class TestIdentitySection:
@@ -698,3 +754,226 @@ class TestReadStack:
         handler = ConfigurationHandler(TwoAppConfig)
         with pytest.raises(KeyError, match="server.tls"):
             handler("server.tls")
+
+
+def write_defaults_recipe(
+    base_dir: Path, filename: str = "config.py", mount_path: str = "/srv/deployment"
+) -> Path:
+    """A recipe file in *base_dir* deviating from the package defaults.
+
+    ``mount_path`` needs to be a directory that EXISTS only where the recipe
+    reaches a real ``StorageManager`` — genro-storage's local backend validates
+    the anchor at ``configure()`` time, never at recipe time.
+    """
+    path = base_dir / filename
+    path.write_text(
+        "from typing import Any\n"
+        "\n"
+        "from genro_asgi.config import BaseConfiguration\n"
+        "\n"
+        "\n"
+        "class DeploymentConfiguration(BaseConfiguration):\n"
+        "    def server_section(self, cfg: Any) -> None:\n"
+        "        cfg.server(host='10.0.0.1', port=9999)\n"
+        "\n"
+        "    def storage_mounts(self, section: Any) -> None:\n"
+        f"        section.local(name='site', base_path={mount_path!r})\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+class TestParentRecipes:
+    """``BaseConfiguration`` + the declared defaults layer + the site recipe.
+
+    ``DefaultConfig.parents_for()`` is what ``AsgiServer`` hands the handler: the
+    package defaults lowest, the recipe's own defaults source over them, the site
+    recipe last and winning.
+    """
+
+    def test_a_site_inherits_the_default_site_mount_and_adds_its_key(
+        self, tmp_path: Path
+    ) -> None:
+        class KeyOnlyConfig(BaseConfiguration):
+            storage_key = "k1"
+
+        parents = DefaultConfig(tmp_path).parents_for(KeyOnlyConfig)
+        mounts, storage_key = ConfigurationHandler(KeyOnlyConfig, parents=parents).storage_config()
+        assert storage_key == "k1"
+        assert mounts == [{**DEFAULT_SITE_MOUNT, "base_path": str(Path.cwd())}]
+
+    def test_only_the_package_defaults_are_layered_without_a_defaults_recipe(
+        self, tmp_path: Path
+    ) -> None:
+        assert DefaultConfig(tmp_path).parents_for(BaseConfiguration) == [BaseConfiguration]
+
+    def test_the_conventional_recipe_joins_the_chain_when_its_file_exists(
+        self, tmp_path: Path
+    ) -> None:
+        declared = write_defaults_recipe(tmp_path)
+        assert DefaultConfig(tmp_path).parents_for(BaseConfiguration) == [
+            BaseConfiguration,
+            declared,
+        ]
+
+    def test_the_defaults_layer_overrides_the_base_and_loses_to_the_site(
+        self, tmp_path: Path
+    ) -> None:
+        write_defaults_recipe(tmp_path)
+
+        class SiteConfig(AsgiConfigBuilder):
+            """Says one thing only: the layers under it supply everything else."""
+
+            def main(self, root: Any) -> None:
+                root.configuration().server(host="127.0.0.1")
+
+        parents = DefaultConfig(tmp_path).parents_for(SiteConfig)
+        handler = ConfigurationHandler(SiteConfig, parents=parents)
+        assert handler("server.host") == "127.0.0.1"      # the site wins
+        assert handler("server.port") == 9999             # the defaults layer holds
+        mounts, _ = handler.storage_config()              # over the package default
+        assert mounts == [{**DEFAULT_SITE_MOUNT, "base_path": "/srv/deployment"}]
+
+    def test_a_key_only_section_without_parents_yields_no_mount(self) -> None:
+        """The guard: a storage section with no mount child is not a crash."""
+
+        class KeyOnlyConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                root.configuration().storage(app=StorageManager, storage_key="k1")
+
+        mounts, storage_key = ConfigurationHandler(KeyOnlyConfig).storage_config()
+        assert mounts == []
+        assert storage_key == "k1"
+
+
+class TestDeclaredDefaultConfig:
+    """``default_config`` on the recipe: which defaults source, declared by the recipe.
+
+    Unset (or ``True``) takes the conventional ``<base_dir>/config.py`` when it is
+    there, ``False`` takes nothing, a path takes that file and must find it.
+    """
+
+    def test_unset_takes_the_conventional_file(self, tmp_path: Path) -> None:
+        declared = write_defaults_recipe(tmp_path)
+
+        class SiteConfig(BaseConfiguration):
+            pass
+
+        assert SiteConfig.default_config is None
+        assert DefaultConfig(tmp_path).parents_for(SiteConfig) == [BaseConfiguration, declared]
+
+    def test_true_reads_the_conventional_file_like_an_unset_attribute(
+        self, tmp_path: Path
+    ) -> None:
+        declared = write_defaults_recipe(tmp_path)
+
+        class SiteConfig(BaseConfiguration):
+            default_config = True
+
+        assert DefaultConfig(tmp_path).parents_for(SiteConfig) == [BaseConfiguration, declared]
+
+    def test_false_refuses_the_layer_even_when_the_file_is_there(self, tmp_path: Path) -> None:
+        write_defaults_recipe(tmp_path)
+
+        class SiteConfig(BaseConfiguration):
+            default_config = False
+
+        assert DefaultConfig(tmp_path).parents_for(SiteConfig) == [BaseConfiguration]
+
+    def test_an_explicit_path_is_layered_from_wherever_it_lives(self, tmp_path: Path) -> None:
+        elsewhere = write_defaults_recipe(tmp_path, filename="shared_defaults.py")
+
+        class SiteConfig(BaseConfiguration):
+            default_config = str(elsewhere)
+
+        parents = DefaultConfig(tmp_path).parents_for(SiteConfig)
+        assert parents == [BaseConfiguration, elsewhere]
+        assert ConfigurationHandler(SiteConfig, parents=parents)("server.port") == 9999
+
+    def test_an_explicit_path_that_does_not_exist_is_a_config_error(self, tmp_path: Path) -> None:
+        missing = tmp_path / "absent.py"
+
+        class SiteConfig(BaseConfiguration):
+            default_config = missing
+
+        with pytest.raises(ConfigError, match="does not exist"):
+            DefaultConfig(tmp_path).parents_for(SiteConfig)
+
+    def test_a_config_py_source_declares_its_own_default_config(self, tmp_path: Path) -> None:
+        """The attribute is read off the recipe class a path source defines."""
+        write_defaults_recipe(tmp_path)
+        site = tmp_path / "site.py"
+        site.write_text(
+            "from genro_asgi.config import BaseConfiguration\n"
+            "\n"
+            "\n"
+            "class SiteConfiguration(BaseConfiguration):\n"
+            "    default_config = False\n",
+            encoding="utf-8",
+        )
+        assert DefaultConfig(tmp_path).parents_for(site) == [BaseConfiguration]
+
+    def test_a_config_py_source_must_define_exactly_one_recipe(self, tmp_path: Path) -> None:
+        site = tmp_path / "site.py"
+        site.write_text("value = 1\n", encoding="utf-8")
+        with pytest.raises(ConfigError, match="exactly one ConfigBuilder subclass"):
+            DefaultConfig(tmp_path).parents_for(site)
+
+
+class TestHomeResolution:
+    """``base_dir``: the explicit argument, then ``GENRO_ASGI_HOME``, then ``~``."""
+
+    def test_the_env_var_is_the_default_base_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(HOME_ENV, str(tmp_path))
+        assert DefaultConfig().base_dir == tmp_path
+        assert DefaultConfig().path == tmp_path / "config.py"
+
+    def test_the_explicit_argument_wins_over_the_env_var(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(HOME_ENV, str(tmp_path / "from_env"))
+        assert DefaultConfig(tmp_path / "explicit").base_dir == tmp_path / "explicit"
+
+    def test_the_home_directory_is_the_last_resort(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv(HOME_ENV, raising=False)
+        assert DefaultConfig().base_dir == Path.home() / ".genroasgi"
+
+    def test_the_cli_registry_follows_the_same_variable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(HOME_ENV, str(tmp_path))
+        assert AppsRegistry().base_dir == tmp_path
+        assert AppsRegistry().apps_dir == tmp_path / "apps"
+
+
+class TestServerLayersTheDeclaredDefaults:
+    """The production wiring: ``AsgiServer(config=...)`` layers what the recipe declares."""
+
+    def test_the_server_reads_the_conventional_defaults_recipe(
+        self, genro_asgi_home: Path
+    ) -> None:
+        write_defaults_recipe(genro_asgi_home, mount_path=str(genro_asgi_home))
+
+        class SiteConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                root.configuration().server(host="127.0.0.1")
+
+        server = AsgiServer(config=SiteConfig)
+        assert server.config is not None
+        assert server.config("server.host") == "127.0.0.1"      # the site wins
+        assert server.config("server.port") == 9999             # from the defaults layer
+
+    def test_a_recipe_declining_the_layer_sees_only_the_package_defaults(
+        self, genro_asgi_home: Path
+    ) -> None:
+        write_defaults_recipe(genro_asgi_home)
+
+        class SiteConfig(BaseConfiguration):
+            default_config = False
+
+        server = AsgiServer(config=SiteConfig)
+        assert server.config is not None
+        with pytest.raises(KeyError, match="server.port"):
+            server.config("server.port")

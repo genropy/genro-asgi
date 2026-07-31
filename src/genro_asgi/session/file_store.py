@@ -37,7 +37,7 @@ import json
 import secrets
 from typing import Any
 
-from ..storage import LocalStorage, LocalStorageNode
+from genro_storage import StorageManager, StorageNode
 from .avatar import Avatar
 from .session import Session
 
@@ -51,7 +51,7 @@ class FileSessionStore:
 
     def __init__(
         self,
-        storage: LocalStorage,
+        storage: StorageManager,
         mount: str = "site",
         prefix: str = "sessions",
         default_ttl: int = 3600,
@@ -65,7 +65,7 @@ class FileSessionStore:
 
     # ── persistence helpers ────────────────────────────────────────────
 
-    def _node(self, session_id: str) -> LocalStorageNode:
+    def _node(self, session_id: str) -> StorageNode:
         """The storage node backing ``session_id`` on the configured mount."""
         return self._storage.node(f"{self._mount}:{self._prefix}/{session_id}.json")
 
@@ -92,19 +92,19 @@ class FileSessionStore:
         return session
 
     def _write(self, session: Session) -> None:
-        """Persist a session's record to its file (encryption is the mount's concern)."""
+        """Persist a session's record to its file (plain: a session is not a credential)."""
         self._node(session.id).write_text(json.dumps(self._entry(session)))
 
     def _remove_file(self, session_id: str) -> None:
         """Delete a session's file if it exists (a no-op otherwise)."""
         node = self._node(session_id)
-        if node.exists:
+        if node.exists():
             node.delete()
 
     def _load(self, session_id: str) -> Session | None:
         """Load a session from disk, or ``None`` if no file; a non-JSON file raises."""
         node = self._node(session_id)
-        if not node.exists:
+        if not node.exists():
             return None
         return self._session_from_entry(session_id, json.loads(node.read_text()))
 

@@ -45,11 +45,12 @@ Two stores ship with genro-asgi:
 
 - **`MemorySessionStore`** — sessions live in the process. Simple, fast, lost on
   restart. Good for development and single-process deployments.
-- **`FileSessionStore`** — sessions persist on disk, backed by a `LocalStorage`:
+- **`FileSessionStore`** — sessions persist on disk, under the `site:sessions`
+  prefix of the server's `genro_storage.StorageManager`:
 
   ```python
   from genro_asgi import FileSessionStore
-  # FileSessionStore(LocalStorage(...))
+  # FileSessionStore(server.storage)
   ```
 
 Both are importable from `genro_asgi`.

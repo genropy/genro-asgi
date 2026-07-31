@@ -67,6 +67,7 @@ from types import ModuleType
 import uvicorn
 
 from .asgi_server import AsgiServer
+from .config.default_config import DefaultConfig
 
 __all__ = [
     "LAUNCHER_ENV",
@@ -88,10 +89,17 @@ class CliError(Exception):
 
 
 class AppsRegistry:
-    """The ``~/.genroasgi`` store: registered servers and the pids of the running ones."""
+    """The ``~/.genroasgi`` store: registered servers and the pids of the running ones.
+
+    The directory is also where a deployment keeps its defaults layer, so
+    ``base_dir`` comes from ``DefaultConfig`` — one default for both, one
+    ``GENRO_ASGI_HOME`` relocating both, and one parameter a test can point at a
+    temporary directory.
+    """
 
     def __init__(self, base_dir: Path | None = None) -> None:
-        self.base_dir = base_dir or Path.home() / ".genroasgi"
+        self.default_config = DefaultConfig(base_dir)
+        self.base_dir = self.default_config.base_dir
         self.apps_dir = self.base_dir / "apps"
         self.run_dir = self.base_dir / "run"
 

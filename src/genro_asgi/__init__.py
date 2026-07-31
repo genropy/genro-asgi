@@ -39,8 +39,10 @@ from .communication import CommunicationMixin
 from .config import (
     AsgiConfigBuilder,
     AsgiServerGrammar,
+    BaseConfiguration,
     ConfigError,
     ConfigurationHandler,
+    DefaultConfig,
 )
 from .db import AsgiDbHandlerBase
 from .exceptions import (
@@ -68,7 +70,6 @@ from .session import (
     SessionMixin,
     SessionStore,
 )
-from .storage import LocalStorage, LocalStorageNode, StorageNode
 from .storage_mixin import StorageMixin
 from .tasks import TaskGrammar
 from .types import ASGIApp, Message, Receive, Scope, Send
@@ -87,12 +88,14 @@ __all__ = [
     "AuthSection",
     "Avatar",
     "BaseApplication",
+    "BaseConfiguration",
     "BaseMiddleware",
     "BaseServer",
     "ChannelClient",
     "CommunicationMixin",
     "ConfigError",
     "ConfigurationHandler",
+    "DefaultConfig",
     "FileApiKeyStore",
     "FileSessionStore",
     "FileUserStore",
@@ -103,8 +106,6 @@ __all__ = [
     "HTTPForbidden",
     "HTTPNotFound",
     "HTTPUnauthorized",
-    "LocalStorage",
-    "LocalStorageNode",
     "McpApplication",
     "McpEngine",
     "McpError",
@@ -132,11 +133,10 @@ __all__ = [
     "SessionMixin",
     "SessionStore",
     "StorageMixin",
-    "StorageNode",
     "TaskGrammar",
     "UserStore",
     "__version__",
     "router_openapi",
 ]
 
-__version__ = "0.21.0"
+__version__ = "0.22.0"

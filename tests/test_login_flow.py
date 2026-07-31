@@ -34,13 +34,14 @@ from typing import Any
 import pytest
 from cryptography.fernet import Fernet
 
+from tests.storage_support import site_storage
+
 from genro_asgi import (
     AsgiServer,
     AuthMethod,
     AuthSection,
     BaseApplication,
     FileUserStore,
-    LocalStorage,
     PasswordMethod,
     ServerApplication,
     UserStore,
@@ -230,7 +231,7 @@ class TestLoginHappyPath:
         assert promoted.data["cart"] == "kept"  # the cart survives the login
 
     async def test_login_green_path_against_a_file_user_store(self, tmp_path: Path) -> None:
-        storage = LocalStorage(base_dir=tmp_path)
+        storage = site_storage(tmp_path)
         storage.set_encryption_keys(Fernet.generate_key().decode())
         store = FileUserStore(storage)
         store.save(

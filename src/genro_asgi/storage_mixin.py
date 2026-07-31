@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Storage capability: filesystem storage as a mixin over the base server (§4, D6).
+"""Storage capability: genro-storage as a mixin over the base server (§4, D6).
 
 ``StorageMixin`` is a capability composed over ``BaseServer`` (``class S(...,
 StorageMixin, BaseServer)``). Unlike ``AuthMixin``/``SessionMixin`` it arms NO
@@ -20,72 +20,93 @@ middleware — storage is survival infrastructure, not a request-chain concern
 (§4: PUBLIC = base + storage). Its cooperative ``__init__`` peels ``storage=``
 and ``storage_key=`` and forwards everything else down the D16 chain.
 
-``storage=`` shapes the ``LocalStorage`` the server owns:
+``storage=`` shapes the ``genro_storage.StorageManager`` the server owns:
 
-- ``None`` → a fresh ``LocalStorage()`` (default ``base_dir``), only the
-  predefined ``site``/``secure`` mounts;
-- a ``LocalStorage`` instance → adopted as-is;
-- a dict ``{mount_code: {"path": ..., "encrypted": ...}}`` → a fresh
-  ``LocalStorage`` with one ``add_mount`` per entry.
+- ``None`` → a manager with the single mount ``site:``, the deployment
+  directory (the process cwd);
+- a ``StorageManager`` instance → adopted as-is;
+- a ``list[dict]`` → genro-storage's own mount configuration, handed to
+  ``configure()`` verbatim (``{"name": ..., "protocol": ..., ...}``); an EMPTY
+  list reads like ``None`` — a recipe that declared a ``storage`` section for
+  its key material alone asked for the default layout, not for no storage.
 
-``storage_key=`` installs at-rest encryption key material (``set_encryption_keys``
-— comma-separated Fernet keys, first encrypts, all decrypt). Configured but
-resolved empty is an explicit boot error (old-repo semantics: no silent
-degradation); omitted, the encrypted mounts stay dormant until keys are set.
+``storage_key=`` is the at-rest key material: comma-separated Fernet keys, each
+optionally ``<domain>:`` prefixed (the first key of a domain encrypts, all of
+them decrypt). It reaches ``configure(storage_key=...)``; key material that
+resolves empty is genro-storage's own boot error, never a silent
+no-encryption fallback. Omitted, encryption stays dormant and any
+``encrypted=True`` write raises at the write site.
+
+Encryption is declared per WRITE, not per mount: the stores that hold
+credentials pass ``encrypted=True``, everything else writes plain, and both
+share one directory tree — what lands on disk is self-describing (an envelope
+whose first line is ``#GNRE1:``), so reads declare nothing.
+
+genro-storage nodes are ``smartasync``: under a running event loop they would
+hand back a coroutine instead of a value. This server's storage API is
+SYNCHRONOUS by ratification (D22, core 1b) — the stores and the spool are plain
+sync objects and async dispatch paths wrap them — so the mixin pins the sync
+dispatch (``set_sync()``) for the context the server is built in, which every
+task it later spawns inherits.
 
 A composition WITHOUT the mixin has NO ``storage`` attribute at all.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-from .storage import LocalStorage
+from genro_storage import StorageManager
+from genro_toolbox.smartasync import set_sync
 
-__all__ = ["StorageMixin"]
+__all__ = ["DEFAULT_SITE_MOUNT", "StorageMixin"]
+
+DEFAULT_SITE_MOUNT = {"name": "site", "protocol": "local"}
+"""The default layout, minus its anchor: ONE local mount named ``site``.
+
+The anchor is deliberately absent — it is the cwd read when the manager is
+built, which is boot. ``BaseConfiguration.storage_mounts`` writes the same
+mount as a recipe line, so this is the one place the two agree on.
+"""
 
 
 class StorageMixin:
     """Storage capability mixin, composed over the base server. Arms no middleware.
 
-    Constructor kwargs peeled here: ``storage`` — ``None`` (a fresh
-    ``LocalStorage``), a ``LocalStorage`` instance (adopted), or a
-    ``{code: {path, encrypted}}`` dict (mounts materialized); ``storage_key`` —
-    the encryption key material (configured-but-empty raises).
+    Constructor kwargs peeled here: ``storage`` — ``None`` (a manager with the
+    single ``site:`` mount on the deployment directory), a ``StorageManager``
+    instance (adopted), or a ``list[dict]`` of genro-storage mount configs (empty
+    reads like ``None``); ``storage_key`` — the at-rest key material.
     """
 
     def __init__(self, **kwargs: Any) -> None:
-        storage: LocalStorage | dict[str, Any] | None = kwargs.pop("storage", None)
+        storage: StorageManager | list[dict[str, Any]] | None = kwargs.pop("storage", None)
         storage_key: str | None = kwargs.pop("storage_key", None)
+        set_sync()
         super().__init__(**kwargs)
-        self._storage = self._build_storage(storage)
-        if storage_key is not None:
-            if not storage_key:
-                raise ValueError(
-                    "'storage_key' is configured but resolved empty: the storage "
-                    "encryption key is missing (check the environment)"
-                )
-            self._storage.set_encryption_keys(storage_key)
+        self._storage = self._build_storage(storage, storage_key)
 
-    def _build_storage(self, storage: LocalStorage | dict[str, Any] | None) -> LocalStorage:
-        """Turn the ``storage=`` kwarg into the ``LocalStorage`` the server owns."""
-        if storage is None:
-            return LocalStorage()
-        if isinstance(storage, LocalStorage):
+    def _build_storage(
+        self,
+        storage: StorageManager | list[dict[str, Any]] | None,
+        storage_key: str | None,
+    ) -> StorageManager:
+        """Turn ``storage=``/``storage_key=`` into the ``StorageManager`` the server owns."""
+        if isinstance(storage, StorageManager):
+            if storage_key is not None:
+                storage.set_encryption_keys(storage_key)
             return storage
-        built = LocalStorage()
-        for code, mount_config in storage.items():
-            built.add_mount(
-                {
-                    "name": code,
-                    "type": "local",
-                    "path": mount_config["path"],
-                    "encrypted": bool(mount_config.get("encrypted")),
-                }
-            )
+        mounts = storage or self._default_mounts()
+        built = StorageManager()
+        built.configure(mounts, storage_key=storage_key)
         return built
 
+    def _default_mounts(self) -> list[dict[str, Any]]:
+        """The default configuration: one ``site:`` mount on the deployment directory."""
+        return [{**DEFAULT_SITE_MOUNT, "base_path": str(Path.cwd())}]
+
     @property
-    def storage(self) -> LocalStorage:
-        """The filesystem storage this server owns (mounts + at-rest encryption)."""
+    def storage(self) -> StorageManager:
+        """The storage this server owns (mounts + at-rest encryption key material)."""
         return self._storage

@@ -2,7 +2,7 @@ import genro_asgi
 
 
 def test_version():
-    assert genro_asgi.__version__ == "0.21.0"
+    assert genro_asgi.__version__ == "0.22.0"
 
 
 def test_root_exports_public_api():
@@ -20,12 +20,14 @@ def test_root_exports_public_api():
         "AuthSection",
         "Avatar",
         "BaseApplication",
+        "BaseConfiguration",
         "BaseMiddleware",
         "BaseServer",
         "ChannelClient",
         "CommunicationMixin",
         "ConfigError",
         "ConfigurationHandler",
+        "DefaultConfig",
         "FileApiKeyStore",
         "FileSessionStore",
         "FileUserStore",
@@ -36,8 +38,6 @@ def test_root_exports_public_api():
         "HTTPForbidden",
         "HTTPNotFound",
         "HTTPUnauthorized",
-        "LocalStorage",
-        "LocalStorageNode",
         "McpApplication",
         "McpEngine",
         "McpError",
@@ -65,7 +65,6 @@ def test_root_exports_public_api():
         "SessionMixin",
         "SessionStore",
         "StorageMixin",
-        "StorageNode",
         "TaskGrammar",
         "UserStore",
         "__version__",

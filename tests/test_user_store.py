@@ -17,7 +17,7 @@
 The contract suite is PARAMETRIZED over FACTORIES (invariant §5.9): callables
 returning a fresh configured store over the SAME mount, so a future db backend
 plugs into the SAME suite. Today the only backend is ``FileUserStore`` over an
-encrypted tmp ``secure`` mount (records are ciphertext at rest).
+a tmp ``site`` mount with key material installed (records are ciphertext at rest).
 """
 
 from __future__ import annotations
@@ -27,7 +27,11 @@ import json
 import pytest
 from cryptography.fernet import Fernet
 
-from genro_asgi import FileUserStore, LocalStorage, UserStore
+from genro_storage.exceptions import StorageError
+
+from tests.storage_support import site_storage
+
+from genro_asgi import FileUserStore, UserStore
 
 # --- store contract suite (parametrized over FACTORIES, §5.9) ---
 
@@ -37,7 +41,7 @@ def _file_factory(tmp_path):
     key = Fernet.generate_key().decode()
 
     def make(**kwargs):
-        storage = LocalStorage(base_dir=str(tmp_path))
+        storage = site_storage(tmp_path)
         storage.set_encryption_keys(key)
         return FileUserStore(storage, **kwargs)
 
@@ -158,10 +162,8 @@ class TestPasswordHashing:
 
 
 def _encrypted_storage(tmp_path, key):
-    """A LocalStorage over ``tmp_path`` with ``key`` installed for the secure mount."""
-    storage = LocalStorage(base_dir=str(tmp_path))
-    storage.set_encryption_keys(key)
-    return storage
+    """The site storage over ``tmp_path`` with ``key`` installed as at-rest key material."""
+    return site_storage(tmp_path, storage_key=key)
 
 
 class TestFileUserStore:
@@ -180,27 +182,28 @@ class TestFileUserStore:
         key = Fernet.generate_key().decode()
         store = FileUserStore(_encrypted_storage(tmp_path, key))
         store.save(_record(store, "dave", password="s3cret"))
-        raw = (tmp_path / "secure" / "users" / "dave.json").read_bytes()
+        raw = (tmp_path / "users" / "dave.json").read_bytes()
+        assert raw.startswith(b"#GNRE1:")       # the self-describing envelope
         assert b"dave" not in raw
         assert b"scrypt" not in raw
         with pytest.raises(json.JSONDecodeError):
             json.loads(raw)
-        assert Fernet(key).decrypt(raw)
+        assert Fernet(key).decrypt(raw.split(b"\n", 1)[1])
 
-    def test_encrypted_mount_without_keys_raises_on_save(self, tmp_path) -> None:
-        store = FileUserStore(LocalStorage(base_dir=str(tmp_path)))
-        with pytest.raises(RuntimeError):
+    def test_encrypted_write_without_keys_raises_on_save(self, tmp_path) -> None:
+        store = FileUserStore(site_storage(tmp_path))
+        with pytest.raises(StorageError):
             store.save(_record(store, "erin"))
 
     def test_save_with_traversal_identity_raises(self, tmp_path) -> None:
-        """An identity climbing out of the users prefix is denied by the storage guard (Phase 10)."""
+        """An identity climbing out of the users prefix is denied by the storage guard."""
         key = Fernet.generate_key().decode()
         store = FileUserStore(_encrypted_storage(tmp_path, key))
-        with pytest.raises(ValueError, match="escapes mount 'secure'"):
+        with pytest.raises(ValueError, match="traversal"):
             store.save(_record(store, "../intruder"))
 
     def test_get_with_traversal_identity_raises(self, tmp_path) -> None:
         key = Fernet.generate_key().decode()
         store = FileUserStore(_encrypted_storage(tmp_path, key))
-        with pytest.raises(ValueError, match="escapes mount 'secure'"):
+        with pytest.raises(ValueError, match="traversal"):
             store.get("../intruder")

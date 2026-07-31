@@ -34,9 +34,10 @@ from pathlib import Path
 import pytest
 from genro_routes import route
 
+from tests.storage_support import site_storage
+
 from genro_asgi import AsgiServer, BaseServer, RoutedApplication
 from genro_asgi.application import BaseApplication
-from genro_asgi.storage import LocalStorage
 from genro_asgi.tasks import TaskManager, new_descriptor
 from genro_asgi.tasks.manager import POLL_SECONDS
 from genro_asgi.tasks.scheduler import TaskScheduler
@@ -62,7 +63,7 @@ class DemoApp(RoutedApplication):
 @pytest.fixture
 def server(tmp_path: Path) -> AsgiServer:
     """A real AsgiServer whose primary is the DemoApp, storage on tmp_path."""
-    return AsgiServer(applications=[DemoApp(mount="")], storage=LocalStorage(base_dir=str(tmp_path)))
+    return AsgiServer(applications=[DemoApp(mount="")], storage=site_storage(tmp_path))
 
 
 def stage(server: AsgiServer, node_path: str, params: dict[str, int], task_id: str) -> None:
@@ -129,7 +130,7 @@ class TestManagerWiring:
 
     def test_disabled_server_raises_on_access(self, tmp_path: Path) -> None:
         disabled = AsgiServer(applications=[DemoApp(mount="")], tasks=False,
-                              storage=LocalStorage(base_dir=str(tmp_path)))
+                              storage=site_storage(tmp_path))
         assert disabled.tasks_enabled is False
         with pytest.raises(RuntimeError, match="disabled"):
             disabled.tasks
@@ -167,7 +168,7 @@ class TestNonLifespanPassThrough:
 
     async def test_disabled_lifespan_still_acks(self, tmp_path: Path) -> None:
         disabled = AsgiServer(applications=[DemoApp(mount="")], tasks=False,
-                              storage=LocalStorage(base_dir=str(tmp_path)))
+                              storage=site_storage(tmp_path))
         sent: list[dict[str, object]] = []
         queue = [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}]
 

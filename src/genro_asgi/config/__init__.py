@@ -18,15 +18,23 @@ A ``config.py`` defines a ``ServerConfiguration`` (subclass of
 ``AsgiConfigBuilder``) whose recipe declares the site sections;
 ``AsgiServer(config=...)`` builds its own ``ConfigurationHandler`` over that
 source and reads every value through it.
+
+The recipe is never alone: the handler layers ``BaseConfiguration`` (the
+package's shipped defaults) and the defaults source the recipe itself declares
+through its ``default_config`` attribute underneath it — see ``DefaultConfig``.
 """
 
-from .builder import AsgiConfigBuilder
+from .builder import AsgiConfigBuilder, BaseConfiguration
+from .default_config import HOME_ENV, DefaultConfig
 from .elements import AsgiServerGrammar
 from .handler import ConfigError, ConfigurationHandler
 
 __all__ = [
+    "HOME_ENV",
     "AsgiConfigBuilder",
     "AsgiServerGrammar",
+    "BaseConfiguration",
     "ConfigError",
     "ConfigurationHandler",
+    "DefaultConfig",
 ]
