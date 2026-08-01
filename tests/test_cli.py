@@ -241,6 +241,38 @@ class TestArgumentParsing:
         launcher = ServerLauncher(parse(cli, ["serve", str(module)]), cli.registry)
         assert launcher.server_kwargs == {}
 
+
+class TestSaveSessionWiring:
+    """Naming an instance IS the switch: the snapshot file takes the name."""
+
+    def test_a_named_serve_arms_the_snapshot(self, tmp_path: Path) -> None:
+        module = tmp_path / "config.py"
+        module.write_text(CONFIG_RECIPE)
+        cli = Cli(registry=AppsRegistry(base_dir=tmp_path))
+        launcher = ServerLauncher(parse(cli, ["serve", str(module), "--name", "demo"]), cli.registry)
+        expected = str(tmp_path / "sessions" / "demo.pickle")
+        assert launcher.save_session_path == expected
+        assert launcher.constructor_kwargs == {"save_session": expected}
+        assert launcher.server_kwargs == {}  # serve() never sees the snapshot kwarg
+        assert launcher.build_server().save_session == Path(expected)
+
+    def test_a_nameless_serve_stays_volatile(self, tmp_path: Path) -> None:
+        module = tmp_path / "config.py"
+        module.write_text(CONFIG_RECIPE)
+        cli = Cli(registry=AppsRegistry(base_dir=tmp_path))
+        launcher = ServerLauncher(parse(cli, ["serve", str(module)]), cli.registry)
+        assert launcher.save_session_path is None
+        assert "save_session" not in launcher.constructor_kwargs
+        assert launcher.build_server().save_session is None
+
+    def test_relaunching_a_registered_name_arms_the_same_file(self, tmp_path: Path) -> None:
+        module = tmp_path / "config.py"
+        module.write_text(CONFIG_RECIPE)
+        cli = Cli(registry=AppsRegistry(base_dir=tmp_path))
+        cli.registry.save("demo", {"source": str(module)})
+        launcher = ServerLauncher(parse(cli, ["serve", "demo"]), cli.registry)
+        assert launcher.save_session_path == str(tmp_path / "sessions" / "demo.pickle")
+
     def test_a_missing_subcommand_is_a_usage_error(self) -> None:
         with pytest.raises(SystemExit) as exit_info:
             Cli().run([])
@@ -384,7 +416,10 @@ class TestReloadPayload:
         # restored after the test instead of leaking into the environment.
         monkeypatch.setenv(LAUNCHER_ENV, "")
         assert cli.run(["serve", str(module), "--reload", "--name", "demo"]) == 0
-        assert json.loads(os.environ[LAUNCHER_ENV]) == {"config": str(module.resolve())}
+        assert json.loads(os.environ[LAUNCHER_ENV]) == {
+            "config": str(module.resolve()),
+            "save_session": str(tmp_path / "sessions" / "demo.pickle"),
+        }
         assert launched == {
             "target": "genro_asgi.__main__:factory",
             "factory": True,
@@ -460,3 +495,13 @@ class TestFactory:
         monkeypatch.setenv(LAUNCHER_ENV, json.dumps({"host": "0.0.0.0"}))
         with pytest.raises(CliError, match="neither an 'application' nor a 'config' key"):
             factory()
+
+    def test_save_session_in_the_payload_arms_the_snapshot(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        module = tmp_path / "config.py"
+        module.write_text(CONFIG_RECIPE)
+        snapshot = str(tmp_path / "sessions" / "demo.pickle")
+        payload = {"config": str(module), "save_session": snapshot}
+        monkeypatch.setenv(LAUNCHER_ENV, json.dumps(payload))
+        assert factory().save_session == Path(snapshot)

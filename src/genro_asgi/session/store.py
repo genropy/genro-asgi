@@ -25,6 +25,9 @@ this REPLACES the former TaskManager purge loop, a ratified revision of core
 1e/◆D22). ``dump``/``restore`` persist meta and the keyed avatars'
 identity/tags only — never the data Bag. The serialized shape is
 ``avatars: {key: {identity, tags}}``, the whole wardrobe of the session.
+``save_snapshot``/``load_snapshot`` are the OTHER persistence pair — one
+pickle file carrying every live session whole, data Bag included, the
+development survival line ``SessionMixin`` drives around the lifespan.
 ``create()`` is anonymous by default (``avatar is None``); capturing an identity
 into a session is an explicit ``create(avatar=...)``, which dresses the root
 slot.
@@ -32,8 +35,10 @@ slot.
 
 from __future__ import annotations
 
+import pickle
 import secrets
 import time
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from .avatar import Avatar
@@ -143,6 +148,33 @@ class MemorySessionStore:
             }
             for session_id, session in self._sessions.items()
         }
+
+    def save_snapshot(self, path: str | Path) -> int:
+        """Pickle EVERY live session — data Bag INCLUDED — to *path*.
+
+        The development survival line (``genro-asgi serve --name``): the whole
+        store crosses a restart through one pickle file. This deliberately
+        supersedes the ``dump``/``restore`` contract ("the data Bag is never
+        persisted") for the snapshot path. Expired sessions are reaped first;
+        parent directories are created. Returns how many sessions were saved.
+        """
+        self.purge_expired()
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(pickle.dumps(self._sessions))
+        return len(self._sessions)
+
+    def load_snapshot(self, path: str | Path) -> int:
+        """Repopulate the store from a ``save_snapshot`` file, dropping expired ones.
+
+        The TTL is the only filter: a session whose ``last_access`` is still
+        within its ``ttl`` comes back whole (data Bag included). Returns how
+        many sessions were restored.
+        """
+        sessions: dict[str, Session] = pickle.loads(Path(path).read_bytes())
+        kept = {sid: session for sid, session in sessions.items() if not session.is_expired()}
+        self._sessions.update(kept)
+        return len(kept)
 
     def restore(self, data: dict[str, Any]) -> None:
         """Restore non-expired sessions from ``dump()`` output (meta + rebuilt avatars)."""

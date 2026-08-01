@@ -259,6 +259,25 @@ class ServerLauncher:
         return kwargs
 
     @property
+    def save_session_path(self) -> str | None:
+        """The session snapshot file a NAMED serve arms, ``None`` for a nameless one.
+
+        Giving the instance a name IS the switch: sessions of ``--name demo``
+        survive a restart through ``<base_dir>/sessions/demo.pickle``.
+        """
+        if not self.name:
+            return None
+        return str(self.registry.base_dir / "sessions" / f"{self.name}.pickle")
+
+    @property
+    def constructor_kwargs(self) -> dict:
+        """What ``AsgiServer(...)`` receives: host/port plus the armed snapshot."""
+        kwargs = dict(self.server_kwargs)
+        if self.save_session_path is not None:
+            kwargs["save_session"] = self.save_session_path
+        return kwargs
+
+    @property
     def quickstart_target(self) -> str:
         """The ``application=`` target, a file spelling made absolute."""
         module_part, class_name = TargetResolver(self.source.partition("=")[2]).parts
@@ -271,10 +290,10 @@ class ServerLauncher:
         """What ``factory`` needs to rebuild this server in the reloaded process.
 
         One source key (``application`` or ``config``, always absolute) plus the
-        explicitly-given host/port only: an absent key lets the config's own
-        value apply, exactly as it does here.
+        explicitly-given host/port and the armed session snapshot: an absent
+        key lets the config's own value apply, exactly as it does here.
         """
-        payload = dict(self.server_kwargs)
+        payload = dict(self.constructor_kwargs)
         if self.is_quickstart:
             payload["application"] = self.quickstart_target
         else:
@@ -325,11 +344,11 @@ class ServerLauncher:
         """The server this source describes, host/port forwarded when given."""
         if self.is_quickstart:
             app_class = TargetResolver(self.source.partition("=")[2]).resolve()
-            return AsgiServer(applications=[app_class()], **self.server_kwargs)
+            return AsgiServer(applications=[app_class()], **self.constructor_kwargs)
         if self.is_config_path:
             config_path = Path(self.source).resolve()
             self.ensure_importable(config_path.parent)
-            return AsgiServer(config=str(config_path), **self.server_kwargs)
+            return AsgiServer(config=str(config_path), **self.constructor_kwargs)
         raise CliError(
             f"cannot serve {self.source!r}: not an existing config.py path, "
             "not an 'application=<target>' assignment"
@@ -477,7 +496,7 @@ def factory() -> AsgiServer:
         described = json.loads(payload)
     except json.JSONDecodeError as error:
         raise CliError(f"{LAUNCHER_ENV} is not valid JSON: {error}") from error
-    kwargs = {key: described[key] for key in ("host", "port") if key in described}
+    kwargs = {key: described[key] for key in ("host", "port", "save_session") if key in described}
     if "application" in described:
         return AsgiServer(applications=[TargetResolver(described["application"]).resolve()()], **kwargs)
     if "config" in described:

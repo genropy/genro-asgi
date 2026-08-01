@@ -142,6 +142,106 @@ class TestPurgeDeltaCheck:
         assert time.time() - store._last_purge < 60
 
 
+# --- pickle snapshot: the whole store crosses a restart (data Bag INCLUDED) ---
+
+
+class TestSnapshot:
+    def test_roundtrip_keeps_avatar_and_data(self, tmp_path) -> None:
+        store = MemorySessionStore(default_ttl=3600)
+        session = store.create(avatar=Avatar("alice", ["admin"]))
+        session.data["cart"] = "kept"
+        session.attach_avatar(Avatar("alice@erp", ["operator"]), "erp")
+        path = tmp_path / "sessions.pickle"
+        assert store.save_snapshot(path) == 1
+        fresh = MemorySessionStore(default_ttl=3600)
+        assert fresh.load_snapshot(path) == 1
+        restored = fresh.get(session.id)
+        assert restored is not None
+        assert restored.avatar().identity == "alice"
+        assert restored.avatar("erp").identity == "alice@erp"
+        assert restored.data["cart"] == "kept"  # unlike dump(), the Bag survives
+
+    def test_save_reaps_expired_sessions_first(self, tmp_path) -> None:
+        store = MemorySessionStore(default_ttl=3600)
+        live = store.create()
+        expired = store.create()
+        expired.meta["last_access"] = time.time() - 10_000
+        path = tmp_path / "sessions.pickle"
+        assert store.save_snapshot(path) == 1
+        fresh = MemorySessionStore()
+        fresh.load_snapshot(path)
+        assert fresh.get(live.id) is not None
+        assert fresh.get(expired.id) is None
+
+    def test_load_drops_a_session_expired_on_disk(self, tmp_path) -> None:
+        # the session is live at save time and past its TTL at load time:
+        # the TTL is the only filter of the restore side
+        store = MemorySessionStore(default_ttl=1)
+        aged = store.create()
+        path = tmp_path / "sessions.pickle"
+        store.save_snapshot(path)
+        time.sleep(1.1)
+        fresh = MemorySessionStore()
+        assert fresh.load_snapshot(path) == 0
+        assert fresh.get(aged.id) is None
+
+    def test_save_creates_parent_directories(self, tmp_path) -> None:
+        store = MemorySessionStore()
+        store.create()
+        path = tmp_path / "deep" / "nested" / "sessions.pickle"
+        store.save_snapshot(path)
+        assert path.is_file()
+
+
+class SnapshotServer(SessionMixin, MiddlewareMixin, BaseServer):
+    """The session composition with the snapshot armed via ``save_session=``."""
+
+
+async def lifespan_cycle(server: BaseServer) -> list[Message]:
+    """Drive one full lifespan protocol (startup then shutdown); return the acks."""
+    messages = [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}]
+    sent: list[Message] = []
+
+    async def receive() -> Message:
+        return messages.pop(0)
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    await server({"type": "lifespan"}, receive, send)
+    return sent
+
+
+class TestSnapshotLifespan:
+    async def test_sessions_survive_a_server_restart(self, tmp_path) -> None:
+        path = tmp_path / "demo.pickle"
+        server = SnapshotServer(applications=[EchoApp(mount="")], save_session=str(path))
+        session = server.session_store.create(avatar=Avatar("alice", ["admin"]))
+        session.data["cart"] = "kept"
+        acks = await lifespan_cycle(server)  # shutdown writes the snapshot
+        assert {m["type"] for m in acks} == {"lifespan.startup.complete", "lifespan.shutdown.complete"}
+        assert path.is_file()
+        reborn = SnapshotServer(applications=[EchoApp(mount="")], save_session=str(path))
+        await lifespan_cycle(reborn)  # startup loads the snapshot
+        restored = reborn.session_store.get(session.id)
+        assert restored is not None
+        assert restored.avatar().identity == "alice"
+        assert restored.data["cart"] == "kept"
+
+    async def test_absent_snapshot_file_starts_empty(self, tmp_path) -> None:
+        path = tmp_path / "never-written.pickle"
+        server = SnapshotServer(applications=[EchoApp(mount="")], save_session=str(path))
+        acks = await lifespan_cycle(server)
+        assert {m["type"] for m in acks} == {"lifespan.startup.complete", "lifespan.shutdown.complete"}
+        assert path.is_file()  # the shutdown still writes one
+
+    async def test_disarmed_server_writes_nothing(self, tmp_path) -> None:
+        server = SnapshotServer(applications=[EchoApp(mount="")])
+        assert server.save_session is None
+        await lifespan_cycle(server)
+        assert list(tmp_path.rglob("*.pickle")) == []
+
+
 # --- MemorySessionStore.restore drops an expired dumped session (Macro 2 item 8) ---
 
 
