@@ -2,7 +2,7 @@ import genro_asgi
 
 
 def test_version():
-    assert genro_asgi.__version__ == "0.22.0"
+    assert genro_asgi.__version__ == "0.23.0"
 
 
 def test_root_exports_public_api():
