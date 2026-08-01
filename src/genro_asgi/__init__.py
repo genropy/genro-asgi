@@ -64,7 +64,6 @@ from .routed_application import RoutedApplication
 from .server import BaseServer
 from .session import (
     Avatar,
-    FileSessionStore,
     MemorySessionStore,
     Session,
     SessionMixin,
@@ -97,7 +96,6 @@ __all__ = [
     "ConfigurationHandler",
     "DefaultConfig",
     "FileApiKeyStore",
-    "FileSessionStore",
     "FileUserStore",
     "Frame",
     "FrameStream",

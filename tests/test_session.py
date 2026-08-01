@@ -14,28 +14,24 @@
 
 """Session tests (Macro 2 Phase 4 + core 1b Phase 3): store contract + cookie flow.
 
-The store contract suite is PARAMETRIZED over FACTORIES (invariant §5.9):
-callables returning a fresh configured store, so a backend needing a
-storage/mount (``FileSessionStore``) plugs into the SAME suite as
-``MemorySessionStore``. The cookie flow is driven directly through a
-``SessionMixin/MiddlewareMixin/BaseServer`` composition at the ASGI level (no
-uvicorn), the same driving style as ``test_middleware.py``.
+The store contract suite runs over a FACTORY (invariant §5.9): a callable
+returning a fresh configured store, so a future backend can plug into the SAME
+suite as ``MemorySessionStore`` (the only shipped store). The cookie flow is
+driven directly through a ``SessionMixin/MiddlewareMixin/BaseServer``
+composition at the ASGI level (no uvicorn), the same driving style as
+``test_middleware.py``.
 """
 
 from __future__ import annotations
 
-import json
 import time
 
 import pytest
-
-from tests.storage_support import site_storage
 
 from genro_asgi import (
     Avatar,
     BaseApplication,
     BaseServer,
-    FileSessionStore,
     MemorySessionStore,
     Session,
     SessionMixin,
@@ -44,34 +40,17 @@ from genro_asgi import (
 from genro_asgi.middleware import MiddlewareMixin
 from genro_asgi.types import Message, Receive, Scope, Send
 
-# --- store contract suite (parametrized over FACTORIES, §5.9) ---
+# --- store contract suite (over a FACTORY, §5.9) ---
 
 
-def _memory_factory(tmp_path):
-    """A factory building a fresh ``MemorySessionStore`` per call."""
+@pytest.fixture
+def store_factory():
+    """A callable returning a fresh configured ``MemorySessionStore``."""
 
     def make(**kwargs):
         return MemorySessionStore(**kwargs)
 
     return make
-
-
-def _file_factory(tmp_path):
-    """A factory building fresh ``FileSessionStore``s over one shared tmp mount."""
-
-    def make(**kwargs):
-        return FileSessionStore(site_storage(tmp_path), **kwargs)
-
-    return make
-
-
-STORE_FACTORIES = [_memory_factory, _file_factory]
-
-
-@pytest.fixture(params=STORE_FACTORIES)
-def store_factory(request, tmp_path):
-    """A callable returning a fresh configured store (memory or file-over-tmp)."""
-    return request.param(tmp_path)
 
 
 class TestSessionStoreContract:
@@ -135,68 +114,6 @@ class TestSessionStoreContract:
         again = store.get(session.id)
         assert again is not None
         assert again.avatar() is not None and again.avatar().identity == "carol"
-
-
-# --- FileSessionStore specifics (D22 survival line) ---
-
-
-class TestFileSessionStore:
-    def test_session_survives_a_new_store_on_the_same_mount(self, tmp_path) -> None:
-        store = FileSessionStore(site_storage(tmp_path))
-        created = store.create(avatar=Avatar("carol", ["ops"]))
-        fresh = FileSessionStore(site_storage(tmp_path))
-        restored = fresh.get(created.id)
-        assert restored is not None
-        assert restored is not created
-        assert restored.avatar().identity == "carol"
-        assert restored.avatar().tags == ["ops"]
-        assert len(restored.data) == 0
-
-    def test_save_persists_an_attached_avatar_to_disk(self, tmp_path) -> None:
-        store = FileSessionStore(site_storage(tmp_path))
-        created = store.create()  # anonymous
-        created.attach_avatar(Avatar("dave", ["admin"]))
-        store.save(created)  # the write-back seam
-        fresh = FileSessionStore(site_storage(tmp_path))
-        restored = fresh.get(created.id)
-        assert restored is not None
-        assert restored.avatar() is not None and restored.avatar().identity == "dave"
-        assert restored.avatar().tags == ["admin"]
-
-    def test_corrupted_session_file_raises(self, tmp_path) -> None:
-        storage = site_storage(tmp_path)
-        store = FileSessionStore(storage)
-        created = store.create()
-        storage.node(f"site:sessions/{created.id}.json").write_text("not-json{{{")
-        fresh = FileSessionStore(site_storage(tmp_path))
-        with pytest.raises(json.JSONDecodeError):
-            fresh.get(created.id)
-
-    def test_delete_removes_the_file(self, tmp_path) -> None:
-        storage = site_storage(tmp_path)
-        store = FileSessionStore(storage)
-        created = store.create()
-        assert storage.node(f"site:sessions/{created.id}.json").exists()
-        store.delete(created.id)
-        assert not storage.node(f"site:sessions/{created.id}.json").exists()
-
-    def test_get_with_traversal_session_id_raises(self, tmp_path) -> None:
-        """A crafted cookie id may not read a file planted outside the prefix (Phase 10)."""
-        storage = site_storage(tmp_path)
-        store = FileSessionStore(storage)
-        now = time.time()
-        planted = {
-            "meta": {"created_at": now, "last_access": now, "ttl": 3600},
-            "avatars": {"root": {"identity": "intruder", "tags": ["SUPERADMIN"]}},
-        }
-        storage.node("site:secret.json").write_text(json.dumps(planted))
-        with pytest.raises(ValueError, match="traversal"):
-            store.get("../secret")
-
-    def test_delete_with_traversal_session_id_raises(self, tmp_path) -> None:
-        store = FileSessionStore(site_storage(tmp_path))
-        with pytest.raises(ValueError, match="traversal"):
-            store.delete("../secret")
 
 
 # --- MemorySessionStore.restore drops an expired dumped session (Macro 2 item 8) ---
@@ -307,18 +224,6 @@ class TestSessionAvatars:
         restored = fresh.get(session.id)
         assert restored.avatar().identity == "alice"
         assert restored.avatar().tags == ["admin"]
-        assert restored.avatar("erp").identity == "alice@erp"
-        assert restored.avatar("erp").tags == ["operator"]
-        assert restored.dirty is False
-
-    def test_file_store_roundtrips_every_keyed_avatar(self, tmp_path) -> None:
-        storage = site_storage(tmp_path)
-        session = FileSessionStore(storage).create(avatar=Avatar("alice", ["admin"]))
-        session.attach_avatar(Avatar("alice@erp", ["operator"]), "erp")
-        store = FileSessionStore(storage)
-        store.save(session)
-        restored = FileSessionStore(storage).get(session.id)
-        assert restored.avatar().identity == "alice"
         assert restored.avatar("erp").identity == "alice@erp"
         assert restored.avatar("erp").tags == ["operator"]
         assert restored.dirty is False

@@ -157,8 +157,8 @@ class UserStore:
 class FileUserStore(UserStore):
     """One JSON file per user over a storage mount, written encrypted at rest.
 
-    Like ``FileSessionStore`` it holds the shared ``StorageManager`` (dual
-    relationship) and never raw paths. Records live at
+    It holds the shared ``StorageManager`` (dual relationship) and never raw
+    paths. Records live at
     ``<mount>:<prefix>/<identity>.json`` and are always written
     ``encrypted=True`` — the write site declares it, not the mount.
     """

@@ -39,21 +39,12 @@ server = AsgiServer(applications=[App()], session_store=MemorySessionStore())
 server.serve(host="127.0.0.1", port=8000)
 ```
 
-## Choosing a store
+## The store
 
-Two stores ship with genro-asgi:
-
-- **`MemorySessionStore`** — sessions live in the process. Simple, fast, lost on
-  restart. Good for development and single-process deployments.
-- **`FileSessionStore`** — sessions persist on disk, under the `site:sessions`
-  prefix of the server's `genro_storage.StorageManager`:
-
-  ```python
-  from genro_asgi import FileSessionStore
-  # FileSessionStore(server.storage)
-  ```
-
-Both are importable from `genro_asgi`.
+One store ships with genro-asgi: **`MemorySessionStore`** — sessions live in
+the process. Simple, fast, lost on restart (but see the shutdown snapshot
+below). A custom backend can be plugged through the `session_store=` kwarg by
+implementing the `SessionStore` protocol.
 
 ## The session cookie
 
@@ -122,12 +113,12 @@ $ curl -b "session_id=..." http://127.0.0.1:8000/index
 ## Gotchas
 
 - `MemorySessionStore` loses everything on restart and does not share across
-  processes — use `FileSessionStore` (or another backend) for anything
-  persistent.
+  processes — the shutdown snapshot (below) covers the development restart,
+  not multi-process deployments.
 - The cookie is always `HttpOnly`; you cannot turn that off. You *can* set
   `secure` and `samesite`.
 - Configure the cookie under `middleware={"session": {...}}`, not under the
   `session_store` / `session_ttl` kwargs — those control the store and lifetime,
   the middleware controls the cookie.
-- `SessionMixin`, `Session`, `MemorySessionStore` and `FileSessionStore` are all
-  importable from `genro_asgi`.
+- `SessionMixin`, `Session` and `MemorySessionStore` are all importable from
+  `genro_asgi`.

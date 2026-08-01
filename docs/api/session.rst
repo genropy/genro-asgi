@@ -1,7 +1,7 @@
 Sessions
 ========
 
-The session mixin, the session object, the avatar, and the session stores.
+The session mixin, the session object, the avatar, and the session store.
 
 .. automodule:: genro_asgi.session.mixin
    :members:
@@ -16,9 +16,5 @@ The session mixin, the session object, the avatar, and the session stores.
    :show-inheritance:
 
 .. automodule:: genro_asgi.session.store
-   :members:
-   :show-inheritance:
-
-.. automodule:: genro_asgi.session.file_store
    :members:
    :show-inheritance:

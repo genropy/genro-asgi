@@ -29,7 +29,6 @@ def test_root_exports_public_api():
         "ConfigurationHandler",
         "DefaultConfig",
         "FileApiKeyStore",
-        "FileSessionStore",
         "FileUserStore",
         "Frame",
         "FrameStream",
