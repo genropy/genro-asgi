@@ -116,6 +116,32 @@ class TestSessionStoreContract:
         assert again.avatar() is not None and again.avatar().identity == "carol"
 
 
+# --- delta-checked mass reap at create time (session-store minimization) ---
+
+
+class TestPurgeDeltaCheck:
+    def test_create_within_interval_skips_the_mass_reap(self) -> None:
+        store = MemorySessionStore(default_ttl=3600)
+        expired = store.create()
+        expired.meta["last_access"] = time.time() - 10_000
+        store.create()  # _last_purge is fresh: no reap happens here
+        assert expired.id in store.dump()
+
+    def test_create_past_interval_runs_the_mass_reap(self) -> None:
+        store = MemorySessionStore(default_ttl=3600)
+        expired = store.create()
+        expired.meta["last_access"] = time.time() - 10_000
+        store._last_purge = time.time() - 10_000  # the interval has elapsed
+        store.create()
+        assert expired.id not in store.dump()
+
+    def test_purge_expired_resets_the_delta_clock(self) -> None:
+        store = MemorySessionStore(default_ttl=3600)
+        store._last_purge = time.time() - 10_000
+        store.purge_expired()
+        assert time.time() - store._last_purge < 60
+
+
 # --- MemorySessionStore.restore drops an expired dumped session (Macro 2 item 8) ---
 
 

@@ -29,19 +29,18 @@ fire-and-forget worker loop for the whole process. It owns:
 - ``worker_id`` — the single logical worker of the mono-process core (``"local"``).
 
 ``start()``/``stop()`` are the lifecycle the server's lifespan hook calls
-(``TaskMixin.__call__``): ``start`` launches three tasks on the running loop — the
-fire-and-forget ``_worker_loop``, the ``scheduler`` tick loop, and the built-in
-``_purge_loop`` (session GC) — and ``stop`` cancels/awaits them all (in-flight
-executions are their own tasks and are left to finish). Each loop mirrors the same
-shape: a failing pass is logged and never kills the loop.
+(``TaskMixin.__call__``): ``start`` launches two tasks on the running loop — the
+fire-and-forget ``_worker_loop`` and the ``scheduler`` tick loop — and ``stop``
+cancels/awaits them both (in-flight executions are their own tasks and are left
+to finish). Each loop mirrors the same shape: a failing pass is logged and never
+kills the loop. Session GC is NOT a manager job: the store reaps expired
+sessions itself, delta-checked at ``create`` time (a ratified revision of core
+1e/◆D22 — the former ``_purge_loop`` is gone).
 
 The worker loop is FIRE-AND-FORGET on the event loop: it polls ``list_pending``,
 ``assign``s each task to ``worker_id``, and launches ``executor.execute`` as its own
 task. The D2 thread pool stays reserved for the blocking handler BODY inside
-``execute`` (via ``server.run_sync``) — the loop itself never blocks the pool. The
-session-purge loop is a plain internal job (NOT a scheduler store record — it is no
-``@route(task=...)``, so it has no registry callable): it calls
-``server.session_store.purge_expired()`` through ``run_sync`` every ``PURGE_SECONDS``.
+``execute`` (via ``server.run_sync``) — the loop itself never blocks the pool.
 Distributed dispatch (worker processes, a batch commander) is out of scope (D22).
 """
 
@@ -61,10 +60,9 @@ from .store import FileTaskStore
 if TYPE_CHECKING:
     from ..server import BaseServer
 
-__all__ = ["TaskManager", "POLL_SECONDS", "PURGE_SECONDS"]
+__all__ = ["TaskManager", "POLL_SECONDS"]
 
 POLL_SECONDS = 0.5      # how often the worker loop polls the pending queue
-PURGE_SECONDS = 300.0   # how often the built-in session-purge job runs
 
 
 class TaskManager:
@@ -78,7 +76,7 @@ class TaskManager:
 
     __slots__ = (
         "server", "executor", "hub", "task_store", "scheduler", "worker_id",
-        "_loop", "_loop_task", "_purge_task",
+        "_loop", "_loop_task",
     )
 
     def __init__(self, server: BaseServer) -> None:
@@ -99,7 +97,6 @@ class TaskManager:
         self.worker_id = WORKER_ID
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_task: asyncio.Task[None] | None = None
-        self._purge_task: asyncio.Task[None] | None = None
 
     @property
     def spool(self) -> Any:
@@ -114,25 +111,22 @@ class TaskManager:
     # -- lifecycle (called by the server's lifespan hook) --
 
     def start(self) -> None:
-        """Launch the worker, scheduler and purge loops (lifespan startup)."""
+        """Launch the worker and scheduler loops (lifespan startup)."""
         self._loop = asyncio.get_running_loop()
         self._loop_task = self._loop.create_task(self._worker_loop())
-        self._purge_task = self._loop.create_task(self._purge_loop())
         self.scheduler.start()
         logging.getLogger(__name__).info("task manager started (worker %r)", self.worker_id)
 
     async def stop(self) -> None:
-        """Cancel the worker, purge and scheduler loops (lifespan shutdown).
+        """Cancel the worker and scheduler loops (lifespan shutdown).
 
         In-flight executions are their own tasks and are left to finish.
         """
         await self.scheduler.stop()
-        for task in (self._purge_task, self._loop_task):
-            if task is not None:
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
-        self._purge_task = None
+        if self._loop_task is not None:
+            self._loop_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._loop_task
         self._loop_task = None
         logging.getLogger(__name__).info("task manager stopped")
 
@@ -182,20 +176,3 @@ class TaskManager:
         session_id = descriptor.get("session_id")
         if session_id is not None:
             self.hub.publish(session_id, {"type": "progress", "task_id": task_id, "data": data})
-
-    # -- the built-in session-purge loop --
-
-    async def _purge_loop(self) -> None:
-        """Reap expired sessions forever; a failing pass is logged, never fatal.
-
-        A plain internal job, NOT a scheduler store record: the session GC is no
-        ``@route(task=...)`` so it has no registry callable. It calls
-        ``server.session_store.purge_expired()`` off the loop (via ``run_sync``,
-        the store's I/O contract) every ``PURGE_SECONDS``.
-        """
-        while True:
-            await asyncio.sleep(PURGE_SECONDS)
-            try:
-                await self.server.run_sync(self.server.session_store.purge_expired)
-            except Exception:
-                logging.getLogger(__name__).exception("session purge failed")

@@ -15,13 +15,15 @@
 """Session store — the storage Protocol and the in-memory default.
 
 ``SessionStore`` is a runtime-checkable ``Protocol`` (get/create/delete/
-purge_expired/dump/restore). Its test suite is a shared CONTRACT suite
-parametrized over implementations (§5.9), so the core 1b file/db backends plug
-into the SAME tests. ``MemorySessionStore`` is the dict-backed default:
-``secrets`` tokens, a ``default_ttl`` for new sessions, lazy expiry on ``get``,
-opportunistic ``purge_expired`` at ``create`` time (no background task — those
-arrive in core 1e), and a ``dump``/``restore`` that persists meta and the keyed
-avatars' identity/tags only — never the data Bag. The serialized shape is
+purge_expired/dump/restore). Its test suite is a shared CONTRACT suite driven
+by a store factory (§5.9), so a custom backend plugs into the SAME tests.
+``MemorySessionStore`` is the dict-backed only shipped store: ``secrets``
+tokens, a ``default_ttl`` for new sessions, lazy expiry on ``get``, and a
+delta-checked ``purge_expired`` at ``create`` time — the mass reap runs only
+when ``PURGE_INTERVAL`` has elapsed since the last one (no background task:
+this REPLACES the former TaskManager purge loop, a ratified revision of core
+1e/◆D22). ``dump``/``restore`` persist meta and the keyed avatars'
+identity/tags only — never the data Bag. The serialized shape is
 ``avatars: {key: {identity, tags}}``, the whole wardrobe of the session.
 ``create()`` is anonymous by default (``avatar is None``); capturing an identity
 into a session is an explicit ``create(avatar=...)``, which dresses the root
@@ -31,12 +33,15 @@ slot.
 from __future__ import annotations
 
 import secrets
+import time
 from typing import Any, Protocol, runtime_checkable
 
 from .avatar import Avatar
 from .session import Session
 
-__all__ = ["SessionStore", "MemorySessionStore"]
+__all__ = ["SessionStore", "MemorySessionStore", "PURGE_INTERVAL"]
+
+PURGE_INTERVAL = 300.0   # seconds between two mass reaps of expired sessions
 
 
 @runtime_checkable
@@ -78,12 +83,13 @@ class SessionStore(Protocol):
 class MemorySessionStore:
     """In-memory session store — the default implementation."""
 
-    __slots__ = ("_sessions", "_default_ttl")
+    __slots__ = ("_sessions", "_default_ttl", "_last_purge")
 
     def __init__(self, default_ttl: int = 3600) -> None:
         """Initialize an empty store with a default TTL for new sessions."""
         self._sessions: dict[str, Session] = {}
         self._default_ttl = default_ttl
+        self._last_purge = time.time()
 
     def get(self, session_id: str) -> Session | None:
         """Retrieve a session by id; drop and return ``None`` if it has expired."""
@@ -97,8 +103,14 @@ class MemorySessionStore:
         return session
 
     def create(self, avatar: Avatar | None = None) -> Session:
-        """Create a session (default TTL), purging expired ones opportunistically first."""
-        self.purge_expired()
+        """Create a session (default TTL); a delta-checked mass reap runs first.
+
+        The reap is opportunistic AND throttled: it runs only when
+        ``PURGE_INTERVAL`` has elapsed since the last one, so a burst of
+        creates never pays a full-store scan each time.
+        """
+        if time.time() - self._last_purge > PURGE_INTERVAL:
+            self.purge_expired()
         session_id = secrets.token_urlsafe(32)
         session = Session(session_id=session_id, avatar=avatar, ttl=self._default_ttl)
         self._sessions[session_id] = session
@@ -113,6 +125,7 @@ class MemorySessionStore:
 
     def purge_expired(self) -> int:
         """Drop every expired session from the store; return the count purged."""
+        self._last_purge = time.time()
         expired = [sid for sid, session in self._sessions.items() if session.is_expired()]
         for sid in expired:
             del self._sessions[sid]
