@@ -30,7 +30,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from genro_asgi import Avatar, BaseApplication, BaseServer, Request, Response
+from genro_asgi import Avatar, BaseApplication, BaseServer, Request, Response, Session
 from genro_asgi.types import Receive, Scope, Send
 
 
@@ -161,13 +161,23 @@ class TestAuthSessionAccessors:
     async def test_avatar_and_tags_from_scope(self) -> None:
         avatar = Avatar("alice", ["admin", "staff"])
         request = await make_request(scope_extra={"auth": avatar})
-        assert request.avatar is avatar
+        assert request.avatar() is avatar
         assert request.auth_tags == ["admin", "staff"]
 
     async def test_anonymous_when_no_avatar_on_scope(self) -> None:
         request = await make_request()
-        assert request.avatar is None
+        assert request.avatar() is None
         assert request.auth_tags == []
+
+    async def test_keyed_avatar_delegates_to_the_session(self) -> None:
+        session = Session("tok", avatar=Avatar("alice"), ttl=3600)
+        session.attach_avatar(Avatar("alice@erp"), "erp")
+        request = await make_request(scope_extra={"session": session})
+        assert request.avatar("erp").identity == "alice@erp"
+
+    async def test_keyed_avatar_without_a_session_is_none(self) -> None:
+        request = await make_request()
+        assert request.avatar("erp") is None
 
     async def test_session_from_scope(self) -> None:
         session = object()

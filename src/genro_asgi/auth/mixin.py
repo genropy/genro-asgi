@@ -156,4 +156,4 @@ class AuthMixin:
         if avatar is not None:
             return avatar
         session = self.session(request)
-        return session.avatar if session is not None else None
+        return session.avatar() if session is not None else None

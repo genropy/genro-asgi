@@ -48,6 +48,7 @@ from typing import TYPE_CHECKING, Any
 from genro_tytx import asgi_data
 
 from .response import Response
+from .session.session import Session
 
 if TYPE_CHECKING:
     from .application import BaseApplication
@@ -205,19 +206,23 @@ class Request:
         """The application that created this request (``None`` if unbound)."""
         return self._application
 
-    @property
-    def avatar(self) -> Any:
-        """The identity acting on this request (an ``Avatar``) or ``None``.
+    def avatar(self, key: str = Session.ROOT_AVATAR_KEY) -> Any:
+        """The identity acting on this request under ``key`` (an ``Avatar``) or ``None``.
 
-        The effective identity the auth chain resolved for this request —
-        header credentials or the session's avatar — read from the scope.
+        With no argument — the root slot — it is the effective identity the auth
+        chain resolved for this request: header credentials or the session's root
+        avatar, read from the scope. Any other key is a sub-login, looked up in
+        the session's keyed avatars (``None`` without a session).
         """
-        return self._scope.get("auth")
+        if key == Session.ROOT_AVATAR_KEY:
+            return self._scope.get("auth")
+        session = self.session
+        return session.avatar(key) if session is not None else None
 
     @property
     def auth_tags(self) -> list[str]:
         """Authorization tags of the current identity (empty when anonymous)."""
-        avatar = self.avatar
+        avatar = self.avatar()
         return list(avatar.tags) if avatar is not None else []
 
     @property

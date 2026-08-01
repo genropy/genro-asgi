@@ -57,8 +57,8 @@ from .mcp import McpEngine, McpError
 from .middleware import BaseMiddleware, MiddlewareMixin
 from .plugin_mixin import PluginMixin
 from .plugins import OpenAPIPlugin, OpenAPITranslator, router_openapi
-from .registry import RegisteredRequest, RequestRegistry
 from .request import Request
+from .request_registry import RegisteredRequest, RequestRegistry
 from .response import Response
 from .routed_application import RoutedApplication
 from .server import BaseServer

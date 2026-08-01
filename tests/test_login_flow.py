@@ -225,9 +225,9 @@ class TestLoginHappyPath:
         assert set_cookie_value(sent) is None  # the client's cookie is still valid
         promoted = server.session_store.get(anonymous.id)
         assert promoted is anonymous
-        assert promoted.avatar is not None
-        assert promoted.avatar.identity == "alice"
-        assert promoted.avatar.tags == ["admin"]
+        assert promoted.avatar() is not None
+        assert promoted.avatar().identity == "alice"
+        assert promoted.avatar().tags == ["admin"]
         assert promoted.data["cart"] == "kept"  # the cart survives the login
 
     async def test_login_green_path_against_a_file_user_store(self, tmp_path: Path) -> None:
@@ -296,7 +296,7 @@ class TestLoginHappyPath:
         payload = json_body(sent)
         assert cookie_token(sent) == payload["session_id"]
         promoted = server.session_store.get(payload["session_id"])
-        assert promoted is not None and promoted.avatar is not None
+        assert promoted is not None and promoted.avatar() is not None
 
 
 class TestLoginFailures:

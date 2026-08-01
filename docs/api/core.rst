@@ -47,7 +47,7 @@ Request and response
 Registry, lifespan and pool
 ---------------------------
 
-.. automodule:: genro_asgi.registry
+.. automodule:: genro_asgi.request_registry
    :members:
    :show-inheritance:
 

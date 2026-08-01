@@ -18,7 +18,8 @@ Like ``MemorySessionStore`` this store keeps live ``Session`` objects in memory
 (so ``get`` returns the same instance and ``touch`` is honored) but mirrors each
 to ``<mount>:<prefix>/<id>.json``, so a session survives a process restart or a
 fresh store built on the SAME mount — the D22 survival line. The file carries
-meta (created_at/last_access/ttl) and the avatar's identity/tags ONLY, keyed on
+meta (created_at/last_access/ttl) and the keyed avatars' identity/tags ONLY
+(``avatars: {key: {identity, tags}}``, the whole wardrobe), keyed on
 disk by the session id (the filename); the data Bag is VOLATILE — never
 persisted — the SAME contract as ``dump``/``restore`` (full-data persistence is
 a future decision). All I/O is synchronous through the Phase 1 storage nodes
@@ -70,23 +71,29 @@ class FileSessionStore:
         return self._storage.node(f"{self._mount}:{self._prefix}/{session_id}.json")
 
     def _entry(self, session: Session) -> dict[str, Any]:
-        """Serialize a session to the dump/on-disk record (meta + avatar, no data)."""
-        avatar = session.avatar
+        """Serialize a session to the dump/on-disk record (meta + avatars, no data)."""
         return {
             "meta": dict(session.meta),
-            "avatar": (
-                {"identity": avatar.identity, "tags": list(avatar.tags)}
-                if avatar is not None
-                else None
-            ),
+            "avatars": {
+                key: {"identity": avatar.identity, "tags": list(avatar.tags)}
+                for key, avatar in session.avatars.items()
+            },
         }
 
     def _session_from_entry(self, session_id: str, entry: dict[str, Any]) -> Session:
         """Rebuild a session from a dump/on-disk record (data Bag starts empty)."""
         meta = entry["meta"]
-        avatar_data = entry.get("avatar")
-        avatar = Avatar(avatar_data["identity"], avatar_data["tags"]) if avatar_data else None
-        session = Session(session_id=session_id, avatar=avatar, ttl=meta["ttl"])
+        avatars = entry["avatars"]
+        root = avatars.get(Session.ROOT_AVATAR_KEY)
+        session = Session(
+            session_id=session_id,
+            avatar=Avatar(root["identity"], root["tags"]) if root else None,
+            ttl=meta["ttl"],
+        )
+        for key, avatar_data in avatars.items():
+            if key != Session.ROOT_AVATAR_KEY:
+                session.attach_avatar(Avatar(avatar_data["identity"], avatar_data["tags"]), key)
+        session.clear_dirty()
         session.meta["created_at"] = meta["created_at"]
         session.meta["last_access"] = meta["last_access"]
         return session

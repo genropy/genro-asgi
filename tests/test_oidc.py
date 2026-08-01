@@ -468,9 +468,9 @@ class TestOidcCallback:
         assert response_status(sent) == 302
         assert response_headers(sent)[b"location"].decode() == "/app/page"
         promoted = server.session_store.get(session_id)
-        assert promoted is not None and promoted.avatar is not None
-        assert promoted.avatar.identity == "alice@example.com"
-        assert promoted.avatar.tags == []
+        assert promoted is not None and promoted.avatar() is not None
+        assert promoted.avatar().identity == "alice@example.com"
+        assert promoted.avatar().tags == []
         # The session id never changes at login (no cookie involved).
         assert promoted.id == session_id
 
@@ -512,7 +512,7 @@ class TestOidcCallback:
         )
         assert response_status(sent) == 400
         promoted = server.session_store.get(session_id)
-        assert promoted is not None and promoted.avatar is None
+        assert promoted is not None and promoted.avatar() is None
 
     async def test_callback_rejects_a_missing_state(self, mock_provider: None) -> None:
         server = make_server()
@@ -551,7 +551,7 @@ class TestOidcCallback:
         )
         assert response_status(sent) == 400
         promoted = server.session_store.get(session_id)
-        assert promoted is not None and promoted.avatar is None
+        assert promoted is not None and promoted.avatar() is None
 
     async def test_callback_rejects_a_wrong_issuer_id_token(
         self, monkeypatch: pytest.MonkeyPatch, mock_provider: None
@@ -676,7 +676,7 @@ class TestOidcEndToEnd:
         # 4. The session now carries the authenticated identity (id unchanged),
         #    and the OIDC login never touched the password lockout machinery.
         authenticated = server.session_store.get(session.id)
-        assert authenticated is not None and authenticated.avatar is not None
-        assert authenticated.avatar.identity == "alice@example.com"
+        assert authenticated is not None and authenticated.avatar() is not None
+        assert authenticated.avatar().identity == "alice@example.com"
         assert authenticated.id == session.id
         assert getattr(server, "user_store", None) is None

@@ -81,10 +81,12 @@ A `Session` carries:
 - `.id` — the session identifier.
 - `.data` — a `Bag` of arbitrary session data.
 - `.meta` — session metadata.
-- `.avatar` — the attached identity, if any.
+- `.avatar(key="root")` — the identity attached under `key`, if any; with no
+  argument, the root one (the primary login).
+- `.avatars` — a read-only view of every keyed identity on the session.
 - `.dirty` — whether the session has unsaved changes.
-- `.attach_avatar(...)` — bind an `Avatar` to the session; this is what a login
-  does.
+- `.attach_avatar(avatar, key="root")` — bind an `Avatar` to the session under
+  `key`; the default root key is what a login does.
 
 ## Attaching an avatar at login
 

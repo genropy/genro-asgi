@@ -20,10 +20,12 @@ parametrized over implementations (§5.9), so the core 1b file/db backends plug
 into the SAME tests. ``MemorySessionStore`` is the dict-backed default:
 ``secrets`` tokens, a ``default_ttl`` for new sessions, lazy expiry on ``get``,
 opportunistic ``purge_expired`` at ``create`` time (no background task — those
-arrive in core 1e), and a ``dump``/``restore`` that persists meta and the
-avatar's identity/tags only — never the data Bag. ``create()`` is anonymous by
-default (``avatar is None``); capturing an identity into a session is an
-explicit ``create(avatar=...)``.
+arrive in core 1e), and a ``dump``/``restore`` that persists meta and the keyed
+avatars' identity/tags only — never the data Bag. The serialized shape is
+``avatars: {key: {identity, tags}}``, the whole wardrobe of the session.
+``create()`` is anonymous by default (``avatar is None``); capturing an identity
+into a session is an explicit ``create(avatar=...)``, which dresses the root
+slot.
 """
 
 from __future__ import annotations
@@ -46,7 +48,10 @@ class SessionStore(Protocol):
         ...
 
     def create(self, avatar: Avatar | None = None) -> Session:
-        """Create a new session with a unique token (anonymous by default)."""
+        """Create a new session with a unique token (anonymous by default).
+
+        ``avatar`` dresses the session's root slot.
+        """
         ...
 
     def save(self, session: Session) -> None:
@@ -114,26 +119,33 @@ class MemorySessionStore:
         return len(expired)
 
     def dump(self) -> dict[str, Any]:
-        """Serialize meta and the avatar's identity/tags per session (never the data Bag)."""
+        """Serialize meta and every keyed avatar's identity/tags (never the data Bag)."""
         return {
             session_id: {
                 "meta": dict(session.meta),
-                "avatar": (
-                    {"identity": session.avatar.identity, "tags": list(session.avatar.tags)}
-                    if session.avatar is not None
-                    else None
-                ),
+                "avatars": {
+                    key: {"identity": avatar.identity, "tags": list(avatar.tags)}
+                    for key, avatar in session.avatars.items()
+                },
             }
             for session_id, session in self._sessions.items()
         }
 
     def restore(self, data: dict[str, Any]) -> None:
-        """Restore non-expired sessions from ``dump()`` output (meta + rebuilt avatar)."""
+        """Restore non-expired sessions from ``dump()`` output (meta + rebuilt avatars)."""
         for session_id, session_data in data.items():
             meta = session_data["meta"]
-            avatar_data = session_data.get("avatar")
-            avatar = Avatar(avatar_data["identity"], avatar_data["tags"]) if avatar_data else None
-            session = Session(session_id=session_id, avatar=avatar, ttl=meta["ttl"])
+            avatars = session_data["avatars"]
+            root = avatars.get(Session.ROOT_AVATAR_KEY)
+            session = Session(
+                session_id=session_id,
+                avatar=Avatar(root["identity"], root["tags"]) if root else None,
+                ttl=meta["ttl"],
+            )
+            for key, avatar_data in avatars.items():
+                if key != Session.ROOT_AVATAR_KEY:
+                    session.attach_avatar(Avatar(avatar_data["identity"], avatar_data["tags"]), key)
+            session.clear_dirty()
             session.meta["created_at"] = meta["created_at"]
             session.meta["last_access"] = meta["last_access"]
             if not session.is_expired():

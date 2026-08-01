@@ -79,14 +79,14 @@ class TestSessionStoreContract:
         assert isinstance(store_factory(), SessionStore)
 
     def test_create_default_is_anonymous(self, store_factory) -> None:
-        assert store_factory().create().avatar is None
+        assert store_factory().create().avatar() is None
 
     def test_create_get_roundtrip(self, store_factory) -> None:
         store = store_factory()
         created = store.create(avatar=Avatar("alice"))
         fetched = store.get(created.id)
         assert fetched is created
-        assert fetched.avatar.identity == "alice"
+        assert fetched.avatar().identity == "alice"
 
     def test_get_unknown_returns_none(self, store_factory) -> None:
         assert store_factory().get("nope") is None
@@ -121,8 +121,8 @@ class TestSessionStoreContract:
         fresh.restore(dumped)
         restored = fresh.get(session.id)
         assert restored is not None
-        assert restored.avatar.identity == "bob"
-        assert restored.avatar.tags == ["user"]
+        assert restored.avatar().identity == "bob"
+        assert restored.avatar().tags == ["user"]
         assert len(restored.data) == 0
 
     def test_save_is_in_the_contract(self, store_factory) -> None:
@@ -134,7 +134,7 @@ class TestSessionStoreContract:
         store.save(session)
         again = store.get(session.id)
         assert again is not None
-        assert again.avatar is not None and again.avatar.identity == "carol"
+        assert again.avatar() is not None and again.avatar().identity == "carol"
 
 
 # --- FileSessionStore specifics (D22 survival line) ---
@@ -148,8 +148,8 @@ class TestFileSessionStore:
         restored = fresh.get(created.id)
         assert restored is not None
         assert restored is not created
-        assert restored.avatar.identity == "carol"
-        assert restored.avatar.tags == ["ops"]
+        assert restored.avatar().identity == "carol"
+        assert restored.avatar().tags == ["ops"]
         assert len(restored.data) == 0
 
     def test_save_persists_an_attached_avatar_to_disk(self, tmp_path) -> None:
@@ -160,8 +160,8 @@ class TestFileSessionStore:
         fresh = FileSessionStore(site_storage(tmp_path))
         restored = fresh.get(created.id)
         assert restored is not None
-        assert restored.avatar is not None and restored.avatar.identity == "dave"
-        assert restored.avatar.tags == ["admin"]
+        assert restored.avatar() is not None and restored.avatar().identity == "dave"
+        assert restored.avatar().tags == ["admin"]
 
     def test_corrupted_session_file_raises(self, tmp_path) -> None:
         storage = site_storage(tmp_path)
@@ -187,7 +187,7 @@ class TestFileSessionStore:
         now = time.time()
         planted = {
             "meta": {"created_at": now, "last_access": now, "ttl": 3600},
-            "avatar": {"identity": "intruder", "tags": ["SUPERADMIN"]},
+            "avatars": {"root": {"identity": "intruder", "tags": ["SUPERADMIN"]}},
         }
         storage.node("site:secret.json").write_text(json.dumps(planted))
         with pytest.raises(ValueError, match="traversal"):
@@ -220,12 +220,12 @@ class TestSessionUnit:
     def test_session_holds_avatar_and_bag(self) -> None:
         session = Session("tok", avatar=Avatar("alice"), ttl=3600)
         assert session.id == "tok"
-        assert isinstance(session.avatar, Avatar)
-        assert session.avatar.identity == "alice"
+        assert isinstance(session.avatar(), Avatar)
+        assert session.avatar().identity == "alice"
         assert not session.is_expired()
 
     def test_anonymous_session_avatar_is_none(self) -> None:
-        assert Session("tok", avatar=None, ttl=3600).avatar is None
+        assert Session("tok", avatar=None, ttl=3600).avatar() is None
 
     def test_avatar_normalizes_none_tags(self) -> None:
         assert Avatar("alice", None).tags == []
@@ -259,6 +259,77 @@ class TestSessionUnit:
         session = Session("tok", avatar=None, ttl=3600)
         session.attach_avatar(Avatar("alice"))
         assert session.dirty is True
+
+
+# --- the dressing model: keyed avatars on one session ---
+
+
+class TestSessionAvatars:
+    def test_constructor_avatar_dresses_the_root_slot(self) -> None:
+        session = Session("tok", avatar=Avatar("alice"), ttl=3600)
+        assert session.avatar() is session.avatar(Session.ROOT_AVATAR_KEY)
+        assert list(session.avatars) == ["root"]
+
+    def test_attach_under_explicit_key_and_read_back(self) -> None:
+        session = Session("tok", avatar=Avatar("alice"), ttl=3600)
+        session.attach_avatar(Avatar("alice@erp", ["operator"]), "erp")
+        assert session.avatar("erp").identity == "alice@erp"
+        assert session.avatar().identity == "alice"  # root untouched by a sub-login
+
+    def test_unclaimed_slot_is_none(self) -> None:
+        session = Session("tok", avatar=Avatar("alice"), ttl=3600)
+        assert session.avatar("erp") is None
+
+    def test_keyed_attach_marks_dirty(self) -> None:
+        session = Session("tok", avatar=Avatar("alice"), ttl=3600)
+        session.clear_dirty()
+        session.attach_avatar(Avatar("alice@erp"), "erp")
+        assert session.dirty is True
+
+    def test_avatars_view_is_enumerable(self) -> None:
+        session = Session("tok", avatar=Avatar("alice"), ttl=3600)
+        session.attach_avatar(Avatar("alice@erp"), "erp")
+        assert sorted(session.avatars) == ["erp", "root"]
+        assert len(session.avatars) == 2
+        assert "erp" in session.avatars
+
+    def test_avatars_view_is_read_only(self) -> None:
+        session = Session("tok", avatar=Avatar("alice"), ttl=3600)
+        with pytest.raises(TypeError):
+            session.avatars["erp"] = Avatar("intruder")  # type: ignore[index]
+
+    def test_memory_store_roundtrips_every_keyed_avatar(self) -> None:
+        store = MemorySessionStore(default_ttl=3600)
+        session = store.create(avatar=Avatar("alice", ["admin"]))
+        session.attach_avatar(Avatar("alice@erp", ["operator"]), "erp")
+        fresh = MemorySessionStore(default_ttl=3600)
+        fresh.restore(store.dump())
+        restored = fresh.get(session.id)
+        assert restored.avatar().identity == "alice"
+        assert restored.avatar().tags == ["admin"]
+        assert restored.avatar("erp").identity == "alice@erp"
+        assert restored.avatar("erp").tags == ["operator"]
+        assert restored.dirty is False
+
+    def test_file_store_roundtrips_every_keyed_avatar(self, tmp_path) -> None:
+        storage = site_storage(tmp_path)
+        session = FileSessionStore(storage).create(avatar=Avatar("alice", ["admin"]))
+        session.attach_avatar(Avatar("alice@erp", ["operator"]), "erp")
+        store = FileSessionStore(storage)
+        store.save(session)
+        restored = FileSessionStore(storage).get(session.id)
+        assert restored.avatar().identity == "alice"
+        assert restored.avatar("erp").identity == "alice@erp"
+        assert restored.avatar("erp").tags == ["operator"]
+        assert restored.dirty is False
+
+    def test_anonymous_session_serializes_an_empty_wardrobe(self) -> None:
+        store = MemorySessionStore(default_ttl=3600)
+        session = store.create()
+        assert store.dump()[session.id]["avatars"] == {}
+        fresh = MemorySessionStore(default_ttl=3600)
+        fresh.restore(store.dump())
+        assert fresh.get(session.id).avatar() is None
 
 
 # --- ASGI cookie flow ---
@@ -382,9 +453,9 @@ class TestAttachAvatar:
     def test_attach_sets_the_avatar_on_the_existing_session(self) -> None:
         session = MemorySessionStore().create()
         session.attach_avatar(Avatar("alice", ["admin"]))
-        assert session.avatar is not None
-        assert session.avatar.identity == "alice"
-        assert session.avatar.tags == ["admin"]
+        assert session.avatar() is not None
+        assert session.avatar().identity == "alice"
+        assert session.avatar().tags == ["admin"]
 
     def test_attach_preserves_session_data_and_id(self) -> None:
         store = MemorySessionStore()
@@ -419,8 +490,8 @@ class TestPromotedSessionCookie:
         server = SessionServer(applications=[app])
         scope, sent = await http_get(server)
         session_id = scope["session"].id
-        assert scope["session"].avatar is not None
-        assert scope["session"].avatar.identity == "alice"
+        assert scope["session"].avatar() is not None
+        assert scope["session"].avatar().identity == "alice"
         cookie = set_cookie_value(sent)  # issued for the NEW session, not for the login
         assert cookie is not None
         assert cookie.startswith(f"session_id={session_id}")
@@ -434,7 +505,7 @@ class TestPromotedSessionCookie:
         anonymous.data["cart"] = "kept"
         scope, sent = await http_get(server, cookie=f"session_id={anonymous.id}")
         assert scope["session"] is anonymous  # same session, same id
-        assert scope["session"].avatar is not None
+        assert scope["session"].avatar() is not None
         assert scope["session"].data["cart"] == "kept"  # the cart survives the login
         assert set_cookie_value(sent) is None  # the client's cookie is still valid
 

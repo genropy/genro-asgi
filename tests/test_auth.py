@@ -354,7 +354,7 @@ class TestCombinedChainFlow:
         assert response_status(sent) == 200
         assert scope["auth"].identity == "alice"
         assert set_cookie_value(sent) is not None
-        assert scope["session"].avatar is None
+        assert scope["session"].avatar() is None
 
     async def test_session_identity_flows_through_the_chain(self) -> None:
         # B2: cookie only — the §5.5 session fallback works through the chain.

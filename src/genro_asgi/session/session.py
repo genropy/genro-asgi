@@ -12,15 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Server-managed session: id, meta, Bag data, and an optional Avatar.
+"""Server-managed session: id, meta, Bag data, and a keyed collection of Avatars.
 
 A ``Session`` groups request-scoped state under a unique id with expiry
 tracking. ``SessionMiddleware`` creates or reconnects sessions via the request
-cookie and attaches them to ``scope["session"]``. Each session carries an
-``Avatar | None`` — ``None`` is an anonymous session; capturing an identity is
-an explicit ``avatar=`` at creation — and a ``Bag`` for arbitrary application
-data. ``touch()`` refreshes ``last_access``; ``is_expired()`` measures the TTL
-from it.
+cookie and attaches them to ``scope["session"]``.
+
+**The dressing model.** A session is not one identity but a wardrobe of them,
+each stored under a key. The ``ROOT_AVATAR_KEY`` slot holds the identity of the
+primary login — the one the auth chain resolves and the one ``avatar()`` returns
+with no argument. Further keys are *sub-logins*: an identity a page acquired
+inside the same session (a second-system credential, an impersonation, a
+delegated account) that must coexist with the root one instead of replacing it.
+Page trees will reference the slot they are dressed in by ``avatar_key``, so the
+identity of a page is a lookup in this collection, never a copy of it.
+
+``avatar(key)`` returns ``Avatar | None`` — ``None`` is an unclaimed slot, and an
+absent root slot is an anonymous session; capturing an identity is an explicit
+``avatar=`` at creation (the root slot) or an ``attach_avatar`` call. ``avatars``
+is a read-only view for enumeration; ``attach_avatar`` is its only writer. There
+is no detach: a slot claimed in a session stays claimed for its lifetime.
+``data`` is a ``Bag`` for arbitrary application data. ``touch()`` refreshes
+``last_access``; ``is_expired()`` measures the TTL from it.
 
 Write-back is explicit (D24): a session persists at request end ONLY when
 ``dirty`` is set. ``attach_avatar`` marks it dirty (a login must survive), and a
@@ -34,7 +47,8 @@ middleware clears the flag with ``clear_dirty()`` after a successful save.
 from __future__ import annotations
 
 import time
-from typing import Any
+import types
+from typing import Any, Mapping
 
 from genro_bag import Bag
 
@@ -44,17 +58,21 @@ __all__ = ["Session"]
 
 
 class Session:
-    """Server-managed session with meta, Bag data, and an optional Avatar."""
+    """Server-managed session with meta, Bag data, and keyed identity avatars."""
 
-    __slots__ = ("_id", "_meta", "_data", "_avatar", "_dirty")
+    __slots__ = ("_id", "_meta", "_data", "_avatars", "_dirty")
+
+    ROOT_AVATAR_KEY = "root"
 
     def __init__(self, session_id: str, avatar: Avatar | None, ttl: int) -> None:
-        """Initialize the session with its token, an identity avatar, and a TTL."""
+        """Initialize the session with its token, its root avatar, and a TTL."""
         now = time.time()
         self._id = session_id
         self._meta: dict[str, Any] = {"created_at": now, "last_access": now, "ttl": ttl}
         self._data = Bag()
-        self._avatar = avatar
+        self._avatars: dict[str, Avatar] = {}
+        if avatar is not None:
+            self._avatars[self.ROOT_AVATAR_KEY] = avatar
         self._dirty = False
 
     @property
@@ -72,24 +90,34 @@ class Session:
         """Application data as a Bag."""
         return self._data
 
+    def avatar(self, key: str = ROOT_AVATAR_KEY) -> Avatar | None:
+        """The avatar dressed under ``key``; ``None`` = unclaimed slot.
+
+        With no argument it returns the root avatar — the primary login — so an
+        anonymous session answers ``None``.
+        """
+        return self._avatars.get(key)
+
     @property
-    def avatar(self) -> Avatar | None:
-        """Identity avatar; ``None`` = anonymous session."""
-        return self._avatar
+    def avatars(self) -> Mapping[str, Avatar]:
+        """Read-only view of the keyed avatars (``attach_avatar`` is the only writer)."""
+        return types.MappingProxyType(self._avatars)
 
     @property
     def dirty(self) -> bool:
         """Whether the session has unsaved changes to persist at request end."""
         return self._dirty
 
-    def attach_avatar(self, avatar: Avatar) -> None:
-        """Attach the identity avatar — the login event (marks the session dirty).
+    def attach_avatar(self, avatar: Avatar, key: str = ROOT_AVATAR_KEY) -> None:
+        """Dress ``key`` with an avatar — the login event (marks the session dirty).
 
         The session stays the same object: id, ``data`` and ``meta`` are
         untouched, so whatever an anonymous visitor accumulated survives
-        the login. The change is marked dirty so the login persists.
+        the login. The default key is the root slot (the primary login); any
+        other key is a sub-login coexisting with it. The change is marked dirty
+        so the login persists.
         """
-        self._avatar = avatar
+        self._avatars[key] = avatar
         self.mark_dirty()
 
     def mark_dirty(self) -> None:

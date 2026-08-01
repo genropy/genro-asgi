@@ -53,7 +53,7 @@ import uvicorn
 from .application import BaseApplication
 from .lifespan import Lifespan
 from .pool import WorkPool
-from .registry import RequestRegistry
+from .request_registry import RequestRegistry
 from .response import Response
 
 if TYPE_CHECKING:
