@@ -46,6 +46,35 @@ the process. Simple, fast, lost on restart (but see the shutdown snapshot
 below). A custom backend can be plugged through the `session_store=` kwarg by
 implementing the `SessionStore` protocol.
 
+## The shutdown snapshot
+
+The `save_session=` kwarg names a pickle file; when set, the server saves
+**every live session — data included** — to that file at shutdown, and loads
+it back at the next startup (a session past its TTL is dropped on load; an
+absent file starts empty).
+
+The CLI arms this automatically when you name an instance:
+
+```console
+$ genro-asgi serve ./config.py --name demo
+```
+
+persists sessions to `~/.genroasgi/sessions/demo.pickle` across restarts —
+`--reload` restarts included. A nameless serve stays volatile.
+
+This is a development convenience: your login and your work survive a code
+restart. It is not a production persistence story — the snapshot is one file
+written by one process at shutdown.
+
+## Session expiry
+
+A session dies by inactivity alone: every request refreshes its
+`last_access`, and a session whose inactivity exceeds the TTL is dropped —
+lazily when its cookie comes back, and in a periodic mass reap at
+session-creation time. There is no active signal from the client: a closed
+tab leaves the session alive until the TTL runs out; explicit death is the
+logout's `delete()`.
+
 ## The session cookie
 
 Cookie behaviour is controlled through the `session` middleware options:
@@ -64,6 +93,12 @@ server = AsgiServer(
 
 The session cookie is **always** `HttpOnly`. `secure` and `samesite` are yours to
 set; `cookie_name` renames the cookie.
+
+The cookie's `Max-Age` is the session TTL **times 24**, on purpose: the
+server-side expiry slides with activity while `Max-Age` is fixed from issue
+time, so a same-length cookie would log an active user out on schedule. The
+wide cookie makes the server the only arbiter of expiry, and only the first
+response of a session carries a `Set-Cookie`.
 
 ## The Session object
 

@@ -132,6 +132,13 @@ A registered name then becomes a source of its own — `genro-asgi serve demo`
 relaunches with the stored options — and an unknown name is an error listing the
 names that do exist.
 
+**Naming an instance also arms the session snapshot**: the sessions of
+`--name demo` are pickled to `~/.genroasgi/sessions/demo.pickle` at shutdown
+and reloaded at the next boot (expired ones filtered out by their TTL). A
+nameless serve stays volatile. This is a development convenience — production
+deployments will bring their own persistence. See the
+[sessions guide](sessions.md) for details.
+
 The store is `~/.genroasgi`: `apps/<name>.json` holds the **pointer** (the
 source string and the options you gave), `run/<name>.pid` the pid of the running
 process. It never copies your application, so relaunching by name always runs the
