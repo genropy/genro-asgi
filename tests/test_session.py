@@ -38,6 +38,7 @@ from genro_asgi import (
     SessionStore,
 )
 from genro_asgi.middleware import MiddlewareMixin
+from genro_asgi.middleware.session import COOKIE_LIFETIME_FACTOR
 from genro_asgi.types import Message, Receive, Scope, Send
 
 # --- store contract suite (over a FACTORY, §5.9) ---
@@ -475,6 +476,15 @@ class TestSessionCookieFlow:
         cookie = set_cookie_value(sent)
         assert cookie is not None
         assert "Secure" not in cookie
+
+    async def test_cookie_max_age_outlives_the_sliding_ttl(self) -> None:
+        # Max-Age is fixed from issue time while the server TTL slides:
+        # the cookie is issued COOKIE_LIFETIME_FACTOR times wider (legacy-style)
+        server = SessionServer(applications=[EchoApp(mount="")], session_ttl=3600)
+        _, sent = await http_get(server)
+        cookie = set_cookie_value(sent)
+        assert cookie is not None
+        assert f"Max-Age={3600 * COOKIE_LIFETIME_FACTOR}" in cookie
 
 
 # --- attach_avatar (login seam): identity attached in place, id unchanged ---

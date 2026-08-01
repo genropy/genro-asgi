@@ -21,7 +21,14 @@ session or creates a new ANONYMOUS one through ``server.session_store``
 an explicit act of the login surface, core 1d), attaches it to
 ``scope["session"]``, and — ONLY when the session was created here — wraps
 ``send`` to add its ``Set-Cookie`` header (HttpOnly, ``Max-Age`` = the session
-TTL). Login never changes the session id: a handler attaches the avatar to
+TTL times ``COOKIE_LIFETIME_FACTOR``). The cookie is deliberately much longer
+than the session: the server-side TTL is SLIDING (every request refreshes
+``last_access``) while ``Max-Age`` is fixed from issue time, so a same-length
+cookie would log an active user out on schedule. The wide fixed cookie is the
+legacy-proven answer (``GnrWebConnection.write_cookie``: timeout × 24, never
+re-issued per request) — the server stays the only arbiter of expiry and no
+response but the first carries a ``Set-Cookie``. Login never changes the
+session id: a handler attaches the avatar to
 the existing session in place (``request.session.attach_avatar``), so the
 cookie the client already holds stays valid and no login-time cookie exists —
 handlers stay pure and never set cookies themselves. Armed by ``SessionMixin``; order 400 (OUTSIDE
@@ -41,7 +48,9 @@ from .base import BaseMiddleware, headers_dict
 if TYPE_CHECKING:
     from ..types import ASGIApp, Receive, Scope, Send
 
-__all__ = ["SessionMiddleware"]
+__all__ = ["SessionMiddleware", "COOKIE_LIFETIME_FACTOR"]
+
+COOKIE_LIFETIME_FACTOR = 24   # cookie Max-Age = session TTL × this (see module doc)
 
 
 class SessionMiddleware(BaseMiddleware):
@@ -76,10 +85,14 @@ class SessionMiddleware(BaseMiddleware):
         return morsel.value if morsel is not None else None
 
     def _set_cookie(self, session: Any) -> tuple[bytes, bytes]:
-        """Build the ``Set-Cookie`` header tuple for a session to (re)issue to the client."""
+        """Build the ``Set-Cookie`` header tuple for a session to (re)issue to the client.
+
+        ``Max-Age`` is the TTL times ``COOKIE_LIFETIME_FACTOR``: the cookie
+        must outlive the sliding server-side expiry (module doc).
+        """
         parts = [
             f"{self._cookie_name}={session.id}",
-            f"Max-Age={session.meta['ttl']}",
+            f"Max-Age={session.meta['ttl'] * COOKIE_LIFETIME_FACTOR}",
             "Path=/",
             "HttpOnly",
             f"SameSite={self._samesite.capitalize()}",
