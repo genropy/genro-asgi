@@ -21,12 +21,29 @@ reverse.
 
 from .client import ChannelClient
 from .frame import MAX_FRAME_SIZE, REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
+from .hub import (
+    CALL_METHOD,
+    EVENT_METHOD,
+    REPLY_METHOD,
+    ChannelCallError,
+    ChannelHub,
+    ChannelMember,
+)
+from .local import LocalChannel, LocalFrameStream
 
 __all__ = [
+    "CALL_METHOD",
+    "EVENT_METHOD",
     "MAX_FRAME_SIZE",
     "REGISTER_METHOD",
     "REGISTER_PATH",
+    "REPLY_METHOD",
+    "ChannelCallError",
     "ChannelClient",
+    "ChannelHub",
+    "ChannelMember",
     "Frame",
     "FrameStream",
+    "LocalChannel",
+    "LocalFrameStream",
 ]

@@ -189,3 +189,27 @@ disable_error_code = ["attr-defined"]
 [[tool.mypy.overrides]]
 module = "genro_asgi.applications.server_sections.tasks_section"
 disable_error_code = ["union-attr", "no-any-return"]
+
+# UserStickyWorker owns a WorkPool passing ITSELF as the parent (ratified
+# decision: pool.py is untouched, the parent is only stored, never used at
+# runtime) — a worker is not a BaseServer, so the arg-type is deliberate. Its
+# @route handlers are wrapped by genro-routes, whose decorator returns an
+# untyped callable: a handler calling a sibling handler therefore returns Any
+# where the annotation promises a dict.
+[[tool.mypy.overrides]]
+module = "genro_asgi.spa.worker"
+disable_error_code = ["arg-type", "no-any-return"]
+
+# WorkerEntry resolves its worker class from a dotted reference, so getattr
+# returns Any where the annotations promise a class and an instance
+# (no-any-return); and the SIGTERM handler it installs after building the
+# client sees the same handle mypy still types as Optional (union-attr).
+[[tool.mypy.overrides]]
+module = "genro_asgi.spa.worker_entry"
+disable_error_code = ["no-any-return", "union-attr"]
+
+# The commander loads the very worker class a spawned child would load, from
+# the same dotted reference and the same getattr — identical no-any-return.
+[[tool.mypy.overrides]]
+module = "genro_asgi.spa.commander"
+disable_error_code = ["no-any-return"]

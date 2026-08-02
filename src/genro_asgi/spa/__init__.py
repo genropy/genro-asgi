@@ -14,17 +14,26 @@
 
 """The SPA world — the machinery behind UserSticky commanders and workers.
 
-Everything here serves single-page applications: today the register
-machinery (`Register`, `RegisterRegistry` — in-process datasets with
-secondary indexes and the users/pages lifecycle vocabulary), later the
-commander/worker runtimes and the envelope protocol. Nothing in the base
-server instantiates any of it: this package is inert until a runtime (or
-genropy-asgi) mounts it. It is reached by subpackage import — this
-``__init__`` is the public face (``from genro_asgi.spa import
-RegisterRegistry``); nothing is re-exported from ``genro_asgi`` top-level.
+Everything here serves single-page applications: the register machinery
+(`Register`, `RegisterRegistry` — in-process datasets with secondary
+indexes and the users/pages lifecycle vocabulary) and the UserSticky pair
+above it (`UserStickyWorker`, the execution unit; `UserStickyCommander`,
+the pool owner and routing surface, which also holds the worker itself in
+the single role). Nothing in the base server instantiates any of it: this
+package is inert until a runtime (or genropy-asgi) mounts it. It is
+reached by subpackage import — this ``__init__`` is the public face
+(``from genro_asgi.spa import RegisterRegistry``); nothing is re-exported
+from ``genro_asgi`` top-level.
 """
 
+from .commander import UserStickyCommander
 from .register import Register
 from .register_registry import RegisterRegistry
+from .worker import UserStickyWorker
 
-__all__ = ["Register", "RegisterRegistry"]
+__all__ = [
+    "Register",
+    "RegisterRegistry",
+    "UserStickyCommander",
+    "UserStickyWorker",
+]
