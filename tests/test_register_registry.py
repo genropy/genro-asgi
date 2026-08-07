@@ -26,8 +26,13 @@ def test_generic_registers_exist_with_ratified_indexes() -> None:
     assert isinstance(registry.user_items, Register)
     assert registry.user_items.name == "user_items"
     assert registry.user_items.index_attrs == ()
+    assert registry.connection_items.name == "connection_items"
+    assert registry.connection_items.index_attrs == ()
     assert registry.page_items.name == "page_items"
-    assert registry.page_items.index_attrs == ("user", "session_id", "root_page_id")
+    assert registry.page_items.index_attrs == (
+        "session_id",
+        "root_page_id",
+    )
 
 
 def test_generic_registers_are_stable_references() -> None:
@@ -154,7 +159,7 @@ def test_drop_page_cascades_only_on_the_last_page() -> None:
     registry.new_page("p1", user="alice", session_id="s1")
     registry.new_page("p2", user="alice", session_id="s1")
     dropped = registry.drop_page("p1")
-    assert dropped["user"] == "alice"
+    assert dropped["register_item_id"] == "p1"
     assert "alice" in registry.user_items
     registry.drop_page("p2")
     assert "alice" not in registry.user_items
@@ -168,8 +173,8 @@ def test_drop_user_removes_every_page_of_that_user() -> None:
     registry.new_page("p3", user="bob", session_id="s2")
     registry.drop_user("alice")
     assert "alice" not in registry.user_items
-    assert registry.page_items.keys_by("user", "alice") == []
-    assert registry.page_items.keys_by("user", "bob") == ["p3"]
+    assert "p1" not in registry.page_items and "p2" not in registry.page_items
+    assert "p3" in registry.page_items
     assert "bob" in registry.user_items
 
 
@@ -177,3 +182,220 @@ def test_drop_user_unknown_raises_key_error() -> None:
     registry = RegisterRegistry()
     with pytest.raises(KeyError):
         registry.drop_user("alice")
+
+
+# ----------------------------------------------------------------------
+# The chain page -> connection -> user
+# ----------------------------------------------------------------------
+
+
+def test_new_page_builds_the_whole_chain_bottom_up() -> None:
+    registry = RegisterRegistry()
+    page = registry.new_page("p1", user="s1", session_id="s1")
+    assert page["connection_id"] == "s1"
+    connection = registry.connection_items.get("s1")
+    assert connection["user"] == "s1"
+    assert registry.user_items.get("s1")["store"] is not None
+    assert registry.user_items.get("s1")["connections"] == {"s1"}
+    assert connection["pages"] == {"p1"}
+
+
+def test_new_connection_is_born_guest_with_its_own_user_entry() -> None:
+    registry = RegisterRegistry()
+    connection = registry.new_connection("s1")
+    assert connection["user"] == "s1"
+    assert "s1" in registry.user_items
+    assert registry.user_items.get("s1")["store"] is not None
+
+
+def test_new_connection_under_a_named_user_reuses_the_entry() -> None:
+    registry = RegisterRegistry()
+    registry.new_user("alice", role="admin")
+    registry.new_connection("s1", user="alice")
+    assert registry.user_items.get("alice")["connections"] == {"s1"}
+    assert registry.user_items.get("alice")["role"] == "admin"
+
+
+def test_two_pages_of_one_connection_share_it() -> None:
+    registry = RegisterRegistry()
+    registry.new_page("p1", user="alice", session_id="s1")
+    registry.new_page("p2", user="alice", session_id="s1")
+    assert len(registry.connection_items) == 1
+    assert registry.connection_items.get("s1")["pages"] == {"p1", "p2"}
+
+
+def test_two_connections_of_one_user_share_the_user_entry() -> None:
+    registry = RegisterRegistry()
+    registry.new_page("p1", user="alice", session_id="s1")
+    registry.new_page("p2", user="alice", session_id="s2")
+    assert len(registry.user_items) == 1
+    assert registry.user_items.get("alice")["connections"] == {"s1", "s2"}
+
+
+def test_drop_page_climbs_the_chain_only_on_the_last_page() -> None:
+    registry = RegisterRegistry()
+    registry.new_page("p1", user="alice", session_id="s1")
+    registry.new_page("p2", user="alice", session_id="s1")
+    registry.drop_page("p1")
+    assert "s1" in registry.connection_items
+    assert "alice" in registry.user_items
+    registry.drop_page("p2")
+    assert "s1" not in registry.connection_items
+    assert "alice" not in registry.user_items
+
+
+def test_drop_page_of_one_connection_leaves_the_sibling_connection() -> None:
+    registry = RegisterRegistry()
+    registry.new_page("p1", user="alice", session_id="s1")
+    registry.new_page("p2", user="alice", session_id="s2")
+    registry.drop_page("p1")
+    assert "s1" not in registry.connection_items
+    assert "s2" in registry.connection_items
+    assert "alice" in registry.user_items
+
+
+def test_drop_connection_takes_its_pages_and_the_last_user() -> None:
+    registry = RegisterRegistry()
+    registry.new_page("p1", user="alice", session_id="s1")
+    registry.new_page("p2", user="alice", session_id="s1")
+    connection = registry.drop_connection("s1")
+    assert connection["user"] == "alice"
+    assert len(registry.page_items) == 0
+    assert "alice" not in registry.user_items
+
+
+def test_drop_connection_never_climbs_back_down_and_up_again() -> None:
+    registry = RegisterRegistry()
+    registry.new_page("p1", user="alice", session_id="s1")
+    registry.new_page("p2", user="alice", session_id="s2")
+    registry.drop_connection("s1")
+    assert "alice" in registry.user_items
+    assert registry.user_items.get("alice")["connections"] == {"s2"}
+    assert registry.connection_items.get("s2")["pages"] == {"p2"}
+
+
+def test_drop_user_takes_every_connection_and_page() -> None:
+    registry = RegisterRegistry()
+    registry.new_page("p1", user="alice", session_id="s1")
+    registry.new_page("p2", user="alice", session_id="s2")
+    registry.new_page("p3", user="bob", session_id="s3")
+    registry.drop_user("alice")
+    assert "alice" not in registry.user_items
+    assert "s1" not in registry.connection_items and "s2" not in registry.connection_items
+    assert "p1" not in registry.page_items and "p2" not in registry.page_items
+    assert registry.user_items.get("bob")["connections"] == {"s3"}
+    assert registry.connection_items.get("s3")["pages"] == {"p3"}
+
+
+def test_drop_page_without_cascade_leaves_the_chain_standing() -> None:
+    registry = RegisterRegistry()
+    registry.new_page("p1", user="alice", session_id="s1")
+    registry.drop_page("p1", cascade=False)
+    assert "s1" in registry.connection_items
+    assert "alice" in registry.user_items
+
+
+def test_drop_connection_without_cascade_leaves_the_user_standing() -> None:
+    registry = RegisterRegistry()
+    registry.new_page("p1", user="alice", session_id="s1")
+    registry.drop_connection("s1", cascade=False)
+    assert "alice" in registry.user_items
+    assert len(registry.page_items) == 0
+
+
+def test_drop_connection_detaches_the_collectors_of_its_pages() -> None:
+    registry = RegisterRegistry()
+    page = registry.new_page("p1", user="alice", session_id="s1")
+    registry.subscribe_store_path("p1", "prefs")
+    collector, view = page["collector"], page["user_view"]
+    registry.drop_connection("s1")
+    page["store"]["x"] = 1
+    assert collector.changes == []
+    assert view.changes == []
+
+
+# ----------------------------------------------------------------------
+# The tree lives in the items: both directions agree after every mutator
+# ----------------------------------------------------------------------
+
+
+def assert_tree(registry: RegisterRegistry, tree: dict[str, dict[str, set[str]]]) -> None:
+    """Check the whole registry against ``{user: {connection: {page, ...}}}``.
+
+    Both directions are read: the downward edge sets carried by the items and
+    the upward parent keys carried by their children, plus the three counts, so
+    a row the tree does not name is a failure too.
+    """
+    assert len(registry.user_items) == len(tree)
+    assert len(registry.connection_items) == sum(len(c) for c in tree.values())
+    assert len(registry.page_items) == sum(len(p) for c in tree.values() for p in c.values())
+    for user, connections in tree.items():
+        assert registry.user_items.get(user)["connections"] == set(connections)
+        for connection_id, pages in connections.items():
+            connection = registry.connection_items.get(connection_id)
+            assert connection["user"] == user
+            assert connection["pages"] == pages
+            for page_id in pages:
+                assert registry.page_items.get(page_id)["connection_id"] == connection_id
+                assert registry.user_of_page(page_id) == user
+
+
+def test_the_two_directions_agree_after_every_creation() -> None:
+    registry = RegisterRegistry()
+    registry.new_page("p1", user="alice", session_id="s1")
+    registry.new_page("p2", user="alice", session_id="s1")
+    registry.new_page("p3", user="alice", session_id="s2")
+    registry.new_connection("s3")
+    assert_tree(
+        registry,
+        {"alice": {"s1": {"p1", "p2"}, "s2": {"p3"}}, "s3": {"s3": set()}},
+    )
+
+
+def test_the_two_directions_agree_after_a_drop_from_the_bottom() -> None:
+    registry = RegisterRegistry()
+    registry.new_page("p1", user="alice", session_id="s1")
+    registry.new_page("p2", user="alice", session_id="s1")
+    registry.new_page("p3", user="alice", session_id="s2")
+    registry.drop_page("p1")
+    assert_tree(registry, {"alice": {"s1": {"p2"}, "s2": {"p3"}}})
+    registry.drop_page("p2")
+    assert_tree(registry, {"alice": {"s2": {"p3"}}})
+
+
+def test_the_two_directions_agree_after_a_drop_from_the_top() -> None:
+    registry = RegisterRegistry()
+    registry.new_page("p1", user="alice", session_id="s1")
+    registry.new_page("p2", user="alice", session_id="s2")
+    registry.new_page("p3", user="bob", session_id="s3")
+    registry.drop_connection("s1")
+    assert_tree(registry, {"alice": {"s2": {"p2"}}, "bob": {"s3": {"p3"}}})
+    registry.drop_user("alice")
+    assert_tree(registry, {"bob": {"s3": {"p3"}}})
+
+
+def test_the_login_moves_the_connection_between_the_two_users_sets() -> None:
+    registry = RegisterRegistry()
+    registry.new_page("p1", user="sess-1", session_id="sess-1")
+    registry.new_page("p2", user="sess-2", session_id="sess-2")
+    registry.change_connection_user("sess-1", "alice")
+    assert_tree(
+        registry,
+        {"alice": {"sess-1": {"p1"}}, "sess-2": {"sess-2": {"p2"}}},
+    )
+    registry.change_connection_user("sess-2", "alice")
+    assert_tree(registry, {"alice": {"sess-1": {"p1"}, "sess-2": {"p2"}}})
+
+
+def test_user_of_page_walks_up_the_chain() -> None:
+    registry = RegisterRegistry()
+    registry.new_page("p1", user="alice", session_id="s1")
+    assert registry.user_of_page("p1") == "alice"
+    registry.change_connection_user("s1", "bob")
+    assert registry.user_of_page("p1") == "bob"
+
+
+def test_user_of_page_unknown_raises_key_error() -> None:
+    registry = RegisterRegistry()
+    with pytest.raises(KeyError, match="nope"):
+        registry.user_of_page("nope")

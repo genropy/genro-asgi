@@ -87,13 +87,21 @@ EVENT_METHOD = "EVENT"
 
 
 class ChannelCallError(Exception):
-    """A CALL answered with an error REPLY; ``error`` is the member's payload."""
+    """A CALL answered with an error REPLY; ``error`` is the member's payload.
 
-    def __init__(self, member_name: str, path: str, error: Any) -> None:
+    ``payload`` is the whole REPLY the error arrived in: an errored REPLY can
+    carry more than its error (the spa delivery keys ride it), and whoever
+    turns this exception into a response needs those keys untouched.
+    """
+
+    def __init__(
+        self, member_name: str, path: str, error: Any, payload: dict[str, Any] | None = None
+    ) -> None:
         super().__init__(f"call {path} on {member_name} failed: {error}")
         self.member_name = member_name
         self.path = path
         self.error = error
+        self.payload = payload or {}
 
 
 class ChannelMember:

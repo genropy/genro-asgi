@@ -30,7 +30,7 @@ from typing import Any
 
 import pytest
 
-from genro_asgi.spa.commander import METRICS_WINDOW, UserStickyCommander
+from genro_asgi.spa.commander import LOGIN_OP, METRICS_WINDOW, UserStickyCommander
 
 
 async def swallow_frame(frame: Any) -> None:
@@ -158,7 +158,7 @@ def test_a_reserved_lifecycle_op_has_no_surface_consumer_yet(
     commander: UserStickyCommander, caplog: Any
 ) -> None:
     with caplog.at_level("WARNING"):
-        commander.fold_events("W:w-1", [event("new_page", 1, user="alice")])
+        commander.fold_events("W:w-1", [event("drop_pages", 1, user="alice")])
     assert commander.user_worker_map == {}
     assert caplog.records == []
 
@@ -224,6 +224,108 @@ async def test_a_deliberate_retire_sweeps_the_users_it_held(
 def test_retiring_an_unknown_worker_is_an_error(commander: UserStickyCommander) -> None:
     with pytest.raises(KeyError, match="no such worker"):
         commander.retire("W:ghost")
+
+
+# ----------------------------------------------------------------------
+# The surface tree: the edge sets and the labels say the same thing
+# ----------------------------------------------------------------------
+
+
+def assert_tree_aligned(commander: UserStickyCommander) -> None:
+    """Every edge agrees with its label, and every label with its edge."""
+    edges = {
+        (user, session_id)
+        for user, sessions in commander.user_connections.items()
+        for session_id in sessions
+    }
+    assert edges == {(user, session_id) for session_id, user in commander.connection_user.items()}
+    page_edges = {
+        (session_id, page_id)
+        for session_id, pages in commander.connection_pages.items()
+        for page_id in pages
+    }
+    assert page_edges == {
+        (connection, page_id) for page_id, connection in commander.page_connection.items()
+    }
+    assert all(sessions for sessions in commander.user_connections.values())
+    assert all(pages for pages in commander.connection_pages.values())
+
+
+def populate_tree(commander: UserStickyCommander) -> None:
+    """Alice with two connections on ``W:w-1``, bob with one on ``W:w-2``."""
+    commander.fold_events(
+        "W:w-1",
+        [
+            event("new_user", 1, user="alice"),
+            event("new_connection", 2, user="alice", session_id="s1"),
+            event("new_page", 3, user="alice", page_id="p1", session_id="s1"),
+            event("new_connection", 4, user="alice", session_id="s2"),
+            event("new_page", 5, user="alice", page_id="p2", session_id="s2"),
+            event("new_page", 6, user="alice", page_id="p3", session_id="s2"),
+        ],
+    )
+    commander.fold_events(
+        "W:w-2",
+        [
+            event("new_user", 1, user="bob"),
+            event("new_connection", 2, user="bob", session_id="s9"),
+            event("new_page", 3, user="bob", page_id="p9", session_id="s9"),
+        ],
+    )
+
+
+def test_the_tree_is_aligned_after_a_full_lifecycle(commander: UserStickyCommander) -> None:
+    populate_tree(commander)
+    assert_tree_aligned(commander)
+
+    assert commander.connections_of("alice") == ["s1", "s2"]
+    assert commander.pages_of_connection("s2") == ["p2", "p3"]
+    assert [commander.worker_of_page(page) for page in ("p1", "p2", "p3")] == ["W:w-1"] * 3
+
+
+def test_removing_a_user_never_touches_a_sibling_user(commander: UserStickyCommander) -> None:
+    populate_tree(commander)
+
+    commander.remove_user("alice")
+
+    assert_tree_aligned(commander)
+    assert commander.user_connections == {"bob": {"s9"}}
+    assert commander.connection_pages == {"s9": {"p9"}}
+    assert commander.page_connection == {"p9": "s9"}
+
+
+def test_a_login_moves_the_edge_and_orphans_nothing(commander: UserStickyCommander) -> None:
+    populate_tree(commander)
+
+    commander.fold_events(
+        "W:w-2",
+        [event(LOGIN_OP, 4, user="alice", previous_user="bob", session_id="s9", package="")],
+    )
+
+    assert_tree_aligned(commander)
+    assert commander.connections_of("alice") == ["s1", "s2", "s9"]
+    assert "bob" not in commander.user_connections
+    # p9 came over with s9: its owner derives to alice without any page write.
+    assert commander.page_connection == {"p1": "s1", "p2": "s2", "p3": "s2", "p9": "s9"}
+    assert commander.connection_user["s9"] == "alice"
+
+
+def test_dropping_a_connection_leaves_its_sibling_intact(commander: UserStickyCommander) -> None:
+    populate_tree(commander)
+
+    commander.fold_events(
+        "W:w-1",
+        [
+            event("drop_page", 7, user="alice", page_id="p2"),
+            event("drop_page", 8, user="alice", page_id="p3"),
+            event("drop_connection", 9, user="alice", session_id="s2"),
+        ],
+    )
+
+    assert_tree_aligned(commander)
+    assert commander.user_connections["alice"] == {"s1"}
+    assert commander.connection_pages["s1"] == {"p1"}
+    assert "s2" not in commander.connection_pages
 
 
 # ----------------------------------------------------------------------
@@ -345,7 +447,7 @@ async def test_a_caretaker_kills_the_worker_that_never_answers(monkeypatch: Any)
         # A caretaker is born only for a row with a real process: give the
         # in-process worker a live one and replay its REGISTER.
         row["process"] = LiveProcess()
-        commander.member_joined(FakeMember(name))
+        await commander.member_joined(FakeMember(name))
         # The member is on the wire and reads the CALL — and answers nothing.
         commander.local_channel.on_message = swallow_frame
         await until(lambda: bool(killed), timeout=5.0)
@@ -393,7 +495,7 @@ async def test_a_member_joining_mid_stop_leaves_no_caretaker_behind(
     born: list[Any] = []
 
     async def register_late(names: list[str]) -> None:
-        pool.member_joined(FakeMember(name))
+        await pool.member_joined(FakeMember(name))
         born.append(pool.worker_roster[name]["caretaker"])
         await waited(names)
 

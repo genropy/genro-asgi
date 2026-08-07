@@ -210,12 +210,16 @@ def test_outbox_offer_wakes_the_notify_callback() -> None:
 def test_op_vocabulary_is_the_whole_reserved_set() -> None:
     assert "change_connection_user" in LIFECYCLE_OPS
     assert len(LIFECYCLE_OPS) == 9
-    assert STORE_OPS == frozenset({"store_set", "store_del"})
+    assert STORE_OPS == frozenset({"store_set", "store_del", "store_lock", "store_unlock"})
     assert POST_OPS == frozenset({"subscribeTable", "notifyDbEvents"})
     assert len(EXCHANGE_OPS) == 3
-    # Reserved names with no handler: only the active subset is routed.
     worker = UserStickyWorker("W:w1")
-    assert not worker.op_names & (STORE_OPS | POST_OPS | EXCHANGE_OPS)
+    # The exchange names are served (the addressed write), the post ones too (the
+    # dbevents species), and so are the two global-store writes. The lock pair is
+    # the exception BY DESIGN: those two names exist only as the ascending
+    # handshake ``global_store_lock`` produces, so no CALL ever addresses them.
+    assert worker.op_names >= EXCHANGE_OPS | POST_OPS | {"store_set", "store_del"}
+    assert not worker.op_names & {"store_lock", "store_unlock"}
 
 
 # ----------------------------------------------------------------------
@@ -226,12 +230,13 @@ def test_op_vocabulary_is_the_whole_reserved_set() -> None:
 def test_lifecycle_ops_mutate_the_register_and_shape_increasing_seqs() -> None:
     worker = UserStickyWorker("W:w1")
     with call_sink(worker) as events:
-        worker.new_user("sess-1", tenant="acme")
-        assert worker.user_items.get("sess-1")["tenant"] == "acme"
+        worker.new_connection("sess-1")
+        assert worker.connection_items.get("sess-1")["user"] == "sess-1"
 
-        entry = worker.change_connection_user("sess-1", user="alice")
-        # Re-keyed with its carried fields intact — and then pushed out: the login
-        # event takes the baggage and this worker keeps neither key.
+        entry = worker.change_connection_user("sess-1", user="alice", tenant="acme")
+        # The login's own fields describe the real user, so they are on the entry
+        # it creates — and then it is pushed out: the login event takes the
+        # baggage and this worker keeps neither key.
         assert entry["tenant"] == "acme"
         assert entry["register_item_id"] == "alice"
         assert "sess-1" not in worker.user_items
@@ -243,15 +248,68 @@ def test_lifecycle_ops_mutate_the_register_and_shape_increasing_seqs() -> None:
 
         assert [(e["op"], e["seq"]) for e in events] == [
             ("new_user", 1),
-            ("change_connection_user", 2),
-            ("drop_user", 3),
+            ("new_connection", 2),
+            ("change_connection_user", 3),
+            ("drop_user", 4),
         ]
         assert {e["worker"] for e in events} == {"W:w1"}
-        assert events[1]["previous_user"] == "sess-1"
-        assert events[1]["user"] == "alice"
-    assert worker.last_seq == 3
+        assert events[2]["previous_user"] == "sess-1"
+        assert events[2]["user"] == "alice"
+        assert events[2]["session_id"] == "sess-1"
+    assert worker.last_seq == 4
     # The lifecycle never touches the outbox: it rides the REPLY alone.
     assert worker.outbox.pending() == 0
+
+
+def test_the_page_ops_announce_the_whole_chain_cascade_in_order() -> None:
+    worker = UserStickyWorker("W:w1")
+    with call_sink(worker) as events:
+        worker.new_page("sess-1", "p1", session_id="sess-1")
+        worker.new_page("sess-1", "p2", session_id="sess-1")
+        assert [(e["op"], e.get("session_id"), e.get("page_id")) for e in events] == [
+            ("new_user", None, None),
+            ("new_connection", "sess-1", None),
+            ("new_page", "sess-1", "p1"),
+            ("new_page", "sess-1", "p2"),
+        ]
+        events.clear()
+        worker.drop_page("sess-1", "p1")
+        worker.drop_page("sess-1", "p2")
+        assert [(e["op"], e.get("session_id"), e.get("page_id")) for e in events] == [
+            ("drop_page", None, "p1"),
+            ("drop_page", None, "p2"),
+            ("drop_connection", "sess-1", None),
+            ("drop_user", None, None),
+        ]
+    assert len(worker.connection_items) == 0
+
+
+def test_a_second_connection_of_a_user_announces_only_its_own_birth() -> None:
+    worker = UserStickyWorker("W:w1")
+    with call_sink(worker) as events:
+        worker.new_page("alice", "p1", session_id="sess-1")
+        events.clear()
+        worker.new_page("alice", "p2", session_id="sess-2")
+        assert [(e["op"], e.get("session_id")) for e in events] == [
+            ("new_connection", "sess-2"),
+            ("new_page", "sess-2"),
+        ]
+        events.clear()
+        worker.drop_page("alice", "p1")
+        # The sibling connection keeps the user alive: no drop_user in the cascade.
+        assert [(e["op"], e.get("session_id")) for e in events] == [
+            ("drop_page", None),
+            ("drop_connection", "sess-1"),
+        ]
+    assert worker.user_items.get("alice")["connections"] == {"sess-2"}
+
+
+def test_a_connection_row_survives_the_wire_view() -> None:
+    worker = UserStickyWorker("W:w1")
+    with call_sink(worker):
+        worker.new_page("alice", "p1", session_id="sess-1")
+    wired = worker.wire_entry(worker.connection_items.get("sess-1"))
+    assert wired == {"register_item_id": "sess-1", "user": "alice"}
 
 
 def test_a_lifecycle_op_outside_a_call_is_an_explicit_error() -> None:
@@ -269,11 +327,15 @@ def test_change_connection_user_on_an_unknown_identity_is_an_explicit_error() ->
 def test_operational_ops_shape_no_event() -> None:
     worker = UserStickyWorker("W:w1")
     with call_sink(worker) as events:
-        worker.new_user("alice")
-        worker.change_connection_user("alice", user="alice")
+        worker.new_connection("sess-1")
+        worker.change_connection_user("sess-1", user="alice")
         package = events[-1]["package"]
         worker.install_package("alice", package)
-        assert [e["op"] for e in events] == ["new_user", "change_connection_user"]
+        assert [e["op"] for e in events] == [
+            "new_user",
+            "new_connection",
+            "change_connection_user",
+        ]
     assert worker.shape_event("install_package", user="alice") is None
 
 
@@ -286,8 +348,10 @@ def test_the_login_push_round_trip_preserves_the_user_entry() -> None:
     source = UserStickyWorker("W:w1")
     target = UserStickyWorker("W:w2")
     with call_sink(source) as events:
-        source.new_user("sess-1", tenant="acme", tags=["admin"])
-        entry = source.change_connection_user("sess-1", user="alice")
+        source.new_connection("sess-1")
+        entry = source.change_connection_user(
+            "sess-1", user="alice", tenant="acme", tags=["admin"]
+        )
         # The source spends and forgets: the slice lives on in the package alone.
         assert "alice" not in source.user_items
         package = events[-1]["package"]
@@ -296,7 +360,8 @@ def test_the_login_push_round_trip_preserves_the_user_entry() -> None:
     assert installed["tenant"] == "acme"
     assert installed["tags"] == ["admin"]
     assert installed["register_item_id"] == "alice"
-    assert target.user_items.get("alice") == installed
+    # An op answers with the wire view: the live store stays on the worker.
+    assert target.wire_entry(target.user_items.get("alice")) == installed
     # The package is a deepcopy: the source's own entry never reached it.
     assert installed is not entry
 
@@ -305,7 +370,7 @@ def test_add_user_refuses_a_package_addressed_to_another_identity() -> None:
     source = UserStickyWorker("W:w1")
     target = UserStickyWorker("W:w2")
     with call_sink(source) as events:
-        source.new_user("sess-1")
+        source.new_connection("sess-1")
         source.change_connection_user("sess-1", user="alice")
         package = events[-1]["package"]
     with pytest.raises(ValueError, match="addressed to"):
@@ -420,7 +485,7 @@ async def test_the_http_call_form_answers_an_explicit_error_reply(
 
 async def test_an_unknown_op_answers_an_error_reply(harness: WorkerHarness) -> None:
     with pytest.raises(ChannelCallError, match="unknown op"):
-        await harness.call("/op/store_set", {"identity": "alice"})
+        await harness.call("/op/store_lock", {"identity": "alice"})
 
 
 async def test_a_failing_handler_answers_an_error_reply_with_the_pending_events(
@@ -528,3 +593,54 @@ async def test_shutdown_stops_the_tasks_and_closes_the_channel_without_orphan(
     await asyncio.wait_for(harness.channel.wait_closed(), timeout=5.0)
     assert orphaned == []
     assert harness.worker.pool.provisioned is False
+
+
+def test_a_resident_login_links_the_connection_and_ships_nothing() -> None:
+    worker = UserStickyWorker("W:w1")
+    with call_sink(worker) as events:
+        worker.new_page("alice", "p1", session_id="sess-1")
+        page_store = worker.page_items.get("p1")["store"]
+        events.clear()
+        worker.new_connection("sess-2")
+        entry = worker.change_connection_user("sess-2", user="alice")
+        # The worker already hosts alice: the registry's join is the whole
+        # login, so the event goes up with no baggage to place.
+        assert entry["register_item_id"] == "alice"
+        assert [e["op"] for e in events] == [
+            "new_user",
+            "new_connection",
+            "change_connection_user",
+        ]
+        assert events[-1]["session_id"] == "sess-2"
+        assert events[-1]["previous_user"] == "sess-2"
+        assert "package" not in events[-1]
+    # Nothing was evicted: the resident entry, its first connection and its page
+    # are the same live objects they were before the second one logged in.
+    assert worker.user_items.get("alice")["connections"] == {"sess-1", "sess-2"}
+    assert worker.page_items.get("p1")["store"] is page_store
+    assert worker.connection_items.get("sess-1")["pages"] == {"p1"}
+    # The orphaned guest died with its last connection.
+    assert "sess-2" not in worker.user_items
+
+
+def test_a_self_login_leaves_the_user_whole() -> None:
+    # previous_user == user: the link branch re-adds the connection to the very
+    # set it was discarded from, so the emptiness check that drops the previous
+    # user must run AFTER the re-add — this test pins that order.
+    worker = UserStickyWorker("W:w1")
+    with call_sink(worker) as events:
+        worker.new_page("alice", "p1", session_id="sess-1")
+        entry = worker.user_items.get("alice")
+        user_store, connections = entry["store"], entry["connections"]
+        events.clear()
+        worker.change_connection_user("sess-1", user="alice")
+        assert [e["op"] for e in events] == ["change_connection_user"]
+        assert events[-1]["previous_user"] == "alice"
+        assert "package" not in events[-1]
+    resident = worker.user_items.get("alice")
+    assert resident is entry
+    assert resident["store"] is user_store
+    assert resident["connections"] is connections
+    assert resident["connections"] == {"sess-1"}
+    assert worker.connection_items.get("sess-1")["pages"] == {"p1"}
+    assert worker.page_items.get("p1") is not None

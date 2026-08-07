@@ -22,7 +22,7 @@ sits.
 
 **The surface registries are plain dicts, deliberately not the Register
 machine of the worker** (the validated lesson: keys and locations up here,
-contents down there). There are exactly two:
+contents down there). There are exactly six, in four groups:
 
 - ``worker_roster`` — worker name → the ROW that holds everything that is that
   worker's:
@@ -38,8 +38,67 @@ contents down there). There are exactly two:
   worker's ``group``, read from the row.
 - ``user_worker_map`` — user identity → the name of the worker holding it, or
   ``None`` while a placement for that user is in flight. It is the ONLY
-  user-keyed structure, and both it and the rows mutate through the single pair
-  ``assign_user`` / ``remove_user``.
+  structure that says WHERE a user is, and both it and the rows mutate through
+  the single pair ``assign_user`` / ``remove_user``.
+- ``connection_user`` / ``user_connections`` — the middle level of the ownership
+  TREE users → connections, held as the child→parent label plus the parent→child
+  edge set.
+- ``connection_pages`` / ``page_connection`` — the lower level, the same edge
+  both ways: which pages each connection opened, and which connection each page
+  belongs to. ``page_connection`` is fed exclusively by the lifecycle fold — the
+  ``new_page`` and ``drop_page`` events the REPLYs already carry, plus the
+  ``drop_user`` cascade — so a live page costs no traffic of its own.
+
+The four tree structures are aligned BY CONSTRUCTION: nothing outside
+``register_connection`` / ``drop_connection`` / ``register_page`` /
+``drop_page`` / ``relabel_user`` / ``remove_user`` ever touches an edge, and
+each of those updates every side it concerns in one step. Every read is a
+lookup — the demolition of a user is linear in that user's own children, never
+a scan of foreign entries.
+
+**Nothing above the written edge is stored: it is DERIVED by walking up the
+chain.** A page's user is its connection's user, and a page's worker is its
+user's worker — so ``worker_of_page(page_id)`` climbs
+``page_connection`` → ``connection_user`` → ``user_worker_map`` and answers
+``None`` at any missing hop: a page the surface does not know, a user already
+swept, a placement still in flight. That is why a move needs nothing up here
+beyond ``assign_user``: pages live where their user lives, with no per-page
+write to keep in step, so no duplicate exists that could diverge.
+
+**The third tier of the exchange is a routing job, not a reading one.** A
+datachange whose target is not on the worker that produced it ascends here as an
+EVENT, and ``route_exchange`` resolves its address — a page by walking its
+chain, a user through ``user_worker_map``, or a whole set of pages through the
+daemon's filter grammar (``'*'``, or ``'field:value'`` matched on the fields the
+walk derives). What it resolves is
+buffered per destination worker and flushed as ONE ``/datachange_in`` EVENT per
+worker, so a broadcast over N pages of one worker costs one send. The change
+itself travels TYTX-encoded and is never opened up here: the address is the whole
+of what the commander reads, and an address it cannot resolve is dropped with a
+debug log — there is no retry queue.
+
+**dbevents fan out on their own pipe, and the origin is excluded.** A
+``subscribeTable`` ascending from a worker folds into ``page_subscriptions`` — a
+``SubscriptionIndex`` twin of the one the worker keeps for its own pages, which
+exists so this surface can reach the subscribers sitting ANYWHERE else. A
+``notifyDbEvents`` carries deposits already shaped by the origin worker, which
+already served its own subscribers: every page held by the message's ``worker``
+is skipped here, and what is left is buffered per destination and flushed as ONE
+``/dbevents_in`` EVENT per worker — a distinct pipe from the exchange's, because
+a deposit is not a change. A commit on a table nobody subscribed costs no send at
+all; a page whose placement is in flight simply misses it.
+
+**The global store's MASTER lives here, and this is its only writer.** The
+``store_set``/``store_del`` messages ascend and are applied to
+``global_master``, whose capture-all collector is drained and shipped as ONE
+``/global/changes`` EVENT to every active worker — the author's own included, so
+one push updates every replica the same way. A worker's replica is seeded inside
+``member_joined`` itself (``/global/snapshot``), before it can receive any
+incremental change. ``global_lock`` is the read-modify-write grant: FIFO, and it
+hands the master's content over with the grant so a holder never mounts a stale
+copy. The holder's changes reach the master ONLY at its release, which makes the
+whole lock all-or-nothing — a holder that dies has its lock released by the
+channel EOF and has written nothing.
 
 **Supervision is the legacy ProcessPool's, over the channel.** A worker is
 ``sys.executable -m genro_asgi.spa.worker_entry`` with its whole configuration
@@ -77,25 +136,43 @@ session id while anonymous; the commander never reads a cookie (that is
 ``SpaApplication``'s job in 2b). It resolves ``user_worker_map`` and, on a miss,
 sends the caller to the **reception**: the first active worker of the pool, the
 guests' worker. ``guest_occupancy_limit`` is how many users the reception may
-hold before ``check_capacity`` widens the pool.
+hold before ``check_capacity`` widens the pool. ``forward_envelope`` is the one
+implementation behind it: it answers with the result AND, for a page-addressed
+CALL, the page's pull delivery under ``DELIVERY_KEYS``, carried through
+untouched — the commander is the transport of those changes, never their reader.
 
 **Placement happens at login, and the login waits for it.** The worker pushes:
 its ``change_connection_user`` event carries the user's whole slice as a
-``package`` and the source has already forgotten it. Folding that event writes
-``None`` under the new key — the flag "this user's placement is in flight" —
-and the caller's own coroutine then runs ``place_login``: ``decide_worker``
-picks the least-loaded active worker, ``install_package`` plants the slice
-there, the map is pointed at it, the flag falls and only THEN is the login
-result released. The room is ready before the guest is told its number. A
-``forward_call`` that finds the flag up parks on ``placement_done`` — the parked
-coroutines are the queue, there is no structure — and re-reads the map on every
-wakeup, so a flag re-raised by a chained login simply parks it again. No clock
-bounds any of it: the install CALL waits, and the only terminator is the
-destination's death, which fails that CALL. An install that fails unmaps the
-user: the source spent its copy, so the user exists nowhere and the surface
-says so. Every login has a caller
-coroutine holding it — a login is caused by a CALL and comes back on that
-CALL's REPLY — so ``place_login`` is never detached.
+``package`` and the source has already forgotten it — UNLESS that worker is
+already the user's home, and then it links the arriving connection to the
+resident entry and sends the login with NO ``package`` at all. That packageless
+event is the resident-link announcement: nothing travelled, nothing was flagged,
+and ``place_logins`` skips it. The skip leans on one invariant: a user a worker
+holds ALWAYS has a key in ``user_worker_map`` — ``install_package``'s caller
+assigns the map in the same breath, and the login that creates a user on a
+worker ships it out inside the same locked mutation — so the fold of a
+packageless login never finds an unplaced user to flag. Everything below is the
+road of a login that did push. The caller's own
+coroutine runs ``place_login``, and presence comes BEFORE occupancy: a user
+somebody already holds goes back to its own worker — sticky wins, no
+``decide_worker`` at all, and ``add_user`` there JOINS the arriving connection
+onto the resident half (that is the CROSS-worker join: the user's home is not
+the worker the connection was sitting on). Only a user nobody holds is a free
+choice; that one the
+fold flags with ``None`` under its key — "this user's placement is in flight" —
+and ``decide_worker`` picks the least-loaded active worker for it. Either way
+``install_package`` plants the slice, the map is pointed at the destination, the
+flag falls and only THEN is the login result released. The room is ready before
+the guest is told its number. A ``forward_call`` that finds the flag up parks on
+``placement_done`` — the parked coroutines are the queue, there is no structure
+— and re-reads the map on every wakeup, so a flag re-raised by a chained login
+simply parks it again. No clock bounds any of it: the install CALL waits, and
+the only terminator is the destination's death, which fails that CALL. An
+install that fails unmaps a user that was UNPLACED: the source spent its copy,
+so that user exists nowhere and the surface says so — but a resident keeps its
+placement, because the connection that failed to arrive was never its only one.
+Every login has a caller coroutine holding it — a login is caused by a CALL and
+comes back on that CALL's REPLY — so ``place_login`` is never detached.
 
 **The single role is configuration, not a subclass.** ``local_worker=True``
 (with ``workers=0``) makes the commander build ONE worker in this very process
@@ -127,10 +204,30 @@ import uuid
 from collections import deque
 from typing import Any
 
+from genro_tytx import from_tytx, to_tytx
+
 from ..channel.frame import Frame
 from ..channel.hub import ChannelCallError, ChannelHub, ChannelMember
 from ..channel.local import LocalChannel
-from .worker import LIFECYCLE_OPS, OP_PATH_PREFIX, UserStickyWorker
+from .global_store import (
+    GLOBAL_CHANGES_PATH,
+    GLOBAL_GRANT_PATH,
+    GLOBAL_SNAPSHOT_PATH,
+    CapturingGlobalStore,
+    GlobalStoreLock,
+)
+from .subscription_index import SubscriptionIndex
+from .worker import (
+    DATACHANGE_IN_PATH,
+    DBEVENTS_IN_PATH,
+    DELIVERY_KEYS,
+    EXCHANGE_OPS,
+    LIFECYCLE_OPS,
+    OP_PATH_PREFIX,
+    POST_OPS,
+    STORE_OPS,
+    UserStickyWorker,
+)
 
 __all__ = [
     "DEFAULT_GROUP",
@@ -245,6 +342,22 @@ class UserStickyCommander:
         # the map is the flag "this user's placement is in flight".
         self.worker_roster: dict[str, dict[str, Any]] = {}
         self.user_worker_map: dict[str, str | None] = {}
+        # The middle link of the ownership chain: which user each connection is,
+        # and the same edge read downward — the two sides move together.
+        self.connection_user: dict[str, str] = {}
+        self.user_connections: dict[str, set[str]] = {}
+        # The lower edge of the tree, both ways: which pages each connection
+        # opened, and which connection each page belongs to. Nothing else about
+        # a page is written — its user and its worker are derived by walking up.
+        self.connection_pages: dict[str, set[str]] = {}
+        self.page_connection: dict[str, str] = {}
+        # The cross-worker dbevents surface, fed by the ascending subscriptions.
+        # No lock: every mutation of it is a sync method on this loop.
+        self.page_subscriptions = SubscriptionIndex()
+        # The global store: the MASTER lives here and only this object writes it,
+        # so its captures are the whole of what the replicas ever see.
+        self.global_master = CapturingGlobalStore()
+        self.global_lock = GlobalStoreLock()
         # Fired-and-rearmed at the end of every placement: the coroutines parked
         # on it while a flag is up ARE the queue of waiters.
         self.placement_done = asyncio.Event()
@@ -328,7 +441,9 @@ class UserStickyCommander:
         for name in list(self.worker_roster):
             self.cancel_caretaker(name)
 
-    async def wait_workers_ready(self, count: int | None = None, timeout: float | None = None) -> None:
+    async def wait_workers_ready(
+        self, count: int | None = None, timeout: float | None = None
+    ) -> None:
         """Block until ``count`` workers have presented themselves (readiness gate)."""
         expected = self.target if count is None else count
         limit = self.READY_TIMEOUT if timeout is None else timeout
@@ -546,11 +661,14 @@ class UserStickyCommander:
     # Channel callbacks
     # ------------------------------------------------------------------
 
-    def member_joined(self, member: ChannelMember) -> None:
+    async def member_joined(self, member: ChannelMember) -> None:
         """REGISTER seen: the worker is ready to be routed to, and to be watched.
 
         Its caretaker is born here — only for a row with a real process: an
-        in-process worker cannot outlive the commander that probes it.
+        in-process worker cannot outlive the commander that probes it. Async
+        because the newcomer's replica is seeded HERE, inside the registration
+        itself, which is the only place where "the snapshot before any
+        incremental change" is a fact rather than a hope.
         """
         entry = self.worker_roster.get(member.name)
         if entry is None:
@@ -558,6 +676,7 @@ class UserStickyCommander:
             return
         entry["status"] = "active"
         entry["pid"] = member.pid
+        await self.bootstrap_replica(member.name)
         if entry["process"] is not None:
             entry["caretaker"] = asyncio.create_task(self.caretaker(member.name))
         self.logger.info("Worker %s active (pid %s)", member.name, member.pid)
@@ -577,6 +696,12 @@ class UserStickyCommander:
         deliberate = entry["status"] == "draining"
         entry["status"] = "dead"
         self.cancel_caretaker(member.name)
+        if self.global_lock.held_by(member.name):
+            self.global_lock.release()
+            self.logger.info(
+                "Worker %s is gone holding the global-store lock: released, master untouched",
+                member.name,
+            )
         if deliberate:
             swept = self.sweep_worker(member.name)
             self.logger.info("Worker %s retired: swept %s users", member.name, len(swept))
@@ -589,12 +714,260 @@ class UserStickyCommander:
         self._wakeup.set()
 
     async def handle_event(self, member: ChannelMember, frame: Frame) -> None:
-        """Inbound EVENTs have no consumer in 2a.
+        """The ascending rail: an exchange message a worker could not deliver itself.
 
-        The lifecycle rides the REPLY of the CALL that caused it and the
-        occupancy is answered to a probe: nothing pushes EVENTs upward any more.
+        The lifecycle never arrives here — it rides the REPLY of the CALL that
+        caused it, and the occupancy is answered to a probe. What does arrive is
+        the third tier: a datachange whose target is not on the worker that
+        produced it, for this surface to resolve.
         """
+        op = self.op_of(frame.path)
+        if op in EXCHANGE_OPS:
+            await self.route_exchange(frame.data or {})
+            return
+        if op in POST_OPS:
+            await self.apply_post(frame.data or {})
+            return
+        if op in STORE_OPS:
+            await self.apply_store(member.name, frame.data or {})
+            return
         self.logger.debug("No consumer for EVENT %s from %s", frame.path, member.name)
+
+    def op_of(self, path: str) -> str:
+        """The op name a channel path carries."""
+        return path[len(OP_PATH_PREFIX) :] if path.startswith(OP_PATH_PREFIX) else path
+
+    # ------------------------------------------------------------------
+    # The exchange switch, third tier: resolve, buffer, one send per worker
+    # ------------------------------------------------------------------
+
+    async def route_exchange(self, message: dict[str, Any]) -> None:
+        """Resolve one ascending message and ship it to the workers it reaches.
+
+        The commander is the router and nothing more: it reads the address off
+        the header — ``kind``, ``target``, ``filters`` — and never opens the
+        TYTX parcel the message carries. A broadcast fans out into one item per
+        matching page, and items sharing a destination worker are batched, so a
+        broadcast over N pages of one worker costs ONE send.
+        """
+        buffer: dict[str, list[dict[str, Any]]] = {}
+        for worker, item in self.exchange_destinations(message):
+            buffer.setdefault(worker, []).append(item)
+        await self.flush_exchange(buffer)
+
+    def exchange_destinations(self, message: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+        """Every ``(worker, message)`` pair one ascending message resolves to.
+
+        An address the surface cannot resolve — an unknown page, a user whose
+        placement is in flight, a target already swept — is dropped with a debug
+        log: a change is a signal and there is no retry queue (the legacy rule,
+        verbatim).
+        """
+        if message["filters"] is not None:
+            return [
+                (worker, {**message, "target": page_id, "filters": None})
+                for page_id, worker in self.matching_pages(message["filters"])
+                if worker is not None
+            ]
+        target = message["target"]
+        if message["kind"] == "user_store":
+            worker = self.user_worker_map.get(target)
+        else:
+            worker = self.worker_of_page(target)
+        if worker is None:
+            self.logger.debug(
+                "exchange dropped: no routable target %r (%s)", target, message["kind"]
+            )
+            return []
+        return [(worker, message)]
+
+    def matching_pages(self, filters: str) -> list[tuple[str, str | None]]:
+        """The ``(page_id, worker)`` pairs a filter addresses: every page, or one
+        field's exact value.
+
+        ``'*'`` (or nothing) is every page. Anything else is ONE ``field:value``
+        pair, compared for equality against the three fields the walk up the
+        chain derives — ``connection`` is the written edge, ``user`` its owner,
+        ``worker`` that user's placement: all three links of one chain, so the
+        surface holds no second independent field to conjoin. A field it does not
+        carry matches nothing.
+
+        The daemon's multi-pair grammar and its prefix-anchored regex belong to
+        ``pages()``, the query over the rich worker rows (owner's decision
+        2026-08-06: that is a phase-B fan-out, worker → commander → every
+        worker). Neither is emulated here, and the regex deliberately is not:
+        prefix-anchored, ``user:mario`` would deliver a user's change to every
+        user whose name it prefixes. An expression this surface cannot answer
+        is an error, not a silently empty broadcast.
+        """
+        if not filters or filters == "*":
+            return [(page_id, self.worker_of_page(page_id)) for page_id in self.page_connection]
+        if " AND " in filters:
+            raise ValueError(
+                f"filter {filters!r}: the page surface answers one field:value pair — "
+                "the multi-pair grammar lives in pages()"
+            )
+        name, _, value = filters.partition(":")
+        matched = []
+        for page_id, connection in self.page_connection.items():
+            user = self.connection_user.get(connection)
+            worker = None if user is None else self.user_worker_map.get(user)
+            derived = {"worker": worker, "user": user, "connection": connection}
+            if derived.get(name) == value:
+                matched.append((page_id, worker))
+        return matched
+
+    async def flush_exchange(self, buffer: dict[str, list[dict[str, Any]]]) -> None:
+        """Ship the buffer: ONE ``/datachange_in`` EVENT per destination worker."""
+        for worker, batch in buffer.items():
+            try:
+                await self.hub.post(worker, DATACHANGE_IN_PATH, batch)
+            except (LookupError, ConnectionError) as exc:
+                self.logger.debug("datachange_in missed %s: %s", worker, exc)
+
+    # ------------------------------------------------------------------
+    # The dbevents surface: subscriptions fold in, batches fan out to the
+    # OTHER workers. Its own pipe, never the exchange one.
+    # ------------------------------------------------------------------
+
+    async def apply_post(self, message: dict[str, Any]) -> None:
+        """Fold one ascending POST: a subscription, or a commit to fan out."""
+        if message["op"] == "subscribeTable":
+            self.fold_subscription(message)
+            return
+        await self.fan_out_dbevents(message)
+
+    def fold_subscription(self, message: dict[str, Any]) -> None:
+        """Mirror a worker's local subscription on the cross-worker surface.
+
+        The worker keeps its own index for the pages it holds; this one exists so
+        the fan-out can reach the subscribers sitting anywhere else.
+        """
+        page_id, table = message["page_id"], message["table"]
+        if message.get("subscribe", True):
+            self.page_subscriptions.subscribe(page_id, table)
+        else:
+            self.page_subscriptions.unsubscribe(page_id, table)
+
+    async def fan_out_dbevents(self, message: dict[str, Any]) -> None:
+        """Deliver a commit's deposits to the subscribers of the OTHER workers.
+
+        Origin exclusion (§2.4, verbatim): the worker that produced the commit
+        already served its own pages, so every page it holds is skipped here —
+        the ``worker`` stamp on the message is what says which. A page whose
+        placement is in flight is skipped too: a dbevent is a signal and there is
+        no retry queue. Deposits sharing a destination worker are batched, so a
+        commit reaching N pages of one worker costs ONE send.
+        """
+        origin = message.get("worker")
+        buffer: dict[str, list[dict[str, Any]]] = {}
+        for deposit in message.get("deposits") or []:
+            for page_id in self.page_subscriptions.pages_for(deposit["table"]):
+                worker = self.worker_of_page(page_id)
+                if worker is None or worker == origin:
+                    continue
+                buffer.setdefault(worker, []).append({"page_id": page_id, "deposit": deposit})
+        await self.flush_dbevents(buffer)
+
+    async def flush_dbevents(self, buffer: dict[str, list[dict[str, Any]]]) -> None:
+        """Ship the buffer: ONE ``/dbevents_in`` EVENT per destination worker."""
+        for worker, batch in buffer.items():
+            try:
+                await self.hub.post(worker, DBEVENTS_IN_PATH, batch)
+            except (LookupError, ConnectionError) as exc:
+                self.logger.debug("dbevents_in missed %s: %s", worker, exc)
+
+    # ------------------------------------------------------------------
+    # The global store: the master is here, and it is the only writer. Every
+    # replica is a consequence of what this object captured.
+    # ------------------------------------------------------------------
+
+    async def apply_store(self, worker: str, message: dict[str, Any]) -> None:
+        """Fold one ascending global-store message: a write, or a lock's two halves."""
+        op = message["op"]
+        if op == "store_lock":
+            await self.grant_global_lock(worker, message["request_id"])
+        elif op == "store_unlock":
+            await self.release_global_lock(worker, message)
+        elif op == "store_del":
+            self.global_master.delete(message["path"])
+            await self.propagate_global()
+        else:
+            self.global_master.set(message["path"], message["value"])
+            await self.propagate_global()
+
+    async def bootstrap_replica(self, worker: str) -> None:
+        """Seed a fresh worker's replica with the master, before any change of its own.
+
+        The worker is already ``active`` when the snapshot is captured, so a write
+        landing while this ship is in flight is posted AFTER it and applies on
+        top: the replica is born aligned and stays so. Nothing between the two
+        statements awaits, which is what makes that ordering a fact.
+        """
+        await self.post_global(worker, GLOBAL_SNAPSHOT_PATH, self.global_master.snapshot())
+
+    async def propagate_global(self) -> None:
+        """Ship what the master captured to every replica: ONE EVENT per worker.
+
+        Every active worker, the author's own included — its replica is written
+        by this very push like all the others, which is exactly why a lock's
+        working copy can simply be thrown away at release.
+        """
+        changes = self.global_master.drain()
+        if not changes:
+            return
+        encoded = to_tytx(changes, "json")
+        for worker in self.active_workers:
+            await self.post_global(worker, GLOBAL_CHANGES_PATH, encoded)
+
+    async def post_global(self, worker: str, path: str, data: Any) -> None:
+        """One global-store EVENT toward one worker; one already gone is skipped."""
+        try:
+            await self.hub.post(worker, path, data)
+        except (LookupError, ConnectionError) as exc:
+            self.logger.debug("%s missed %s: %s", path, worker, exc)
+
+    async def grant_global_lock(self, worker: str, request_id: str) -> None:
+        """Park on the FIFO lock, then hand the master itself to the winner.
+
+        The grant CARRIES the store, so a holder never has to ask whether its
+        replica was current: what it mounts is the master at grant time. A grant
+        that cannot be delivered means the winner's channel has ALREADY ended —
+        the EOF that releases a holder fired while this waiter was still parked,
+        so no further ``channel_lost`` will ever fire for it. Same death rule,
+        evaluated now: release on the spot, master untouched, next waiter served.
+        """
+        await self.global_lock.acquire(worker, request_id)
+        try:
+            await self.hub.post(
+                worker,
+                GLOBAL_GRANT_PATH,
+                {"request_id": request_id, "store": self.global_master.snapshot()},
+            )
+        except (LookupError, ConnectionError) as exc:
+            self.logger.info(
+                "Global-store grant undeliverable to %s (%s): released, master untouched",
+                worker,
+                exc,
+            )
+            self.global_lock.release()
+
+    async def release_global_lock(self, worker: str, message: dict[str, Any]) -> None:
+        """Apply a holder's changes to the master, release, propagate to everyone.
+
+        The changes land here and nowhere else, so the protocol is all-or-nothing
+        by construction. A release for a grant no longer in force applies NOTHING:
+        the holder's channel died while the release was on the wire, and the death
+        already gave the lock away. The master is written BEFORE the release, so
+        the next waiter's grant carries these changes.
+        """
+        request_id = message["request_id"]
+        if not self.global_lock.holds(request_id):
+            self.logger.debug("global unlock of a grant no longer in force from %s", worker)
+            return
+        self.global_master.apply_changes(from_tytx(message["changes"], "json"))
+        self.global_lock.release()
+        await self.propagate_global()
 
     async def unwrap_reply(self, worker: str, path: str, payload: dict[str, Any]) -> Any:
         """The REPLY drain: fold the events the payload carries, then read it.
@@ -607,7 +980,11 @@ class UserStickyCommander:
         """
         await self.place_logins(worker, payload.get("events") or [])
         if "error" in payload:
-            raise ChannelCallError(worker, path, payload["error"])
+            # The whole REPLY travels on the exception: an errored page CALL
+            # still carried its drain, and the op outcome does not gate the
+            # delivery (Phase 2 rule) — losing it here would empty collectors
+            # the worker already drained.
+            raise ChannelCallError(worker, path, payload["error"], payload=payload)
         return payload.get("result")
 
     # ------------------------------------------------------------------
@@ -637,8 +1014,16 @@ class UserStickyCommander:
             self.register_user(user, worker)
         elif op == "drop_user":
             self.drop_user(user, worker)
+        elif op == "new_connection":
+            self.register_connection(event["session_id"], user)
+        elif op == "drop_connection":
+            self.drop_connection(event["session_id"])
         elif op == LOGIN_OP:
-            self.relabel_user(user, event.get("previous_user"))
+            self.relabel_user(user, event.get("previous_user"), event["session_id"])
+        elif op == "new_page":
+            self.register_page(event.get("page_id"), user, worker, event["session_id"])
+        elif op == "drop_page":
+            self.drop_page(event.get("page_id"), worker)
         elif op in LIFECYCLE_OPS:
             self.logger.debug("fold: op %r has no surface consumer yet", op)
         else:
@@ -657,19 +1042,148 @@ class UserStickyCommander:
             return
         self.assign_user(user, worker)
 
-    def relabel_user(self, user: str | None, previous_user: str | None) -> None:
-        """The login: the anonymous key goes, and the new one is born flagged.
+    def register_connection(self, session_id: str, user: str | None) -> None:
+        """Map a connection to the user it belongs to — the middle link, folded."""
+        if user is None:
+            return
+        self.connection_user[session_id] = user
+        self.user_connections.setdefault(user, set()).add(session_id)
 
-        The worker announcing this has already pushed the user out of its own
-        register, so it is nobody's holder any more: the fold writes ``None``
+    def drop_connection(self, session_id: str) -> None:
+        """Forget one connection: its pages announced their own drop before it.
+
+        The cascade climbs on the worker and is announced in that order, so by
+        the time this arrives the pages of that connection are already gone.
+        The user stays: a sibling connection of it is being served all along.
+        """
+        owner = self.connection_user.pop(session_id, None)
+        if owner is not None:
+            self.discard_connection_edge(owner, session_id)
+        self.connection_pages.pop(session_id, None)
+
+    def discard_connection_edge(self, user: str, session_id: str) -> None:
+        """Take one connection off its user's edge set, dropping the set when empty.
+
+        Called only for an owner just read off ``connection_user``, so the edge
+        set exists by the alignment invariant — a missing one is a broken
+        surface and raises (``KeyError``), never passes silently.
+        """
+        siblings = self.user_connections[user]
+        siblings.discard(session_id)
+        if not siblings:
+            del self.user_connections[user]
+
+    def connections_of(self, user: str) -> list[str]:
+        """Every connection of a user, sorted — the edge set read downward."""
+        return sorted(self.user_connections.get(user, set()))
+
+    def relabel_user(
+        self, user: str | None, previous_user: str | None, session_id: str
+    ) -> None:
+        """The login: the CONNECTION changes owner, and no page edge ever moves.
+
+        One edge moves, and one only — the surface transcribes what the worker
+        did to its own registers: the connection leaves its guest entry and joins
+        the real user's. The pages of that connection follow it without being
+        touched, because their user is derived from it and never written. The old
+        guest leaves the surface once it has no connection left, and by then it
+        owns no page either, BY CONSTRUCTION.
+
+        The worker announcing this has already pushed the slice out of its own
+        register, so for a user nobody has ever placed the fold writes ``None``
         (placement in flight) and the destination mapping arrives later, from
         ``place_login`` alone.
+
+        A user already placed somewhere is NOT flagged: it is not in flight, it
+        is at home. Its other connections are being served there this whole
+        time, and the arriving one will join them — blanking the map would park
+        every call to a user that never left.
         """
         if user is None:
             return
-        if previous_user is not None and previous_user != user:
+        former_owner = self.connection_user.get(session_id)
+        if former_owner is not None and former_owner != user:
+            self.discard_connection_edge(former_owner, session_id)
+        self.connection_user[session_id] = user
+        self.user_connections.setdefault(user, set()).add(session_id)
+        if (
+            previous_user is not None
+            and previous_user != user
+            and not self.connections_of(previous_user)
+        ):
             self.remove_user(previous_user)
-        self.assign_user(user, None)
+        if user not in self.user_worker_map:
+            self.assign_user(user, None)
+
+    def register_page(
+        self, page_id: str | None, user: str | None, worker: str, connection: str
+    ) -> None:
+        """Hang a page under its connection — the owner check applies.
+
+        The user rule, verbatim: a claim from a worker that no longer holds the
+        page never re-points it. Where "holds" is now DERIVED — the announcing
+        worker is compared against the walk up the known page's chain — and a page
+        only ever changes worker with its user, through ``assign_user``.
+
+        ``user`` is not stored: it is the event's word for who owns
+        ``connection``, and a connection this surface never heard of is
+        self-healed with it. The announcing worker owns both, in the same REPLY
+        cascade, so the middle link cannot be missing for any other reason.
+        """
+        if page_id is None or user is None:
+            return
+        previous = self.page_connection.get(page_id)
+        if previous is not None and self.worker_of_page(page_id) != worker:
+            self.logger.debug("fold: page %s already placed, ignoring %s's claim", page_id, worker)
+            return
+        if previous is not None and previous != connection:
+            self.discard_page_edge(previous, page_id)
+        if connection not in self.connection_user:
+            self.register_connection(connection, user)
+        self.page_connection[page_id] = connection
+        self.connection_pages.setdefault(connection, set()).add(page_id)
+
+    def discard_page_edge(self, session_id: str, page_id: str) -> None:
+        """Take one page off its connection's edge set, dropping the set when empty."""
+        siblings = self.connection_pages.get(session_id)
+        if siblings is None:
+            return
+        siblings.discard(page_id)
+        if not siblings:
+            del self.connection_pages[session_id]
+
+    def drop_page(self, page_id: str | None, worker: str) -> None:
+        """Unhang a page, unless it has meanwhile been placed somewhere else.
+
+        Its subscriptions go with it: a page that exists nowhere subscribes to
+        nothing, and a stale entry would make every commit on that table resolve
+        a destination for a page nobody holds.
+        """
+        if page_id is None or self.worker_of_page(page_id) != worker:
+            return
+        connection = self.page_connection.pop(page_id)
+        self.discard_page_edge(connection, page_id)
+        self.page_subscriptions.drop_page(page_id)
+
+    def worker_of_page(self, page_id: str) -> str | None:
+        """The worker holding a page, DERIVED: page → connection → user → worker.
+
+        ``None`` at any missing hop, which is the whole of the old semantics — a
+        page the surface does not know, a connection or user already swept, a
+        placement still in flight — now holding by derivation instead of by a
+        written flag somebody has to keep in step.
+        """
+        connection = self.page_connection.get(page_id)
+        if connection is None:
+            return None
+        user = self.connection_user.get(connection)
+        if user is None:
+            return None
+        return self.user_worker_map.get(user)
+
+    def pages_of_connection(self, session_id: str) -> list[str]:
+        """Every page opened by one connection, sorted — the edge set read downward."""
+        return sorted(self.connection_pages.get(session_id, set()))
 
     def drop_user(self, user: str | None, worker: str) -> None:
         """Unmap a user, unless it has meanwhile been assigned somewhere else."""
@@ -686,6 +1200,10 @@ class UserStickyCommander:
 
         ``worker=None`` raises the placement flag: the user is in the map and on
         no row at all, which is the truth while its slice is on the wire.
+
+        The user's connections and pages travel with it and NOTHING is written
+        for them: they answer the new worker the moment this map entry changes,
+        because that is where their answer is derived from.
         """
         previous = self.user_worker_map.get(user)
         carried = None
@@ -701,11 +1219,19 @@ class UserStickyCommander:
         """Drop a user from the surface: its half-row and its map entry, together.
 
         The other mutator. A user whose placement is in flight (``None`` in the
-        map) has no half-row anywhere, so only the flag goes.
+        map) has no half-row anywhere, so only the flag goes. The demolition
+        follows the chain downward — every connection of the user, every page of
+        each connection, and the connection entries after them: a page without
+        its user exists nowhere, and neither does a connection.
         """
         worker = self.user_worker_map.pop(user, None)
         if worker is not None:
             del self.worker_roster[worker]["users"][user]
+        for session_id in sorted(self.user_connections.pop(user, set())):
+            for page_id in sorted(self.connection_pages.pop(session_id, set())):
+                del self.page_connection[page_id]
+                self.page_subscriptions.drop_page(page_id)
+            del self.connection_user[session_id]
 
     def sweep_worker(self, worker: str) -> list[str]:
         """Forget every user of a dead worker: what they pointed at is gone."""
@@ -742,15 +1268,38 @@ class UserStickyCommander:
         finally points at; the whole call is one entry under that user's
         ``pending``.
         """
+        envelope = await self.forward_envelope(identity, path, kwargs, timeout)
+        return envelope["result"]
+
+    async def forward_envelope(
+        self,
+        identity: str,
+        path: str,
+        kwargs: dict[str, Any] | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """Forward the call and return its whole envelope: result plus delivery.
+
+        The one implementation of the forward — ``forward_call`` reads the result
+        out of it. The pull delivery a page-addressed CALL brought back travels
+        under ``DELIVERY_KEYS``, passed through UNTOUCHED to the outer response:
+        the commander does not read the changes, it carries them. A CALL that
+        addressed no page brings neither key, so neither appears here. A CALL
+        that FAILED still carried its drain: the raised ``ChannelCallError``
+        holds the whole REPLY as ``payload``, delivery keys included.
+        """
         worker = await self.resolve_worker(identity)
         request_id = self.open_request(worker, identity, path)
         try:
             payload = await self.hub.call(
                 worker, path, {"identity": identity, "kwargs": kwargs or {}}, timeout=timeout
             )
-            return await self.unwrap_reply(worker, path, payload)
+            result = await self.unwrap_reply(worker, path, payload)
         finally:
             self.close_request(worker, identity, request_id)
+        envelope: dict[str, Any] = {"result": result}
+        envelope.update({key: payload[key] for key in DELIVERY_KEYS if key in payload})
+        return envelope
 
     async def resolve_worker(self, identity: str) -> str:
         """The worker to route ``identity`` to, once no placement of it is in flight."""
@@ -778,11 +1327,14 @@ class UserStickyCommander:
         return reception
 
     def decide_worker(self) -> str:
-        """Where a just-logged user belongs: the least-loaded active worker.
+        """Where an UNPLACED just-logged user belongs: the least-loaded worker.
 
-        Head count is the 2a reading of load — the evaluator that measures the
-        real thing is out of scope. The capacity check runs AFTER the pick, so a
-        login never lands on the worker its own arrival spawned.
+        Occupancy is the second step of the placement and it only ever sees the
+        users nobody holds — ``place_login`` answers the presence question
+        before asking this one. Head count is the 2a reading of load — the
+        evaluator that measures the real thing is out of scope. The capacity
+        check runs AFTER the pick, so a login never lands on the worker its own
+        arrival spawned.
         """
         candidates = self.active_workers
         if not candidates:
@@ -849,22 +1401,38 @@ class UserStickyCommander:
         here, in the caller's own coroutine — the only placement path there is,
         because a login exists only as the effect of a CALL. A login result is
         released once its user has a room.
+
+        A login with NO ``package`` is the resident-link announcement: the
+        worker that sent it already hosts the user, so it linked the arriving
+        connection and shipped nothing. There is no room to make — the user is
+        in the one it never left, and the fold raised no flag for it — so the
+        event is complete here and never reaches ``place_login``.
         """
         for event in self.fold_events(worker, events):
+            if "package" not in event:
+                continue
             await self.place_login(event["user"], event["package"])
 
     async def place_login(self, user: str, package: str) -> None:
         """Give a just-logged user its room: decide, install, map, drop the flag.
 
-        The user is already flagged in the map (the fold did that) and its slice
+        Presence comes BEFORE occupancy: a user already placed goes back to its
+        own worker, whatever the load says — the resident half of it is there,
+        and ``add_user`` joins the arriving connection onto it. Only a user
+        nobody holds is a free choice, and only then does ``decide_worker`` run.
+
+        An unplaced user is flagged in the map (the fold did that) and its slice
         exists only inside ``package`` — the source spent its copy pushing it.
         So there is nothing to roll back: an install that fails — the destination
-        dying is the only way it can — leaves the user nowhere, and the map is
-        made to say exactly that.
+        dying is the only way it can — leaves it nowhere, and the map is made to
+        say exactly that. A RESIDENT user is not removed by a failed install:
+        the connection that failed to arrive was never its only one, and taking
+        the placement away would evict everything that never moved.
         """
         path = f"{OP_PATH_PREFIX}install_package"
+        resident = self.user_worker_map.get(user)
         try:
-            destination = self.decide_worker()
+            destination = resident if resident is not None else self.decide_worker()
             payload = await self.hub.call(
                 destination,
                 path,
@@ -872,7 +1440,8 @@ class UserStickyCommander:
             )
             await self.unwrap_reply(destination, path, payload)
         except Exception as exc:
-            self.remove_user(user)
+            if resident is None:
+                self.remove_user(user)
             self.logger.warning("Placement of %s failed (%s: %s)", user, type(exc).__name__, exc)
             raise
         else:
