@@ -231,10 +231,9 @@ class RegisterRegistry:
         The new page id joins its connection row's ``pages``.
 
         Rows are born with a live ``store`` Bag under a capture-all
-        ``collector``, an empty ``dbevents`` list, an empty ``pending_changes``
-        list and empty subscription sets; ``user_view`` stays None until the
-        first ``subscribe_store_path``. Every other keyword passes through
-        verbatim (schemaless).
+        ``collector``, an empty ``dbevents`` list and empty subscription sets;
+        ``user_view`` stays None until the first ``subscribe_store_path``.
+        Every other keyword passes through verbatim (schemaless).
         """
         if parent_page_id is not None and root_page_id is None:
             raise ValueError(f"page {page_id!r} has a parent but no root_page_id")
@@ -261,7 +260,6 @@ class RegisterRegistry:
             collector=DataChangeCollector(store),
             user_view=None,
             dbevents=[],
-            pending_changes=[],
             store_subscriptions=set(),
             table_subscriptions=set(),
             **fields,

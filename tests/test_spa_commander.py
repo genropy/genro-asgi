@@ -328,6 +328,20 @@ def test_dropping_a_connection_leaves_its_sibling_intact(commander: UserStickyCo
     assert "s2" not in commander.connection_pages
 
 
+def test_discard_connection_edge_on_a_missing_set_raises(
+    commander: UserStickyCommander,
+) -> None:
+    """A missing edge set is a broken surface: KeyError, never a silent pass."""
+    with pytest.raises(KeyError):
+        commander.discard_connection_edge("ghost", "s1")
+
+
+def test_discard_page_edge_on_a_missing_set_raises(commander: UserStickyCommander) -> None:
+    """The page twin holds the same contract as the connection edge."""
+    with pytest.raises(KeyError):
+        commander.discard_page_edge("ghost", "p1")
+
+
 # ----------------------------------------------------------------------
 # Supervision — real children on a real UDS hub
 # ----------------------------------------------------------------------

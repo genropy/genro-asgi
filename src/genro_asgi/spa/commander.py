@@ -1144,10 +1144,13 @@ class UserStickyCommander:
         self.connection_pages.setdefault(connection, set()).add(page_id)
 
     def discard_page_edge(self, session_id: str, page_id: str) -> None:
-        """Take one page off its connection's edge set, dropping the set when empty."""
-        siblings = self.connection_pages.get(session_id)
-        if siblings is None:
-            return
+        """Take one page off its connection's edge set, dropping the set when empty.
+
+        Called only for a connection just read off ``page_connection``, so the
+        edge set exists by the alignment invariant — a missing one is a broken
+        surface and raises (``KeyError``), never passes silently.
+        """
+        siblings = self.connection_pages[session_id]
         siblings.discard(page_id)
         if not siblings:
             del self.connection_pages[session_id]

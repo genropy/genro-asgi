@@ -29,7 +29,7 @@ rebuild from scratch when there is no incremental delta to apply.
 
 Items are LIVE, never copies: ``create``/``get``/``update``/``drop`` return
 the stored dict itself. Mutating non-indexed fields in place is the intended
-idiom, inherited from the legacy daemon (appending to ``pending_changes``,
+idiom, inherited from the legacy daemon (appending to ``dbevents``,
 adding to subscription sets, touching timestamps). INDEXED fields are the one
 exception: they change ONLY through ``update``, which moves the key between
 buckets — writing them directly desyncs the index silently. Known trap when

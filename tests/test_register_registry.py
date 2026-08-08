@@ -128,13 +128,13 @@ def test_new_page_born_fields_and_passthrough() -> None:
     page = registry.new_page("p1", user="alice", session_id="s1", connection_id="c1")
     assert page["avatar_key"] == "root"
     assert page["data"] is None
-    assert page["pending_changes"] == []
+    assert page["dbevents"] == []
     assert page["store_subscriptions"] == set()
     assert page["table_subscriptions"] == set()
     assert page["connection_id"] == "c1"
-    page["pending_changes"].append("x")
+    page["dbevents"].append("x")
     other = registry.new_page("p2", user="bob", session_id="s2")
-    assert other["pending_changes"] == []
+    assert other["dbevents"] == []
     registry.add_index("page_items", "connection_id")
     assert registry.page_items.keys_by("connection_id", "c1") == ["p1"]
 

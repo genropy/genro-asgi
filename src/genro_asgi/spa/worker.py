@@ -21,8 +21,9 @@ plain object that owns:
 - ``registry`` — its :class:`RegisterRegistry`; ``user_items`` is the register
   of the users this worker holds. Contents live here and nowhere else: the
   commander keeps keys and locations only.
-- ``outbox`` — the FIFO the async sender drains; idle infrastructure in 2a (no
-  producer feeds it), kept for the cleanup and cross-worker traffic to come.
+- ``outbox`` — the FIFO the async sender drains: every ascending message —
+  exchange traffic, dbevent deposits, global-store writes — rides it up to
+  the commander.
 - ``last_seq`` — the per-worker monotonic sequence stamped on every shaped
   event, assigned under ``dispatch_lock`` so seq order IS mutation order.
 - ``pool`` — a :class:`WorkPool` whose parent is the worker itself: a sync op
@@ -43,7 +44,7 @@ task — ``create_task`` copies the context, so the sink of a CALL in flight is
 its own list and two CALLs never see each other's events; a lifecycle op
 outside any CALL is impossible and says so.
 
-**The outbox is the async rail, and the exchange is its producer.** ``Outbox``,
+**The outbox is the async rail, and the exchange is one of its producers.** ``Outbox``,
 ``notify_sender`` and ``sender_loop`` are the transport of the cross-worker
 traffic (design D4): a datachange whose target is not here rides them up to the
 commander as an EVENT. The lifecycle never does — it rides the REPLY of the CALL
@@ -91,10 +92,13 @@ still alive to produce it. The worker owns no clock for it.
 
 **Op vocabulary.** ``LIFECYCLE_OPS``/``STORE_OPS``/``POST_OPS``/
 ``EXCHANGE_OPS`` are transcribed whole from the legacy worker: they are the
-reserved protocol names. In 2a only the user lifecycle ops are active
-(``new_user``, ``change_connection_user``, ``drop_user``) plus the two install
-primitives, which are operational (they mutate on the commander's own order,
-so they shape no event). Everything else is a reserved name with no handler.
+reserved protocol names, and all four families are live — the lifecycle ops
+mutate the registers and shape the events a REPLY carries up, the store ops
+ascend to the master, the POST ops feed the dbevents rail, the exchange ops
+ride the three-tier switch. The install primitives are operational (they
+mutate on the commander's own order, so they shape no event);
+``drop_pages`` and ``drop_connections`` remain reserved names with no
+handler.
 
 **The live stores have one drain point.** ``collect_page`` is where everything
 pending for a page leaves the worker: its own store collector and its
@@ -278,13 +282,10 @@ DELIVERY_KEYS = ("datachanges", "dbevents")
 LIVE_ROW_FIELDS = frozenset({"store", "collector", "user_view", "connections", "pages"})
 
 # The page-row fields the rebirth builds itself, so a move package never carries
-# them: the two collectors (objects bound to THIS process's Bags), the containers
-# a row is born with, the reserved key, and the user the destination re-creates
-# the row under. Everything else in a packaged row is a value handed straight
-# back to ``new_page``.
-MOVE_REBUILT_FIELDS = frozenset(
-    {"register_item_id", "user", "collector", "user_view", "dbevents", "pending_changes"}
-)
+# them: the two collectors (objects bound to THIS process's Bags), the
+# ``dbevents`` container a row is born with, and the reserved key. Everything
+# else in a packaged row is a value handed straight back to ``new_page``.
+MOVE_REBUILT_FIELDS = frozenset({"register_item_id", "collector", "user_view", "dbevents"})
 
 # The packaged keys the rebirth replays BY HAND, in order, once the row exists:
 # ``new_page`` seeds each of them itself and would refuse them as keywords.
@@ -959,7 +960,7 @@ class UserStickyWorker(RoutingClass):
                 page["table_subscriptions"].discard(table)
                 self.subscriptions.unsubscribe(page_id, table)
             self.outbox.offer(
-                self.shape_post(
+                self.shape_ascending(
                     "subscribeTable", page_id=page_id, table=table, subscribe=subscribe
                 )
             )
@@ -995,7 +996,7 @@ class UserStickyWorker(RoutingClass):
             for deposit in deposits:
                 self.fan_out_local(deposit)
             if deposits:
-                self.outbox.offer(self.shape_post("notifyDbEvents", deposits=deposits))
+                self.outbox.offer(self.shape_ascending("notifyDbEvents", deposits=deposits))
         return {"tables": [deposit["table"] for deposit in deposits]}
 
     def dbevent_deposit(
@@ -1081,14 +1082,14 @@ class UserStickyWorker(RoutingClass):
         same push that updates everybody else's. One writer, one order.
         """
         with self.dispatch_lock:
-            self.outbox.offer(self.shape_store("store_set", path=path, value=value))
+            self.outbox.offer(self.shape_ascending("store_set", path=path, value=value))
         return {"path": path}
 
     @route()
     def store_del(self, identity: str, path: str, **addressing: Any) -> Any:
         """Remove one path of the global store — it ascends exactly like a write."""
         with self.dispatch_lock:
-            self.outbox.offer(self.shape_store("store_del", path=path))
+            self.outbox.offer(self.shape_ascending("store_del", path=path))
         return {"path": path}
 
     def global_store_lock(self) -> GlobalStoreLease:
@@ -1106,7 +1107,7 @@ class UserStickyWorker(RoutingClass):
         granted: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         self.global_grants[request_id] = granted
         with self.dispatch_lock:
-            self.outbox.offer(self.shape_store("store_lock", request_id=request_id))
+            self.outbox.offer(self.shape_ascending("store_lock", request_id=request_id))
         try:
             store = await granted
         finally:
@@ -1127,7 +1128,7 @@ class UserStickyWorker(RoutingClass):
         copy.detach()
         with self.dispatch_lock:
             self.outbox.offer(
-                self.shape_store(
+                self.shape_ascending(
                     "store_unlock", request_id=request_id, changes=to_tytx(changes, "json")
                 )
             )
@@ -1164,22 +1165,14 @@ class UserStickyWorker(RoutingClass):
         self.last_seq += 1
         return {"op": op, "seq": self.last_seq, "worker": self.name, **payload}
 
-    def shape_post(self, op: str, **payload: Any) -> dict[str, Any]:
-        """Stamp an ascending POST message with its seq and its origin.
+    def shape_ascending(self, op: str, **payload: Any) -> dict[str, Any]:
+        """Stamp an ascending message with its seq and its origin worker.
 
-        The dbevents rail's own shaper: the ``worker`` stamp is what the
-        commander excludes from its fan-out, so a message that lost it would be
-        served twice. Called with ``dispatch_lock`` held, like every seq bump.
-        """
-        self.last_seq += 1
-        return {"op": op, "seq": self.last_seq, "worker": self.name, **payload}
-
-    def shape_store(self, op: str, **payload: Any) -> dict[str, Any]:
-        """Stamp an ascending global-store message with its seq and its origin.
-
-        The global rail's own shaper: the ``worker`` stamp is the name the
-        commander grants a lock to and releases it from when that channel ends.
-        Called with ``dispatch_lock`` held, like every seq bump.
+        One shaper for the POST and global-store rails: the ``worker`` stamp
+        is what the commander excludes from a dbevents fan-out — a message
+        that lost it would be served twice — and the name it grants a global
+        lock to and releases when that channel ends. Called with
+        ``dispatch_lock`` held, like every seq bump.
         """
         self.last_seq += 1
         return {"op": op, "seq": self.last_seq, "worker": self.name, **payload}
