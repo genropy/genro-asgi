@@ -220,6 +220,10 @@ class GlobalStoreLease:
 
     The lease owns its ``request_id``: one lease is one grant, from the request
     that ascends to the release that carries the changes back.
+
+    NEVER open a lease while holding the worker's ``dispatch_lock``: both the
+    acquire and the release queue their ascending message on a pool thread
+    UNDER that very lock, so a holder would deadlock against itself.
     """
 
     def __init__(self, worker: Any) -> None:

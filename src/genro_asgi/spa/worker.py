@@ -1081,15 +1081,13 @@ class UserStickyWorker(RoutingClass):
         ``GLOBAL_CHANGES_PATH`` batch, so this worker's replica is updated by the
         same push that updates everybody else's. One writer, one order.
         """
-        with self.dispatch_lock:
-            self.outbox.offer(self.shape_ascending("store_set", path=path, value=value))
+        self.offer_ascending("store_set", path=path, value=value)
         return {"path": path}
 
     @route()
     def store_del(self, identity: str, path: str, **addressing: Any) -> Any:
         """Remove one path of the global store — it ascends exactly like a write."""
-        with self.dispatch_lock:
-            self.outbox.offer(self.shape_ascending("store_del", path=path))
+        self.offer_ascending("store_del", path=path)
         return {"path": path}
 
     def global_store_lock(self) -> GlobalStoreLease:
@@ -1103,11 +1101,15 @@ class UserStickyWorker(RoutingClass):
         answer: the copy IS the master at grant time. It is hydrated BEFORE its
         collector attaches — a captured hydration would ship the whole store back
         at release.
+
+        The ascending request is queued through the pool: ``dispatch_lock`` is
+        taken there, never on this coroutine's loop thread.
         """
         granted: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         self.global_grants[request_id] = granted
-        with self.dispatch_lock:
-            self.outbox.offer(self.shape_ascending("store_lock", request_id=request_id))
+        await self.pool.run(
+            functools.partial(self.offer_ascending, "store_lock", request_id=request_id)
+        )
         try:
             store = await granted
         finally:
@@ -1123,15 +1125,18 @@ class UserStickyWorker(RoutingClass):
         all-or-nothing: a body that raised releases with nothing to apply,
         exactly as a holder's death does. The copy is detached either way — the
         author's replica is updated by the propagation like everybody else's.
+        The ascent is queued through the pool, like the acquire's.
         """
         changes = copy.drain() if apply else []
         copy.detach()
-        with self.dispatch_lock:
-            self.outbox.offer(
-                self.shape_ascending(
-                    "store_unlock", request_id=request_id, changes=to_tytx(changes, "json")
-                )
+        await self.pool.run(
+            functools.partial(
+                self.offer_ascending,
+                "store_unlock",
+                request_id=request_id,
+                changes=to_tytx(changes, "json"),
             )
+        )
 
     def grant_global_lock(self, grant: dict[str, Any]) -> None:
         """Hand a descending grant to the coroutine parked on it.
@@ -1176,6 +1181,18 @@ class UserStickyWorker(RoutingClass):
         """
         self.last_seq += 1
         return {"op": op, "seq": self.last_seq, "worker": self.name, **payload}
+
+    def offer_ascending(self, op: str, **payload: Any) -> None:
+        """Take ``dispatch_lock``, shape one ascending message and queue it.
+
+        The sync half of the ascent: sync op handlers call it on their own
+        pool thread, and the loop-side callers (the global-lock pair) hand it
+        to the pool — the loop never waits on ``dispatch_lock``, because a
+        long hold elsewhere (a move packaging, a whole descending batch)
+        would freeze every coroutine with it (see the op INVARIANT below).
+        """
+        with self.dispatch_lock:
+            self.outbox.offer(self.shape_ascending(op, **payload))
 
     def shape_exchange(self, message: dict[str, Any]) -> dict[str, Any]:
         """Stamp an ascending exchange message with its seq and its origin.
