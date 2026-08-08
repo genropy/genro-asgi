@@ -14,8 +14,10 @@
 
 """The UserSticky commander: the pool of workers and the routing picture above it.
 
-The commander is the other half of the UserSticky pair — a derivable base, not
-an application (the mountable front arrives with ``SpaApplication`` in 2b). It
+The commander is the other half of the UserSticky pair — a derivable base,
+never an application: the mountable front, ``SpaApplication`` (phase B), OWNS
+a commander rather than deriving from it, so the site-facing routes and the
+supervisor never share a namespace and a commander role composes freely. It
 owns the :class:`~genro_asgi.channel.hub.ChannelHub` its workers connect to,
 spawns and supervises them, and keeps the surface picture of where everything
 sits.
@@ -133,7 +135,7 @@ explicit ``assign_user`` decision does that.
 **The front face is ``forward_call(identity, path, kwargs)``.** ``identity`` is the
 sticky key the caller provides — the root avatar identity once logged, the
 session id while anonymous; the commander never reads a cookie (that is
-``SpaApplication``'s job in 2b). It resolves ``user_worker_map`` and, on a miss,
+``SpaApplication``'s job, phase B). It resolves ``user_worker_map`` and, on a miss,
 sends the caller to the **reception**: the first active worker of the pool, the
 guests' worker. ``guest_occupancy_limit`` is how many users the reception may
 hold before ``check_capacity`` widens the pool. ``forward_envelope`` is the one
