@@ -393,7 +393,7 @@ class UserStickyWorker(RoutingClass):
         max_threads: ``WorkPool`` size for the sync op handlers.
         """
         self.name = name
-        self.registry = RegisterRegistry()
+        self.registry = self.build_registry()
         self.outbox = Outbox(self)
         self.pool = WorkPool(self, max_threads)
         # Reentrant: the subscription index takes this very lock, so an index
@@ -422,6 +422,15 @@ class UserStickyWorker(RoutingClass):
         self._service_tasks: set[asyncio.Task[None]] = set()
         if channel is not None:
             self.attach_channel(channel)
+
+    def build_registry(self) -> RegisterRegistry:
+        """The registry factory, called once at construction.
+
+        A consumer whose rows hold its own store type returns its registry
+        subclass here (the seams: ``RegisterRegistry.new_store`` and
+        ``new_collector``).
+        """
+        return RegisterRegistry()
 
     @property
     def user_items(self) -> Register:

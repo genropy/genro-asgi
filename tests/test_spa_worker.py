@@ -38,6 +38,7 @@ from genro_routes import route
 
 from genro_asgi.channel import ChannelCallError, ChannelHub, Frame, LocalChannel
 from genro_asgi.channel.hub import CALL_METHOD
+from genro_asgi.spa import RegisterRegistry
 from genro_asgi.spa.worker import (
     EXCHANGE_OPS,
     LIFECYCLE_OPS,
@@ -644,3 +645,17 @@ def test_a_self_login_leaves_the_user_whole() -> None:
     assert resident["connections"] == {"sess-1"}
     assert worker.connection_items.get("sess-1")["pages"] == {"p1"}
     assert worker.page_items.get("p1") is not None
+
+
+def test_build_registry_is_the_worker_seam() -> None:
+    """A worker subclass supplies its whole registry through one factory."""
+
+    class SeamRegistry(RegisterRegistry):
+        pass
+
+    class SeamWorker(UserStickyWorker):
+        def build_registry(self) -> RegisterRegistry:
+            return SeamRegistry()
+
+    assert isinstance(SeamWorker("W:w1").registry, SeamRegistry)
+    assert isinstance(UserStickyWorker("W:w1").registry, RegisterRegistry)

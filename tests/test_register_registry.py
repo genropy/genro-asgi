@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from genro_asgi.spa import Register, RegisterRegistry
@@ -411,3 +413,38 @@ def test_subscribe_store_path_unknown_page_raises_key_error() -> None:
     registry = RegisterRegistry()
     with pytest.raises(KeyError, match="nope"):
         registry.subscribe_store_path("nope", "prefs")
+
+
+def test_the_factory_seams_own_every_store_and_collector() -> None:
+    """A subclass owning the two factories owns every live object a row is born with."""
+
+    class SeamRegistry(RegisterRegistry):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stores: list[Any] = []
+            self.collectors: list[Any] = []
+
+        def new_store(self) -> Any:
+            store = super().new_store()
+            self.stores.append(store)
+            return store
+
+        def new_collector(self, store: Any, paths: set[str] | None = None) -> Any:
+            collector = super().new_collector(store, paths=paths)
+            self.collectors.append(collector)
+            return collector
+
+    registry = SeamRegistry()
+    registry.new_user("alice")
+    page = registry.new_page("p1", user="sess-1", session_id="sess-1")
+    registry.subscribe_store_path("p1", "prefs")
+    registry.change_connection_user("sess-1", "alice")
+
+    # Every store born through the seam: alice's, the guest's, the page's.
+    assert registry.user_items.get("alice")["store"] in registry.stores
+    assert page["store"] in registry.stores
+    # Every collector too: the page's own capture-all, the first user_view,
+    # the re-attach of the resident login — which is the last one built.
+    assert page["collector"] in registry.collectors
+    assert page["user_view"] is registry.collectors[-1]
+    assert len(registry.collectors) == 3

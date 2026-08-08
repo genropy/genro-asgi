@@ -165,6 +165,25 @@ class RegisterRegistry:
         """
         self._registers[register_name].add_index(attr)
 
+    def new_store(self) -> Any:
+        """The store factory: the birth of every row's live store.
+
+        A consumer whose rows hold its own store type overrides this alone —
+        nothing else in the machinery names the concrete class, and a store
+        travels the move pickled, whole.
+        """
+        return Bag()
+
+    def new_collector(self, store: Any, paths: set[str] | None = None) -> Any:
+        """The collector factory: the capture attached to a row's store.
+
+        One seam for the three attach points — a page's own capture-all
+        collector, the ``user_view`` born of the first subscription, the
+        re-attach of the login — so a consumer pairing its own store type
+        overrides the capture with it.
+        """
+        return DataChangeCollector(store, paths=paths)
+
     def new_user(self, user: str, **fields: Any) -> dict[str, Any]:
         """Create the entry of ``user`` in the ``user_items`` register.
 
@@ -176,7 +195,8 @@ class RegisterRegistry:
         Raises ``ValueError`` if the user already has an entry — page
         creation calls this only for a user it has not seen.
         """
-        fields.setdefault("store", Bag())
+        if "store" not in fields:
+            fields["store"] = self.new_store()
         return self.user_items.create(user, connections=set(), **fields)
 
     def new_connection(
@@ -247,7 +267,7 @@ class RegisterRegistry:
             self.new_connection(connection_id, user=user)
         store = fields.pop("store", None)
         if store is None:
-            store = Bag()
+            store = self.new_store()
         page = self.page_items.create(
             page_id,
             session_id=session_id,
@@ -257,7 +277,7 @@ class RegisterRegistry:
             avatar_key=avatar_key,
             data=data,
             store=store,
-            collector=DataChangeCollector(store),
+            collector=self.new_collector(store),
             user_view=None,
             dbevents=[],
             store_subscriptions=set(),
@@ -337,7 +357,7 @@ class RegisterRegistry:
             view = page["user_view"]
             if view is not None:
                 view.detach()
-                fresh = DataChangeCollector(user_store, paths=set(page["store_subscriptions"]))
+                fresh = self.new_collector(user_store, paths=set(page["store_subscriptions"]))
                 for change in view.changes:
                     fresh.append(change)
                 page["user_view"] = fresh
@@ -359,7 +379,7 @@ class RegisterRegistry:
         view = page["user_view"]
         if view is None:
             user_store = self.user_items.get(self.user_of_page(page_id))["store"]
-            page["user_view"] = DataChangeCollector(user_store, paths={prefix})
+            page["user_view"] = self.new_collector(user_store, paths={prefix})
         else:
             view.subscribe_path(prefix)
         return page
