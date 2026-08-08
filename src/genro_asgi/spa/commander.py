@@ -1007,45 +1007,44 @@ class UserStickyCommander:
         return logins
 
     def fold_event(self, worker: str, event: dict[str, Any]) -> None:
-        """Fold one shaped lifecycle event into the surface registries."""
+        """Fold one shaped lifecycle event into the surface registries.
+
+        The worker shapes every event whole, so a missing entity key is a
+        broken producer and raises (``KeyError``), never passes silently.
+        """
         op = event.get("op")
-        user = event.get("user")
         if op == "new_user":
-            self.register_user(user, worker)
+            self.register_user(event["user"], worker)
         elif op == "drop_user":
-            self.drop_user(user, worker)
+            self.drop_user(event["user"], worker)
         elif op == "new_connection":
-            self.register_connection(event["session_id"], user)
+            self.register_connection(event["session_id"], event["user"])
         elif op == "drop_connection":
             self.drop_connection(event["session_id"])
         elif op == LOGIN_OP:
-            self.relabel_user(user, event.get("previous_user"), event["session_id"])
+            self.relabel_user(event["user"], event.get("previous_user"), event["session_id"])
         elif op == "new_page":
-            self.register_page(event.get("page_id"), user, worker, event["session_id"])
+            self.register_page(event["page_id"], event["user"], worker, event["session_id"])
         elif op == "drop_page":
-            self.drop_page(event.get("page_id"), worker)
+            self.drop_page(event["page_id"], worker)
         elif op in LIFECYCLE_OPS:
             self.logger.debug("fold: op %r has no surface consumer yet", op)
         else:
             self.logger.warning("fold: unknown op %r from %s", op, worker)
 
-    def register_user(self, user: str | None, worker: str) -> None:
+    def register_user(self, user: str, worker: str) -> None:
         """Map a user to the worker that announced it — the owner check applies.
 
         An event arriving late from a worker that no longer holds the user never
         re-points it: only the explicit ``assign_user`` decision does.
         """
-        if user is None:
-            return
         if user in self.user_worker_map and self.user_worker_map[user] != worker:
             self.logger.debug("fold: %s already assigned, ignoring %s's claim", user, worker)
             return
         self.assign_user(user, worker)
 
-    def register_connection(self, session_id: str, user: str | None) -> None:
+    def register_connection(self, session_id: str, user: str) -> None:
         """Map a connection to the user it belongs to — the middle link, folded."""
-        if user is None:
-            return
         self.connection_user[session_id] = user
         self.user_connections.setdefault(user, set()).add(session_id)
 
@@ -1077,9 +1076,7 @@ class UserStickyCommander:
         """Every connection of a user, sorted — the edge set read downward."""
         return sorted(self.user_connections.get(user, set()))
 
-    def relabel_user(
-        self, user: str | None, previous_user: str | None, session_id: str
-    ) -> None:
+    def relabel_user(self, user: str, previous_user: str | None, session_id: str) -> None:
         """The login: the CONNECTION changes owner, and no page edge ever moves.
 
         One edge moves, and one only — the surface transcribes what the worker
@@ -1099,8 +1096,6 @@ class UserStickyCommander:
         time, and the arriving one will join them — blanking the map would park
         every call to a user that never left.
         """
-        if user is None:
-            return
         former_owner = self.connection_user.get(session_id)
         if former_owner is not None and former_owner != user:
             self.discard_connection_edge(former_owner, session_id)
@@ -1115,9 +1110,7 @@ class UserStickyCommander:
         if user not in self.user_worker_map:
             self.assign_user(user, None)
 
-    def register_page(
-        self, page_id: str | None, user: str | None, worker: str, connection: str
-    ) -> None:
+    def register_page(self, page_id: str, user: str, worker: str, connection: str) -> None:
         """Hang a page under its connection — the owner check applies.
 
         The user rule, verbatim: a claim from a worker that no longer holds the
@@ -1130,8 +1123,6 @@ class UserStickyCommander:
         self-healed with it. The announcing worker owns both, in the same REPLY
         cascade, so the middle link cannot be missing for any other reason.
         """
-        if page_id is None or user is None:
-            return
         previous = self.page_connection.get(page_id)
         if previous is not None and self.worker_of_page(page_id) != worker:
             self.logger.debug("fold: page %s already placed, ignoring %s's claim", page_id, worker)
@@ -1155,14 +1146,14 @@ class UserStickyCommander:
         if not siblings:
             del self.connection_pages[session_id]
 
-    def drop_page(self, page_id: str | None, worker: str) -> None:
+    def drop_page(self, page_id: str, worker: str) -> None:
         """Unhang a page, unless it has meanwhile been placed somewhere else.
 
         Its subscriptions go with it: a page that exists nowhere subscribes to
         nothing, and a stale entry would make every commit on that table resolve
         a destination for a page nobody holds.
         """
-        if page_id is None or self.worker_of_page(page_id) != worker:
+        if self.worker_of_page(page_id) != worker:
             return
         connection = self.page_connection.pop(page_id)
         self.discard_page_edge(connection, page_id)
@@ -1188,9 +1179,9 @@ class UserStickyCommander:
         """Every page opened by one connection, sorted — the edge set read downward."""
         return sorted(self.connection_pages.get(session_id, set()))
 
-    def drop_user(self, user: str | None, worker: str) -> None:
+    def drop_user(self, user: str, worker: str) -> None:
         """Unmap a user, unless it has meanwhile been assigned somewhere else."""
-        if user is None or self.user_worker_map.get(user) != worker:
+        if self.user_worker_map.get(user) != worker:
             return
         self.remove_user(user)
 

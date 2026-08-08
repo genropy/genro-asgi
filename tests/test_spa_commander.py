@@ -342,6 +342,12 @@ def test_discard_page_edge_on_a_missing_set_raises(commander: UserStickyCommande
         commander.discard_page_edge("ghost", "p1")
 
 
+def test_a_malformed_event_is_an_explicit_error(commander: UserStickyCommander) -> None:
+    """The worker shapes every event whole: a missing entity key raises at the fold."""
+    with pytest.raises(KeyError):
+        commander.fold_events("W:w-1", [event("new_page", 1, user="alice")])
+
+
 # ----------------------------------------------------------------------
 # Supervision — real children on a real UDS hub
 # ----------------------------------------------------------------------
