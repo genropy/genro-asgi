@@ -264,6 +264,12 @@ def test_drop_connection_takes_its_pages_and_the_last_user() -> None:
     assert "alice" not in registry.user_items
 
 
+def test_drop_connection_unknown_raises_key_error() -> None:
+    registry = RegisterRegistry()
+    with pytest.raises(KeyError, match="ghost"):
+        registry.drop_connection("ghost")
+
+
 def test_drop_connection_never_climbs_back_down_and_up_again() -> None:
     registry = RegisterRegistry()
     registry.new_page("p1", user="alice", session_id="s1")
@@ -399,3 +405,9 @@ def test_user_of_page_unknown_raises_key_error() -> None:
     registry = RegisterRegistry()
     with pytest.raises(KeyError, match="nope"):
         registry.user_of_page("nope")
+
+
+def test_subscribe_store_path_unknown_page_raises_key_error() -> None:
+    registry = RegisterRegistry()
+    with pytest.raises(KeyError, match="nope"):
+        registry.subscribe_store_path("nope", "prefs")

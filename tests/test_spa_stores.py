@@ -378,6 +378,23 @@ def test_the_login_fields_describe_the_user_and_its_connection() -> None:
     assert registry.connection_items.get("sess-1")["user_name"] == "Ada"
 
 
+def test_the_login_fields_on_a_resident_stay_on_the_connection() -> None:
+    """Resident wins: the entry keeps its own fields, the arriving ones land on the connection."""
+    registry = RegisterRegistry()
+    registry.new_user("alice", user_name="Ada")
+    resident_store = registry.user_items.get("alice")["store"]
+    registry.new_page("p1", user="sess-1", session_id="sess-1")
+
+    registry.change_connection_user("sess-1", "alice", user_name="Lovelace")
+
+    entry = registry.user_items.get("alice")
+    assert entry["user_name"] == "Ada"
+    assert entry["store"] is resident_store
+    assert entry["connections"] == {"sess-1"}
+    assert registry.connection_items.get("sess-1")["user_name"] == "Lovelace"
+    assert "sess-1" not in registry.user_items
+
+
 def test_a_login_on_an_unknown_connection_is_an_explicit_error() -> None:
     registry = RegisterRegistry()
     try:
