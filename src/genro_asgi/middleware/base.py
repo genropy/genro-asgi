@@ -31,18 +31,21 @@ outermost. A config name missing from the registry raises ``ValueError``.
 
 ``headers_dict(scope)`` parses the ASGI headers into a lowercase-keyed dict
 cached as ``scope["_headers"]`` — the one header-parse shared by the session
-and auth middlewares downstream.
+and auth middlewares downstream. ``cookie_value(scope, name)`` reads one
+cookie off it, pair by pair, so a malformed sibling cookie never costs the
+request the cookies that are well-formed.
 """
 
 from __future__ import annotations
 
 import logging
+from http.cookies import CookieError, SimpleCookie
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..types import ASGIApp, Receive, Scope, Send
 
-__all__ = ["BaseMiddleware", "build_chain", "headers_dict"]
+__all__ = ["BaseMiddleware", "build_chain", "cookie_value", "headers_dict"]
 
 
 def headers_dict(scope: Scope) -> dict[str, str]:
@@ -59,6 +62,26 @@ def headers_dict(scope: Scope) -> dict[str, str]:
         }
         scope["_headers"] = headers
     return headers
+
+
+def cookie_value(scope: Scope, name: str) -> str | None:
+    """The value of the ``name`` cookie on the request, or ``None``.
+
+    Parsed pair by pair: a whole-header ``SimpleCookie.load`` raises
+    ``CookieError`` on the first cookie with an illegal key (third-party
+    trackers ship them), losing every well-formed sibling with it.
+    """
+    cookie_header = headers_dict(scope).get("cookie")
+    if not cookie_header:
+        return None
+    jar: SimpleCookie = SimpleCookie()
+    for pair in cookie_header.split(";"):
+        try:
+            jar.load(pair.strip())
+        except CookieError:
+            continue
+    morsel = jar.get(name)
+    return morsel.value if morsel is not None else None
 
 
 class BaseMiddleware:

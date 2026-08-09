@@ -40,10 +40,9 @@ scope filtering happens here.
 from __future__ import annotations
 
 from collections.abc import MutableMapping
-from http.cookies import SimpleCookie
 from typing import TYPE_CHECKING, Any
 
-from .base import BaseMiddleware, headers_dict
+from .base import BaseMiddleware, cookie_value
 
 if TYPE_CHECKING:
     from ..types import ASGIApp, Receive, Scope, Send
@@ -76,13 +75,7 @@ class SessionMiddleware(BaseMiddleware):
 
     def _cookie_value(self, scope: Scope) -> str | None:
         """The session cookie value carried by the request, or ``None``."""
-        cookie_header = headers_dict(scope).get("cookie")
-        if not cookie_header:
-            return None
-        jar: SimpleCookie = SimpleCookie()
-        jar.load(cookie_header)
-        morsel = jar.get(self._cookie_name)
-        return morsel.value if morsel is not None else None
+        return cookie_value(scope, self._cookie_name)
 
     def _set_cookie(self, session: Any) -> tuple[bytes, bytes]:
         """Build the ``Set-Cookie`` header tuple for a session to (re)issue to the client.

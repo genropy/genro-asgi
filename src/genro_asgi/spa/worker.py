@@ -162,8 +162,13 @@ order.
 
 **CALL forms.** ``data`` is ``{identity, kwargs}`` — ``identity`` is the
 sticky key and reaches the handler as its first argument. The
-``{identity, http: {...}}`` form is accepted by the protocol and answered with
-an explicit error REPLY: there is no environ synthesizer until phase B.
+``{identity, http: {...}}`` form is the service rail for the old code:
+``serve_http`` hands its facts to a :class:`~.environ.WsgiSeam`, which
+synthesizes the PEP 3333 environ and invokes ``wsgi_app`` in-process on a pool
+thread — WSGI as an adapter, never as a transport. ``wsgi_app`` is the consumer
+seam: ``None`` on this class, assigned by the worker subclass that hosts a WSGI
+site, and while it is ``None`` the http form is answered with an explicit error
+REPLY.
 """
 
 from __future__ import annotations
@@ -186,6 +191,7 @@ from ..channel.client import ChannelClient
 from ..channel.frame import Frame
 from ..channel.hub import CALL_METHOD, EVENT_METHOD, REPLY_METHOD
 from ..pool import WorkPool
+from .environ import WsgiSeam
 from .global_store import (
     GLOBAL_CHANGES_PATH,
     GLOBAL_GRANT_PATH,
@@ -409,6 +415,10 @@ class UserStickyWorker(RoutingClass):
         self.last_seq = 0
         self.logger = logging.getLogger(__name__)
         self.channel: Any = None
+        # The consumer seam for the http CALL form: a WSGI callable assigned by
+        # the subclass that hosts a WSGI site. None here — this class serves no
+        # site of its own.
+        self.wsgi_app: Callable[..., Any] | None = None
         # The causal sink: the events produced BY the CALL being answered in
         # this context. Instance-owned (never module level), so two CALLs in
         # flight fill two distinct lists.
@@ -593,9 +603,18 @@ class UserStickyWorker(RoutingClass):
         also the page's pull cycle, so the drain rides it — see ``send_reply``.
         """
         payload = frame.data or {}
-        if "http" in payload:
-            await self.send_reply(frame, error="http CALL form is unsupported until phase B")
-            return
+        # The op namespace wins: a CALL whose path names a routed op is that
+        # op whatever its kwargs carry — ``http`` is a form, never a reserved
+        # word inside the ops' open ``**fields``. Only a path that names no op
+        # is probed for the form, at both depths: a hand-built CALL carries it
+        # flat, while the front's forward rides the commander's generic
+        # envelope, which nests everything the caller passes under ``kwargs``.
+        op = frame.path[len(OP_PATH_PREFIX) :] if frame.path.startswith(OP_PATH_PREFIX) else frame.path
+        if op not in self.op_names:
+            http = payload.get("http") or (payload.get("kwargs") or {}).get("http")
+            if http is not None:
+                await self.serve_http(frame, http)
+                return
         page_id = (payload.get("kwargs") or {}).get("page_id")
         try:
             result = await self.execute(frame.path, payload)
@@ -604,6 +623,26 @@ class UserStickyWorker(RoutingClass):
             await self.send_reply(frame, error=f"{type(exc).__name__}: {exc}", page_id=page_id)
             return
         await self.send_reply(frame, result=result, page_id=page_id)
+
+    async def serve_http(self, frame: Frame, http: dict[str, Any]) -> None:
+        """Serve the http CALL form through the WSGI seam, or refuse it.
+
+        No ``wsgi_app`` means this worker hosts no site: the protocol form is
+        understood and the explicit error says the seam is empty. Otherwise the
+        environ synthesis and the WSGI call run together on a pool thread —
+        WSGI is synchronous, and the loop must stay free for the next CALL.
+        """
+        if self.wsgi_app is None:
+            await self.send_reply(frame, error="http CALL form is unsupported until phase B")
+            return
+        seam = WsgiSeam(self.wsgi_app)
+        try:
+            reply = await self.pool.run(functools.partial(seam.serve, http))
+        except Exception as exc:
+            self.logger.exception("%s: http CALL %s failed", self.name, frame.path)
+            await self.send_reply(frame, error=f"{type(exc).__name__}: {exc}")
+            return
+        await self.send_reply(frame, result=reply)
 
     async def execute(self, path: str, payload: dict[str, Any]) -> Any:
         """Resolve the op from the CALL path and run it on its own vehicle."""

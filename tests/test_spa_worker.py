@@ -479,8 +479,10 @@ async def test_a_call_parked_on_the_loop_does_not_make_the_worker_deaf(
 async def test_the_http_call_form_answers_an_explicit_error_reply(
     harness: WorkerHarness,
 ) -> None:
+    # the form reaches the seam only on a path that names no op: an op path
+    # executes its op whatever its kwargs carry (the ops' **fields are open)
     with pytest.raises(ChannelCallError, match="phase B"):
-        await harness.call("/op/new_user", {"identity": "alice", "http": {"path": "/"}})
+        await harness.call("/sales/order", {"identity": "alice", "http": {"path": "/"}})
     assert "alice" not in harness.worker.user_items
 
 
