@@ -57,7 +57,12 @@ CALL form and handed to the pool through ``commander.forward_envelope`` — the
 front adds no routing of its own, so the sticky pick, the placement wait, the
 event fold and the delivery merge all stay where they already live.
 
-The sticky key is the ``sticky_cid`` cookie, minted here when the request
+A forward the pool refuses — no worker for the identity, a dead one, an error
+REPLY — raises ``ChannelCallError`` and becomes a text/plain **502**: the site
+is the gateway's upstream, and its unavailability is not the client's error.
+
+The sticky key is the ``sticky_cid`` cookie, read ONCE per request and handed
+down the packing (nothing parses it twice), minted here when the request
 carries none. The IDENTITY the forward routes on is read off the commander's
 own surface — ``connection_user.get(cid, cid)``: the session id while
 anonymous, the real user once a login has been folded. The front keeps ZERO
@@ -82,6 +87,7 @@ import inspect
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from ..channel.hub import ChannelCallError
 from ..middleware.base import cookie_value
 from ..response import Response
 from ..routed_application import RoutedApplication
@@ -175,17 +181,50 @@ class SpaApplication(RoutedApplication):
             await self.forward_request(scope, receive, send)
 
     async def forward_request(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """Serve a site path through the pool: pack, forward, translate, answer."""
+        """Serve a site path through the pool: pack, forward, translate, answer.
+
+        The cookie is read ONCE here and the fact travels down: ``pack_http``
+        and ``pack_headers`` receive whether the request carried one instead of
+        re-scanning the headers for it.
+
+        A CALL the worker answers with an error REPLY — ``ChannelCallError``,
+        the one refusal this forward translates (ratified perimeter) — is a bad
+        gateway: the error text becomes a text/plain 502 body, and the cookie
+        logic applies to it like to any other answer, so the connection this
+        request minted survives the failure. Any other exception is the
+        server's own 500, not a gateway answer.
+        """
         carried = self.request_cid(scope)
         cid = carried or uuid.uuid4().hex
         known = cid in self.commander.connection_user
-        http = await self.pack_http(scope, receive, cid, carried is not None)
-        envelope = await self.commander.forward_envelope(
-            self.forward_identity(cid), str(scope.get("path", "/")), {"http": http}
-        )
-        born = not known and cid in self.commander.connection_user
-        response = self.build_response(envelope, cid, carried is None or born)
+        http = await self.pack_http(scope, receive, cid, carried)
+        try:
+            envelope = await self.commander.forward_envelope(
+                self.forward_identity(cid), str(scope.get("path", "/")), {"http": http}
+            )
+        except ChannelCallError as exc:
+            born = not known and cid in self.commander.connection_user
+            response = self.gateway_response(exc, cid, carried is None or born)
+        else:
+            born = not known and cid in self.commander.connection_user
+            response = self.build_response(envelope, cid, carried is None or born)
         await response(scope, receive, send)
+
+    def gateway_response(self, exc: ChannelCallError, cid: str, issue_cookie: bool) -> Response:
+        """The 502 a refused forward becomes: the pool's error text, as text/plain."""
+        payload = getattr(exc, "payload", None) or {}
+        response = Response(
+            content=str(payload.get("error") or exc),
+            status_code=502,
+            headers=[("content-type", "text/plain; charset=utf-8")],
+        )
+        return self.stamp_cookie(response, cid, issue_cookie)
+
+    def stamp_cookie(self, response: Response, cid: str, issue_cookie: bool) -> Response:
+        """The one tail that writes the sticky cookie, whatever exit built the response."""
+        if issue_cookie:
+            response.set_cookie(STICKY_CID_COOKIE, cid, path="/", httponly=True, samesite="lax")
+        return response
 
     def request_cid(self, scope: Scope) -> str | None:
         """The ``sticky_cid`` this request carries, or ``None`` when it carries none."""
@@ -206,13 +245,15 @@ class SpaApplication(RoutedApplication):
         return body
 
     async def pack_http(
-        self, scope: Scope, receive: Receive, cid: str, carried: bool
+        self, scope: Scope, receive: Receive, cid: str, carried: str | None
     ) -> dict[str, Any]:
         """Pack the ASGI request into the JSON-safe ``http`` CALL form.
 
         The cid the front just decided travels in the forwarded ``cookie``
         header: a minted one is not on the client's request yet, and the hosted
         site must see the connection this request already belongs to.
+        ``carried`` is the cookie the forward already parsed, handed down so
+        nothing reads it a second time.
         """
         query_string = scope.get("query_string") or b""
         client = scope.get("client") or None
@@ -226,18 +267,20 @@ class SpaApplication(RoutedApplication):
             "scheme": str(scope.get("scheme", "http")),
         }
 
-    def pack_headers(self, scope: Scope, cid: str, carried: bool) -> list[list[str]]:
+    def pack_headers(self, scope: Scope, cid: str, carried: str | None) -> list[list[str]]:
         """The request headers as a pair-list, with ``sticky_cid`` guaranteed present.
 
-        A minted cid JOINS the request's own ``cookie`` header (``"; "``, RFC
-        6265) — a second ``cookie`` pair would be comma-joined by the PEP 3333
-        reassembly on the serving side, mangling every cookie in it.
+        ``carried`` is the cookie value the forward parsed: a request that
+        already carries one needs no touch-up. A minted cid JOINS the request's
+        own ``cookie`` header (``"; "``, RFC 6265) — a second ``cookie`` pair
+        would be comma-joined by the PEP 3333 reassembly on the serving side,
+        mangling every cookie in it.
         """
         headers = [
             [name.decode("latin-1"), value.decode("latin-1")]
             for name, value in scope.get("headers") or []
         ]
-        if not carried:
+        if carried is None:
             for pair in headers:
                 if pair[0] == "cookie":
                     pair[1] = f"{pair[1]}; {STICKY_CID_COOKIE}={cid}"
@@ -264,9 +307,7 @@ class SpaApplication(RoutedApplication):
             status_code=int(reply.get("status", 200)),
             headers=[(str(name), str(value)) for name, value in reply.get("headers") or []],
         )
-        if issue_cookie:
-            response.set_cookie(STICKY_CID_COOKIE, cid, path="/", httponly=True, samesite="lax")
-        return response
+        return self.stamp_cookie(response, cid, issue_cookie)
 
     async def on_startup(self) -> None:
         """Start the owned pool with the server."""

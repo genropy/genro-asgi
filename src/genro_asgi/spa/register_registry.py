@@ -82,8 +82,11 @@ item; the descending walks iterate a COPY of it, since each drop discards from
 the very set being walked.
 
 **The live stores.** A user row carries ``store``, a live Bag; a page row
-carries its own ``store`` plus ``collector``, a capture-all
-:class:`DataChangeCollector` on that store. A page interested in part of its
+carries its own ``store`` plus ``collector``, a :class:`DataChangeCollector`
+on that store born FILTERED AND EMPTY: a write is captured only under a prefix
+the page has subscribed, mirrored on the row's ``subscribed_paths``. The
+explicit deposit (``collector.append``) bypasses the filter and always lands.
+A page interested in part of its
 user's store gets ``user_view``: a second collector attached to the OWNER
 USER's Bag and filtered on ``store_subscriptions``, created lazily at the
 first ``subscribe_store_path`` and widened by the next ones. That view IS the
@@ -103,6 +106,7 @@ ValueError, an unknown register name raises KeyError.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from genro_bag import Bag
@@ -177,10 +181,10 @@ class RegisterRegistry:
     def new_collector(self, store: Any, paths: set[str] | None = None) -> Any:
         """The collector factory: the capture attached to a row's store.
 
-        One seam for the three attach points — a page's own capture-all
-        collector, the ``user_view`` born of the first subscription, the
-        re-attach of the login — so a consumer pairing its own store type
-        overrides the capture with it.
+        One seam for the three attach points — a page's own collector, born
+        filtered on an empty prefix set, the ``user_view`` born of the first
+        subscription, the re-attach of the login — so a consumer pairing its
+        own store type overrides the capture with it.
         """
         return DataChangeCollector(store, paths=paths)
 
@@ -192,11 +196,17 @@ class RegisterRegistry:
         empty ``connections`` set, the downward edge of the tree, which callers
         never supply: it is filled by ``new_connection``.
 
+        It is born STAMPED: ``last_refresh_ts`` carries the server's own clock
+        from birth, so the expiry sweep needs no fallback to a start time. A
+        supplied value is honoured — a moved row keeps the stamp it travelled
+        with.
+
         Raises ``ValueError`` if the user already has an entry — page
         creation calls this only for a user it has not seen.
         """
         if "store" not in fields:
             fields["store"] = self.new_store()
+        fields.setdefault("last_refresh_ts", time.time())
         return self.user_items.create(user, connections=set(), **fields)
 
     def new_connection(
@@ -209,13 +219,22 @@ class RegisterRegistry:
         guest user entry is brought into being with it, a user entry like any
         other, with its own live store.
 
+        The row is born with a live ``store`` Bag unless the caller supplies one
+        — a moved connection arrives with its own, already hydrated — like every
+        other row of the tree. That store is SERVER-SIDE ONLY: no view, no
+        collector, nothing of it is ever replicated with the browser.
+
         The row is born with an empty ``pages`` set and its id joins the owner
-        entry's ``connections``: both directions of the edge in one gesture.
+        entry's ``connections``: both directions of the edge in one gesture. It
+        is born STAMPED with the server's clock, like every row of the chain.
 
         Raises ``ValueError`` if the connection already has a row.
         """
         if user is None:
             user = connection_id
+        if "store" not in fields:
+            fields["store"] = self.new_store()
+        fields.setdefault("last_refresh_ts", time.time())
         if user not in self.user_items:
             self.new_user(user)
         connection = self.connection_items.create(connection_id, user=user, pages=set(), **fields)
@@ -250,10 +269,18 @@ class RegisterRegistry:
         stored on the page row, whose owner is derived by ``user_of_page``.
         The new page id joins its connection row's ``pages``.
 
-        Rows are born with a live ``store`` Bag under a capture-all
-        ``collector``, an empty ``dbevents`` list and empty subscription sets;
-        ``user_view`` stays None until the first ``subscribe_store_path``.
-        Every other keyword passes through verbatim (schemaless).
+        Rows are born with a live ``store`` Bag under a collector FILTERED AND
+        EMPTY — nothing of the page's own store is captured until the page
+        subscribes a prefix — an empty ``dbevents`` list and empty subscription
+        sets, ``subscribed_paths`` among them: the mirror of that collector's
+        prefix set, the value a move packages. ``user_view`` stays None until
+        the first ``subscribe_store_path``. The row is born STAMPED with the
+        server's clock, like the connection and the user above it. Every other
+        keyword passes through verbatim (schemaless).
+
+        The store may carry a SECOND subscription this registry neither creates
+        nor removes: the worker's table-cache observer, which needs the worker's
+        own index and is therefore attached — and unsubscribed — up there.
         """
         if parent_page_id is not None and root_page_id is None:
             raise ValueError(f"page {page_id!r} has a parent but no root_page_id")
@@ -268,6 +295,7 @@ class RegisterRegistry:
         store = fields.pop("store", None)
         if store is None:
             store = self.new_store()
+        fields.setdefault("last_refresh_ts", time.time())
         page = self.page_items.create(
             page_id,
             session_id=session_id,
@@ -277,9 +305,10 @@ class RegisterRegistry:
             avatar_key=avatar_key,
             data=data,
             store=store,
-            collector=self.new_collector(store),
+            collector=self.new_collector(store, paths=set()),
             user_view=None,
             dbevents=[],
+            subscribed_paths=set(),
             store_subscriptions=set(),
             table_subscriptions=set(),
             **fields,
@@ -389,7 +418,11 @@ class RegisterRegistry:
         return self.page_items.update(page_id, **fields)
 
     def detach_page(self, page: dict[str, Any]) -> None:
-        """Stop the capture of a page row: its own collector and its user view."""
+        """Stop the capture of a page row: its own collector and its user view.
+
+        The two collectors are all this knows about: a worker watching the store
+        for its own purposes unsubscribes its own observer.
+        """
         page["collector"].detach()
         if page["user_view"] is not None:
             page["user_view"].detach()

@@ -200,15 +200,42 @@ def test_a_chunked_answer_is_joined_and_the_iterable_is_closed() -> None:
     assert app.closed is True
 
 
-def test_the_write_callable_is_refused_rather_than_silently_dropped() -> None:
-    seam = WsgiSeam(EchoApp())
-    write = seam.start_response("200 OK", [])
-    try:
-        write(b"lost bytes")
-    except NotImplementedError as exc:
-        assert "write()" in str(exc)
-    else:
-        raise AssertionError("the write callable answered instead of refusing")
+def test_the_write_callable_buffers_and_its_bytes_lead_the_body() -> None:
+    # PEP 3333: what write() emitted precedes what the iterable yields
+    def writing_app(
+        environ: dict[str, Any], start_response: Callable[..., Any]
+    ) -> Iterable[bytes]:
+        write = start_response("200 OK", [])
+        write(b"first ")
+        write(b"second ")
+        return [b"third"]
+
+    reply = WsgiSeam(writing_app).serve(http_form())
+    assert base64.b64decode(reply["body"]) == b"first second third"
+
+
+def test_a_second_serve_starts_from_an_empty_write_buffer() -> None:
+    def writing_app(
+        environ: dict[str, Any], start_response: Callable[..., Any]
+    ) -> Iterable[bytes]:
+        start_response("200 OK", [])(b"once ")
+        return []
+
+    seam = WsgiSeam(writing_app)
+    seam.serve(http_form())
+    assert base64.b64decode(seam.serve(http_form())["body"]) == b"once "
+
+
+def test_the_call_identity_reaches_the_site_in_the_environ() -> None:
+    app = EchoApp()
+    WsgiSeam(app).serve(http_form(), identity="alice")
+    assert app.environ["genro.identity"] == "alice"
+
+
+def test_an_identityless_call_still_carries_the_key() -> None:
+    app = EchoApp()
+    WsgiSeam(app).serve(http_form())
+    assert app.environ["genro.identity"] is None
 
 
 # ----------------------------------------------------------------------
@@ -234,7 +261,24 @@ async def test_an_http_call_without_a_wsgi_app_still_answers_the_explicit_error(
     worker.attach_channel(RecordingChannel())
     assert worker.wsgi_app is None
     await worker.service_call(call_frame({"identity": "alice", "http": http_form()}))
-    assert worker.channel.frames[0].data["error"] == "http CALL form is unsupported until phase B"
+    assert (
+        worker.channel.frames[0].data["error"]
+        == "http CALL form refused: this worker hosts no WSGI site"
+    )
+
+
+async def test_the_seam_runs_on_the_dedicated_http_pool_never_on_the_op_pool() -> None:
+    worker = UserStickyWorker("W:w1")
+    worker.attach_channel(RecordingChannel())
+    app = EchoApp()
+    worker.wsgi_app = app
+    assert worker.http_pool is not worker.pool
+    await worker.service_call(call_frame({"identity": "alice", "http": http_form()}))
+    assert app.environ["genro.identity"] == "alice"
+    # Both pools provision lazily: only the seam's has been touched.
+    assert worker.http_pool.provisioned is True
+    assert worker.pool.provisioned is False
+    await worker.shutdown()
 
 
 async def test_a_raising_wsgi_app_becomes_an_error_reply() -> None:

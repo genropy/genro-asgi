@@ -568,6 +568,7 @@ async def seed_live_guest(pool: Any, source: str, page_id: str = "p1") -> dict[s
     )
     worker = pool.workers[source]
     worker.registry.subscribe_store_path(page_id, "prefs")
+    worker.setStoreSubscription("sess-1", page_id=page_id, storename="page", prefix="counter")
     await pool.commander.forward_call(
         "sess-1", "/op/subscribeTable", {"table": "orders", "page_id": page_id}
     )
@@ -647,6 +648,8 @@ async def test_a_moved_page_lives_again_with_its_stores_and_subscriptions(pages:
     # the guest wrote into, carried whole through the move.
     assert worker.user_items.get("alice")["store"]["prefs.theme"] == "dark"
     assert page["store_subscriptions"] == {"prefs"}
+    assert page["subscribed_paths"] == {"counter"}
+    assert page["collector"].paths == {"counter"}
     assert page["table_subscriptions"] == {"orders"}
     assert worker.subscriptions.pages_for("orders") == {"p1"}
     assert worker.subscriptions.tables_for("p1") == {"orders"}
@@ -661,6 +664,37 @@ async def test_a_moved_page_lives_again_with_its_stores_and_subscriptions(pages:
     # One change, not two: the carried Bag already holds the ``prefs`` node the
     # guest brought into being, so only the leaf is new.
     assert [change["key"]["path"] for change in delivered["datachanges"]] == ["prefs.lang"]
+
+
+async def test_the_page_filter_survives_the_move(pages: Any) -> None:
+    """``subscribed_paths`` is replayed onto the reborn collector, filter and all."""
+    source = pages.commander.reception
+    target = next(name for name in pages.names if name != source)
+    pages.commander.assign_user("ballast", source)
+    await seed_live_guest(pages, source)
+    await pages.commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
+    worker = pages.workers[target]
+    await drain_over_the_wire(pages, "alice")
+    page = worker.page_items.get("p1")
+    page["store"]["counter"] = 2
+    page["store"]["untold.x"] = 1
+    delivered = await drain_over_the_wire(pages, "alice")
+    assert [change["key"]["path"] for change in delivered["datachanges"]] == ["counter"]
+
+
+async def test_the_moved_connection_carries_its_own_store(pages: Any) -> None:
+    """The connection store travels inside the blob, hydrated at destination."""
+    source = pages.commander.reception
+    target = next(name for name in pages.names if name != source)
+    pages.commander.assign_user("ballast", source)
+    await seed_live_guest(pages, source)
+    pages.workers[source].connection_items.get("sess-1")["store"]["device.width"] = 1280
+
+    await pages.commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
+
+    arrived = pages.workers[target].connection_items.get("sess-1")
+    assert arrived["store"]["device.width"] == 1280
+    assert pages.workers[source].connection_items.get("sess-1") is None
 
 
 async def test_a_dbevent_notified_after_the_move_reaches_the_moved_page(pages: Any) -> None:
@@ -680,6 +714,43 @@ async def test_a_dbevent_notified_after_the_move_reaches_the_moved_page(pages: A
     served = from_tytx(envelope["dbevents"], "json")
     assert [(event["table"], event["reason"]) for event in served] == [("orders", "later")]
     assert pages.workers[target].page_items.get("p1")["dbevents"] == []
+
+
+async def test_the_commanded_eviction_carries_what_the_login_push_carries(pages: Any) -> None:
+    """``evict_user`` on order builds the same parcel, and it rebuilds the same slice."""
+    source = pages.commander.reception
+    target = next(name for name in pages.names if name != source)
+    pages.commander.assign_user("ballast", source)
+    seeded = await seed_live_guest(pages, source)
+    await pages.commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
+    assert pages.commander.user_worker_map["alice"] == target
+
+    result = await pages.commander.forward_call("alice", "/op/evict_user")
+    # The worker that answered kept nothing: the slice is in the parcel alone.
+    assert pages.workers[target].user_items.get("alice") is None
+    assert pages.workers[target].page_items.get("p1") is None
+    assert pages.workers[target].subscriptions.pages_for("orders") == set()
+
+    pages.commander.assign_user("alice", source)
+    await pages.commander.forward_call(
+        "alice", "/op/install_package", {"package": result["package"]}
+    )
+    worker = pages.workers[source]
+    page = worker.page_items.get("p1")
+    assert page["store"]["counter"] == 1
+    assert page["subscribed_paths"] == {"counter"}
+    assert page["store_subscriptions"] == {"prefs"}
+    assert page["table_subscriptions"] == {"orders"}
+    assert worker.subscriptions.pages_for("orders") == {"p1"}
+    assert worker.user_items.get("alice")["store"]["prefs.theme"] == "dark"
+    assert worker.connection_items.get("sess-1")["user"] == "alice"
+    # Nothing pending was lost on the way: the two changes and the deposit that
+    # left with the login are still what the page reads at the arrival.
+    delivered = await drain_over_the_wire(pages, "alice")
+    assert [change["key"]["path"] for change in delivered["datachanges"]] == [
+        change["key"]["path"] for change in seeded["datachanges"]
+    ]
+    assert delivered["dbevents"] == [seeded["deposit"]]
 
 
 async def test_an_install_that_fails_takes_the_baggage_with_the_user(pages: Any) -> None:
@@ -891,6 +962,7 @@ async def test_traffic_to_a_resident_page_survives_a_concurrent_login(pages: Any
     source = await home_bound_alice(pages)
     worker = pages.workers[source]
     await drain_over_the_wire(pages, "alice", "p1")
+    worker.setStoreSubscription("alice", page_id="p1", storename="page", prefix="counter")
     worker.page_items.get("p1")["store"]["counter"] = 1
     await commander.forward_call(
         "sess-2", "/op/new_page", {"page_id": "p2", "session_id": "sess-2"}

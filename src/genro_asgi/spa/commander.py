@@ -49,7 +49,8 @@ contents down there). There are exactly six, in four groups:
   both ways: which pages each connection opened, and which connection each page
   belongs to. ``page_connection`` is fed exclusively by the lifecycle fold — the
   ``new_page`` and ``drop_page`` events the REPLYs already carry, plus the
-  ``drop_user`` cascade — so a live page costs no traffic of its own.
+  ``drop_user`` cascade and the drops an expiry sweep ascends — so a live page
+  costs no traffic of its own.
 
 The four tree structures are aligned BY CONSTRUCTION: nothing outside
 ``register_connection`` / ``drop_connection`` / ``register_page`` /
@@ -132,6 +133,14 @@ watermark to keep. The drain runs in the commander, never in the transport:
 rule: a late event never re-points a user already assigned elsewhere; only the
 explicit ``assign_user`` decision does that.
 
+**The task class runs after the release, on the same consumer.** A REPLY also
+carries ``tasks``: the ascending commands the answered CALL produced for pages
+of other workers. ``unwrap_reply`` hands each to ``spawn_command`` — one task
+per command, nobody awaiting it — so the caller is released without waiting on a
+deposit meant for somebody else. ``fold_command`` is that consumer, and it is
+the SAME one ``handle_event`` uses for the outbox EVENTs of the out-of-request
+producers: one implementation, both drains.
+
 **The front face is ``forward_call(identity, path, kwargs)``.** ``identity`` is the
 sticky key the caller provides — the root avatar identity once logged, the
 session id while anonymous; the commander never reads a cookie (that is
@@ -176,6 +185,17 @@ placement, because the connection that failed to arrive was never its only one.
 Every login has a caller coroutine holding it — a login is caused by a CALL and
 comes back on that CALL's REPLY — so ``place_login`` is never detached.
 
+**A total restart is a move whose destination is a file.** With ``dump_path``
+armed, ``stop`` walks ``user_worker_map`` and orders every user out with the
+commanded ``evict_user`` — the same parcel a login pushes, asked for instead of
+announced — and writes them all as one pickle. ``start`` reads that file back
+before anything can be routed, renames it ``_loaded`` so a restart that dies
+mid-restore cannot install it twice, and places each slice exactly like a
+login: ``decide_worker``, the map, ``install_package``. Both halves are
+best-effort by design — a worker that cannot answer at stop, a package a worker
+refuses at start, are logged and skipped — because the alternative to an
+incomplete register is no register at all.
+
 **The single role is configuration, not a subclass.** ``local_worker=True``
 (with ``workers=0``) makes the commander build ONE worker in this very process
 and attach it to its own hub through a :class:`~genro_asgi.channel.local.LocalChannel`:
@@ -194,16 +214,20 @@ commander-initiated move does, when it arrives.
 from __future__ import annotations
 
 import asyncio
+import base64
 import importlib
 import json
 import logging
 import os
+import pickle
+import re
 import signal
 import subprocess
 import sys
 import time
 import uuid
 from collections import deque
+from pathlib import Path
 from typing import Any
 
 from genro_tytx import from_tytx, to_tytx
@@ -300,6 +324,7 @@ class UserStickyCommander:
         probe_interval: float = PROBE_INTERVAL,
         probe_timeout: float = PROBE_TIMEOUT,
         local_worker: bool = False,
+        dump_path: str | None = None,
     ) -> None:
         """Args:
         workers: how many children to keep alive.
@@ -316,6 +341,8 @@ class UserStickyCommander:
         probe_timeout: how long a worker may take to answer its probe.
         local_worker: hold one worker in this process (the single role, §3.5a);
             pair it with ``workers=0`` to spawn no child at all.
+        dump_path: file the whole register is dumped to at ``stop`` and read back
+            at ``start`` — the move across a total restart (None disarms it).
         """
         self.target = workers
         self.group = group
@@ -327,6 +354,7 @@ class UserStickyCommander:
         self.probe_interval = probe_interval
         self.probe_timeout = probe_timeout
         self.local_worker = local_worker
+        self.dump_path = dump_path
         # The in-process worker of the single role and the wire it sits on;
         # both stay None in the multi role.
         self.worker: UserStickyWorker | None = None
@@ -364,6 +392,9 @@ class UserStickyCommander:
         # on it while a flag is up ARE the queue of waiters.
         self.placement_done = asyncio.Event()
         self._reconcile_task: asyncio.Task[None] | None = None
+        # Strong refs to the task-class commands in flight: the loop keeps only
+        # weak ones, and nobody awaits these.
+        self._command_tasks: set[asyncio.Task[None]] = set()
         self._wakeup = asyncio.Event()
 
     @property
@@ -407,12 +438,16 @@ class UserStickyCommander:
         The in-process worker joins BEFORE the first reconcile, so it is the
         first member of the roster and therefore the reception. The caretakers
         are not started here: each is born with its own worker's REGISTER.
+
+        The dump of the previous run is read back LAST, when there is a pool to
+        install it on.
         """
         await self.hub.start()
         if self.local_worker:
             await self.attach_local_worker()
         self._reconcile_task = asyncio.create_task(self.reconcile_loop())
         self._wakeup.set()
+        await self.restore_dump()
 
     async def stop(self) -> None:
         """Deliberate shutdown: retire every worker, close the hub, clean up.
@@ -422,7 +457,11 @@ class UserStickyCommander:
         no channel loss ever cancels — a nascent child, the local worker, a
         late REGISTER landing mid-stop — is exactly what the final sweep ends,
         and with the hub closed no ``member_joined`` can birth another.
+
+        The register is dumped FIRST, while every worker is still there to be
+        asked for its slice: after the retire there is nobody left holding one.
         """
+        await self.write_dump()
         if self._reconcile_task is not None:
             self._reconcile_task.cancel()
             try:
@@ -442,6 +481,104 @@ class UserStickyCommander:
         await self.hub.stop()
         for name in list(self.worker_roster):
             self.cancel_caretaker(name)
+
+    async def write_dump(self) -> None:
+        """Take every user off its worker and write the whole register to disk.
+
+        A total restart is a move whose destination is a file: the slices leave
+        the workers by the ONE road out — the commanded ``evict_user`` — and
+        wait in the parcel they always travel in. Every user is asked for by
+        identity, so each request lands on the worker that actually holds it.
+
+        Best-effort, like the session snapshot it follows: a user whose worker
+        cannot answer is logged and left behind, because a dying pool is exactly
+        when this runs and refusing to write the rest would save nothing.
+
+        The surface forgets each user the moment its parcel is in hand — the
+        same ``remove_user`` every other departure folds into — so a stopped
+        commander holds no placement for what now lives on disk.
+        """
+        if self.dump_path is None:
+            return
+        packages: dict[str, str] = {}
+        for user in list(self.user_worker_map):
+            try:
+                result = await self.forward_call(user, f"{OP_PATH_PREFIX}evict_user")
+            except Exception as exc:
+                self.logger.warning("Dump of %s failed (%s: %s)", user, type(exc).__name__, exc)
+            else:
+                packages[user] = result["package"]
+                self.remove_user(user)
+        target = Path(self.dump_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(pickle.dumps(packages))
+        self.logger.info("Dumped %d users to %s", len(packages), target)
+
+    async def restore_dump(self) -> None:
+        """Install the previous run's dump on the new pool, then retire the file.
+
+        The dump is RENAMED to ``<stem>_loaded<suffix>`` — the daemon's own
+        anti-double-load rename (siteregister.py:859-870), a stale one removed
+        first — and renamed before a single package is installed: a restart that
+        dies mid-restore must not find the file again and install everything
+        twice. The readiness wait comes BEFORE the rename: a pool that never
+        presents itself aborts the restore with the dump still in place, so the
+        next start finds it and tries again.
+
+        Each slice is placed like a login: a worker is decided, the map points
+        at it, and ``install_package`` rebuilds indexes, collectors, views and
+        pendings BY CONSTRUCTION — there is nothing to re-index and no trigger
+        to re-hook. The SURFACE is re-hung here, from the package's own record
+        (``adopt_slice``): the operational install sends no events, and a
+        restarted process folds from nothing. A package the destination refuses
+        is logged and dropped: the surface simply never learns that user.
+        """
+        if self.dump_path is None:
+            return
+        source = Path(self.dump_path)
+        if not source.exists():
+            return
+        packages: dict[str, str] = pickle.loads(source.read_bytes())
+        await self.wait_workers_ready()
+        loaded = source.with_name(f"{source.stem}_loaded{source.suffix}")
+        loaded.unlink(missing_ok=True)
+        source.rename(loaded)
+        path = f"{OP_PATH_PREFIX}install_package"
+        for user, package in packages.items():
+            destination = self.decide_worker()
+            self.assign_user(user, destination)
+            try:
+                payload = await self.hub.call(
+                    destination, path, {"identity": user, "kwargs": {"package": package}}
+                )
+                await self.unwrap_reply(destination, path, payload)
+            except Exception as exc:
+                self.remove_user(user)
+                self.logger.warning(
+                    "Restore of %s failed (%s: %s)", user, type(exc).__name__, exc
+                )
+            else:
+                self.adopt_slice(user, destination, package)
+                self.logger.info("Restored %s on %s", user, destination)
+
+    def adopt_slice(self, user: str, worker: str, package: str) -> None:
+        """Relearn the surface of a restored slice — the fold the install never sends.
+
+        Operational installs shape no events (the surface is the one that
+        ordered them), and a restarted process folds from an empty surface: the
+        only record of the slice's connections, pages and table subscriptions
+        is the package itself — the daemon's ``load()`` rebuilds its own dicts
+        from the file the same way (siteregister.py:859-870). ``assign_user``
+        has already pointed the map; here the chain below it is re-hung, with
+        the same mutators the lifecycle fold uses.
+        """
+        blob = pickle.loads(base64.b64decode(package))
+        for connection_id in blob["connections"]:
+            self.register_connection(connection_id, user)
+        for page_id, packed in blob["pages"].items():
+            self.register_page(page_id, user, worker, packed["connection_id"])
+            for table in packed["table_subscriptions"]:
+                self.page_subscriptions.subscribe(page_id, table)
 
     async def wait_workers_ready(
         self, count: int | None = None, timeout: float | None = None
@@ -716,28 +853,43 @@ class UserStickyCommander:
         self._wakeup.set()
 
     async def handle_event(self, member: ChannelMember, frame: Frame) -> None:
-        """The ascending rail: an exchange message a worker could not deliver itself.
+        """The outbox rail: a command a worker produced outside any CALL.
 
         The lifecycle never arrives here — it rides the REPLY of the CALL that
         caused it, and the occupancy is answered to a probe. What does arrive is
-        the third tier: a datachange whose target is not on the worker that
-        produced it, for this surface to resolve.
+        the third tier of an out-of-request producer: a datachange whose target
+        is not on the worker that produced it, for this surface to resolve. The
+        same command born INSIDE a CALL arrives on that CALL's REPLY, and both
+        drains hand it to the one consumer.
         """
-        op = self.op_of(frame.path)
+        await self.fold_command(member.name, frame.data or {})
+
+    async def fold_command(self, worker: str, message: dict[str, Any]) -> None:
+        """Run one ascending command, whatever drain delivered it.
+
+        One implementation, both drains: the op family says where the command
+        goes, and every ascending message carries its own ``op`` — the outbox
+        EVENT and the REPLY task class are the same shape.
+
+        The LIFECYCLE family reaches here from ONE producer, the expiry sweep:
+        a drop decided on the worker's own clock has no CALL to ride, so it
+        ascends alone and is folded exactly like the same event arriving on a
+        REPLY. The login never comes this way — it is caused by a CALL.
+        """
+        op = message.get("op")
         if op in EXCHANGE_OPS:
-            await self.route_exchange(frame.data or {})
+            await self.route_exchange(message)
             return
         if op in POST_OPS:
-            await self.apply_post(frame.data or {})
+            await self.apply_post(message)
             return
         if op in STORE_OPS:
-            await self.apply_store(member.name, frame.data or {})
+            await self.apply_store(worker, message)
             return
-        self.logger.debug("No consumer for EVENT %s from %s", frame.path, member.name)
-
-    def op_of(self, path: str) -> str:
-        """The op name a channel path carries."""
-        return path[len(OP_PATH_PREFIX) :] if path.startswith(OP_PATH_PREFIX) else path
+        if op in LIFECYCLE_OPS:
+            self.fold_events(worker, [message])
+            return
+        self.logger.debug("No consumer for command %r from %s", op, worker)
 
     # ------------------------------------------------------------------
     # The exchange switch, third tier: resolve, buffer, one send per worker
@@ -763,7 +915,9 @@ class UserStickyCommander:
         An address the surface cannot resolve — an unknown page, a user whose
         placement is in flight, a target already swept — is dropped with a debug
         log: a change is a signal and there is no retry queue (the legacy rule,
-        verbatim).
+        verbatim). A ``connection_store`` target is a session id, resolved in
+        two hops along the ownership chain — ``connection_user`` then
+        ``user_worker_map`` — since a connection lives where its user lives.
         """
         if message["filters"] is not None:
             return [
@@ -774,6 +928,9 @@ class UserStickyCommander:
         target = message["target"]
         if message["kind"] == "user_store":
             worker = self.user_worker_map.get(target)
+        elif message["kind"] == "connection_store":
+            user = self.connection_user.get(target)
+            worker = None if user is None else self.user_worker_map.get(user)
         else:
             worker = self.worker_of_page(target)
         if worker is None:
@@ -788,19 +945,23 @@ class UserStickyCommander:
         field's exact value.
 
         ``'*'`` (or nothing) is every page. Anything else is ONE ``field:value``
-        pair, compared for equality against the three fields the walk up the
-        chain derives — ``connection`` is the written edge, ``user`` its owner,
-        ``worker`` that user's placement: all three links of one chain, so the
-        surface holds no second independent field to conjoin. A field it does not
-        carry matches nothing.
+        pair, compared against the three fields the walk up the chain derives —
+        ``connection`` is the written edge, ``user`` its owner, ``worker`` that
+        user's placement: all three links of one chain, so the surface holds no
+        second independent field to conjoin. A field it does not carry matches
+        nothing.
 
-        The daemon's multi-pair grammar and its prefix-anchored regex belong to
-        ``pages()``, the query over the rich worker rows (owner's decision
-        2026-08-06: that is a phase-B fan-out, worker → commander → every
-        worker). Neither is emulated here, and the regex deliberately is not:
-        prefix-anchored, ``user:mario`` would deliver a user's change to every
-        user whose name it prefixes. An expression this surface cannot answer
-        is an error, not a silently empty broadcast.
+        The comparison is the daemon's own ``checkpage``
+        (gnr/web/daemon/siteregister.py:450-456), transcribed: an empty value
+        never matches, a non-string compares by equality, a string is
+        ``re.match``\\ ed against the filter — prefix-anchored, as the daemon
+        anchors it — and an invalid pattern is no match rather than an error.
+
+        The daemon's multi-pair grammar belongs to ``pages()``, the query over
+        the rich worker rows (owner's decision 2026-08-06: that is a phase-B
+        fan-out, worker → commander → every worker). It is not emulated here:
+        an expression this surface cannot answer is an error, not a silently
+        empty broadcast.
         """
         if not filters or filters == "*":
             return [(page_id, self.worker_of_page(page_id)) for page_id in self.page_connection]
@@ -815,9 +976,24 @@ class UserStickyCommander:
             user = self.connection_user.get(connection)
             worker = None if user is None else self.user_worker_map.get(user)
             derived = {"worker": worker, "user": user, "connection": connection}
-            if derived.get(name) == value:
+            if self.field_matches(derived.get(name), value):
                 matched.append((page_id, worker))
         return matched
+
+    def field_matches(self, value: Any, expression: str) -> bool:
+        """The daemon's ``checkpage`` comparison (siteregister.py:450-456).
+
+        The daemon's ``bytes`` branch has no counterpart: the three derived
+        fields are strings or ``None``.
+        """
+        if not value:
+            return False
+        if not isinstance(value, str):
+            return bool(expression == value)
+        try:
+            return bool(re.match(expression, value))
+        except Exception:
+            return False
 
     async def flush_exchange(self, buffer: dict[str, list[dict[str, Any]]]) -> None:
         """Ship the buffer: ONE ``/datachange_in`` EVENT per destination worker."""
@@ -972,15 +1148,20 @@ class UserStickyCommander:
         await self.propagate_global()
 
     async def unwrap_reply(self, worker: str, path: str, payload: dict[str, Any]) -> Any:
-        """The REPLY drain: fold the events the payload carries, then read it.
+        """The REPLY drain: fold the three sub-envelopes, then read the answer.
 
-        Every ``hub.call`` of this commander goes through here. The fold runs
-        first, and a login it folds is placed HERE, in the caller's own
-        coroutine — so a login result is released only once its user has a room
-        on the destination. An error payload becomes the exception the caller
-        expects.
+        Every ``hub.call`` of this commander goes through here. The SYNCHRONOUS
+        class runs first, and a login it folds is placed HERE, in the caller's
+        own coroutine — so a login result is released only once its user has a
+        room on the destination. The TASK class is then handed one task per
+        command: the caller waits on none of it. An error payload becomes the
+        exception the caller expects — its tasks are spawned all the same, since
+        the worker already drained what they carry and the op outcome gates
+        neither them nor the delivery.
         """
         await self.place_logins(worker, payload.get("events") or [])
+        for command in payload.get("tasks") or []:
+            self.spawn_command(worker, command)
         if "error" in payload:
             # The whole REPLY travels on the exception: an errored page CALL
             # still carried its drain, and the op outcome does not gate the
@@ -988,6 +1169,18 @@ class UserStickyCommander:
             # the worker already drained.
             raise ChannelCallError(worker, path, payload["error"], payload=payload)
         return payload.get("result")
+
+    def spawn_command(self, worker: str, message: dict[str, Any]) -> asyncio.Task[None]:
+        """Run one task-class command on its own task, holding a strong ref.
+
+        The loop keeps only a weak reference to a task, so the set is what keeps
+        the work alive until it ends; nobody awaits it, which is the point of
+        the class.
+        """
+        task = asyncio.create_task(self.fold_command(worker, message))
+        self._command_tasks.add(task)
+        task.add_done_callback(self._command_tasks.discard)
+        return task
 
     # ------------------------------------------------------------------
     # The fold — one implementation, both drains

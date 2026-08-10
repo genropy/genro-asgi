@@ -351,6 +351,9 @@ async def test_a_deposit_leaves_on_the_dbevents_key_and_never_as_a_datachange(
     await pool.new_page("alice", "p1", 0)
     await pool.subscribe("alice", "p1", "glbl.user")
     await pool.notify("alice", {"glbl.user": ["ins:1"]}, page_id="p0")
+    pool.worker_of(0).setStoreSubscription(
+        "alice", page_id="p1", storename="page", prefix="form"
+    )
     page = pool.worker_of(0).page_items.get("p1")
     page["store"]["form.name"] = "Ada"
 
@@ -364,3 +367,47 @@ async def test_a_deposit_leaves_on_the_dbevents_key_and_never_as_a_datachange(
     assert [c["key"]["path"] for c in datachanges] == ["form", "form.name"]
     # Drained: the page's pending list is empty and nothing was duplicated.
     assert page["dbevents"] == []
+
+
+# ----------------------------------------------------------------------
+# D4: the hidden transaction keeps its events to the page that made them
+# ----------------------------------------------------------------------
+
+
+async def test_local_only_deposits_on_the_origin_page_alone(pool: Notified) -> None:
+    """A hidden transaction serves its own page: no fan-out, no ascent."""
+    await pool.new_page("alice", "p0", 0)
+    await pool.new_page("alice", "p1", 0)
+    await pool.new_page("bob", "p2", 1)
+    await pool.subscribe("alice", "p1", "glbl.user")
+    await pool.subscribe("bob", "p2", "glbl.user")
+    pool.sends.clear()
+
+    envelope = await pool.commander.forward_envelope(
+        "alice",
+        "/op/notifyDbEvents",
+        {"dbevents": {"glbl.user": ["ins:1"]}, "page_id": "p0", "local_only": True},
+    )
+
+    assert envelope["result"] == {"tables": ["glbl.user"]}
+    # The origin page is the one CALLing: its deposit rides that very REPLY.
+    assert [d["batch"] for d in from_tytx(envelope["dbevents"], "json")] == [["ins:1"]]
+    # The other local subscriber never saw it, and nothing ascended.
+    assert pool.dbevents_of("p1", 0) == []
+    assert pool.worker_of(0).outbox.pending() == 0
+    assert pool.sends == []
+    assert pool.dbevents_of("p2", 1) == []
+
+
+async def test_subscribe_mode_is_accepted_and_ignored(pool: Notified) -> None:
+    """The vestigial parameter still travels from the callers: it must not refuse."""
+    await pool.new_page("alice", "p1", 0)
+
+    result = await pool.commander.forward_call(
+        "alice",
+        "/op/subscribeTable",
+        {"page_id": "p1", "table": "glbl.user", "subscribeMode": "fired"},
+    )
+
+    assert result == {"page_id": "p1", "table": "glbl.user", "subscribe": True}
+    assert pool.worker_of(0).subscriptions.pages_for("glbl.user") == {"p1"}

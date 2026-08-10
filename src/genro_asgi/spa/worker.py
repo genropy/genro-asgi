@@ -28,27 +28,51 @@ plain object that owns:
   event, assigned under ``dispatch_lock`` so seq order IS mutation order.
 - ``pool`` — a :class:`WorkPool` whose parent is the worker itself: a sync op
   handler runs off the loop, an async one stays on it.
+- ``http_pool`` — a second :class:`WorkPool`, the WSGI seam's own: site
+  requests are long and synchronous, and share no threads with the ops.
 - ``channel`` — the member face of the wire (a :class:`WorkerChannelClient`
   over a socket, or a :class:`LocalChannel` in the single role): the same API
   either way, injected by whoever builds the worker.
 
-**One envelope per CALL: causal attribution.** ``service_call`` opens a sink —
-an instance ContextVar holding a fresh list — for the CALL it is answering, and
-``offer_event`` appends to whichever sink its context sees (a sync handler runs
-on a pool thread with the context copied, so it appends to the same list).
-``send_reply`` carries exactly that list in ``data["events"]``: a REPLY reports
-the lifecycle the answered call CAUSED, nothing else. The commander folds it in
-the caller's own coroutine BEFORE reading the result, so the routing picture is
-already updated when the response is released. Each CALL is SERVED on its own
-task — ``create_task`` copies the context, so the sink of a CALL in flight is
-its own list and two CALLs never see each other's events; a lifecycle op
-outside any CALL is impossible and says so.
+**One envelope per CALL, three sub-envelopes.** ``service_call`` opens two sinks
+— instance ContextVars holding fresh lists — for the CALL it is answering, and
+``send_reply`` ships them beside the browser's own answer. The REPLY therefore
+carries three classes: the answer to the caller (``result``/``error`` plus the
+drain under ``DELIVERY_KEYS``), the SYNCHRONOUS class (``events``) and the TASK
+class (``tasks``). Empty classes carry no key.
 
-**The outbox is the async rail, and the exchange is one of its producers.** ``Outbox``,
+``offer_event`` appends to whichever causal sink its context sees (a sync
+handler runs on a pool thread with the context copied, so it appends to the same
+list): a REPLY reports the lifecycle the answered call CAUSED, nothing else. The
+commander folds that class in the caller's own coroutine BEFORE reading the
+result, so the routing picture is already updated when the response is released.
+Each CALL is SERVED on its own task — ``create_task`` copies the context, so the
+sinks of a CALL in flight are its own lists and two CALLs never mix; a lifecycle
+op outside any CALL is impossible and says so.
+
+The task class is the ascending work the CALL produced for OTHER workers' pages:
+``route_datachange``'s tier 3, shaped exactly as it would ride the outbox. The
+commander runs one task per command AFTER releasing the caller, so the browser
+never waits on a deposit meant for somebody else.
+
+**The outbox is the async rail of the out-of-request producers.** ``Outbox``,
 ``notify_sender`` and ``sender_loop`` are the transport of the cross-worker
-traffic (design D4): a datachange whose target is not here rides them up to the
-commander as an EVENT. The lifecycle never does — it rides the REPLY of the CALL
-that caused it.
+traffic born OUTSIDE a CALL (design D4): a datachange whose target is not here,
+produced by a background task, rides them up to the commander as an EVENT with
+its per-seq ack. Born inside a CALL, that same command rides the REPLY instead.
+The lifecycle comes through here from ONE producer only, for the same reason:
+the expiry sweep, which decides its drops on this worker's own clock with no
+CALL to answer. Every other lifecycle event rides the REPLY that caused it.
+
+**Expiry is stamped by the server and swept on the server's clock.** Every row
+of the chain is born with ``last_refresh_ts``, and a page-addressed CALL — the
+page's own sign of life — re-stamps the page, its connection and its user
+inside the pull trip (``refresh_chain``), always with ``time.time()`` and never
+with a value the client supplied. ``sweep_expired`` then drops what has been
+idle past ``PAGE_MAX_AGE``/``GUEST_MAX_AGE``/``CONNECTION_MAX_AGE``, announcing
+each drop on the outbox. It is DISARMED unless ``sweep_interval`` is given:
+until the browser rail carries a presence signal, a quiet page and a dead one
+look alike from here.
 
 **The login pushes the user out.** ``change_connection_user`` re-labels the
 CONNECTION onto the logged-in user — a mutation, never a re-key: keys, live
@@ -63,6 +87,12 @@ this one included. ONE login does not push: the one onto a user this worker
 already hosts. There the registry's join is everything — the connection is
 linked to the resident entry and the event carries no ``package`` — so a
 resident's pages never leave the worker they are being served on.
+
+**The commander can also ORDER the departure.** ``evict_user`` packages the same
+slice on demand and answers with it: no event, because the surface itself asked
+— it is the reply that tells it. That is the op a rebalance uses, and the op the
+commander walks its whole map with when it dumps the register to disk on the way
+down.
 
 **The move carries the whole slice, and the rebirth has one order.** The parcel
 is the user entry with its store, every CONNECTION of that user, and every page:
@@ -112,22 +142,26 @@ the apply time so ordering remains local.
 ``page_id`` is that page's request/response cycle, and ``send_reply`` merges
 ``wire_delivery`` into its envelope under ``DELIVERY_KEYS`` — each species
 TYTX-encoded, because a change carries a node value and a datetime that JSON
-cannot. Nothing is pushed: a change for a page that never calls waits in its
-collector. The op outcome does not gate the drain, and a CALL addressing no
-page carries neither key.
+cannot. The drain takes ``dispatch_lock``, so ``send_reply`` hands it to the
+pool like every other lock-taking work. Nothing is pushed: a change for a page
+that never calls waits in its collector. The op outcome does not gate the
+drain, and a CALL addressing no page carries neither key.
 
 **The addressed write has three tiers, and one switch.** ``set_datachange``,
 ``reset_datachanges`` and ``drop_datachanges`` all address a target that may or
 may not be here, and ``route_datachange`` is the switch: a target this worker
 holds is applied at once (tier 2 — no channel traffic), anything else ascends
-on the outbox to the commander, which resolves and pushes it back down as a
+to the commander — on the answered CALL's task class, or on the outbox when no
+CALL is being served — which resolves it and pushes it back down as a
 ``DATACHANGE_IN_PATH`` batch (tier 3). Tier 1 needs no op at all: a page writing
 its own store writes the Bag. A filtered broadcast always ascends — the surface
 that knows every page is up there.
 
 **STATE applies as a write, SIGNAL applies as a deposit.** ``kind`` says which:
-``page_store``/``user_store`` are state, so they land through
-``apply_forwarded`` (a real Bag write, ``_original_ts`` carried); ``page`` is a
+``page_store``/``user_store``/``connection_store`` are state, so they land
+through ``apply_forwarded`` (a real Bag write, ``_original_ts`` carried) — the
+connection store is server-side only, so nothing of it is ever delivered to a
+browser, it is simply the third register a store address can name; ``page`` is a
 signal (``setInClientData`` semantics), so it lands through ``append`` on the
 target page's collector — no Bag write, no residue, the producer's
 ``change_ts`` preserved by ``append`` itself. The change travels TYTX-encoded
@@ -148,6 +182,20 @@ remote — reads the same ``ts``; it is JSON by construction, so this rail needs
 no encoding at all. A page that left while the batch was on the wire loses its
 deposit: a dbevent is a signal, and there is no retry queue.
 
+**The table cache is invalidated by the same dbevent.** A page store may hold
+values cached from a table: the writer marks the node with a ``_caching_table``
+attribute, and a per-page observer subscribed to that store records the pair in
+``cached_tables`` (``table -> page_id -> paths``). The observer is INDEPENDENT
+of the page collector's prefix filter — the daemon records the cached path
+before and outside its own prefix match — and it is the worker's, not the
+registry's: the worker attaches it when a page is born or installed and
+unsubscribes it when the page leaves. A dbevent on a table pops its entry and
+writes ``None`` on every cached path, a REAL store write, so the page's
+filtered collector captures the invalidation exactly when that page subscribed
+the path. It runs on both rails, the ``notifyDbEvents`` origin and the
+descending batch, and NEVER under ``local_only``: a hidden transaction belongs
+to its own page and invalidates nothing.
+
 **The global store is read here and written above.** ``global_store`` is this
 worker's REPLICA Bag: local reads, zero round-trip, read-only by convention
 because the single writer is the commander. The ``store_set``/``store_del`` ops
@@ -164,11 +212,13 @@ order.
 sticky key and reaches the handler as its first argument. The
 ``{identity, http: {...}}`` form is the service rail for the old code:
 ``serve_http`` hands its facts to a :class:`~.environ.WsgiSeam`, which
-synthesizes the PEP 3333 environ and invokes ``wsgi_app`` in-process on a pool
-thread — WSGI as an adapter, never as a transport. ``wsgi_app`` is the consumer
-seam: ``None`` on this class, assigned by the worker subclass that hosts a WSGI
-site, and while it is ``None`` the http form is answered with an explicit error
-REPLY.
+synthesizes the PEP 3333 environ and invokes ``wsgi_app`` in-process on a
+thread of ``http_pool`` — the SECOND pool, dedicated to the seam so a burst of
+site requests cannot starve the op handlers — WSGI as an adapter, never as a
+transport. The CALL's ``identity`` reaches the site as ``genro.identity``.
+``wsgi_app`` is the consumer seam: ``None`` on this class, assigned by the
+worker subclass that hosts a WSGI site, and while it is ``None`` the http form
+is answered with an explicit error REPLY.
 """
 
 from __future__ import annotations
@@ -269,7 +319,7 @@ DBEVENTS_IN_PATH = "/dbevents_in"
 #: The address kinds that name a STORE: the change applies as a real Bag write
 #: through ``apply_forwarded``, carrying the producer's instant as
 #: ``_original_ts``.
-STATE_KINDS = frozenset({"page_store", "user_store"})
+STATE_KINDS = frozenset({"page_store", "user_store", "connection_store"})
 
 #: The address kind that names a page itself: the change is a SIGNAL and applies
 #: as a deposit on that page's collector — no Bag write, no residue.
@@ -296,14 +346,29 @@ MOVE_REBUILT_FIELDS = frozenset({"register_item_id", "collector", "user_view", "
 # The packaged keys the rebirth replays BY HAND, in order, once the row exists:
 # ``new_page`` seeds each of them itself and would refuse them as keywords.
 MOVE_REPLAYED_KEYS = frozenset(
-    {"store_subscriptions", "table_subscriptions", "pending_datachanges", "pending_dbevents"}
+    {
+        "subscribed_paths",
+        "store_subscriptions",
+        "table_subscriptions",
+        "pending_datachanges",
+        "pending_dbevents",
+    }
 )
 
 # The connection-row fields the rebirth builds itself: the reserved key, the
 # user the destination re-creates the row under, and the ``pages`` edge set the
-# arriving pages fill in as they land. A connection row holds no live object at
-# all, so everything else in it travels verbatim.
+# arriving pages fill in as they land. Everything else travels verbatim — the
+# row's live ``store`` included, pickled whole inside the blob and handed back
+# to ``new_connection``, which honours a supplied store.
 MOVE_CONNECTION_REBUILT_FIELDS = frozenset({"register_item_id", "user", "pages"})
+
+# The idle ages, in seconds, the expiry sweep measures ``last_refresh_ts``
+# against — the daemon's own defaults (siteregister.py:42 and :564-566).
+# PROVISIONAL: the daemon reads them per-group from the site configuration, and
+# this transposition keeps them module-level until the configuration seam exists.
+PAGE_MAX_AGE = 600
+GUEST_MAX_AGE = 40
+CONNECTION_MAX_AGE = 7200
 
 
 class Outbox:
@@ -392,21 +457,32 @@ class UserStickyWorker(RoutingClass):
         *,
         channel: Any = None,
         max_threads: int | None = None,
+        sweep_interval: float | None = None,
     ) -> None:
         """Args:
         name: the worker's channel name (already typed, e.g. ``W:w1``).
         channel: the member face of the wire; ``attach_channel`` may set it later.
         max_threads: ``WorkPool`` size for the sync op handlers.
+        sweep_interval: seconds between two expiry sweeps; ``None`` (the
+            default) arms no sweep at all — see ``sweep_expired``.
         """
         self.name = name
+        self.sweep_interval = sweep_interval
         self.registry = self.build_registry()
         self.outbox = Outbox(self)
         self.pool = WorkPool(self, max_threads)
+        # A SECOND pool, dedicated to the WSGI seam: a burst of site requests
+        # runs long and synchronous, and must never starve the op handlers.
+        self.http_pool = WorkPool(self, max_threads)
         # Reentrant: the subscription index takes this very lock, so an index
         # change and the row change it belongs to are ONE critical section even
         # though the op already holds it.
         self.dispatch_lock = threading.RLock()
         self.subscriptions = SubscriptionIndex(self.dispatch_lock)
+        # The table cache index: table -> page_id -> the paths of that page's
+        # store holding values cached from the table. Filled by the per-page
+        # cache observer, emptied by an invalidation or by the page leaving.
+        self.cached_tables: dict[str, dict[str, set[str]]] = {}
         # The global store as this worker sees it: a replica, read locally and
         # written only by what the commander pushes down.
         self.global_replica = GlobalStore()
@@ -425,9 +501,15 @@ class UserStickyWorker(RoutingClass):
         self._call_events: ContextVar[list[dict[str, Any]] | None] = ContextVar(
             "call_events", default=None
         )
+        # The task sink: the commands the CALL produced for the commander to run
+        # AFTER the caller is released. Same mechanics as the causal sink.
+        self._call_tasks: ContextVar[list[dict[str, Any]] | None] = ContextVar(
+            "call_tasks", default=None
+        )
         self._loop: asyncio.AbstractEventLoop | None = None
         self._outbox_ready = asyncio.Event()
         self._sender_task: asyncio.Task[None] | None = None
+        self._sweep_task: asyncio.Task[None] | None = None
         # Strong refs to the CALLs being served: the loop keeps only weak ones.
         self._service_tasks: set[asyncio.Task[None]] = set()
         if channel is not None:
@@ -480,6 +562,23 @@ class UserStickyWorker(RoutingClass):
         return events
 
     @property
+    def call_tasks(self) -> list[dict[str, Any]]:
+        """The task sub-envelope of the CALL being answered in this context.
+
+        Read only where ``in_call`` says the sink is open: outside a CALL the
+        ascending command has the outbox for a rail, not this list.
+        """
+        tasks = self._call_tasks.get()
+        if tasks is None:
+            raise RuntimeError("task sink outside a CALL")
+        return tasks
+
+    @property
+    def in_call(self) -> bool:
+        """Whether this context is serving a CALL — the sinks are open."""
+        return self._call_tasks.get() is not None
+
+    @property
     def op_names(self) -> set[str]:
         """The op names this worker routes (its ``@route`` methods)."""
         return set(self.route.nodes(lazy=True).get("entries", {}))
@@ -491,9 +590,11 @@ class UserStickyWorker(RoutingClass):
         self.outbox.notify = self.notify_sender
 
     async def start(self) -> None:
-        """Start the async sender on the running loop."""
+        """Start the async sender on the running loop, and the sweep when armed."""
         self._loop = asyncio.get_running_loop()
         self._sender_task = asyncio.create_task(self.sender_loop())
+        if self.sweep_interval is not None:
+            self._sweep_task = asyncio.create_task(self.sweep_loop())
 
     async def shutdown(self) -> None:
         """Deliberate stop: cancel the sender and the CALLs in flight, then close.
@@ -504,7 +605,7 @@ class UserStickyWorker(RoutingClass):
         """
         tasks = [
             task
-            for task in (self._sender_task, *self._service_tasks)
+            for task in (self._sender_task, self._sweep_task, *self._service_tasks)
             if task is not None and not task.done()
         ]
         for task in tasks:
@@ -515,9 +616,11 @@ class UserStickyWorker(RoutingClass):
             except asyncio.CancelledError:
                 pass
         self._sender_task = None
+        self._sweep_task = None
         if self.channel is not None:
             await self.channel.close()
         self.pool.shutdown(wait=False)
+        self.http_pool.shutdown(wait=False)
 
     # ------------------------------------------------------------------
     # The wire: a CALL is served on its own task, one REPLY per CALL.
@@ -584,17 +687,21 @@ class UserStickyWorker(RoutingClass):
             self.logger.exception("%s: service of CALL %s failed", self.name, frame.path)
 
     async def service_call(self, frame: Frame) -> None:
-        """Open this CALL's causal sink, answer it, then close the sink.
+        """Open this CALL's two sinks, answer it, then close them.
 
-        The sink is what the REPLY carries: the lifecycle this very call
-        produced. Held on the instance ContextVar, so a concurrent CALL — on its
-        own task context — fills its own list and the two never mix.
+        The sinks are what the REPLY carries besides the browser's own answer:
+        the lifecycle this very call produced, and the commands it asks the
+        commander to run after the caller is released. Both are held on instance
+        ContextVars, so a concurrent CALL — on its own task context — fills its
+        own lists and the two never mix.
         """
         token = self._call_events.set([])
+        tasks_token = self._call_tasks.set([])
         try:
             await self.answer_call(frame)
         finally:
             self._call_events.reset(token)
+            self._call_tasks.reset(tasks_token)
 
     async def answer_call(self, frame: Frame) -> None:
         """Dispatch one CALL and reply with its result, or with its failure.
@@ -613,7 +720,7 @@ class UserStickyWorker(RoutingClass):
         if op not in self.op_names:
             http = payload.get("http") or (payload.get("kwargs") or {}).get("http")
             if http is not None:
-                await self.serve_http(frame, http)
+                await self.serve_http(frame, http, payload.get("identity"))
                 return
         page_id = (payload.get("kwargs") or {}).get("page_id")
         try:
@@ -624,20 +731,25 @@ class UserStickyWorker(RoutingClass):
             return
         await self.send_reply(frame, result=result, page_id=page_id)
 
-    async def serve_http(self, frame: Frame, http: dict[str, Any]) -> None:
+    async def serve_http(
+        self, frame: Frame, http: dict[str, Any], identity: str | None = None
+    ) -> None:
         """Serve the http CALL form through the WSGI seam, or refuse it.
 
         No ``wsgi_app`` means this worker hosts no site: the protocol form is
         understood and the explicit error says the seam is empty. Otherwise the
-        environ synthesis and the WSGI call run together on a pool thread —
-        WSGI is synchronous, and the loop must stay free for the next CALL.
+        environ synthesis and the WSGI call run together on an ``http_pool``
+        thread — WSGI is synchronous, and neither the loop nor the op handlers
+        may be held behind it. The CALL's ``identity`` travels into the environ.
         """
         if self.wsgi_app is None:
-            await self.send_reply(frame, error="http CALL form is unsupported until phase B")
+            await self.send_reply(
+                frame, error="http CALL form refused: this worker hosts no WSGI site"
+            )
             return
         seam = WsgiSeam(self.wsgi_app)
         try:
-            reply = await self.pool.run(functools.partial(seam.serve, http))
+            reply = await self.http_pool.run(functools.partial(seam.serve, http, identity))
         except Exception as exc:
             self.logger.exception("%s: http CALL %s failed", self.name, frame.path)
             await self.send_reply(frame, error=f"{type(exc).__name__}: {exc}")
@@ -663,11 +775,17 @@ class UserStickyWorker(RoutingClass):
         error: Any = None,
         page_id: str | None = None,
     ) -> None:
-        """Answer a CALL, carrying the events that CALL caused for the fold.
+        """Answer a CALL, carrying the events and the commands that CALL caused.
 
         The envelope is causal: the commander folds exactly what this call
         produced, and the delivery is single — the send IS the delivery over UDS
         as over a queue, so there is nothing to ack and nothing to replay.
+
+        Three sub-envelopes travel together: the browser's own answer
+        (``result``/``error`` plus ``DELIVERY_KEYS``), the synchronous class the
+        commander folds BEFORE releasing it (``events``), and the task class it
+        runs after (``tasks`` — the exchange commands this CALL produced for
+        targets living elsewhere). An empty class simply carries no key.
 
         Delivery to the client is PULL, on the page's own request/response
         cycle: when the CALL is page-addressed and that page is still
@@ -678,12 +796,14 @@ class UserStickyWorker(RoutingClass):
         no page carries neither key.
         """
         data: dict[str, Any] = {"events": list(self.call_events)}
+        if self.call_tasks:
+            data["tasks"] = list(self.call_tasks)
         if error is not None:
             data["error"] = error
         else:
             data["result"] = result
-        if page_id is not None and self.page_items.get(page_id) is not None:
-            data.update(self.wire_delivery(page_id))
+        if page_id is not None:
+            data.update(await self.pool.run(functools.partial(self.wire_delivery, page_id)))
         await self.channel.send_frame(
             Frame(id=frame.id, method=REPLY_METHOD, path=frame.path, data=data)
         )
@@ -704,9 +824,10 @@ class UserStickyWorker(RoutingClass):
     async def flush_outbox(self) -> None:
         """Drain the pending events onto ``/op/<name>`` EVENTs, then self-ack.
 
-        The lifecycle never comes through here — it rides the REPLY envelope.
-        What does is the ascending exchange: a message whose target is on another
-        worker, for the commander to resolve.
+        What comes through here is the out-of-request ascent: the exchange
+        whose target lives on another worker, and the lifecycle of a producer
+        no CALL is waiting on — the expiry sweep's drops (``offer_lifecycle``).
+        The lifecycle a CALL caused rides that CALL's REPLY instead.
         """
         events = self.outbox.drain()
         for event in events:
@@ -759,35 +880,76 @@ class UserStickyWorker(RoutingClass):
     def collect_page(self, page_id: str) -> dict[str, Any]:
         """Drain everything pending for one page, in the three-species shape.
 
-        The single drain point: the page's own capture-all collector and its
+        The single drain point: the page's own filtered collector and its
         ``user_view`` (when it has one) are drained together and merged by
         ``change_ts`` — the sort is stable, so two changes stamped alike keep
         the order they were collected in. The dbevents are their own species
         and travel in their own key, never dressed as datachanges.
 
+        The whole drain runs under ``dispatch_lock``, the same lock the pool
+        threads hold when they deposit: without it the read-and-reset window
+        can lose a deposit landing between the drain and the swap. The lock is
+        an RLock, so ``evict_pages`` — which already holds it — re-enters
+        safely.
+
         Raises ``KeyError`` if ``page_id`` is not registered here.
         """
-        page = self.page_items.get(page_id)
-        if page is None:
-            raise KeyError(f"collect_page: unknown page {page_id!r}")
-        datachanges = page["collector"].drain()
-        if page["user_view"] is not None:
-            datachanges.extend(page["user_view"].drain())
+        with self.dispatch_lock:
+            page = self.page_items.get(page_id)
+            if page is None:
+                raise KeyError(f"collect_page: unknown page {page_id!r}")
+            datachanges = page["collector"].drain()
+            if page["user_view"] is not None:
+                datachanges.extend(page["user_view"].drain())
+            dbevents = page["dbevents"]
+            page["dbevents"] = []
         datachanges.sort(key=lambda change: change["change_ts"])
-        dbevents = page["dbevents"]
-        page["dbevents"] = []
         return {"datachanges": datachanges, "dbevents": dbevents}
 
+    def refresh_chain(self, page_id: str) -> float:
+        """Stamp the page and the chain above it with the server's own clock.
+
+        The daemon's ``refresh`` (siteregister.py:678-690) climbs exactly this
+        way — page, its connection, its user — and stamps them with an instant
+        it takes itself: a client value never touches these rows, so a page
+        cannot buy immortality by lying about its own activity. Returns the
+        instant written, which is what makes the stamping assertable.
+        """
+        now = time.time()
+        with self.dispatch_lock:
+            page = self.page_items.get(page_id)
+            page["last_refresh_ts"] = now
+            connection = self.connection_items.get(page["connection_id"])
+            connection["last_refresh_ts"] = now
+            self.user_items.get(connection["user"])["last_refresh_ts"] = now
+        return now
+
     def wire_delivery(self, page_id: str) -> dict[str, Any]:
-        """The drain of one page, encoded for the wire — one key per species.
+        """The server side of one pull cycle: the refresh stamp, then the drain.
 
         A change is not a JSON value: it carries the node's own value (a Bag when
         the write created an intermediate node) and a ``change_ts`` datetime. So
         each species travels TYTX-encoded, the same vehicle the move package uses
         for a store — the reader hydrates it with ``from_tytx``. The frame codec
         stays untouched.
+
+        The refresh rides here because a page-addressed CALL IS the page's sign
+        of life, and this is the trip that CALL already makes: both halves run
+        under one hold of ``dispatch_lock`` (an RLock, so each takes it again on
+        its own account). It drains, so it runs off the loop, through the pool —
+        the op INVARIANT holds here too.
+
+        The existence check lives INSIDE the lock hold, because the trip is a
+        thread handoff: a page the CALL itself dropped, or one a concurrent
+        eviction took between the CALL and its REPLY, is found gone HERE and
+        yields an empty delivery — the REPLY still departs. A check on the loop
+        side would be a decision taken before the window it decides about.
         """
-        collected = self.collect_page(page_id)
+        with self.dispatch_lock:
+            if self.page_items.get(page_id) is None:
+                return {}
+            self.refresh_chain(page_id)
+            collected = self.collect_page(page_id)
         return {key: to_tytx(collected[key], "json") for key in DELIVERY_KEYS}
 
     def apply_forwarded(self, bag: Bag, change: dict[str, Any]) -> None:
@@ -846,21 +1008,37 @@ class UserStickyWorker(RoutingClass):
 
         Tier 2 is the whole point of usersticky — a target this worker holds
         costs no channel traffic at all. Tier 3 is everything else: the message
-        ascends on the outbox and the commander, which alone sees every page,
-        resolves it. A filtered broadcast always ascends for that same reason.
+        ascends for the commander, which alone sees every page, to resolve. A
+        filtered broadcast always ascends for that same reason.
+
+        Which rail it ascends on depends on WHO produced it. Inside a CALL the
+        command joins that CALL's task sub-envelope and travels on its REPLY:
+        one exchange instead of two, with full causal attribution. Outside any
+        CALL — a background task, a handler of its own — the outbox with its
+        per-seq ack is the rail, as before.
         """
         if message["filters"] is None and self.holds_target(message):
             self.apply_datachange(message)
             return
-        self.outbox.offer(self.shape_exchange(message))
+        command = self.shape_exchange(message)
+        if self.in_call:
+            self.call_tasks.append(command)
+            return
+        self.outbox.offer(command)
 
     def target_row(self, message: dict[str, Any]) -> dict[str, Any] | None:
         """The register row a message addresses, or None when it is not here.
 
-        ``kind`` chooses the register: only ``user_store`` names a user, every
-        other kind names a page.
+        ``kind`` chooses the register: ``user_store`` names a user,
+        ``connection_store`` names a session id, every other kind names a page.
         """
-        register = self.user_items if message["kind"] == "user_store" else self.page_items
+        kind = message["kind"]
+        if kind == "user_store":
+            register = self.user_items
+        elif kind == "connection_store":
+            register = self.connection_items
+        else:
+            register = self.page_items
         return register.get(message["target"])
 
     def holds_target(self, message: dict[str, Any]) -> bool:
@@ -873,7 +1051,8 @@ class UserStickyWorker(RoutingClass):
         The state/signal split lands here: a store address is a real Bag write,
         a page address is a deposit on that page's collector. The parcel is
         decoded at this single point — it travelled TYTX from wherever it was
-        produced.
+        produced, ``replace`` riding beside it: the deposit coalesces with the
+        pending change of the same key when the producer asked for it.
         """
         row = self.target_row(message)
         op = message["op"]
@@ -884,7 +1063,9 @@ class UserStickyWorker(RoutingClass):
         elif message["kind"] in STATE_KINDS:
             self.apply_forwarded(row["store"], from_tytx(message["change"], "json"))
         else:
-            row["collector"].append(from_tytx(message["change"], "json"))
+            row["collector"].append(
+                from_tytx(message["change"], "json"), replace=message["replace"]
+            )
 
     async def apply_datachange_in(self, batch: list[dict[str, Any]]) -> None:
         """Apply one descending batch — the arrival of the internal rail.
@@ -919,6 +1100,7 @@ class UserStickyWorker(RoutingClass):
         kind: str = SIGNAL_KIND,
         target: str | None = None,
         filters: str | None = None,
+        replace: bool = False,
         **addressing: Any,
     ) -> dict[str, Any]:
         """Write a change toward a target that may live anywhere.
@@ -928,13 +1110,24 @@ class UserStickyWorker(RoutingClass):
         is the alternative address: the broadcast the commander resolves over
         every page it knows. ``addressing`` absorbs the caller's own ``page_id``
         — the pull cycle of the CALL, never the target of the write.
+
+        ``replace=True`` coalesces: on a SIGNAL address the deposit drops the
+        pending change of the same key — same path, same reason, same fired —
+        so a value written over and over reaches the browser once. It is the
+        daemon's own dedup, which compares ClientDataChange on those very three
+        fields.
         """
         with self.dispatch_lock:
             message = self.exchange_message(
-                "set_datachange", kind=kind, target=target, filters=filters, change=change
+                "set_datachange",
+                kind=kind,
+                target=target,
+                filters=filters,
+                change=change,
+                replace=replace,
             )
             self.route_datachange(message)
-        return {"kind": kind, "target": target, "filters": filters}
+        return {"kind": kind, "target": target, "filters": filters, "replace": replace}
 
     @route()
     def reset_datachanges(
@@ -973,6 +1166,52 @@ class UserStickyWorker(RoutingClass):
             self.route_datachange(message)
         return {"target": target, "filters": filters, "path": path}
 
+    @route()
+    def setStoreSubscription(  # noqa: N802 - reserved protocol name, transcribed verbatim
+        self,
+        identity: str,
+        page_id: str,
+        storename: str,
+        prefix: str,
+        active: bool = True,
+    ) -> dict[str, Any]:
+        """Open (or close) a page's window onto a store, by path prefix.
+
+        The daemon generates a datachange only for a path the page subscribed,
+        and this is the op that declares those prefixes. ``storename='page'``
+        acts on the page's OWN collector — the row's ``subscribed_paths`` and
+        the collector's prefix set move together, the set being what a move
+        packages and the collector what the drain reads. ``storename='user'``
+        acts on ``user_view``, the collector on the owner's Bag: opening one
+        creates or widens it, closing one narrows it, and a page that never
+        opened any has nothing to close.
+
+        Entirely LOCAL: the page lives on this worker by stickiness and both
+        collectors are objects of this process, so nothing ascends. Any other
+        storename is an impossible address and raises ``ValueError``.
+        """
+        with self.dispatch_lock:
+            page = self.page_items.get(page_id)
+            if page is None:
+                raise KeyError(f"setStoreSubscription: unknown page {page_id!r}")
+            if storename == "page":
+                if active:
+                    page["subscribed_paths"].add(prefix)
+                    page["collector"].subscribe_path(prefix)
+                else:
+                    page["subscribed_paths"].discard(prefix)
+                    page["collector"].unsubscribe_path(prefix)
+            elif storename == "user":
+                if active:
+                    self.registry.subscribe_store_path(page_id, prefix)
+                else:
+                    page["store_subscriptions"].discard(prefix)
+                    if page["user_view"] is not None:
+                        page["user_view"].unsubscribe_path(prefix)
+            else:
+                raise ValueError(f"setStoreSubscription: unknown storename {storename!r}")
+        return {"page_id": page_id, "storename": storename, "prefix": prefix, "active": active}
+
     # ------------------------------------------------------------------
     # dbevents: their own ops, their own index, their own pipe. Nothing here
     # ever touches a collector — a deposit is not a change.
@@ -985,12 +1224,17 @@ class UserStickyWorker(RoutingClass):
         table: str,
         page_id: str,
         subscribe: bool = True,
+        subscribeMode: str | None = None,  # noqa: N803 - reserved protocol name
     ) -> dict[str, Any]:
         """Subscribe (or unsubscribe) the CALLING page to a table's events.
 
         ``page_id`` is the caller's own page here — the subscriber is whoever
         asks — so the same field that names the pull cycle of this CALL names
         the subscription's owner, and there is no target to address.
+
+        ``subscribeMode`` is vestigial: the daemon accepts it and reads it
+        nowhere, and callers still pass it, so refusing it would break them at
+        mount time. It is accepted and ignored, exactly as the daemon does.
 
         The row's ``table_subscriptions`` set and the index move together: the
         set is what a move packages, the index is what the fan-out reads. Then
@@ -1021,6 +1265,7 @@ class UserStickyWorker(RoutingClass):
         dbevents: dict[str, Any],
         reason: str | None = None,
         page_id: str | None = None,
+        local_only: bool = False,
         **addressing: Any,
     ) -> dict[str, Any]:
         """Announce a commit's table events: locally at once, then everywhere else.
@@ -1034,14 +1279,26 @@ class UserStickyWorker(RoutingClass):
         same objects ascend, so a remote subscriber reads the origin's ``ts``.
         The commander excludes this worker from its own fan-out, so nothing is
         served twice; a table nobody subscribed anywhere costs no send at all.
+
+        ``local_only`` is the hidden transaction: the events belong to the page
+        that made them and to nobody else, so the deposits land on the origin
+        page alone — no fan-out to the other local subscribers, no ascent, and
+        no table-cache invalidation. The legacy routes that case to the page's
+        own notify and never runs the cache check on it.
         """
         deposits = [
             self.dbevent_deposit(table, batch, page_id, reason)
             for table, batch in (dbevents or {}).items()
             if batch
         ]
+        if local_only:
+            with self.dispatch_lock:
+                for deposit in deposits:
+                    self.deposit_dbevent(page_id, deposit)
+            return {"tables": [deposit["table"] for deposit in deposits]}
         with self.dispatch_lock:
             for deposit in deposits:
+                self.invalidate_table_cache(deposit["table"])
                 self.fan_out_local(deposit)
             if deposits:
                 self.outbox.offer(self.shape_ascending("notifyDbEvents", deposits=deposits))
@@ -1079,7 +1336,7 @@ class UserStickyWorker(RoutingClass):
         for page_id in self.subscriptions.pages_for(deposit["table"]):
             self.deposit_dbevent(page_id, deposit)
 
-    def deposit_dbevent(self, page_id: str, deposit: dict[str, Any]) -> None:
+    def deposit_dbevent(self, page_id: str | None, deposit: dict[str, Any]) -> None:
         """Append one deposit to a page's own pending list. Under ``dispatch_lock``.
 
         A page this worker does not hold — dropped, or moved while the batch was
@@ -1090,6 +1347,104 @@ class UserStickyWorker(RoutingClass):
             self.logger.debug("%s: dbevent dropped, no page %r", self.name, page_id)
             return
         page["dbevents"].append(deposit)
+
+    # ------------------------------------------------------------------
+    # The table cache: an observer per page store records what a table cached
+    # there, a dbevent on that table writes None over it.
+    # ------------------------------------------------------------------
+
+    def cache_observer_id(self, page_id: str) -> str:
+        """The Bag subscriber id of a page's cache observer.
+
+        The observer IS the worker, so its own ``id()`` would not tell two
+        pages apart: the page id is what discriminates, one observer per page
+        store.
+        """
+        return f"cached_tables_{page_id}"
+
+    def attach_cache_observer(self, page_id: str, store: Bag) -> None:
+        """Watch a page's own store for the writes that declare a cached table.
+
+        A dedicated subscription, never the page collector: the recording must
+        happen for EVERY caching write, whatever prefixes the page subscribed
+        (daemon ``_on_data_trigger``, siteregister.py:150-156, records before
+        and outside its prefix match). Updates and inserts only — a delete
+        takes the cached value away with the node, so there is nothing left to
+        invalidate.
+        """
+        store.subscribe(
+            self.cache_observer_id(page_id),
+            update=functools.partial(self.on_cache_update, page_id),
+            insert=functools.partial(self.on_cache_insert, page_id),
+        )
+
+    def on_cache_update(self, page_id: str, **kwargs: Any) -> None:
+        """Record an updated node that names a cached table. Never returns False."""
+        node = kwargs["node"]
+        self.record_cached_path(page_id, ".".join(kwargs["pathlist"] or []), node)
+
+    def on_cache_insert(self, page_id: str, **kwargs: Any) -> None:
+        """Record an inserted node that names a cached table.
+
+        The insert event reports the path of the PARENT, so the node's own
+        label completes it — the same rebuild the collector does.
+        """
+        node = kwargs["node"]
+        path = ".".join(list(kwargs["pathlist"] or []) + [node.label])
+        self.record_cached_path(page_id, path, node)
+
+    def record_cached_path(self, page_id: str, path: str, node: Any) -> None:
+        """Index one caching write; a node with no ``_caching_table`` is ignored.
+
+        This runs inside Bag trigger dispatch, on whatever thread wrote the
+        store, so it takes ``dispatch_lock`` — reentrant, so a write already
+        made under the lock stays safe.
+        """
+        table = node.attr.get("_caching_table")
+        if not table:
+            return
+        with self.dispatch_lock:
+            self.cached_tables.setdefault(table, {}).setdefault(page_id, set()).add(path)
+
+    def drop_page_cache(self, page_id: str) -> None:
+        """Stop watching a page's store and forget its cached paths.
+
+        The mirror of ``subscriptions.drop_page``: the page leaves every table
+        entry and an emptied table leaves no entry behind. Called while the row
+        is still there — the store is reached through it.
+        """
+        with self.dispatch_lock:
+            store = self.page_items.get(page_id)["store"]
+            store.unsubscribe(self.cache_observer_id(page_id), update=True, insert=True)
+            for table in list(self.cached_tables):
+                pages = self.cached_tables[table]
+                pages.pop(page_id, None)
+                if not pages:
+                    del self.cached_tables[table]
+
+    def invalidate_table_cache(self, table: str) -> None:
+        """Write None over every path a table cached, page by page. Under lock.
+
+        Transcribed from ``invalidateTableCache`` (siteregister.py:163-170):
+        the table's entry is popped and each cached path is set to None with a
+        real store write, so the page's own filtered collector captures the
+        invalidation when — and only when — that page subscribed the path. The
+        node keeps its ``_caching_table`` attribute, so the observer records
+        the path again: the daemon re-fills its index the same way, and the
+        entry simply describes a cache holding None until the next real read.
+        A table nobody cached costs one dict lookup that misses.
+        """
+        with self.dispatch_lock:
+            table_cache = self.cached_tables.pop(table, None)
+            if table_cache is None:
+                return
+            for page_id, paths in table_cache.items():
+                page = self.page_items.get(page_id)
+                if page is None:
+                    self.logger.debug("%s: cache invalidation, no page %r", self.name, page_id)
+                    continue
+                for path in paths:
+                    page["store"][path] = None
 
     async def apply_dbevents_in(self, batch: list[dict[str, Any]]) -> None:
         """Apply one descending dbevents batch — the arrival of its own pipe.
@@ -1102,8 +1457,16 @@ class UserStickyWorker(RoutingClass):
             self.logger.exception("%s: dbevents_in batch failed", self.name)
 
     def apply_dbevents_batch(self, batch: list[dict[str, Any]]) -> None:
-        """Deposit a whole descending batch under one lock, page by page."""
+        """Deposit a whole descending batch under one lock, page by page.
+
+        The tables are invalidated FIRST — the daemon's order, cache check
+        before the fan-out (siteregister.py:490-496) — and once each: a batch
+        names the same table for every subscribing page, and the invalidation is
+        worker-wide.
+        """
         with self.dispatch_lock:
+            for table in dict.fromkeys(item["deposit"]["table"] for item in batch):
+                self.invalidate_table_cache(table)
             for item in batch:
                 self.deposit_dbevent(item["page_id"], item["deposit"])
 
@@ -1259,6 +1622,18 @@ class UserStickyWorker(RoutingClass):
             self.call_events.append(event)
         return event
 
+    def offer_lifecycle(self, op: str, **payload: Any) -> dict[str, Any] | None:
+        """Shape a lifecycle op and queue it on the outbox — the CALL-less rail.
+
+        The sibling of ``offer_event`` for a producer nobody is waiting on: the
+        expiry sweep runs on its own clock, outside any CALL, so its drops have
+        no REPLY envelope to ride and take the outbox with its per-seq ack.
+        """
+        event = self.shape_event(op, **payload)
+        if event is not None:
+            self.outbox.offer(event)
+        return event
+
     # ------------------------------------------------------------------
     # User lifecycle ops — the active subset of the vocabulary. Each mutates
     # the register and offers its event under one lock.
@@ -1347,17 +1722,7 @@ class UserStickyWorker(RoutingClass):
                     session_id=identity,
                 )
                 return self.wire_entry(entry)
-            connections = self.pack_connections(user)
-            pages = self.evict_pages(user)
-            blob = {
-                "user": user,
-                "user_entry": {k: v for k, v in entry.items() if k not in LIVE_ROW_FIELDS},
-                "user_store": entry["store"],
-                "connections": connections,
-                "pages": pages,
-            }
-            package = base64.b64encode(pickle.dumps(blob)).decode("ascii")
-            self.registry.drop_user(user)
+            package = self.package_user(user)
             self.offer_event(
                 "change_connection_user",
                 user=user,
@@ -1371,9 +1736,9 @@ class UserStickyWorker(RoutingClass):
     def drop_user(self, identity: str) -> dict[str, Any]:
         """Drop the user entry (and its pages) and announce it.
 
-        The pages to forget in the subscription index are collected by walking
-        the tree down — the user entry's ``connections``, each connection's
-        ``pages`` — before the registry demolishes it.
+        The pages to forget in the subscription index and in the table cache are
+        collected by walking the tree down — the user entry's ``connections``,
+        each connection's ``pages`` — before the registry demolishes it.
         """
         with self.dispatch_lock:
             entry = self.user_items.get(identity)
@@ -1382,6 +1747,7 @@ class UserStickyWorker(RoutingClass):
             for connection_id in entry["connections"]:
                 for page_id in self.connection_items.get(connection_id)["pages"]:
                     self.subscriptions.drop_page(page_id)
+                    self.drop_page_cache(page_id)
             entry = self.registry.drop_user(identity)
             self.offer_event("drop_user", user=identity)
             return self.wire_entry(entry)
@@ -1407,6 +1773,7 @@ class UserStickyWorker(RoutingClass):
             unseen_user = identity not in self.user_items
             unseen_connection = connection_id not in self.connection_items
             entry = self.registry.new_page(page_id, user=identity, **fields)
+            self.attach_cache_observer(page_id, entry["store"])
             if unseen_user:
                 self.offer_event("new_user", user=identity)
             if unseen_connection:
@@ -1416,9 +1783,8 @@ class UserStickyWorker(RoutingClass):
             )
             return self.wire_entry(entry)
 
-    @route()
-    def drop_page(self, identity: str, page_id: str) -> dict[str, Any]:
-        """Drop a page row and announce it — with the cascade up the chain.
+    def demolish_page(self, page_id: str, announce: Callable[..., Any]) -> dict[str, Any]:
+        """Take one page off this worker and announce the cascade its drop causes.
 
         ``Registry.drop_page`` takes the connection away with the last page of
         it, and the user with the last connection of that user, so the surface
@@ -1427,18 +1793,121 @@ class UserStickyWorker(RoutingClass):
         after the page event.
 
         The owner is resolved BEFORE the drop: it is derived through the chain,
-        and the chain is exactly what the cascade may tear down.
+        and the chain is exactly what the cascade may tear down. The cache
+        observer goes the same way, while the row is still there to reach the
+        store through.
+
+        ``announce`` is the rail the caller has: an op inside a CALL passes
+        ``offer_event`` and its events ride that REPLY, the expiry sweep — which
+        runs outside any CALL — passes ``offer_lifecycle`` and they ride the
+        outbox. Call it with ``dispatch_lock`` held; returns the dropped row.
         """
-        with self.dispatch_lock:
-            user = self.registry.user_of_page(page_id)
+        user = self.registry.user_of_page(page_id)
+        self.subscriptions.drop_page(page_id)
+        self.drop_page_cache(page_id)
+        entry = self.registry.drop_page(page_id)
+        announce("drop_page", user=user, page_id=page_id)
+        if entry["connection_id"] not in self.connection_items:
+            announce("drop_connection", user=user, session_id=entry["connection_id"])
+        if user not in self.user_items:
+            announce("drop_user", user=user)
+        return entry
+
+    def demolish_connection(self, connection_id: str, announce: Callable[..., Any]) -> None:
+        """Take a whole connection off this worker, pages first, user last.
+
+        The pages announce their own drop BEFORE the connection does: the
+        surface forgets a connection expecting its pages to be gone already, and
+        the order it hears is the order the demolition happened in.
+        ``Registry.drop_connection`` takes the user with the last connection of
+        it, so that drop is announced too. Same ``announce`` contract as
+        ``demolish_page``, same ``dispatch_lock`` hold.
+        """
+        connection = self.connection_items.get(connection_id)
+        user = connection["user"]
+        for page_id in list(connection["pages"]):
             self.subscriptions.drop_page(page_id)
-            entry = self.registry.drop_page(page_id)
-            self.offer_event("drop_page", user=user, page_id=page_id)
-            if entry["connection_id"] not in self.connection_items:
-                self.offer_event("drop_connection", user=user, session_id=entry["connection_id"])
-            if user not in self.user_items:
-                self.offer_event("drop_user", user=user)
-            return self.wire_entry(entry)
+            self.drop_page_cache(page_id)
+            announce("drop_page", user=user, page_id=page_id)
+        self.registry.drop_connection(connection_id)
+        announce("drop_connection", user=user, session_id=connection_id)
+        if user not in self.user_items:
+            announce("drop_user", user=user)
+
+    @route()
+    def drop_page(self, identity: str, page_id: str) -> dict[str, Any]:
+        """Drop a page row and announce it on the REPLY of this CALL."""
+        with self.dispatch_lock:
+            return self.wire_entry(self.demolish_page(page_id, self.offer_event))
+
+    # ------------------------------------------------------------------
+    # Expiry: the daemon's cleanup pass, transcribed — and left disarmed.
+    # ------------------------------------------------------------------
+
+    def is_guest_connection(self, connection_id: str) -> bool:
+        """Whether a connection is still anonymous — the guest rule, transposed.
+
+        The daemon reads the ``guest_`` prefix of the user name
+        (siteregister.py:716-717); the naked sticky key of this world says the
+        same thing structurally: a connection is guest while its user IS its own
+        id, the value ``new_connection`` gives an anonymous reception.
+        """
+        return self.connection_items.get(connection_id)["user"] == connection_id
+
+    def sweep_expired(self) -> dict[str, list[str]]:
+        """Drop what has been idle too long, announcing every drop on the outbox.
+
+        Transcribed from the daemon's ``expire_pages``/``expire_connection``
+        (siteregister.py:709-741): pages first, each against ``PAGE_MAX_AGE`` or
+        ``GUEST_MAX_AGE`` by the guest rule, then the connections that survived
+        them against ``CONNECTION_MAX_AGE`` (``GUEST_MAX_AGE`` for a guest).
+        The connections are snapshot AFTER the pages, so what the page cascade
+        already took away is not walked twice.
+
+        These drops are out-of-request lifecycle: there is no CALL to answer, so
+        they ride the outbox — the rail of every producer nobody is waiting on.
+        ``claim_cleanup`` is not transposed: sticky ownership already gives each
+        user exactly one owner, so there is no cross-process claim to arbitrate.
+
+        Sync, under ``dispatch_lock`` — the op INVARIANT: the loop hands it to
+        the pool. Returns the ids dropped, by species.
+        """
+        now = time.time()
+        dropped: dict[str, list[str]] = {"pages": [], "connections": []}
+        with self.dispatch_lock:
+            for page_id in self.page_items.keys():
+                page = self.page_items.get(page_id)
+                max_age = (
+                    GUEST_MAX_AGE
+                    if self.is_guest_connection(page["connection_id"])
+                    else PAGE_MAX_AGE
+                )
+                if now - page["last_refresh_ts"] > max_age:
+                    self.demolish_page(page_id, self.offer_lifecycle)
+                    dropped["pages"].append(page_id)
+            for connection_id in self.connection_items.keys():
+                connection = self.connection_items.get(connection_id)
+                max_age = (
+                    GUEST_MAX_AGE
+                    if self.is_guest_connection(connection_id)
+                    else CONNECTION_MAX_AGE
+                )
+                if now - connection["last_refresh_ts"] > max_age:
+                    self.demolish_connection(connection_id, self.offer_lifecycle)
+                    dropped["connections"].append(connection_id)
+        return dropped
+
+    async def sweep_loop(self) -> None:
+        """Run the sweep every ``sweep_interval`` seconds, off the loop.
+
+        Started only when the interval is set: DISARMED by default, and
+        deliberately so — without a presence signal from the browser an idle
+        page is indistinguishable from a silent one, and the sweep would kill
+        pages that are merely quiet. The browser rail arms it.
+        """
+        while True:
+            await asyncio.sleep(self.sweep_interval)
+            await self.pool.run(self.sweep_expired)
 
     # ------------------------------------------------------------------
     # The move: evict packages a whole user slice and spends it; install
@@ -1448,8 +1917,9 @@ class UserStickyWorker(RoutingClass):
     def pack_connections(self, user: str) -> dict[str, dict[str, Any]]:
         """Package every connection row of ``user`` for the move.
 
-        A connection row is pure metadata — no store, no collector — so packing
-        is the row minus what the destination rebuilds. Nothing is dropped here:
+        A connection row carries its live store and no collector, so packing is
+        the row minus what the destination rebuilds — the store travels inside
+        the pickled blob and lands hydrated. Nothing is dropped here:
         the ``drop_user`` that ends the eviction takes the connections with it,
         pages and all.
         """
@@ -1471,7 +1941,9 @@ class UserStickyWorker(RoutingClass):
         already gives it. What travels is the whole row minus what the
         destination rebuilds, plus the two drained species under their own keys.
         The local subscription index forgets the page here: a stale entry would
-        resolve a destination for a page this worker no longer has.
+        resolve a destination for a page this worker no longer has. The cache
+        observer is unsubscribed in the same breath, before the drain: the store
+        travels, and a subscription of THIS worker must not travel with it.
 
         The pages are reached by walking the tree — the user's ``connections``,
         each connection's ``pages`` (a copy, it is emptied as we go) — and each
@@ -1484,6 +1956,7 @@ class UserStickyWorker(RoutingClass):
             for page_id in list(connection["pages"]):
                 page = self.page_items.get(page_id)
                 self.registry.detach_page(page)
+                self.drop_page_cache(page_id)
                 pending = self.collect_page(page_id)
                 self.page_items.drop(page_id)
                 connection["pages"].discard(page_id)
@@ -1494,6 +1967,46 @@ class UserStickyWorker(RoutingClass):
                     "pending_dbevents": pending["dbevents"],
                 }
         return packaged
+
+    def package_user(self, user: str) -> str:
+        """Seal the whole slice of ``user`` into a transport package and spend it here.
+
+        The one road out of a worker, whatever orders the departure: the login
+        push and the commanded eviction build the SAME parcel — the user entry
+        without its live fields, the store itself, every connection row, every
+        page drained on the way out — and both leave nothing behind, because a
+        slice that is on the wire must be nowhere else. The order is the one
+        ``evict_pages`` describes: the pages come off BEFORE the Bags are
+        pickled, so no collector of this worker is watching what travels.
+        """
+        entry = self.user_items.get(user)
+        connections = self.pack_connections(user)
+        pages = self.evict_pages(user)
+        blob = {
+            "user": user,
+            "user_entry": {k: v for k, v in entry.items() if k not in LIVE_ROW_FIELDS},
+            "user_store": entry["store"],
+            "connections": connections,
+            "pages": pages,
+        }
+        self.registry.drop_user(user)
+        return base64.b64encode(pickle.dumps(blob)).decode("ascii")
+
+    @route()
+    def evict_user(self, identity: str) -> dict[str, Any]:
+        """Hand the slice of ``identity`` up to the commander and forget it here.
+
+        The commanded move, transcribed from the legacy ``/evict_user``: the
+        commander orders the departure — a rebalance, a shutdown dump — and the
+        worker answers with the parcel. OPERATIONAL, so it shapes NO event: the
+        surface is the one that asked, and it learns the outcome from this very
+        reply. That is the whole difference from the login push, which nobody
+        asked for and which therefore must announce itself.
+        """
+        with self.dispatch_lock:
+            if self.user_items.get(identity) is None:
+                raise KeyError(f"evict_user: unknown user {identity!r}")
+            return {"package": self.package_user(identity)}
 
     def install_connection(self, user: str, connection_id: str, packed: dict[str, Any]) -> None:
         """Rebuild one packaged connection row under ``user``.
@@ -1507,17 +2020,26 @@ class UserStickyWorker(RoutingClass):
     def install_page(self, user: str, page_id: str, packed: dict[str, Any]) -> None:
         """Rebuild one packaged page under ``user``, in the mandatory order.
 
-        The Bag came hydrated out of the parcel, so the capture-all collector
-        ``new_page`` attaches to it captures nothing — attaching one BEFORE the
-        hydration would have turned every arrived node into a fresh change.
-        Then the subscriptions live again: the store prefixes rebuild
-        ``user_view`` on the user's arrived Bag, the tables rebuild both maps of
+        The Bag came hydrated out of the parcel, so the collector ``new_page``
+        attaches to it captures nothing — attaching one BEFORE the hydration
+        would have turned every arrived node into a fresh change. The cache
+        observer is attached here for the same reason the source removed it: it
+        is a subscription of the worker that holds the page, so the destination
+        makes its own. What the arrived store already cached is re-recorded by
+        the next write to it, as it is in the daemon after a load.
+        Then the subscriptions live again: the page's own prefixes re-filter its
+        collector, the store prefixes rebuild ``user_view`` on the user's
+        arrived Bag, the tables rebuild both maps of
         the index. The pendings are re-deposited LAST and verbatim — ``append``
         keeps the producer's ``change_ts`` and assigns a fresh local
         ``change_idx``, so the destination drains them in the order they left.
         """
         fields = {key: value for key, value in packed.items() if key not in MOVE_REPLAYED_KEYS}
         page = self.registry.new_page(page_id, user=user, **fields)
+        self.attach_cache_observer(page_id, page["store"])
+        for prefix in packed["subscribed_paths"]:
+            page["subscribed_paths"].add(prefix)
+            page["collector"].subscribe_path(prefix)
         for prefix in packed["store_subscriptions"]:
             self.registry.subscribe_store_path(page_id, prefix)
         for table in packed["table_subscriptions"]:

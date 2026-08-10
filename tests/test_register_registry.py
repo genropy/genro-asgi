@@ -210,6 +210,22 @@ def test_new_connection_is_born_guest_with_its_own_user_entry() -> None:
     assert registry.user_items.get("s1")["store"] is not None
 
 
+def test_new_connection_is_born_with_its_own_live_store() -> None:
+    registry = RegisterRegistry()
+    connection = registry.new_connection("s1")
+    assert connection["store"] is not None
+    assert connection["store"] is not registry.user_items.get("s1")["store"]
+
+
+def test_new_connection_honours_a_supplied_store() -> None:
+    registry = RegisterRegistry()
+    carried = registry.new_store()
+    carried["arrived.here"] = "yes"
+    connection = registry.new_connection("s1", store=carried)
+    assert connection["store"] is carried
+    assert connection["store"]["arrived.here"] == "yes"
+
+
 def test_new_connection_under_a_named_user_reuses_the_entry() -> None:
     registry = RegisterRegistry()
     registry.new_user("alice", role="admin")
@@ -443,7 +459,7 @@ def test_the_factory_seams_own_every_store_and_collector() -> None:
     # Every store born through the seam: alice's, the guest's, the page's.
     assert registry.user_items.get("alice")["store"] in registry.stores
     assert page["store"] in registry.stores
-    # Every collector too: the page's own capture-all, the first user_view,
+    # Every collector too: the page's own filtered one, the first user_view,
     # the re-attach of the resident login — which is the last one built.
     assert page["collector"] in registry.collectors
     assert page["user_view"] is registry.collectors[-1]

@@ -32,7 +32,13 @@ same conventions.
 **One body, whole, both ways.** Streaming and large bodies are out of scope by
 ratification: the request body arrives as one ``BytesIO`` and the response
 iterable is consumed to the last chunk (and closed, as PEP 3333 requires)
-before the reply dict exists.
+before the reply dict exists. The legacy ``write()`` callable is supported the
+only way a whole-body reply can support it: its chunks are buffered and, per
+PEP 3333, prepended to the bytes the iterable yields.
+
+**The identity travels.** The CALL's ``identity`` — the sticky key the pool
+routed on — reaches the site as ``environ["genro.identity"]``: the hosted code
+sees who the request belongs to without re-deriving it from the cookie.
 
 The call is synchronous — WSGI is — so the worker runs it on its pool.
 """
@@ -60,14 +66,16 @@ class WsgiSeam:
         self.wsgi_app = wsgi_app
         self.status = ""
         self.headers: list[tuple[str, str]] = []
+        self.written: list[bytes] = []
 
-    def build_environ(self, http: dict[str, Any]) -> dict[str, Any]:
+    def build_environ(self, http: dict[str, Any], identity: str | None = None) -> dict[str, Any]:
         """The PEP 3333 environ for one ``http`` dict.
 
         ``SCRIPT_NAME`` is empty: the path the front forwards is already
         mount-relative, so the whole of it is ``PATH_INFO``. ``SERVER_NAME`` and
         ``SERVER_PORT`` come from the Host header, the only place the front's
-        own address survives the packing.
+        own address survives the packing. ``genro.identity`` carries the CALL's
+        identity, ``None`` when the caller named none.
         """
         body = base64.b64decode(http.get("body") or "")
         headers = [(str(name), str(value)) for name, value in http.get("headers") or []]
@@ -85,6 +93,7 @@ class WsgiSeam:
             "wsgi.multithread": True,
             "wsgi.multiprocess": False,
             "wsgi.run_once": False,
+            "genro.identity": identity,
         }
         environ.update(self.header_environ(headers))
         if body and "CONTENT_LENGTH" not in environ:
@@ -133,26 +142,31 @@ class WsgiSeam:
         """The classic WSGI callback: capture status and headers for the reply.
 
         The return value is the legacy ``write`` callable PEP 3333 still
-        mandates; nothing here uses it, so it raises rather than pretending to
-        buffer bytes the reply would silently lose.
+        mandates: it buffers, and ``serve`` puts its bytes where the spec puts
+        them — before everything the iterable yields.
         """
         self.status = status
         self.headers = list(headers)
-        return self.refuse_write
+        return self.buffer_write
 
-    def refuse_write(self, data: bytes) -> None:
-        """The deprecated ``write`` callable — unsupported, and says so."""
-        raise NotImplementedError("the write() callable is not supported: return an iterable")
+    def buffer_write(self, data: bytes) -> None:
+        """The deprecated ``write`` callable: buffer the chunk for the reply."""
+        self.written.append(data)
 
-    def serve(self, http: dict[str, Any]) -> dict[str, Any]:
+    def serve(self, http: dict[str, Any], identity: str | None = None) -> dict[str, Any]:
         """Run the WSGI app on one ``http`` dict and shape its reply.
 
         Synchronous by nature — the caller gives it a thread.
         """
-        environ = self.build_environ(http)
+        self.written = []
+        environ = self.build_environ(http, identity)
         result = self.wsgi_app(environ, self.start_response)
         try:
-            body = b"".join(result)
+            # The iterable is consumed FIRST: an app that writes while it
+            # yields fills the buffer during this very loop, and its bytes
+            # still lead the body.
+            chunks = list(result)
+            body = b"".join(self.written + chunks)
         finally:
             close = getattr(result, "close", None)
             if close is not None:

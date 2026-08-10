@@ -36,9 +36,10 @@ from genro_bag import Bag
 from genro_bag.datachange import DataChangeCollector
 from genro_tytx import from_tytx, to_tytx
 
+from genro_asgi.channel import ChannelCallError
 from genro_asgi.channel.local import LocalChannel
 from genro_asgi.spa.commander import UserStickyCommander
-from genro_asgi.spa.worker import UserStickyWorker
+from genro_asgi.spa.worker import PAGE_MAX_AGE, UserStickyWorker
 
 SETTLE_TIMEOUT = 5.0
 
@@ -89,16 +90,26 @@ class Routed:
         self.commander = UserStickyCommander(workers=0, guest_occupancy_limit=1000)
         self.workers: dict[str, UserStickyWorker] = {}
         self.sends: list[tuple[str, str, Any]] = []
+        # The two ascending rails, told apart: what a REPLY's task class handed
+        # to the commander, and what a worker's outbox took.
+        self.commands: list[dict[str, Any]] = []
+        self.ascended: list[dict[str, Any]] = []
 
     async def start(self, count: int = 2) -> None:
         await self.commander.start()
         hub_post = self.commander.hub.post
+        spawn_command = self.commander.spawn_command
 
         async def recording_post(name: str, path: str, data: Any = None) -> str:
             self.sends.append((name, path, data))
             return await hub_post(name, path, data)
 
+        def recording_spawn(worker: str, message: dict[str, Any]) -> Any:
+            self.commands.append(message)
+            return spawn_command(worker, message)
+
         self.commander.hub.post = recording_post  # type: ignore[method-assign]
+        self.commander.spawn_command = recording_spawn  # type: ignore[method-assign]
         for _ in range(count):
             await self.add_worker()
 
@@ -107,6 +118,13 @@ class Routed:
         name = commander.next_worker_name()
         commander.worker_roster[name] = commander.new_roster_row(os.getpid(), None)
         worker = UserStickyWorker(name)
+        offer = worker.outbox.offer
+
+        def recording_offer(event: dict[str, Any]) -> None:
+            self.ascended.append(event)
+            offer(event)
+
+        worker.outbox.offer = recording_offer  # type: ignore[method-assign]
         channel = LocalChannel(name)
         worker.attach_channel(channel)
         await channel.connect()
@@ -116,6 +134,8 @@ class Routed:
         # A REGISTER seeds that worker's global-store replica: setup traffic, not
         # routing traffic, so it never counts toward what these tests assert.
         self.sends.clear()
+        self.commands.clear()
+        self.ascended.clear()
         return name
 
     async def stop(self) -> None:
@@ -139,6 +159,14 @@ class Routed:
         self.commander.assign_user(user, self.names[worker_index])
         return await self.commander.forward_call(
             user, "/op/new_page", {"page_id": page_id, "session_id": f"s-{page_id}"}
+        )
+
+    async def subscribe_page(self, user: str, page_id: str, prefix: str) -> Any:
+        """Open the page's own store on ``prefix`` — its collector is born empty."""
+        return await self.commander.forward_call(
+            user,
+            "/op/setStoreSubscription",
+            {"page_id": page_id, "storename": "page", "prefix": prefix},
         )
 
     async def set_datachange(self, producer: str, **kwargs: Any) -> Any:
@@ -174,6 +202,48 @@ async def test_a_target_on_my_worker_is_written_locally(pool: Routed) -> None:
     assert pool.worker_of(0).outbox.pending() == 0
 
 
+async def test_replace_coalesces_the_pending_deposits_of_one_key(pool: Routed) -> None:
+    """The daemon's dedup: same path, same reason, same fired — one pending change."""
+    await pool.new_page("alice", "p1", 0)
+    await pool.new_page("alice", "p2", 0)
+    page = pool.worker_of(0).page_items.get("p2")
+
+    for value in (1, 2, 3):
+        await pool.set_datachange(
+            "alice", change=parcel(a_change(value=value)), kind="page", target="p2", replace=True
+        )
+
+    deposited = page["collector"].drain()
+    assert [c["key"]["path"] for c in deposited] == ["gnr.x"]
+    assert deposited[0]["value"] == 3
+
+
+async def test_without_replace_every_deposit_stays_pending(pool: Routed) -> None:
+    await pool.new_page("alice", "p1", 0)
+    await pool.new_page("alice", "p2", 0)
+    page = pool.worker_of(0).page_items.get("p2")
+
+    for value in (1, 2, 3):
+        await pool.set_datachange(
+            "alice", change=parcel(a_change(value=value)), kind="page", target="p2"
+        )
+
+    assert [c["value"] for c in page["collector"].drain()] == [1, 2, 3]
+
+
+async def test_replace_travels_on_the_ascending_message(pool: Routed) -> None:
+    await pool.new_page("alice", "p1", 0)
+    await pool.new_page("bob", "p2", 1)
+
+    await pool.set_datachange(
+        "alice", change=parcel(a_change()), kind="page", target="p2", replace=True
+    )
+
+    await until(lambda: pool.sends)
+    _, _, batch = pool.sends[0]
+    assert batch[0]["replace"] is True
+
+
 async def test_my_own_user_store_is_written_locally(pool: Routed) -> None:
     await pool.new_page("alice", "p1", 0)
     change = a_change("prefs.theme", "dark")
@@ -182,6 +252,34 @@ async def test_my_own_user_store_is_written_locally(pool: Routed) -> None:
 
     assert pool.worker_of(0).user_items.get("alice")["store"]["prefs.theme"] == "dark"
     assert pool.sends == []
+
+
+async def test_my_own_connection_store_is_written_locally(pool: Routed) -> None:
+    await pool.new_page("alice", "p1", 0)
+    change = a_change("device.width", 1280)
+
+    await pool.set_datachange(
+        "alice", change=parcel(change), kind="connection_store", target="s-p1"
+    )
+
+    assert pool.worker_of(0).connection_items.get("s-p1")["store"]["device.width"] == 1280
+    assert pool.sends == []
+
+
+async def test_a_connection_store_write_is_never_delivered_to_a_page(pool: Routed) -> None:
+    """Server-side only: no view, no collector, nothing on the browser rail."""
+    await pool.new_page("alice", "p1", 0)
+    change = a_change("device.width", 1280)
+
+    await pool.set_datachange(
+        "alice", change=parcel(change), kind="connection_store", target="s-p1"
+    )
+
+    page = pool.worker_of(0).page_items.get("p1")
+    assert page["collector"].pending == 0
+    assert page["user_view"] is None
+    drained = pool.worker_of(0).collect_page("p1")
+    assert drained["datachanges"] == []
 
 
 async def test_a_local_signal_deposits_without_writing_the_store(pool: Routed) -> None:
@@ -206,6 +304,7 @@ async def test_a_local_signal_deposits_without_writing_the_store(pool: Routed) -
 async def test_a_cross_worker_state_write_lands_with_the_original_ts(pool: Routed) -> None:
     await pool.new_page("alice", "p1", 0)
     await pool.new_page("bob", "p2", 1)
+    await pool.subscribe_page("bob", "p2", "gnr")
     change = a_change()
 
     await pool.set_datachange("alice", change=parcel(change), kind="page_store", target="p2")
@@ -223,6 +322,61 @@ async def test_a_cross_worker_state_write_lands_with_the_original_ts(pool: Route
     ]
 
 
+async def test_a_remote_target_produced_in_a_call_rides_that_calls_reply(
+    pool: Routed,
+) -> None:
+    """The task sub-envelope: born inside a CALL, the command travels on its REPLY."""
+    await pool.new_page("alice", "p1", 0)
+    await pool.new_page("bob", "p2", 1)
+    await pool.subscribe_page("bob", "p2", "gnr")
+
+    await pool.set_datachange("alice", change=parcel(a_change()), kind="page_store", target="p2")
+
+    assert pool.ascended == []
+    assert [command["op"] for command in pool.commands] == ["set_datachange"]
+    assert pool.commands[0]["worker"] == pool.names[0]
+    store = pool.worker_of(1).page_items.get("p2")["store"]
+    await until(lambda: store["gnr.x"] == 42)
+
+
+async def test_a_remote_target_produced_outside_a_call_rides_the_outbox(
+    pool: Routed,
+) -> None:
+    """No CALL being served, no task class: the outbox is the rail, as before."""
+    await pool.new_page("alice", "p1", 0)
+    await pool.new_page("bob", "p2", 1)
+    await pool.subscribe_page("bob", "p2", "gnr")
+    pool.commands.clear()
+
+    pool.worker_of(0).set_datachange(
+        "alice", parcel(a_change()), kind="page_store", target="p2"
+    )
+
+    assert [event["op"] for event in pool.ascended] == ["set_datachange"]
+    store = pool.worker_of(1).page_items.get("p2")["store"]
+    await until(lambda: store["gnr.x"] == 42)
+    assert pool.commands == []
+
+
+async def test_the_tasks_of_an_error_reply_are_run_all_the_same() -> None:
+    """The worker already drained what they carry: the op outcome gates neither."""
+    commander = UserStickyCommander(workers=0)
+    folded: list[dict[str, Any]] = []
+
+    async def recording_fold(worker: str, message: dict[str, Any]) -> None:
+        folded.append(message)
+
+    commander.fold_command = recording_fold  # type: ignore[method-assign]
+    command = {"op": "set_datachange", "seq": 1, "worker": "w-1", "kind": "page", "target": "p2"}
+
+    with pytest.raises(ChannelCallError):
+        await commander.unwrap_reply(
+            "w-1", "/op/set_datachange", {"events": [], "tasks": [command], "error": "boom"}
+        )
+
+    await until(lambda: folded == [command])
+
+
 async def test_a_cross_worker_user_store_write_reaches_its_user(pool: Routed) -> None:
     await pool.new_page("alice", "p1", 0)
     await pool.new_page("bob", "p2", 1)
@@ -233,6 +387,23 @@ async def test_a_cross_worker_user_store_write_reaches_its_user(pool: Routed) ->
     store = pool.worker_of(1).user_items.get("bob")["store"]
     await until(lambda: store["prefs.theme"] == "dark")
     assert store.get_node("prefs.theme").attr["_original_ts"] == wire_ts(change)
+
+
+async def test_a_cross_worker_connection_store_write_reaches_its_connection(
+    pool: Routed,
+) -> None:
+    """The surface resolves a session id in two hops: connection → user → worker."""
+    await pool.new_page("alice", "p1", 0)
+    await pool.new_page("bob", "p2", 1)
+    change = a_change("device.width", 1280)
+
+    await pool.set_datachange(
+        "alice", change=parcel(change), kind="connection_store", target="s-p2"
+    )
+
+    store = pool.worker_of(1).connection_items.get("s-p2")["store"]
+    await until(lambda: store["device.width"] == 1280)
+    assert store.get_node("device.width").attr["_original_ts"] == wire_ts(change)
 
 
 async def test_a_cross_worker_signal_keeps_the_producer_ts_and_leaves_no_residue(
@@ -342,12 +513,16 @@ def surface_page(commander: UserStickyCommander, page_id: str, user: str, connec
     commander.user_worker_map[user] = "W:w-1"
 
 
-def test_a_user_filter_never_reaches_a_user_it_only_prefixes() -> None:
+def test_a_filter_value_is_a_prefix_anchored_pattern_like_the_daemons() -> None:
+    # re.match, transcribed from checkpage (siteregister.py:450-456): the
+    # expression is anchored at the start, so it reaches what it prefixes
     commander = UserStickyCommander(workers=0)
     surface_page(commander, "p1", "mario", "s1")
     surface_page(commander, "p2", "mariolino", "s2")
 
-    assert [page_id for page_id, _ in commander.matching_pages("user:mario")] == ["p1"]
+    assert sorted(page_id for page_id, _ in commander.matching_pages("user:mario")) == ["p1", "p2"]
+    assert [page_id for page_id, _ in commander.matching_pages("user:mario$")] == ["p1"]
+    assert [page_id for page_id, _ in commander.matching_pages("user:lino")] == []
 
 
 def test_a_filter_on_a_field_the_walk_does_not_derive_matches_nothing() -> None:
@@ -358,13 +533,24 @@ def test_a_filter_on_a_field_the_walk_does_not_derive_matches_nothing() -> None:
     assert [page_id for page_id, _ in commander.matching_pages("*")] == ["p1"]
 
 
-def test_a_filter_value_is_compared_as_it_is_never_read_as_a_pattern() -> None:
+def test_an_invalid_pattern_is_no_match_never_an_error() -> None:
+    # the daemon swallows the compile failure and answers "no match"
     commander = UserStickyCommander(workers=0)
     surface_page(commander, "p1", "a(", "s1")
     surface_page(commander, "p2", "anything", "s2")
 
-    assert [page_id for page_id, _ in commander.matching_pages("user:a(")] == ["p1"]
-    assert commander.matching_pages("user:a.*") == []
+    assert commander.matching_pages("user:a(") == []
+    assert sorted(page_id for page_id, _ in commander.matching_pages("user:a.*")) == ["p1", "p2"]
+
+
+def test_an_empty_derived_field_matches_nothing() -> None:
+    # checkpage returns None on a falsy value before it ever compiles
+    commander = UserStickyCommander(workers=0)
+    surface_page(commander, "p1", "alice", "s1")
+    commander.user_worker_map.pop("alice")
+
+    assert commander.matching_pages("worker:W:w-1") == []
+    assert [page_id for page_id, _ in commander.matching_pages("user:alice")] == ["p1"]
 
 
 async def test_a_filtered_address_names_pages_never_a_store(pool: Routed) -> None:
@@ -383,8 +569,10 @@ async def test_a_filtered_address_names_pages_never_a_store(pool: Routed) -> Non
 
 async def test_reset_datachanges_empties_a_local_page(pool: Routed) -> None:
     await pool.new_page("alice", "p1", 0)
+    await pool.subscribe_page("alice", "p1", "form")
     page = pool.worker_of(0).page_items.get("p1")
     page["store"]["form.name"] = "Ada"
+    assert page["collector"].pending == 2
 
     await pool.commander.forward_call("alice", "/op/reset_datachanges", {"target": "p1"})
 
@@ -394,6 +582,8 @@ async def test_reset_datachanges_empties_a_local_page(pool: Routed) -> None:
 
 async def test_drop_datachanges_removes_only_what_sits_under_the_path(pool: Routed) -> None:
     await pool.new_page("alice", "p1", 0)
+    await pool.subscribe_page("alice", "p1", "form")
+    await pool.subscribe_page("alice", "p1", "other")
     page = pool.worker_of(0).page_items.get("p1")
     page["store"]["form.name"] = "Ada"
     page["store"]["other.x"] = 1
@@ -408,6 +598,7 @@ async def test_drop_datachanges_removes_only_what_sits_under_the_path(pool: Rout
 async def test_reset_of_a_remote_page_rides_the_rail(pool: Routed) -> None:
     await pool.new_page("alice", "p1", 0)
     await pool.new_page("bob", "p2", 1)
+    await pool.subscribe_page("bob", "p2", "form")
     page = pool.worker_of(1).page_items.get("p2")
     page["store"]["form.name"] = "Ada"
     assert page["collector"].pending == 2
@@ -461,3 +652,26 @@ async def test_the_producers_own_pull_delivery_still_rides_the_reply(pool: Route
     # The target's own deposit stayed with the target: it was not stolen by the
     # producer's REPLY.
     assert pool.worker_of(0).page_items.get("p2")["collector"].pending == 1
+
+
+# ----------------------------------------------------------------------
+# The expiry rail: a drop nobody asked for, folded on the surface
+# ----------------------------------------------------------------------
+
+
+async def test_the_sweeps_cascade_ascends_alone_and_the_surface_folds_it(pool: Routed) -> None:
+    """No CALL caused it, so the whole cascade rides the outbox and lands folded."""
+    await pool.new_page("alice", "p1", 0)
+    worker = pool.worker_of(0)
+    worker.page_items.get("p1")["last_refresh_ts"] -= PAGE_MAX_AGE + 1
+
+    assert worker.sweep_expired()["pages"] == ["p1"]
+
+    await until(lambda: "p1" not in pool.commander.page_connection)
+    assert [event["op"] for event in pool.ascended] == [
+        "drop_page",
+        "drop_connection",
+        "drop_user",
+    ]
+    assert pool.commands == []
+    assert "alice" not in pool.commander.user_worker_map

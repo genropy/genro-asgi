@@ -47,8 +47,8 @@ class SiteWorker(UserStickyWorker):
     """The consumer's worker: it hosts a WSGI site and records what it served.
 
     ``wsgi_app`` is the seam Phase 3 opened — assigned here by the subclass, as
-    a consumer would. The recording rides ``serve_http`` because the identity
-    the forward routed on lives on the CALL frame, not in the environ.
+    a consumer would. The recording rides ``serve_http``, which receives the
+    identity the forward routed on and carries it into the environ.
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -60,9 +60,11 @@ class SiteWorker(UserStickyWorker):
         start_response("200 OK", [("content-type", "text/plain")])
         return [f"site:{environ['PATH_INFO']}".encode()]
 
-    async def serve_http(self, frame: Frame, http: dict[str, Any]) -> None:
-        self.served.append({"identity": (frame.data or {}).get("identity"), "http": http})
-        await super().serve_http(frame, http)
+    async def serve_http(
+        self, frame: Frame, http: dict[str, Any], identity: str | None = None
+    ) -> None:
+        self.served.append({"identity": identity, "http": http})
+        await super().serve_http(frame, http, identity)
 
 
 class SiteSpa(SpaApplication):

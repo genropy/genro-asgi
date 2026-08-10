@@ -79,6 +79,10 @@ class Register:
         """Return the item stored under ``key``, or ``None`` if absent."""
         return self._items.get(key)
 
+    def keys(self) -> list[str]:
+        """A snapshot of every key held, safe to walk while dropping from it."""
+        return list(self._items)
+
     def create(self, key: str, **fields: Any) -> dict[str, Any]:
         """Create the item of ``key``, seed its ``register_item_id`` and index it.
 

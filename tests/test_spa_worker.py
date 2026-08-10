@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from contextlib import contextmanager
 from typing import Any, Iterator
 
@@ -40,8 +41,11 @@ from genro_asgi.channel import ChannelCallError, ChannelHub, Frame, LocalChannel
 from genro_asgi.channel.hub import CALL_METHOD
 from genro_asgi.spa import RegisterRegistry
 from genro_asgi.spa.worker import (
+    CONNECTION_MAX_AGE,
     EXCHANGE_OPS,
+    GUEST_MAX_AGE,
     LIFECYCLE_OPS,
+    PAGE_MAX_AGE,
     POST_OPS,
     STORE_OPS,
     Outbox,
@@ -113,6 +117,11 @@ class ProbeWorker(UserStickyWorker):
     @route()
     def boom(self, identity: str) -> None:
         raise RuntimeError("handler exploded")
+
+    @route()
+    def page_probe(self, identity: str, page_id: str) -> dict[str, Any]:
+        """A page-addressed no-op: the REPLY's delivery is the thing under test."""
+        return {"page": page_id}
 
 
 class WorkerHarness:
@@ -310,7 +319,10 @@ def test_a_connection_row_survives_the_wire_view() -> None:
     with call_sink(worker):
         worker.new_page("alice", "p1", session_id="sess-1")
     wired = worker.wire_entry(worker.connection_items.get("sess-1"))
+    stamp = wired.pop("last_refresh_ts")
     assert wired == {"register_item_id": "sess-1", "user": "alice"}
+    # The expiry stamp is a plain float: a scalar the wire carries like any other.
+    assert isinstance(stamp, float)
 
 
 def test_a_lifecycle_op_outside_a_call_is_an_explicit_error() -> None:
@@ -365,6 +377,35 @@ def test_the_login_push_round_trip_preserves_the_user_entry() -> None:
     assert target.wire_entry(target.user_items.get("alice")) == installed
     # The package is a deepcopy: the source's own entry never reached it.
     assert installed is not entry
+
+
+def test_the_commanded_eviction_hands_the_slice_over_and_announces_nothing() -> None:
+    """``evict_user`` answers with the parcel: the commander asked, so it is told."""
+    source = UserStickyWorker("W:w1")
+    target = UserStickyWorker("W:w2")
+    with call_sink(source) as events:
+        source.new_connection("sess-1", user="alice", tenant="acme")
+        source.new_page("alice", page_id="p1", session_id="sess-1")
+        source.page_items.get("p1")["store"]["counter"] = 1
+        announced = len(events)
+        result = source.evict_user("alice")
+        # Operational: the reply IS the news, nothing rides an event.
+        assert len(events) == announced
+    assert "alice" not in source.user_items
+    assert source.connection_items.get("sess-1") is None
+    assert source.page_items.get("p1") is None
+
+    installed = target.install_package("alice", result["package"])
+    assert installed["register_item_id"] == "alice"
+    arrived = target.connection_items.get("sess-1")
+    assert (arrived["user"], arrived["tenant"]) == ("alice", "acme")
+    assert target.page_items.get("p1")["store"]["counter"] == 1
+
+
+def test_evicting_a_user_nobody_holds_is_an_error() -> None:
+    worker = UserStickyWorker("W:w1")
+    with pytest.raises(KeyError, match="unknown user"):
+        worker.evict_user("ghost")
 
 
 def test_add_user_refuses_a_package_addressed_to_another_identity() -> None:
@@ -481,7 +522,7 @@ async def test_the_http_call_form_answers_an_explicit_error_reply(
 ) -> None:
     # the form reaches the seam only on a path that names no op: an op path
     # executes its op whatever its kwargs carry (the ops' **fields are open)
-    with pytest.raises(ChannelCallError, match="phase B"):
+    with pytest.raises(ChannelCallError, match="hosts no WSGI site"):
         await harness.call("/sales/order", {"identity": "alice", "http": {"path": "/"}})
     assert "alice" not in harness.worker.user_items
 
@@ -649,6 +690,88 @@ def test_a_self_login_leaves_the_user_whole() -> None:
     assert worker.page_items.get("p1") is not None
 
 
+def test_the_drain_loses_nothing_to_a_concurrent_depositor() -> None:
+    """A depositor thread and repeated drains: the union is the whole deposit.
+
+    The depositor writes the way a pool thread does — under ``dispatch_lock``,
+    a real store write plus a dbevent append — while the drain runs from
+    another thread. Without the lock on ``collect_page`` the read-and-reset
+    window can swallow a deposit landing inside it.
+    """
+    worker = UserStickyWorker("W:w1")
+    worker.registry.new_page("p1", user="u1", session_id="s1")
+    worker.setStoreSubscription("u1", page_id="p1", storename="page", prefix="form")
+    store = worker.page_items.get("p1")["store"]
+    deposits = 400
+    drained_changes: list[dict[str, Any]] = []
+    drained_events: list[dict[str, Any]] = []
+    done = threading.Event()
+
+    def depositor() -> None:
+        for index in range(deposits):
+            with worker.dispatch_lock:
+                store[f"form.f{index}"] = index
+                worker.deposit_dbevent("p1", {"table": "adm.user", "index": index})
+        done.set()
+
+    thread = threading.Thread(target=depositor)
+    thread.start()
+    try:
+        while not done.is_set():
+            collected = worker.collect_page("p1")
+            drained_changes.extend(collected["datachanges"])
+            drained_events.extend(collected["dbevents"])
+    finally:
+        thread.join(timeout=5.0)
+    collected = worker.collect_page("p1")
+    drained_changes.extend(collected["datachanges"])
+    drained_events.extend(collected["dbevents"])
+    assert [event["index"] for event in drained_events] == list(range(deposits))
+    leaves = [
+        change["key"]["path"]
+        for change in drained_changes
+        if change["key"]["path"] != "form"
+    ]
+    assert leaves == [f"form.f{index}" for index in range(deposits)]
+
+
+async def test_a_page_evicted_between_the_call_and_its_reply_still_gets_a_reply(
+    harness: Any,
+) -> None:
+    """The other half of B1: the existence check rides the pool trip, under the lock.
+
+    ``send_reply`` hands the delivery drain to the pool, so between the CALL and
+    its REPLY there is a thread handoff a concurrent eviction can win. The check
+    lives inside ``wire_delivery``'s lock hold: a page gone by then yields an
+    empty delivery and the REPLY still departs — before, the drain raised on the
+    pool thread and the caller hung to timeout.
+    """
+    worker = harness.worker
+    await harness.call(
+        "/op/new_page",
+        {"identity": "sess-1", "kwargs": {"page_id": "p1", "session_id": "sess-1"}},
+    )
+    original = worker.pool.run
+
+    async def racing(fn: Any, *args: Any) -> Any:
+        # The eviction wins the handoff: the page goes before the trip lands.
+        if getattr(fn, "func", None) == worker.wire_delivery:
+            with worker.dispatch_lock:
+                worker.demolish_page("p1", worker.offer_lifecycle)
+        return await original(fn, *args)
+
+    worker.pool.run = racing  # type: ignore[method-assign]
+    payload = await harness.hub.call(
+        worker.name,
+        "/op/page_probe",
+        {"identity": "sess-1", "kwargs": {"page_id": "p1"}},
+        timeout=5.0,
+    )
+    assert payload["result"] == {"page": "p1"}
+    assert "datachanges" not in payload and "dbevents" not in payload
+    assert worker.page_items.get("p1") is None
+
+
 def test_build_registry_is_the_worker_seam() -> None:
     """A worker subclass supplies its whole registry through one factory."""
 
@@ -661,3 +784,258 @@ def test_build_registry_is_the_worker_seam() -> None:
 
     assert isinstance(SeamWorker("W:w1").registry, SeamRegistry)
     assert isinstance(UserStickyWorker("W:w1").registry, RegisterRegistry)
+
+
+def caching_worker(*page_ids: str) -> UserStickyWorker:
+    """A worker holding pages of one user, each caching ``adm.user`` in its store.
+
+    The pages are born through the OP, which is what attaches the cache
+    observer: a row created straight on the registry has no observer at all.
+    """
+    worker = UserStickyWorker("W:w1")
+    with call_sink(worker):
+        for page_id in page_ids:
+            worker.new_page("u1", page_id, session_id="s1")
+    for page_id in page_ids:
+        store = worker.page_items.get(page_id)["store"]
+        store.set_item("cache.users", "payload", _caching_table="adm.user")
+    return worker
+
+
+def test_a_caching_write_lands_in_the_table_cache_index() -> None:
+    """Only the node naming a table is indexed, whatever the page subscribed."""
+    worker = caching_worker("p1")
+    store = worker.page_items.get("p1")["store"]
+    store["plain.value"] = 1
+    store.set_item("cache.roles", "payload", _caching_table="adm.role")
+    assert worker.cached_tables == {
+        "adm.user": {"p1": {"cache.users"}},
+        "adm.role": {"p1": {"cache.roles"}},
+    }
+
+
+def test_a_dbevent_writes_none_over_every_cached_path() -> None:
+    """The invalidation is a real store write, so a subscribed page drains it."""
+    worker = caching_worker("p1")
+    worker.setStoreSubscription("u1", page_id="p1", storename="page", prefix="cache")
+    store = worker.page_items.get("p1")["store"]
+    store.set_item("cache.roles", "role payload", _caching_table="adm.user")
+    worker.collect_page("p1")
+    worker.notifyDbEvents("u1", dbevents={"adm.user": [{"dbevent": "I"}]}, page_id="p1")
+    assert store["cache.users"] is None
+    assert store["cache.roles"] is None
+    collected = worker.collect_page("p1")
+    assert {change["key"]["path"] for change in collected["datachanges"]} == {
+        "cache.users",
+        "cache.roles",
+    }
+    # The node keeps its ``_caching_table``, so the None write is recorded in
+    # turn: the entry now describes a cache holding None, exactly as it does in
+    # the daemon after ``invalidateTableCache``.
+    assert worker.cached_tables == {"adm.user": {"p1": {"cache.users", "cache.roles"}}}
+
+
+def test_an_unsubscribed_page_is_invalidated_without_hearing_about_it() -> None:
+    """The observer ignores the collector's filter; the delivery does not."""
+    worker = caching_worker("p1")
+    store = worker.page_items.get("p1")["store"]
+    worker.notifyDbEvents("u1", dbevents={"adm.user": [{"dbevent": "I"}]}, page_id="p1")
+    assert store["cache.users"] is None
+    assert worker.collect_page("p1")["datachanges"] == []
+
+
+def test_the_descending_dbevents_batch_invalidates_the_table_cache() -> None:
+    """The other rail invalidates too, once for a table however many pages cached it."""
+    worker = caching_worker("p1", "p2")
+    deposit = {"table": "adm.user", "batch": [{"dbevent": "I"}], "ts": 1.0}
+    worker.apply_dbevents_batch(
+        [{"page_id": "p1", "deposit": deposit}, {"page_id": "p2", "deposit": deposit}]
+    )
+    assert worker.page_items.get("p1")["store"]["cache.users"] is None
+    assert worker.page_items.get("p2")["store"]["cache.users"] is None
+    assert worker.page_items.get("p1")["dbevents"] == [deposit]
+
+
+def test_a_local_only_notify_invalidates_nothing() -> None:
+    """The hidden transaction belongs to its page: no fan-out, no cache check."""
+    worker = caching_worker("p1")
+    store = worker.page_items.get("p1")["store"]
+    worker.notifyDbEvents(
+        "u1", dbevents={"adm.user": [{"dbevent": "I"}]}, page_id="p1", local_only=True
+    )
+    assert store["cache.users"] == "payload"
+    assert worker.cached_tables == {"adm.user": {"p1": {"cache.users"}}}
+
+
+def test_dropping_a_page_forgets_its_cached_paths() -> None:
+    """The page leaves every table entry, and its store stops being watched."""
+    worker = caching_worker("p1", "p2")
+    departed = worker.page_items.get("p1")["store"]
+    with call_sink(worker):
+        worker.drop_page("u1", "p1")
+    assert worker.cached_tables == {"adm.user": {"p2": {"cache.users"}}}
+    departed.set_item("cache.roles", "payload", _caching_table="adm.user")
+    assert worker.cached_tables == {"adm.user": {"p2": {"cache.users"}}}
+    with call_sink(worker):
+        worker.drop_page("u1", "p2")
+    assert worker.cached_tables == {}
+
+
+# ----------------------------------------------------------------------
+# Expiry — the server-stamped refresh and the disarmed sweep
+# ----------------------------------------------------------------------
+
+
+def aged_worker(**kwargs: Any) -> UserStickyWorker:
+    """A worker holding a logged-in page and a guest one, both born stamped.
+
+    ``mario`` is a real user (its connection is named apart from it), while the
+    guest connection carries its own id as user — the naked sticky key of an
+    anonymous reception, which is what the guest rule reads.
+    """
+    worker = UserStickyWorker("W:w1", **kwargs)
+    with call_sink(worker):
+        worker.new_page("mario", "p1", session_id="s1")
+        worker.new_page("g1", "pg", session_id="g1")
+    return worker
+
+
+def age_page(worker: UserStickyWorker, page_id: str, seconds: float) -> None:
+    """Push one page's stamp back in time, leaving the chain above it fresh."""
+    worker.page_items.get(page_id)["last_refresh_ts"] -= seconds
+
+
+def test_every_row_of_the_chain_is_born_stamped() -> None:
+    """The stamp exists from birth: the sweep needs no fallback to a start time."""
+    born = time.time()
+    worker = aged_worker()
+    stamps = [
+        worker.page_items.get("p1")["last_refresh_ts"],
+        worker.connection_items.get("s1")["last_refresh_ts"],
+        worker.user_items.get("mario")["last_refresh_ts"],
+    ]
+    assert all(born <= stamp <= time.time() for stamp in stamps)
+
+
+async def test_a_page_addressed_call_refreshes_the_whole_chain(harness: Any) -> None:
+    """The page's own CALL is its sign of life, and it climbs to its user."""
+    worker = harness.worker
+    await harness.call(
+        "/op/new_page", {"identity": "mario", "kwargs": {"page_id": "p1", "session_id": "s1"}}
+    )
+    rows = [
+        worker.page_items.get("p1"),
+        worker.connection_items.get("s1"),
+        worker.user_items.get("mario"),
+    ]
+    for row in rows:
+        row["last_refresh_ts"] = 0.0
+
+    before = time.time()
+    await harness.call(
+        "/op/setStoreSubscription",
+        {"identity": "mario", "kwargs": {"page_id": "p1", "storename": "page", "prefix": "gnr"}},
+    )
+
+    assert all(before <= row["last_refresh_ts"] <= time.time() for row in rows)
+
+
+async def test_a_call_addressing_no_page_stamps_nothing(harness: Any) -> None:
+    """Only a page-addressed CALL refreshes: a worker-level op is nobody's life sign."""
+    worker = harness.worker
+    with call_sink(worker):
+        worker.new_page("mario", "p1", session_id="s1")
+    worker.user_items.get("mario")["last_refresh_ts"] = 0.0
+
+    await harness.call("/op/occupancy", {"identity": "mario"})
+
+    assert worker.user_items.get("mario")["last_refresh_ts"] == 0.0
+
+
+def test_a_fresh_chain_survives_the_sweep() -> None:
+    """Nothing is dropped and nothing ascends while every stamp is recent."""
+    worker = aged_worker()
+    assert worker.sweep_expired() == {"pages": [], "connections": []}
+    assert worker.outbox.pending() == 0
+
+
+def test_an_aged_page_is_swept_with_its_cascade_on_the_outbox() -> None:
+    """The out-of-request drop rides the outbox, cascade included, in climbing order."""
+    worker = aged_worker()
+    age_page(worker, "p1", PAGE_MAX_AGE + 1)
+
+    assert worker.sweep_expired() == {"pages": ["p1"], "connections": []}
+
+    assert "p1" not in worker.page_items
+    assert "s1" not in worker.connection_items
+    assert "mario" not in worker.user_items
+    assert [event["op"] for event in worker.outbox.drain()] == [
+        "drop_page",
+        "drop_connection",
+        "drop_user",
+    ]
+
+
+def test_a_guest_page_ages_at_the_guest_rate() -> None:
+    """Forty seconds for a guest, ten minutes for a page whose user has a name."""
+    worker = aged_worker()
+    age_page(worker, "p1", GUEST_MAX_AGE + 1)
+    age_page(worker, "pg", GUEST_MAX_AGE + 1)
+
+    assert worker.sweep_expired()["pages"] == ["pg"]
+
+    assert "p1" in worker.page_items
+
+
+def test_an_idle_connection_takes_its_pages_and_its_user_with_it() -> None:
+    """A connection expires on its own age even while its pages are fresh."""
+    worker = aged_worker()
+    worker.connection_items.get("s1")["last_refresh_ts"] -= CONNECTION_MAX_AGE + 1
+
+    assert worker.sweep_expired() == {"pages": [], "connections": ["s1"]}
+
+    assert "p1" not in worker.page_items
+    assert "mario" not in worker.user_items
+    assert [event["op"] for event in worker.outbox.drain()] == [
+        "drop_page",
+        "drop_connection",
+        "drop_user",
+    ]
+
+
+def test_a_guest_connection_ages_at_the_guest_rate() -> None:
+    """The guest rule reads the same on a connection as on a page."""
+    worker = aged_worker()
+    for connection_id in ("s1", "g1"):
+        worker.connection_items.get(connection_id)["last_refresh_ts"] -= GUEST_MAX_AGE + 1
+
+    assert worker.sweep_expired()["connections"] == ["g1"]
+
+    assert "s1" in worker.connection_items
+
+
+async def test_the_sweep_is_disarmed_unless_an_interval_is_given() -> None:
+    """No interval, no task: an unheard-of page must not be killed for its silence."""
+    worker = aged_worker()
+    age_page(worker, "p1", PAGE_MAX_AGE + 1)
+    await worker.start()
+    try:
+        await asyncio.sleep(0.05)
+        assert "p1" in worker.page_items
+    finally:
+        await worker.shutdown()
+
+
+async def test_an_armed_worker_sweeps_on_its_own_interval() -> None:
+    """Given an interval, the loop runs the sweep off the loop thread, by itself."""
+    worker = aged_worker(sweep_interval=0.01)
+    age_page(worker, "p1", PAGE_MAX_AGE + 1)
+    await worker.start()
+    try:
+        deadline = asyncio.get_running_loop().time() + 5.0
+        while "p1" in worker.page_items:
+            if asyncio.get_running_loop().time() >= deadline:
+                raise TimeoutError("the armed sweep never dropped the aged page")
+            await asyncio.sleep(0.01)
+    finally:
+        await worker.shutdown()

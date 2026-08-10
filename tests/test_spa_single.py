@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import pickle
 from typing import Any
 
 import pytest
@@ -625,6 +626,9 @@ async def test_the_second_login_of_a_user_leaves_the_first_page_untouched(
 ) -> None:
     await make_page(pages, "sess-1", "p1")
     await pages.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
+    pages.worker.setStoreSubscription(
+        "alice", page_id="p1", storename="page", prefix="counter"
+    )
     page_row = pages.worker.page_items.get("p1")
     page_store = page_row["store"]
     page_store["counter"] = 1
@@ -693,3 +697,113 @@ async def test_stopping_the_commander_takes_the_local_worker_down() -> None:
     assert not channel.connected
     assert worker.channel is channel
     assert commander.hub.members == {}
+
+
+# ----------------------------------------------------------------------
+# The total restart: the register crosses it as a move toward a file
+# ----------------------------------------------------------------------
+
+
+def restart_commander(dump: Any) -> UserStickyCommander:
+    """A single-role commander armed with ``dump``."""
+    return UserStickyCommander(
+        workers=0,
+        local_worker=True,
+        guest_occupancy_limit=1000,
+        dump_path=str(dump),
+    )
+
+
+async def test_the_register_crosses_a_total_restart_through_the_dump(tmp_path: Any) -> None:
+    dump = tmp_path / "register.pik"
+    first = restart_commander(dump)
+    await first.start()
+    await first.forward_call("sess-1", "/op/new_connection")
+    await first.forward_call(
+        "sess-1", "/op/new_page", {"page_id": "p1", "session_id": "sess-1"}
+    )
+    await first.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
+    await first.forward_call(
+        "sess-1", "/op/subscribeTable", {"table": "mytable", "page_id": "p1"}
+    )
+    first.worker.user_items.get("alice")["store"]["prefs.theme"] = "dark"
+    await first.stop()
+    assert dump.exists()
+    # The dump is a departure like any other: the surface forgot its users.
+    assert first.user_worker_map == {}
+    # A dump left over by an older run is what the rename must overwrite.
+    (tmp_path / "register_loaded.pik").write_bytes(b"stale")
+
+    second = restart_commander(dump)
+    await second.start()
+    try:
+        assert second.user_worker_map["alice"] == second.worker.name
+        assert second.worker.user_items.get("alice")["store"]["prefs.theme"] == "dark"
+        assert second.worker.connection_items.get("sess-1")["user"] == "alice"
+        assert second.worker.page_items.get("p1")["session_id"] == "sess-1"
+        # The surface is re-hung from the package itself (adopt_slice): the
+        # operational install sends no events, so the fold never runs here.
+        assert second.connection_user == {"sess-1": "alice"}
+        assert second.worker_of_page("p1") == second.worker.name
+        assert second.page_subscriptions.pages_for("mytable") == {"p1"}
+        # The file is retired the moment it is read: a restart dying mid-restore
+        # must not find it again and install everything twice.
+        assert not dump.exists()
+        assert (tmp_path / "register_loaded.pik").read_bytes() != b"stale"
+    finally:
+        await second.stop()
+
+
+async def test_the_dump_leaves_behind_a_user_whose_evict_fails(tmp_path: Any) -> None:
+    """Best-effort, pinned: a refused evict is logged and skipped, the rest is written."""
+    dump = tmp_path / "register.pik"
+    first = restart_commander(dump)
+    await first.start()
+    await first.forward_call("sess-1", "/op/new_connection")
+    await first.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
+    await first.forward_call("sess-2", "/op/new_connection")
+    await first.forward_call("sess-2", "/op/change_connection_user", {"user": "bob"})
+    original = first.forward_call
+
+    async def refusing(
+        identity: str, path: str, kwargs: Any = None, timeout: Any = None
+    ) -> Any:
+        if identity == "alice" and path.endswith("evict_user"):
+            raise RuntimeError("the worker went away mid-shutdown")
+        return await original(identity, path, kwargs, timeout)
+
+    first.forward_call = refusing  # type: ignore[method-assign]
+    await first.stop()
+    packages = pickle.loads(dump.read_bytes())
+    assert set(packages) == {"bob"}
+
+
+async def test_the_restore_skips_a_package_it_cannot_install(tmp_path: Any) -> None:
+    """Best-effort, pinned: a refused install is logged, skipped and unmapped."""
+    dump = tmp_path / "register.pik"
+    first = restart_commander(dump)
+    await first.start()
+    await first.forward_call("sess-2", "/op/new_connection")
+    await first.forward_call("sess-2", "/op/change_connection_user", {"user": "bob"})
+    await first.stop()
+    packages = pickle.loads(dump.read_bytes())
+    packages["alice"] = "not a package"
+    dump.write_bytes(pickle.dumps(packages))
+
+    second = restart_commander(dump)
+    await second.start()
+    try:
+        assert "alice" not in second.user_worker_map
+        assert second.user_worker_map["bob"] == second.worker.name
+        assert second.worker.user_items.get("bob") is not None
+    finally:
+        await second.stop()
+
+
+async def test_an_unarmed_commander_dumps_nothing(tmp_path: Any) -> None:
+    commander = UserStickyCommander(workers=0, local_worker=True, guest_occupancy_limit=1000)
+    await commander.start()
+    await commander.forward_call("sess-1", "/op/new_connection")
+    await commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
+    await commander.stop()
+    assert list(tmp_path.glob("*.pik")) == []

@@ -31,6 +31,7 @@ import pytest
 
 from genro_asgi.applications import SpaApplication
 from genro_asgi.applications.spa_app import STICKY_CID_COOKIE
+from genro_asgi.channel.hub import ChannelCallError
 from genro_asgi.spa.worker import UserStickyWorker
 from genro_asgi.types import Message, Receive, Scope
 
@@ -46,6 +47,7 @@ class StubCommander:
         self.calls: list[tuple[str, str, dict[str, Any]]] = []
         self.envelope: dict[str, Any] = {"result": reply_form()}
         self.births: dict[str, str] = {}
+        self.failure: Exception | None = None
 
     async def forward_envelope(
         self, identity: str, path: str, kwargs: dict[str, Any] | None = None
@@ -53,6 +55,8 @@ class StubCommander:
         self.calls.append((identity, path, kwargs or {}))
         # the fold the real commander runs inside forward_envelope
         self.connection_user.update(self.births)
+        if self.failure is not None:
+            raise self.failure
         return self.envelope
 
     @property
@@ -315,6 +319,30 @@ async def test_a_forward_envelope_carrying_delivery_raises() -> None:
     }
     with pytest.raises(NotImplementedError):
         await forward(spa, site_scope(headers=cookie_header("cid-1")))
+
+
+# ----------------------------------------------------------------------
+# A refused forward is a bad gateway
+# ----------------------------------------------------------------------
+
+
+async def test_a_refused_forward_becomes_a_502_carrying_the_pools_error() -> None:
+    spa = make_spa()
+    spa.commander.failure = ChannelCallError(
+        "W:w1", "/sales/order", "worker is gone", payload={"error": "worker is gone"}
+    )
+    sent = await forward(spa, site_scope(headers=cookie_header("cid-1")))
+    assert sent.status == 502
+    assert sent.body == b"worker is gone"
+    assert sent.header_values("content-type") == ["text/plain; charset=utf-8"]
+
+
+async def test_a_502_still_issues_the_cookie_of_a_minted_cid() -> None:
+    spa = make_spa()
+    spa.commander.failure = ChannelCallError("W:w1", "/sales/order", "boom")
+    sent = await forward(spa)
+    assert sent.status == 502
+    assert len(sent.header_values("set-cookie")) == 1
 
 
 # ----------------------------------------------------------------------

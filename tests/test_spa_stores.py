@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from genro_bag import Bag
 from genro_bag.datachange import DataChangeCollector
+from genro_tytx import to_tytx
 
 from genro_asgi.spa.register_registry import RegisterRegistry
 from genro_asgi.spa.worker import UserStickyWorker
@@ -48,12 +49,33 @@ def test_rows_are_born_with_live_stores() -> None:
     assert page["collector"].bag is page["store"]
     assert page["user_view"] is None
     assert page["dbevents"] == []
+    assert page["collector"].paths == set()
+    assert page["subscribed_paths"] == set()
     assert page["store_subscriptions"] == set()
 
 
+def test_a_moved_row_keeps_the_stamp_it_travelled_with() -> None:
+    """The birth stamp is a default, not an imposition: a rebirth restores it."""
+    registry = RegisterRegistry()
+    registry.new_page("p1", user="u1", session_id="s1", last_refresh_ts=1000.0)
+    assert registry.page_items.get("p1")["last_refresh_ts"] == 1000.0
+
+
+def test_page_collector_captures_nothing_until_the_page_subscribes() -> None:
+    worker = UserStickyWorker("W:w1")
+    worker.registry.new_page("p1", user="u1", session_id="s1")
+    page = worker.page_items.get("p1")
+    page["store"]["form.name"] = "Ada"
+    assert page["collector"].pending == 0
+    assert page["subscribed_paths"] == set()
+
+
 def test_page_collector_captures_its_own_store() -> None:
-    registry = make_registry()
-    page = registry.page_items.get("p1")
+    worker = UserStickyWorker("W:w1")
+    worker.registry.new_page("p1", user="u1", session_id="s1")
+    worker.setStoreSubscription("u1", page_id="p1", storename="page", prefix="form")
+    page = worker.page_items.get("p1")
+    assert page["subscribed_paths"] == {"form"}
     page["store"]["form.name"] = "Ada"
     changes = page["collector"].drain()
     # The intermediate node is a write of its own: genro-bag captures its
@@ -61,6 +83,106 @@ def test_page_collector_captures_its_own_store() -> None:
     assert [c["key"]["path"] for c in changes] == ["form", "form.name"]
     assert changes[-1]["value"] == "Ada"
     assert page["collector"].pending == 0
+
+
+# ----------------------------------------------------------------------
+# setStoreSubscription: the page declares what it wants to hear about
+# ----------------------------------------------------------------------
+
+
+def subscribed_worker() -> UserStickyWorker:
+    """A worker holding one page of ``u1``, nothing subscribed yet."""
+    worker = UserStickyWorker("W:w1")
+    worker.registry.new_page("p1", user="u1", session_id="s1")
+    return worker
+
+
+def test_the_page_subscription_opens_and_closes_its_own_store() -> None:
+    worker = subscribed_worker()
+    page = worker.page_items.get("p1")
+
+    worker.setStoreSubscription("u1", page_id="p1", storename="page", prefix="form")
+    page["store"]["form.name"] = "Ada"
+    assert [c["key"]["path"] for c in page["collector"].drain()] == ["form", "form.name"]
+
+    worker.setStoreSubscription("u1", page_id="p1", storename="page", prefix="form", active=False)
+    assert page["subscribed_paths"] == set()
+    page["store"]["form.name"] = "Grace"
+    assert page["collector"].pending == 0
+
+
+def test_the_explicit_deposit_ignores_the_page_filter() -> None:
+    """The ratified escape: ``set_datachange`` lands whatever the filter says."""
+    worker = subscribed_worker()
+    page = worker.page_items.get("p1")
+    source = Bag()
+    producer = DataChangeCollector(source)
+    source["untold.x"] = 1
+    change = producer.drain()[-1]
+
+    worker.set_datachange("u1", change=to_tytx(change, "json"), target="p1")
+
+    assert [c["key"]["path"] for c in page["collector"].drain()] == ["untold.x"]
+
+
+def test_the_chat_pattern_opens_and_closes_the_user_store() -> None:
+    """The legacy consumer's own shape: a prefix of the USER store, on and off."""
+    worker = subscribed_worker()
+    page = worker.page_items.get("p1")
+    user_store = worker.user_items.get("u1")["store"]
+
+    worker.setStoreSubscription("u1", page_id="p1", storename="user", prefix="gnr.chat.msg")
+    assert page["store_subscriptions"] == {"gnr.chat.msg"}
+    user_store["gnr.chat.msg.m1"] = "ciao"
+    # The intermediate nodes above the prefix are outside it: only the
+    # subscribed node and its leaf are captured.
+    assert [c["key"]["path"] for c in page["user_view"].drain()] == [
+        "gnr.chat.msg",
+        "gnr.chat.msg.m1",
+    ]
+
+    worker.setStoreSubscription(
+        "u1", page_id="p1", storename="user", prefix="gnr.chat.msg", active=False
+    )
+    assert page["store_subscriptions"] == set()
+    user_store["gnr.chat.msg.m2"] = "ancora"
+    assert page["user_view"].pending == 0
+
+
+def test_the_batch_pattern_widens_the_view_it_finds() -> None:
+    worker = subscribed_worker()
+    page = worker.page_items.get("p1")
+    worker.setStoreSubscription("u1", page_id="p1", storename="user", prefix="gnr.chat.msg")
+    view = page["user_view"]
+
+    worker.setStoreSubscription("u1", page_id="p1", storename="user", prefix="gnr.batch")
+
+    assert page["user_view"] is view
+    assert view.paths == {"gnr.chat.msg", "gnr.batch"}
+    worker.user_items.get("u1")["store"]["gnr.batch.b1.status"] = "running"
+    assert [c["key"]["path"] for c in view.drain()] == [
+        "gnr.batch",
+        "gnr.batch.b1",
+        "gnr.batch.b1.status",
+    ]
+
+
+def test_closing_a_user_subscription_a_page_never_took_is_a_no_op() -> None:
+    worker = subscribed_worker()
+
+    worker.setStoreSubscription("u1", page_id="p1", storename="user", prefix="prefs", active=False)
+
+    assert worker.page_items.get("p1")["user_view"] is None
+
+
+def test_an_unknown_storename_is_an_error() -> None:
+    worker = subscribed_worker()
+    try:
+        worker.setStoreSubscription("u1", page_id="p1", storename="connection", prefix="x")
+    except ValueError as exc:
+        assert "connection" in str(exc)
+    else:
+        raise AssertionError("setStoreSubscription accepted an unknown storename")
 
 
 def test_subscription_creates_the_view_then_widens_it() -> None:
@@ -136,6 +258,7 @@ def test_drop_user_detaches_the_collectors_of_its_pages() -> None:
 def test_collect_page_merges_both_collectors_by_ts() -> None:
     worker = UserStickyWorker("W:w1")
     worker.registry.new_page("p1", user="u1", session_id="s1")
+    worker.setStoreSubscription("u1", page_id="p1", storename="page", prefix="form")
     worker.registry.subscribe_store_path("p1", "prefs")
     page = worker.page_items.get("p1")
     page["store"]["form.name"] = "Ada"
@@ -177,6 +300,7 @@ def test_collect_page_of_an_unknown_page_is_an_error() -> None:
 def test_apply_forwarded_stamps_the_original_ts() -> None:
     worker = UserStickyWorker("W:w1")
     worker.registry.new_page("p1", user="u1", session_id="s1")
+    worker.setStoreSubscription("u1", page_id="p1", storename="page", prefix="form")
     source = Bag()
     source.set_item("form.name", "Ada", _attributes={"tag": "input"})
     producer = DataChangeCollector(source)
@@ -196,6 +320,7 @@ def test_apply_forwarded_stamps_the_original_ts() -> None:
 def test_apply_forwarded_deletes_instead_of_nulling() -> None:
     worker = UserStickyWorker("W:w1")
     worker.registry.new_page("p1", user="u1", session_id="s1")
+    worker.setStoreSubscription("u1", page_id="p1", storename="page", prefix="form")
     target = worker.page_items.get("p1")["store"]
     target["form.name"] = "Ada"
     worker.collect_page("p1")
