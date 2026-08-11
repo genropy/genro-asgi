@@ -66,7 +66,7 @@ async def test_a_new_page_call_puts_the_page_on_the_surface(single: UserStickyCo
 
     assert row["connection_id"] == "s1" and row["session_id"] == "s1"
     assert single.page_connection == {"p1": "s1"}
-    assert single.worker_of_page("p1") == single.worker.name
+    assert single.page_worker("p1") == single.worker.name
 
 
 async def test_the_wire_view_of_a_page_row_carries_its_subscriptions_as_lists(
@@ -120,7 +120,7 @@ async def test_a_login_keeps_the_pages_and_their_owner_follows_the_connection(
     # S1: the page survived the login on its own connection, and its owner
     # changed with that connection — nothing about the page itself was touched.
     assert single.page_connection == {"p1": "s1"}
-    assert single.worker_of_page("p1") == single.worker.name
+    assert single.page_worker("p1") == single.worker.name
     assert single.connection_user == {"s1": "alice"}
     assert single.user_worker_map == {"alice": single.worker.name}
 
@@ -143,7 +143,7 @@ async def test_the_guest_leaves_the_surface_once_it_has_no_connection_left(
 
 
 def test_an_unknown_page_resolves_to_none(commander: UserStickyCommander) -> None:
-    assert commander.worker_of_page("nobody-knows-me") is None
+    assert commander.page_worker("nobody-knows-me") is None
 
 
 def test_the_broadcast_filter_matches_on_the_fields_the_walk_derives(
@@ -178,7 +178,7 @@ def test_a_new_page_naming_an_unknown_connection_self_heals_it(
 
     assert commander.connection_user == {"s1": "alice"}
     assert commander.connections_of("alice") == ["s1"]
-    assert commander.worker_of_page("p1") == "W:w-1"
+    assert commander.page_worker("p1") == "W:w-1"
 
 
 def test_a_late_claim_never_re_places_a_page(
@@ -196,7 +196,7 @@ def test_a_late_claim_never_re_places_a_page(
         commander.fold_events(
             "W:w-2", [event("new_page", 1, user="alice", page_id="p1", session_id="s1")]
         )
-    assert commander.worker_of_page("p1") == "W:w-1"
+    assert commander.page_worker("p1") == "W:w-1"
     assert caplog.records == []
 
 
@@ -209,7 +209,7 @@ def test_a_foreign_drop_leaves_the_holder_alone(commander: UserStickyCommander) 
         ],
     )
     commander.fold_events("W:w-2", [event("drop_page", 1, user="alice", page_id="p1")])
-    assert commander.worker_of_page("p1") == "W:w-1"
+    assert commander.page_worker("p1") == "W:w-1"
 
 
 def test_dropping_an_unknown_page_is_a_no_op(commander: UserStickyCommander) -> None:
@@ -242,9 +242,9 @@ def test_pages_follow_their_user_when_it_is_re_pointed(
 
     commander.assign_user("alice", "W:w-2")
 
-    assert commander.worker_of_page("p1") == "W:w-2"
-    assert commander.worker_of_page("p2") == "W:w-2"
-    assert commander.worker_of_page("p3") == "W:w-2"
+    assert commander.page_worker("p1") == "W:w-2"
+    assert commander.page_worker("p2") == "W:w-2"
+    assert commander.page_worker("p3") == "W:w-2"
     # Nothing per page was written: the answer moved because the user's did.
     assert commander.page_connection == before
 
@@ -261,7 +261,7 @@ def test_a_placement_in_flight_leaves_the_pages_unplaced(
         ],
     )
     commander.assign_user("alice", None)
-    assert commander.worker_of_page("p1") is None
+    assert commander.page_worker("p1") is None
     assert "p1" in commander.page_connection
 
 
@@ -361,7 +361,7 @@ def test_a_login_leaves_the_page_subscriptions_where_they_are(
 
     commander.fold_events(
         "W:w-1",
-        [event(LOGIN_OP, 4, user="alice", previous_user="s1", session_id="s1", package="")],
+        [event(LOGIN_OP, 4, user="alice", previous_user="s1", session_id="s1", encoded="")],
     )
 
     assert commander.page_subscriptions.pages_for("glbl.user") == {"p1"}
@@ -390,18 +390,18 @@ def test_the_login_of_a_second_connection_never_flags_a_resident_user(
 
     commander.fold_events(
         "W:w-2",
-        [event(LOGIN_OP, 4, user="alice", previous_user="s2", session_id="s2", package="")],
+        [event(LOGIN_OP, 4, user="alice", previous_user="s2", session_id="s2", encoded="")],
     )
 
     # S2: alice is at home, not in flight, and her first connection never moved.
     assert commander.user_worker_map == {"alice": "W:w-1"}
     assert commander.connections_of("alice") == ["s1", "s2"]
     assert commander.page_connection == {"p1": "s1", "p2": "s2"}
-    assert commander.worker_of_page("p1") == "W:w-1"
+    assert commander.page_worker("p1") == "W:w-1"
     # p2 came over with its connection: its owner derives to alice, its worker
     # to the one alice was already on.
     assert commander.connection_user["s2"] == "alice"
-    assert commander.worker_of_page("p2") == "W:w-1"
+    assert commander.page_worker("p2") == "W:w-1"
 
 
 def test_a_re_registered_page_leaves_no_edge_on_its_old_connection(

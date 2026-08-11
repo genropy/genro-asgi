@@ -177,7 +177,7 @@ async def test_every_reply_carries_only_the_events_of_its_own_call(
         ("/op/new_connection", ["new_user", "new_connection"]),
         ("/op/new_connection", ["new_user", "new_connection"]),
         ("/op/change_connection_user", ["change_connection_user"]),
-        ("/op/install_package", []),
+        ("/op/decode_user", []),
         ("/op/occupancy", []),
     ]
     assert [event["user"] for _, events in seen for event in events] == [
@@ -214,7 +214,7 @@ def gate_the_install(commander: UserStickyCommander, gate: asyncio.Event) -> dic
     original = commander.hub.call
 
     async def gated(name: str, path: str, data: Any = None, timeout: float | None = None) -> Any:
-        if path.endswith("install_package"):
+        if path.endswith("decode_user"):
             seen["identity"] = data["identity"]
             seen["held"] = commander.worker.user_items.get(data["identity"])
             seen["flag"] = commander.user_worker_map.get(data["identity"], "missing")
@@ -293,7 +293,7 @@ async def test_an_install_that_fails_leaves_the_user_nowhere(
     original = single.hub.call
 
     async def failing(name: str, path: str, data: Any = None, timeout: float | None = None) -> Any:
-        if path.endswith("install_package"):
+        if path.endswith("decode_user"):
             raise RuntimeError("no room")
         return await original(name, path, data, timeout=timeout)
 
@@ -564,7 +564,7 @@ async def test_a_login_relabels_the_page_and_never_re_keys_it(
     # S1: the keys are untouched on both sides of the chain — the page kept its
     # id under the connection it was born on, and only the labels moved.
     page = pages.worker.page_items.get("p1")
-    assert (page["connection_id"], pages.worker.registry.user_of_page("p1")) == (
+    assert (page["connection_id"], pages.worker.registry.page_user("p1")) == (
         "sess-1",
         "alice",
     )
@@ -595,7 +595,7 @@ async def test_a_second_connection_of_the_same_user_joins_at_home(
     await pages.forward_call("sess-2", "/op/change_connection_user", {"user": "alice"})
 
     assert pages.worker.user_items.get("alice")["connections"] == {"sess-1", "sess-2"}
-    assert {pages.worker.registry.user_of_page(p) for p in ("p1", "p2")} == {"alice"}
+    assert {pages.worker.registry.page_user(p) for p in ("p1", "p2")} == {"alice"}
     assert pages.user_worker_map == {"alice": pages.worker.name}
     # The resident store was joined, not replaced: what the first connection
     # wrote is still there for the second one to subscribe to.
@@ -643,7 +643,7 @@ async def test_the_second_login_of_a_user_leaves_the_first_page_untouched(
         for event in events
         if event["op"] == "change_connection_user"
     ]
-    assert [("package" in event) for event in logins] == [False]
+    assert [("encoded" in event) for event in logins] == [False]
     assert [path for path, _ in seen] == ["/op/change_connection_user"]
 
     # p1 is the same row on the same Bag, and what was pending on it is still
@@ -741,7 +741,7 @@ async def test_the_register_crosses_a_total_restart_through_the_dump(tmp_path: A
         # The surface is re-hung from the package itself (adopt_slice): the
         # operational install sends no events, so the fold never runs here.
         assert second.connection_user == {"sess-1": "alice"}
-        assert second.worker_of_page("p1") == second.worker.name
+        assert second.page_worker("p1") == second.worker.name
         assert second.page_subscriptions.pages_for("mytable") == {"p1"}
         # The file is retired the moment it is read: a restart dying mid-restore
         # must not find it again and install everything twice.

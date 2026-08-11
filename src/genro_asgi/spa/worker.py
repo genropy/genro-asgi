@@ -80,12 +80,12 @@ stores and collectors survive it, with ONE declared exception: the anonymous
 user entry claiming its first real identity is transferred whole onto the new
 key, store included — and then, under the very same lock, packages
 the user's whole slice, DROPS it from ``user_items`` and offers the login event
-with that ``package`` riding on it: the worker spends its copy and forgets
+with that ``encoded`` riding on it: the worker spends its copy and forgets
 (legacy ``evict_user``). Nothing is left here for a second step to collect: the
 commander installs the package on the worker it decides the user belongs to,
 this one included. ONE login does not push: the one onto a user this worker
 already hosts. There the registry's join is everything — the connection is
-linked to the resident entry and the event carries no ``package`` — so a
+linked to the resident entry and the event carries no ``encoded`` — so a
 resident's pages never leave the worker they are being served on.
 
 **The commander can also ORDER the departure.** ``evict_user`` packages the same
@@ -1941,7 +1941,7 @@ class UserStickyWorker(RoutingClass):
         connection is linked to the resident entry, its pages' ``user_view`` is
         re-attached to the resident store, the orphaned guest dies — and nothing
         travels. No package, no drop, and the login event goes up WITHOUT the
-        ``package`` key, which is how the commander reads "this user is at home,
+        ``encoded`` key, which is how the commander reads "this user is at home,
         there is no room to make". The resident's other connections and their
         pages are never taken off the register, so no traffic addressed to them
         can fall into an eviction window: there is none.
@@ -1977,13 +1977,13 @@ class UserStickyWorker(RoutingClass):
                     session_id=identity,
                 )
                 return self.wire_entry(entry)
-            package = self.package_user(user)
+            encoded = self.encode_user(user)
             self.offer_event(
                 "change_connection_user",
                 user=user,
                 previous_user=previous_user,
                 session_id=identity,
-                package=package,
+                encoded=encoded,
             )
             return self.wire_entry(entry)
 
@@ -2057,7 +2057,7 @@ class UserStickyWorker(RoutingClass):
         runs outside any CALL — passes ``offer_lifecycle`` and they ride the
         outbox. Call it with ``dispatch_lock`` held; returns the dropped row.
         """
-        user = self.registry.user_of_page(page_id)
+        user = self.registry.page_user(page_id)
         self.subscriptions.drop_page(page_id)
         self.drop_page_cache(page_id)
         entry = self.registry.drop_page(page_id)
@@ -2223,8 +2223,8 @@ class UserStickyWorker(RoutingClass):
                 }
         return packaged
 
-    def package_user(self, user: str) -> str:
-        """Seal the whole slice of ``user`` into a transport package and spend it here.
+    def encode_user(self, user: str) -> str:
+        """Seal the whole slice of ``user`` into its encoded wire form and spend it here.
 
         The one road out of a worker, whatever orders the departure: the login
         push and the commanded eviction build the SAME parcel — the user entry
@@ -2261,7 +2261,7 @@ class UserStickyWorker(RoutingClass):
         with self.dispatch_lock:
             if self.user_items.get(identity) is None:
                 raise KeyError(f"evict_user: unknown user {identity!r}")
-            return {"package": self.package_user(identity)}
+            return {"encoded": self.encode_user(identity)}
 
     def install_connection(self, user: str, connection_id: str, packed: dict[str, Any]) -> None:
         """Rebuild one packaged connection row under ``user``.
@@ -2341,6 +2341,6 @@ class UserStickyWorker(RoutingClass):
             return self.wire_entry(entry)
 
     @route()
-    def install_package(self, identity: str, package: str) -> dict[str, Any]:
-        """Decode a transport package and install it — the descending move."""
-        return self.add_user(identity, pickle.loads(base64.b64decode(package)))
+    def decode_user(self, identity: str, encoded: str) -> dict[str, Any]:
+        """Decode a moved user's encoded slice and install it — the descending move."""
+        return self.add_user(identity, pickle.loads(base64.b64decode(encoded)))

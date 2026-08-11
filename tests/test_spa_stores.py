@@ -352,7 +352,7 @@ def test_the_login_relabels_the_connection_and_its_pages_with_the_keys_intact() 
     assert registry.connection_items.get("sess-1") is connection
     assert connection["user"] == "alice"
     assert connection["pages"] == {"p1", "p2"}
-    assert {registry.user_of_page(page_id) for page_id in ("p1", "p2")} == {"alice"}
+    assert {registry.page_user(page_id) for page_id in ("p1", "p2")} == {"alice"}
     assert registry.page_items.get("p1")["connection_id"] == "sess-1"
     assert "sess-1" not in registry.user_items
 

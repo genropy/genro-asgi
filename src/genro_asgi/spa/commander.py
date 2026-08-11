@@ -70,7 +70,7 @@ a scan of foreign entries.
 
 **Nothing above the written edge is stored: it is DERIVED by walking up the
 chain.** A page's user is its connection's user, and a page's worker is its
-user's worker — so ``worker_of_page(page_id)`` climbs
+user's worker — so ``page_worker(page_id)`` climbs
 ``page_connection`` → ``connection_user`` → ``user_worker_map`` and answers
 ``None`` at any missing hop: a page the surface does not know, a user already
 swept, a placement still in flight. That is why a move needs nothing up here
@@ -163,12 +163,12 @@ untouched — the commander is the transport of those changes, never their reade
 
 **Placement happens at login, and the login waits for it.** The worker pushes:
 its ``change_connection_user`` event carries the user's whole slice as a
-``package`` and the source has already forgotten it — UNLESS that worker is
+``encoded`` and the source has already forgotten it — UNLESS that worker is
 already the user's home, and then it links the arriving connection to the
-resident entry and sends the login with NO ``package`` at all. That packageless
+resident entry and sends the login with NO ``encoded`` at all. That packageless
 event is the resident-link announcement: nothing travelled, nothing was flagged,
 and ``place_logins`` skips it. The skip leans on one invariant: a user a worker
-holds ALWAYS has a key in ``user_worker_map`` — ``install_package``'s caller
+holds ALWAYS has a key in ``user_worker_map`` — ``decode_user``'s caller
 assigns the map in the same breath, and the login that creates a user on a
 worker ships it out inside the same locked mutation — so the fold of a
 packageless login never finds an unplaced user to flag. Everything below is the
@@ -181,7 +181,7 @@ the worker the connection was sitting on). Only a user nobody holds is a free
 choice; that one the
 fold flags with ``None`` under its key — "this user's placement is in flight" —
 and ``decide_worker`` picks the least-loaded active worker for it. Either way
-``install_package`` plants the slice, the map is pointed at the destination, the
+``decode_user`` plants the slice, the map is pointed at the destination, the
 flag falls and only THEN is the login result released. The room is ready before
 the guest is told its number. A ``forward_call`` that finds the flag up parks on
 ``placement_done`` — the parked coroutines are the queue, there is no structure
@@ -200,7 +200,7 @@ commanded ``evict_user`` — the same parcel a login pushes, asked for instead o
 announced — and writes them all as one pickle. ``start`` reads that file back
 before anything can be routed, renames it ``_loaded`` so a restart that dies
 mid-restore cannot install it twice, and places each slice exactly like a
-login: ``decide_worker``, the map, ``install_package``. Both halves are
+login: ``decide_worker``, the map, ``decode_user``. Both halves are
 best-effort by design — a worker that cannot answer at stop, a package a worker
 refuses at start, are logged and skipped — because the alternative to an
 incomplete register is no register at all.
@@ -224,7 +224,7 @@ under the user's key — every forward of it parks there, before the pick, so
 nothing is routed at a worker the slice is leaving — waits out the user's live
 calls within ``move_quiesce_timeout``, then takes the parcel with the same
 commanded ``evict_user`` the dump uses and plants it with the same
-``install_package`` a login does. The map moves LAST: until the install is
+``decode_user`` a login does. The map moves LAST: until the install is
 confirmed the user is served from its source, and a budget that expires or a
 source that cannot answer simply leaves it there. What has no way back is the
 evict: the source strips itself as it answers, so from there on the commander
@@ -239,7 +239,7 @@ a rebalance, and nothing else sends a compaction. Excess before slack, one flag
 per force, and the pass is detached: a caretaker never waits on what it started.
 The compaction reads the capacity ledger — ``C`` what the pool may take (the
 reception up to its threshold, a whole gate each for the others), ``O`` what it
-holds in ``load_of`` — and while ``C - O`` stays over ``compaction_margin``, and
+holds in ``worker_load`` — and while ``C - O`` stays over ``compaction_margin``, and
 the pool is wider than ``min_workers``, it drains the least loaded NON-reception
 worker with ``move_user`` and retires it. A drain that does not empty ends the
 pass and retires nothing: a worker still holding state is never retired.
@@ -655,7 +655,7 @@ class UserStickyCommander:
             except Exception as exc:
                 self.logger.warning("Dump of %s failed (%s: %s)", user, type(exc).__name__, exc)
             else:
-                packages[user] = result["package"]
+                packages[user] = result["encoded"]
                 self.remove_user(user)
         target = Path(self.dump_path)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -674,7 +674,7 @@ class UserStickyCommander:
         next start finds it and tries again.
 
         Each slice is placed like a login: a worker is decided, the map points
-        at it, and ``install_package`` rebuilds indexes, collectors, views and
+        at it, and ``decode_user`` rebuilds indexes, collectors, views and
         pendings BY CONSTRUCTION — there is nothing to re-index and no trigger
         to re-hook. The SURFACE is re-hung here, from the package's own record
         (``adopt_slice``): the operational install sends no events, and a
@@ -691,13 +691,13 @@ class UserStickyCommander:
         loaded = source.with_name(f"{source.stem}_loaded{source.suffix}")
         loaded.unlink(missing_ok=True)
         source.rename(loaded)
-        path = f"{OP_PATH_PREFIX}install_package"
-        for user, package in packages.items():
+        path = f"{OP_PATH_PREFIX}decode_user"
+        for user, encoded in packages.items():
             destination = self.decide_worker()
             self.assign_user(user, destination)
             try:
                 payload = await self.hub.call(
-                    destination, path, {"identity": user, "kwargs": {"package": package}}
+                    destination, path, {"identity": user, "kwargs": {"encoded": encoded}}
                 )
                 await self.unwrap_reply(destination, path, payload)
             except Exception as exc:
@@ -706,10 +706,10 @@ class UserStickyCommander:
                     "Restore of %s failed (%s: %s)", user, type(exc).__name__, exc
                 )
             else:
-                self.adopt_slice(user, destination, package)
+                self.adopt_slice(user, destination, encoded)
                 self.logger.info("Restored %s on %s", user, destination)
 
-    def adopt_slice(self, user: str, worker: str, package: str) -> None:
+    def adopt_slice(self, user: str, worker: str, encoded: str) -> None:
         """Relearn the surface of a restored slice — the fold the install never sends.
 
         Operational installs shape no events (the surface is the one that
@@ -720,7 +720,7 @@ class UserStickyCommander:
         has already pointed the map; here the chain below it is re-hung, with
         the same mutators the lifecycle fold uses.
         """
-        blob = pickle.loads(base64.b64decode(package))
+        blob = pickle.loads(base64.b64decode(encoded))
         for connection_id in blob["connections"]:
             self.register_connection(connection_id, user)
         for page_id, packed in blob["pages"].items():
@@ -1180,7 +1180,7 @@ class UserStickyCommander:
             user = self.connection_user.get(target)
             worker = None if user is None else self.user_worker_map.get(user)
         else:
-            worker = self.worker_of_page(target)
+            worker = self.page_worker(target)
         if worker is None:
             self.logger.debug(
                 "exchange dropped: no routable target %r (%s)", target, message["kind"]
@@ -1212,7 +1212,7 @@ class UserStickyCommander:
         empty broadcast.
         """
         if not filters or filters == "*":
-            return [(page_id, self.worker_of_page(page_id)) for page_id in self.page_connection]
+            return [(page_id, self.page_worker(page_id)) for page_id in self.page_connection]
         if " AND " in filters:
             raise ValueError(
                 f"filter {filters!r}: the page surface answers one field:value pair — "
@@ -1289,7 +1289,7 @@ class UserStickyCommander:
         buffer: dict[str, list[dict[str, Any]]] = {}
         for deposit in message.get("deposits") or []:
             for page_id in self.page_subscriptions.pages_for(deposit["table"]):
-                worker = self.worker_of_page(page_id)
+                worker = self.page_worker(page_id)
                 if worker is None or worker == origin:
                     continue
                 buffer.setdefault(worker, []).append({"page_id": page_id, "deposit": deposit})
@@ -1581,7 +1581,7 @@ class UserStickyCommander:
         cascade, so the middle link cannot be missing for any other reason.
         """
         previous = self.page_connection.get(page_id)
-        if previous is not None and self.worker_of_page(page_id) != worker:
+        if previous is not None and self.page_worker(page_id) != worker:
             self.logger.debug("fold: page %s already placed, ignoring %s's claim", page_id, worker)
             return
         if previous is not None and previous != connection:
@@ -1610,13 +1610,13 @@ class UserStickyCommander:
         nothing, and a stale entry would make every commit on that table resolve
         a destination for a page nobody holds.
         """
-        if self.worker_of_page(page_id) != worker:
+        if self.page_worker(page_id) != worker:
             return
         connection = self.page_connection.pop(page_id)
         self.discard_page_edge(connection, page_id)
         self.page_subscriptions.drop_page(page_id)
 
-    def worker_of_page(self, page_id: str) -> str | None:
+    def page_worker(self, page_id: str) -> str | None:
         """The worker holding a page, DERIVED: page → connection → user → worker.
 
         ``None`` at any missing hop, which is the whole of the old semantics — a
@@ -1788,7 +1788,7 @@ class UserStickyCommander:
         }
         window.append({"ts": time.time(), "report": report, "forward": dict(counters)})
 
-    def window_of(self, worker: str) -> deque[dict[str, Any]] | None:
+    def worker_window(self, worker: str) -> deque[dict[str, Any]] | None:
         """The archived occupancy window of one worker, None when it is unknown.
 
         A worker the roster holds but that has answered no probe yet reads as an
@@ -1811,11 +1811,11 @@ class UserStickyCommander:
         """
         view: dict[str, dict[str, Any]] = {}
         for name in self.active_workers:
-            components = self.evaluator.components_of(name)
+            components = self.evaluator.worker_components(name)
             view[name] = {
-                "occupancy": round(self.evaluator.saturation_of(name) * 100),
+                "occupancy": round(self.evaluator.worker_saturation(name) * 100),
                 "components": {key: round(value * 100) for key, value in components.items()},
-                "history": [round(value * 100) for value in self.evaluator.history_of(name)],
+                "history": [round(value * 100) for value in self.evaluator.worker_history(name)],
                 "rates": self.evaluator.rates_of(name),
                 # a copy, like the archived snapshot: the view is the consumer's
                 # to annotate, the ledger is not
@@ -2012,16 +2012,16 @@ class UserStickyCommander:
         """The reception-first pick over ``candidates`` (the active workers)."""
         reception = candidates[0]
         others = candidates[1:]
-        if not others or self.evaluator.saturation_of(reception) < self.reception_threshold:
+        if not others or self.evaluator.worker_saturation(reception) < self.reception_threshold:
             return reception
-        admitting = [name for name in others if self.evaluator.saturation_of(name) < 1.0]
+        admitting = [name for name in others if self.evaluator.worker_saturation(name) < 1.0]
         if not admitting:
             fallback = others[-1]
             self.logger.warning(
                 "Every worker past the admission gate; placing the login on %s anyway", fallback
             )
             return fallback
-        return min(admitting, key=self.evaluator.load_of)
+        return min(admitting, key=self.evaluator.worker_load)
 
     def check_capacity(self) -> None:
         """Widen the pool when the login just placed found no room left.
@@ -2037,11 +2037,11 @@ class UserStickyCommander:
             return
         reception, others = active[0], active[1:]
         if others:
-            if any(self.evaluator.saturation_of(name) < 1.0 for name in others):
+            if any(self.evaluator.worker_saturation(name) < 1.0 for name in others):
                 return
             reason = "no worker past the reception still admits"
         else:
-            if self.evaluator.saturation_of(reception) < self.reception_threshold:
+            if self.evaluator.worker_saturation(reception) < self.reception_threshold:
                 return
             reason = f"reception {reception} is over its threshold"
         if len(self.living_workers) > len(active):
@@ -2094,18 +2094,18 @@ class UserStickyCommander:
         because a login exists only as the effect of a CALL. A login result is
         released once its user has a room.
 
-        A login with NO ``package`` is the resident-link announcement: the
+        A login with NO ``encoded`` is the resident-link announcement: the
         worker that sent it already hosts the user, so it linked the arriving
         connection and shipped nothing. There is no room to make — the user is
         in the one it never left, and the fold raised no flag for it — so the
         event is complete here and never reaches ``place_login``.
         """
         for event in self.fold_events(worker, events):
-            if "package" not in event:
+            if "encoded" not in event:
                 continue
-            await self.place_login(event["user"], event["package"])
+            await self.place_login(event["user"], event["encoded"])
 
-    async def place_login(self, user: str, package: str) -> None:
+    async def place_login(self, user: str, encoded: str) -> None:
         """Give a just-logged user its room: decide, install, map, drop the flag.
 
         Presence comes BEFORE occupancy: a user already placed goes back to its
@@ -2114,7 +2114,7 @@ class UserStickyCommander:
         nobody holds is a free choice, and only then does ``decide_worker`` run.
 
         An unplaced user is flagged in the map (the fold did that) and its slice
-        exists only inside ``package`` — the source spent its copy pushing it.
+        exists only inside ``encoded`` — the source spent its copy pushing it.
         So there is nothing to roll back: an install that fails — the destination
         dying is the only way it can — leaves it nowhere, and the map is made to
         say exactly that. A RESIDENT user is not removed by a failed install:
@@ -2127,7 +2127,7 @@ class UserStickyCommander:
         worker the slice has just left; past the barrier the map names the
         destination and the join lands where the user actually lives.
         """
-        path = f"{OP_PATH_PREFIX}install_package"
+        path = f"{OP_PATH_PREFIX}decode_user"
         await self.await_move(user)
         resident = self.user_worker_map.get(user)
         try:
@@ -2135,7 +2135,7 @@ class UserStickyCommander:
             payload = await self.hub.call(
                 destination,
                 path,
-                {"identity": user, "kwargs": {"package": package}},
+                {"identity": user, "kwargs": {"encoded": encoded}},
             )
             await self.unwrap_reply(destination, path, payload)
         except Exception as exc:
@@ -2213,13 +2213,13 @@ class UserStickyCommander:
                 )
                 return False
             try:
-                package = await self.evict_for_move(user, source)
+                encoded = await self.evict_for_move(user, source)
             except Exception as exc:
                 self.logger.warning(
                     "Move of %s from %s aborted (%s: %s)", user, source, type(exc).__name__, exc
                 )
                 return False
-            destination = await self.install_in_custody(user, target, package)
+            destination = await self.install_in_custody(user, target, encoded)
             self.assign_user(user, destination)
             self.logger.info("Moved %s from %s to %s", user, source, destination)
             return destination == target
@@ -2251,9 +2251,9 @@ class UserStickyCommander:
         path = f"{OP_PATH_PREFIX}evict_user"
         payload = await self.hub.call(source, path, {"identity": user, "kwargs": {}})
         result = await self.unwrap_reply(source, path, payload)
-        return str(result["package"])
+        return str(result["encoded"])
 
-    async def install_in_custody(self, user: str, target: str, package: str) -> str:
+    async def install_in_custody(self, user: str, target: str, encoded: str) -> str:
         """Plant the parcel, re-deciding the room until one takes it.
 
         The CALL carries no deadline: a REPLY or the destination's EOF ends it,
@@ -2261,14 +2261,14 @@ class UserStickyCommander:
         wait's. Every worker is tried at most once — a pool that refused the
         slice everywhere raises rather than spinning on the same rooms.
         """
-        path = f"{OP_PATH_PREFIX}install_package"
+        path = f"{OP_PATH_PREFIX}decode_user"
         tried: set[str] = set()
         destination: str | None = target
         while destination is not None:
             tried.add(destination)
             try:
                 payload = await self.hub.call(
-                    destination, path, {"identity": user, "kwargs": {"package": package}}
+                    destination, path, {"identity": user, "kwargs": {"encoded": encoded}}
                 )
                 await self.unwrap_reply(destination, path, payload)
             except Exception as exc:
@@ -2289,7 +2289,7 @@ class UserStickyCommander:
         candidates = [name for name in self.active_workers if name not in tried]
         if not candidates:
             return None
-        return min(candidates, key=self.evaluator.load_of)
+        return min(candidates, key=self.evaluator.worker_load)
 
     def release_move(self, user: str) -> None:
         """Drop the user's barrier and wake everything parked on it."""
@@ -2334,7 +2334,7 @@ class UserStickyCommander:
         else:
             self.trigger_compaction()
 
-    def threshold_of(self, worker: str) -> float:
+    def worker_threshold(self, worker: str) -> float:
         """The saturation ``worker`` is judged at: its own if reception, else the gate.
 
         The reception carries the guests as well, so it is asked to stay lower —
@@ -2350,7 +2350,7 @@ class UserStickyCommander:
         """
         excess = []
         for name in self.active_workers:
-            over = self.evaluator.saturation_of(name) - self.threshold_of(name)
+            over = self.evaluator.worker_saturation(name) - self.worker_threshold(name)
             if over > 0:
                 excess.append((name, over))
         return sorted(excess, key=lambda item: -item[1])
@@ -2438,16 +2438,16 @@ class UserStickyCommander:
         the binding resource, the choice on the whole picture.
         """
         ceiling = 1.0 - self.rebalance_margin
-        saturation = self.evaluator.saturation_of
+        saturation = self.evaluator.worker_saturation
         eligible = [
             name
             for name in self.active_workers[1:]
-            if saturation(name) <= self.threshold_of(name)
+            if saturation(name) <= self.worker_threshold(name)
             and saturation(name) + total_excess <= ceiling
         ]
         if not eligible:
             return None
-        return min(eligible, key=self.evaluator.load_of)
+        return min(eligible, key=self.evaluator.worker_load)
 
     def rebalance_weights(self, worker: str, now: float | None = None) -> dict[str, float]:
         """``worker``'s saturation apportioned over its MOVABLE users, by recent seconds.
@@ -2468,7 +2468,7 @@ class UserStickyCommander:
         total = sum(seconds.values())
         if total <= 0.0:
             return {}
-        saturation = self.evaluator.saturation_of(worker)
+        saturation = self.evaluator.worker_saturation(worker)
         return {
             user: saturation * (value / total)
             for user, value in seconds.items()
@@ -2493,7 +2493,7 @@ class UserStickyCommander:
         if target_empty:
             ordered = sorted(weights, key=lambda user: -weights[user])
         else:
-            floor = self.rebalance_min_share * self.evaluator.saturation_of(worker)
+            floor = self.rebalance_min_share * self.evaluator.worker_saturation(worker)
             ordered = sorted(
                 (user for user in weights if weights[user] >= floor),
                 key=lambda user: weights[user],
@@ -2534,14 +2534,14 @@ class UserStickyCommander:
 
         ``C`` is what the pool may take — the reception up to its own threshold
         plus a whole gate for every other worker — and ``O`` is what it holds,
-        summed in QUANTITY (``load_of``): the ledger asks how much fits, not which
+        summed in QUANTITY (``worker_load``): the ledger asks how much fits, not which
         resource binds. A pool with no active worker has no capacity to report.
         """
         active = self.active_workers
         if not active:
             return 0.0
         capacity = self.reception_threshold + (len(active) - 1) * 1.0
-        occupied = sum(self.evaluator.load_of(name) for name in active)
+        occupied = sum(self.evaluator.worker_load(name) for name in active)
         return capacity - occupied
 
     async def compact_pass(self) -> None:
@@ -2562,7 +2562,7 @@ class UserStickyCommander:
                     return
                 if self.capacity_headroom() <= self.compaction_margin:
                     return
-                candidate = min(candidates, key=self.evaluator.load_of)
+                candidate = min(candidates, key=self.evaluator.worker_load)
                 if not await self.drain_worker(candidate):
                     self.logger.warning(
                         "Compaction stopped: worker %s did not drain, keeping it", candidate
@@ -2606,5 +2606,5 @@ class UserStickyCommander:
         candidates = [name for name in self.active_workers if name != drained]
         if not candidates:
             return None
-        admitting = [name for name in candidates if self.evaluator.saturation_of(name) < 1.0]
-        return min(admitting or candidates, key=self.evaluator.load_of)
+        admitting = [name for name in candidates if self.evaluator.worker_saturation(name) < 1.0]
+        return min(admitting or candidates, key=self.evaluator.worker_load)

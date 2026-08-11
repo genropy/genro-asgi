@@ -17,7 +17,7 @@
 The commander archives, per worker, a window of raw occupancy readings (each row
 ``{ts, report, forward}``, see ``UserStickyCommander.record_occupancy``) in that
 worker's roster row. This object is the JUDGE half of the contract: it reads the
-window through ``commander.window_of`` and answers the questions the pool
+window through ``commander.worker_window`` and answers the questions the pool
 policies ask — how full is this worker, from what, over what recent history, and
 at what forward rate.
 
@@ -48,10 +48,10 @@ components become commensurable.
 
 Two readings are taken off those ratios:
 
-- ``saturation_of`` = their MAX — the GATE. The bottleneck answers "can I take
+- ``worker_saturation`` = their MAX — the GATE. The bottleneck answers "can I take
   another user?"; one component at its target closes the worker even if the
   others are idle;
-- ``load_of`` = their QUADRATIC MEAN — the QUANTITY. Ordering candidates wants
+- ``worker_load`` = their QUADRATIC MEAN — the QUANTITY. Ordering candidates wants
   the whole picture, not just the worst component, and the quadratic mean keeps
   the worst one dominant while the others still count.
 
@@ -132,10 +132,10 @@ class OccupancyEvaluator:
 
         Empty when the worker has no measurable component in the window.
         """
-        components = self.components_of(worker_id)
+        components = self.worker_components(worker_id)
         return {name: value / self.targets[name] for name, value in components.items()}
 
-    def saturation_of(self, worker_id: str) -> float:
+    def worker_saturation(self, worker_id: str) -> float:
         """The GATE reading: the max of the worker's component ratios.
 
         1.0 is "at the target" — the bottleneck decides whether the worker still
@@ -146,7 +146,7 @@ class OccupancyEvaluator:
             return 0.0
         return max(ratios.values())
 
-    def load_of(self, worker_id: str) -> float:
+    def worker_load(self, worker_id: str) -> float:
         """The QUANTITY reading: the quadratic mean of the worker's component ratios.
 
         The whole picture rather than the worst component alone — what orders
@@ -157,7 +157,7 @@ class OccupancyEvaluator:
             return 0.0
         return math.sqrt(sum(value * value for value in ratios.values()) / len(ratios))
 
-    def components_of(self, worker_id: str) -> dict[str, float]:
+    def worker_components(self, worker_id: str) -> dict[str, float]:
         """The averaged components present for this worker (memory/cpu/executor).
 
         Each component is averaged over the last ``SMOOTHING_ROWS`` rows, counting
@@ -177,15 +177,15 @@ class OccupancyEvaluator:
                 counts[name] = counts.get(name, 0) + 1
         return {name: sums[name] / counts[name] for name in sums}
 
-    def history_of(self, worker_id: str) -> list[float]:
+    def worker_history(self, worker_id: str) -> list[float]:
         """Per-row saturation across the WHOLE window (the max RATIO of each row).
 
         One value per archived row, in order — the histogram the monitor draws,
-        on the same axis as ``saturation_of``: 1.0 is "at the target", and a row
+        on the same axis as ``worker_saturation``: 1.0 is "at the target", and a row
         past it reads over 1.0. A row with no measurable component contributes
         0.0.
         """
-        window = self.commander.window_of(worker_id)
+        window = self.commander.worker_window(worker_id)
         if not window:
             return []
         history: list[float] = []
@@ -207,7 +207,7 @@ class OccupancyEvaluator:
         forward, errors included, while the REQUEST delta counts completions
         only — behind many transport failures the figure inflates accordingly.
         """
-        window = self.commander.window_of(worker_id)
+        window = self.commander.worker_window(worker_id)
         if not window or len(window) < 2:
             return {"rps": None, "latency_ms": None}
         rows = list(window)
@@ -221,7 +221,7 @@ class OccupancyEvaluator:
 
     def recent_rows(self, worker_id: str) -> list[dict[str, Any]]:
         """The last ``SMOOTHING_ROWS`` rows of the worker's window (fewer if younger)."""
-        window = self.commander.window_of(worker_id)
+        window = self.commander.worker_window(worker_id)
         if not window:
             return []
         return list(window)[-SMOOTHING_ROWS:]

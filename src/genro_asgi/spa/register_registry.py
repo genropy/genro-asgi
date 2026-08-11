@@ -40,7 +40,7 @@ carries ``connections``, a connection row carries ``pages``; upwards they are
 the parent key each child already holds — a page row's ``connection_id``, a
 connection row's ``user``. Every lifecycle mutator writes both directions in
 the same gesture, so the two can never disagree. A page row stores NO ``user``
-label: the owner is DERIVED by walking up (``user_of_page``), and what is
+label: the owner is DERIVED by walking up (``page_user``), and what is
 derived cannot diverge. The connection row is born GUEST — its ``user`` is the
 session id itself, naked, the anonymous sticky key — and the login is a label
 mutation on that live row, never a re-key.
@@ -266,7 +266,7 @@ class RegisterRegistry:
         IS its session in the reception. The chain is brought into being from
         the bottom up: the connection row when unseen, and with it the user
         entry when unseen. ``user`` drives that cascade ONLY — it is never
-        stored on the page row, whose owner is derived by ``user_of_page``.
+        stored on the page row, whose owner is derived by ``page_user``.
         The new page id joins its connection row's ``pages``.
 
         Rows are born with a live ``store`` Bag under a collector FILTERED AND
@@ -316,7 +316,7 @@ class RegisterRegistry:
         self.connection_items.get(connection_id)["pages"].add(page_id)
         return page
 
-    def user_of_page(self, page_id: str) -> str:
+    def page_user(self, page_id: str) -> str:
         """The user a page belongs to, derived by walking up its chain.
 
         Page row → ``connection_id`` → connection row → ``user``. Nothing is
@@ -325,7 +325,7 @@ class RegisterRegistry:
         """
         page = self.page_items.get(page_id)
         if page is None:
-            raise KeyError(f"user_of_page: unknown page {page_id!r}")
+            raise KeyError(f"page_user: unknown page {page_id!r}")
         return self.connection_items.get(page["connection_id"])["user"]
 
     def change_connection_user(
@@ -407,7 +407,7 @@ class RegisterRegistry:
         page["store_subscriptions"].add(prefix)
         view = page["user_view"]
         if view is None:
-            user_store = self.user_items.get(self.user_of_page(page_id))["store"]
+            user_store = self.user_items.get(self.page_user(page_id))["store"]
             page["user_view"] = self.new_collector(user_store, paths={prefix})
         else:
             view.subscribe_path(prefix)

@@ -253,7 +253,7 @@ def test_lifecycle_ops_mutate_the_register_and_shape_increasing_seqs() -> None:
         assert "sess-1" not in worker.user_items
         assert "alice" not in worker.user_items
 
-        worker.install_package("alice", events[-1]["package"])
+        worker.decode_user("alice", events[-1]["encoded"])
         worker.drop_user("alice")
         assert "alice" not in worker.user_items
 
@@ -343,14 +343,14 @@ def test_operational_ops_shape_no_event() -> None:
     with call_sink(worker) as events:
         worker.new_connection("sess-1")
         worker.change_connection_user("sess-1", user="alice")
-        package = events[-1]["package"]
-        worker.install_package("alice", package)
+        encoded = events[-1]["encoded"]
+        worker.decode_user("alice", encoded)
         assert [e["op"] for e in events] == [
             "new_user",
             "new_connection",
             "change_connection_user",
         ]
-    assert worker.shape_event("install_package", user="alice") is None
+    assert worker.shape_event("decode_user", user="alice") is None
 
 
 # ----------------------------------------------------------------------
@@ -368,9 +368,9 @@ def test_the_login_push_round_trip_preserves_the_user_entry() -> None:
         )
         # The source spends and forgets: the slice lives on in the package alone.
         assert "alice" not in source.user_items
-        package = events[-1]["package"]
+        encoded = events[-1]["encoded"]
 
-    installed = target.install_package("alice", package)
+    installed = target.decode_user("alice", encoded)
     assert installed["tenant"] == "acme"
     assert installed["tags"] == ["admin"]
     assert installed["register_item_id"] == "alice"
@@ -396,7 +396,7 @@ def test_the_commanded_eviction_hands_the_slice_over_and_announces_nothing() -> 
     assert source.connection_items.get("sess-1") is None
     assert source.page_items.get("p1") is None
 
-    installed = target.install_package("alice", result["package"])
+    installed = target.decode_user("alice", result["encoded"])
     assert installed["register_item_id"] == "alice"
     arrived = target.connection_items.get("sess-1")
     assert (arrived["user"], arrived["tenant"]) == ("alice", "acme")
@@ -415,9 +415,9 @@ def test_add_user_refuses_a_package_addressed_to_another_identity() -> None:
     with call_sink(source) as events:
         source.new_connection("sess-1")
         source.change_connection_user("sess-1", user="alice")
-        package = events[-1]["package"]
+        encoded = events[-1]["encoded"]
     with pytest.raises(ValueError, match="addressed to"):
-        target.install_package("bob", package)
+        target.decode_user("bob", encoded)
 
 
 # ----------------------------------------------------------------------
@@ -806,7 +806,7 @@ def test_a_resident_login_links_the_connection_and_ships_nothing() -> None:
         ]
         assert events[-1]["session_id"] == "sess-2"
         assert events[-1]["previous_user"] == "sess-2"
-        assert "package" not in events[-1]
+        assert "encoded" not in events[-1]
     # Nothing was evicted: the resident entry, its first connection and its page
     # are the same live objects they were before the second one logged in.
     assert worker.user_items.get("alice")["connections"] == {"sess-1", "sess-2"}
@@ -829,7 +829,7 @@ def test_a_self_login_leaves_the_user_whole() -> None:
         worker.change_connection_user("sess-1", user="alice")
         assert [e["op"] for e in events] == ["change_connection_user"]
         assert events[-1]["previous_user"] == "alice"
-        assert "package" not in events[-1]
+        assert "encoded" not in events[-1]
     resident = worker.user_items.get("alice")
     assert resident is entry
     assert resident["store"] is user_store

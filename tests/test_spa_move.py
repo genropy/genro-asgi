@@ -81,7 +81,7 @@ class InstallProbe:
     async def call(
         self, name: str, path: str, data: Any = None, timeout: float | None = None
     ) -> Any:
-        if not path.endswith("install_package"):
+        if not path.endswith("decode_user"):
             return await self.hub_call(name, path, data, timeout=timeout)
         self.destinations.append(name)
         self.arrived.set()
@@ -837,7 +837,7 @@ async def test_the_commanded_eviction_carries_what_the_login_push_carries(pages:
 
     pages.commander.assign_user("alice", source)
     await pages.commander.forward_call(
-        "alice", "/op/install_package", {"package": result["package"]}
+        "alice", "/op/decode_user", {"encoded": result["encoded"]}
     )
     worker = pages.workers[source]
     page = worker.page_items.get("p1")
@@ -901,7 +901,7 @@ async def test_two_connections_of_one_user_end_up_whole_on_one_worker(pages: Any
     # slice: both connections, both pages, each page under its own connection.
     worker = pages.workers[commander.user_worker_map["alice"]]
     assert worker.user_items.get("alice")["connections"] == {"sess-1", "sess-2"}
-    assert {worker.registry.user_of_page(page_id) for page_id in ("p1", "p2")} == {"alice"}
+    assert {worker.registry.page_user(page_id) for page_id in ("p1", "p2")} == {"alice"}
     assert worker.page_items.get("p1")["connection_id"] == "sess-1"
     assert worker.page_items.get("p2")["connection_id"] == "sess-2"
     assert worker.connection_items.get("sess-1")["pages"] == {"p1"}
@@ -1041,7 +1041,7 @@ async def test_a_resident_login_never_takes_the_pages_off_the_worker(pages: Any)
     # The login went up with no baggage: there was no room to make.
     logins = [event for event in folded if event["op"] == "change_connection_user"]
     assert [event["session_id"] for event in logins] == ["sess-2"]
-    assert "package" not in logins[0]
+    assert "encoded" not in logins[0]
     # And both pages are served afterwards, each on its own connection.
     for page_id in ("p1", "p2"):
         await drain_over_the_wire(pages, "alice", page_id)
@@ -1276,7 +1276,7 @@ class RefuseInstall:
     async def call(
         self, name: str, path: str, data: Any = None, timeout: float | None = None
     ) -> Any:
-        if not path.endswith("install_package"):
+        if not path.endswith("decode_user"):
             return await self.hub_call(name, path, data, timeout=timeout)
         self.destinations.append(name)
         if name in self.refused:
@@ -1855,8 +1855,8 @@ async def test_a_memory_hot_worker_sheds_by_weight_until_its_excess_is_covered()
         commander.count_user_consumption("bob", 1.0)
         # The decisive case of P2: the gate is over 1.0 while the load reads well
         # under it — the max is what sheds.
-        assert commander.evaluator.saturation_of(host) == pytest.approx(1.125)
-        assert commander.evaluator.load_of(host) < 0.9
+        assert commander.evaluator.worker_saturation(host) == pytest.approx(1.125)
+        assert commander.evaluator.worker_load(host) < 0.9
         await commander.rebalance_pass()
         # Excess 0.125, and alice's three quarters of 1.125 cover it alone.
         assert commander.user_worker_map["alice"] == cool

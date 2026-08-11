@@ -361,7 +361,7 @@ def assert_tree(registry: RegisterRegistry, tree: dict[str, dict[str, set[str]]]
             assert connection["pages"] == pages
             for page_id in pages:
                 assert registry.page_items.get(page_id)["connection_id"] == connection_id
-                assert registry.user_of_page(page_id) == user
+                assert registry.page_user(page_id) == user
 
 
 def test_the_two_directions_agree_after_every_creation() -> None:
@@ -411,18 +411,18 @@ def test_the_login_moves_the_connection_between_the_two_users_sets() -> None:
     assert_tree(registry, {"alice": {"sess-1": {"p1"}, "sess-2": {"p2"}}})
 
 
-def test_user_of_page_walks_up_the_chain() -> None:
+def test_page_user_walks_up_the_chain() -> None:
     registry = RegisterRegistry()
     registry.new_page("p1", user="alice", session_id="s1")
-    assert registry.user_of_page("p1") == "alice"
+    assert registry.page_user("p1") == "alice"
     registry.change_connection_user("s1", "bob")
-    assert registry.user_of_page("p1") == "bob"
+    assert registry.page_user("p1") == "bob"
 
 
-def test_user_of_page_unknown_raises_key_error() -> None:
+def test_page_user_unknown_raises_key_error() -> None:
     registry = RegisterRegistry()
     with pytest.raises(KeyError, match="nope"):
-        registry.user_of_page("nope")
+        registry.page_user("nope")
 
 
 def test_subscribe_store_path_unknown_page_raises_key_error() -> None:

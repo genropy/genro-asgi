@@ -340,7 +340,7 @@ def test_the_tree_is_aligned_after_a_full_lifecycle(commander: UserStickyCommand
 
     assert commander.connections_of("alice") == ["s1", "s2"]
     assert commander.pages_of_connection("s2") == ["p2", "p3"]
-    assert [commander.worker_of_page(page) for page in ("p1", "p2", "p3")] == ["W:w-1"] * 3
+    assert [commander.page_worker(page) for page in ("p1", "p2", "p3")] == ["W:w-1"] * 3
 
 
 def test_removing_a_user_never_touches_a_sibling_user(commander: UserStickyCommander) -> None:
@@ -359,7 +359,7 @@ def test_a_login_moves_the_edge_and_orphans_nothing(commander: UserStickyCommand
 
     commander.fold_events(
         "W:w-2",
-        [event(LOGIN_OP, 4, user="alice", previous_user="bob", session_id="s9", package="")],
+        [event(LOGIN_OP, 4, user="alice", previous_user="bob", session_id="s9", encoded="")],
     )
 
     assert_tree_aligned(commander)
@@ -775,7 +775,7 @@ async def test_the_fold_runs_off_the_forward_clock(
     async def call(worker: str, path: str, data: Any, timeout: Any = None) -> dict[str, Any]:
         if path == "/op":
             login = event(
-                LOGIN_OP, 2, user="alice", previous_user="s-1", session_id="c-1", package="pkg"
+                LOGIN_OP, 2, user="alice", previous_user="s-1", session_id="c-1", encoded="pkg"
             )
             return {"result": 7, "events": [login]}
         # the placement leg of the fold: the forward must already be counted
