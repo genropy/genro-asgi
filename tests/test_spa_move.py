@@ -32,7 +32,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 import threading
+import time
 from typing import Any
 
 import pytest
@@ -1608,6 +1610,63 @@ async def test_the_probe_return_is_what_sets_the_beat_going() -> None:
         await asyncio.sleep(0)
     finally:
         await running.stop()
+
+
+async def test_a_worker_sitting_on_a_handover_beyond_the_cycles_is_killed() -> None:
+    """The caretaker's second eye (#9): probes answered, handover stale — the kill."""
+    running = LocalPool()
+    await running.start(1)
+    try:
+        commander = running.commander
+        name = running.names[0]
+        killed: list[tuple[str, int]] = []
+        commander.signal_worker = lambda worker, sig: killed.append((worker, sig))  # type: ignore[method-assign]
+        commander.pending_users[name] = (
+            time.time() - commander.max_pending_cycles * commander.probe_interval - 1
+        )
+        await commander.probe_worker(name)
+        assert killed == [(name, signal.SIGKILL)]
+        # The verdict pre-empts the archive and the beat: a wedged worker's
+        # answer is not fresh knowledge about the pool.
+        assert len(commander.worker_roster[name]["occupancy"]) == 0
+    finally:
+        await running.stop()
+
+
+async def test_a_fresh_handover_never_trips_the_second_eye() -> None:
+    running = LocalPool()
+    await running.start(1)
+    try:
+        commander = running.commander
+        name = running.names[0]
+        killed: list[tuple[str, int]] = []
+        commander.signal_worker = lambda worker, sig: killed.append((worker, sig))  # type: ignore[method-assign]
+        commander.pending_users[name] = time.time()
+        await commander.probe_worker(name)
+        assert killed == []
+        # The probe return did its ordinary job: archive and beat.
+        assert commander.worker_roster[name]["occupancy"][-1]["report"]["worker"] == name
+    finally:
+        await running.stop()
+
+
+async def test_hand_user_to_clears_its_entry_whatever_the_answer(pool: Any) -> None:
+    commander = pool.commander
+    source = commander.reception
+    target = next(name for name in pool.names if name != source)
+    await seed_live_guest(pool, source)
+    await commander.forward_call(
+        "sess-1", "/op/change_connection_user", {"user": "alice", "tag": "carried"}
+    )
+    encoded = await commander.evict_for_move("alice", commander.user_worker_map["alice"])
+    # The answered handover leaves no residue.
+    await commander.hand_user_to(target, "alice", encoded)
+    assert "alice" in pool.workers[target].user_items
+    assert commander.pending_users == {}
+    # The failed one neither: the entry falls with the error.
+    with pytest.raises(Exception):
+        await commander.hand_user_to("W:ghost", "alice", encoded)
+    assert commander.pending_users == {}
 
 
 async def test_a_rebalance_already_in_flight_is_never_doubled(

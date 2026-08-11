@@ -306,6 +306,7 @@ __all__ = [
     "CONSUMPTION_BUCKETS",
     "CONSUMPTION_BUCKET_SECONDS",
     "DEFAULT_GROUP",
+    "MAX_PENDING_CYCLES",
     "METRICS_WINDOW",
     "MOVE_QUIESCE_TIMEOUT",
     "PROBE_INTERVAL",
@@ -340,6 +341,13 @@ PROBE_INTERVAL = 5.0
 #: declared gone. The probe is the one CALL that may expire: it carries nothing
 #: to lose, and the silence IS the information. PROVISIONAL, as above.
 PROBE_TIMEOUT = 10.0
+
+#: The caretaker's second eye (issue #9): how many probe cycles a worker may
+#: sit on an unanswered ``add_user`` handover before it is declared stuck and
+#: killed — probes it keeps answering notwithstanding. The kill makes the
+#: handover's outcome certain (EOF), so the custody salvage can re-home the
+#: user without ever risking a slice alive on two workers.
+MAX_PENDING_CYCLES = 3
 
 #: How long a dead worker's roster row — and its forward counters — outlives
 #: it before ``reconcile`` buries both, logging the obituary. Long enough for
@@ -419,6 +427,7 @@ class UserStickyCommander:
         max_workers: int | None = None,
         probe_interval: float = PROBE_INTERVAL,
         probe_timeout: float = PROBE_TIMEOUT,
+        max_pending_cycles: int = MAX_PENDING_CYCLES,
         local_worker: bool = False,
         dump_path: str | None = None,
         memory_limit_mb: int | None = None,
@@ -443,6 +452,8 @@ class UserStickyCommander:
         max_workers: ceiling the capacity check never scales past (None = unbounded).
         probe_interval: seconds between two probes of the same worker.
         probe_timeout: how long a worker may take to answer its probe.
+        max_pending_cycles: probe cycles a worker may sit on an unanswered
+            ``add_user`` handover before the caretaker kills it (issue #9).
         local_worker: hold one worker in this process (the single role, §3.5a);
             pair it with ``workers=0`` to spawn no child at all.
         dump_path: file the whole register is dumped to at ``stop`` and read back
@@ -477,6 +488,7 @@ class UserStickyCommander:
         self.reception_threshold = reception_threshold
         self.probe_interval = probe_interval
         self.probe_timeout = probe_timeout
+        self.max_pending_cycles = max_pending_cycles
         self.local_worker = local_worker
         self.dump_path = dump_path
         self.memory_limit_mb = int(memory_limit_mb) if memory_limit_mb is not None else None
@@ -534,6 +546,10 @@ class UserStickyCommander:
         # The users a commander-initiated move is carrying right now, each with
         # the barrier every forward of that user parks on until it lands.
         self.moving: dict[str, asyncio.Event] = {}
+        # One handover at most is in flight toward a worker (users arrive
+        # minutes apart): worker -> when its unanswered add_user CALL left.
+        # Written and cleared by hand_user_to, read by the caretaker (#9).
+        self.pending_users: dict[str, float] = {}
         # The beat's two forces, one flag each: a pass in flight is never doubled
         # (one pool, one pass), and the task set is what keeps it alive.
         self.compacting = False
@@ -691,15 +707,11 @@ class UserStickyCommander:
         loaded = source.with_name(f"{source.stem}_loaded{source.suffix}")
         loaded.unlink(missing_ok=True)
         source.rename(loaded)
-        path = f"{OP_PATH_PREFIX}add_user"
         for user, encoded in packages.items():
             destination = self.decide_worker()
             self.assign_user(user, destination)
             try:
-                payload = await self.hub.call(
-                    destination, path, {"identity": user, "kwargs": {"encoded": encoded}}
-                )
-                await self.unwrap_reply(destination, path, payload)
+                await self.hand_user_to(destination, user, encoded)
             except Exception as exc:
                 self.remove_user(user)
                 self.logger.warning(
@@ -866,6 +878,14 @@ class UserStickyCommander:
         commander had a moment ago, so the beat runs right behind it: the probe
         return IS the pool's heartbeat (the legacy beat rode the push envelope,
         which the pull probe replaced — declared divergence).
+
+        A good answer is not the whole verdict: the second eye (issue #9) then
+        checks ``pending_users`` — a worker that keeps answering probes while
+        sitting on an ``add_user`` handover beyond ``max_pending_cycles`` probe
+        cycles is stuck where the probe deliberately cannot look (the probe
+        avoids the worker's write lock), and is killed like a mute one. The EOF
+        makes the handover's outcome certain, so the custody salvage re-homes
+        the user.
         """
         try:
             payload = await self.hub.call(
@@ -881,6 +901,17 @@ class UserStickyCommander:
         except (ConnectionError, ChannelCallError, LookupError) as exc:
             self.logger.debug("Probe of %s skipped (%s: %s)", name, type(exc).__name__, exc)
         else:
+            started = self.pending_users.get(name)
+            if started is not None:
+                waited = time.time() - started
+                if waited > self.max_pending_cycles * self.probe_interval:
+                    self.logger.warning(
+                        "Worker %s answers probes but sat on a user handover for %.1fs: killing",
+                        name,
+                        waited,
+                    )
+                    self.signal_worker(name, signal.SIGKILL)
+                    return
             self.record_occupancy(name, report)
             self.pool_beat()
 
@@ -2127,17 +2158,11 @@ class UserStickyCommander:
         worker the slice has just left; past the barrier the map names the
         destination and the join lands where the user actually lives.
         """
-        path = f"{OP_PATH_PREFIX}add_user"
         await self.await_move(user)
         resident = self.user_worker_map.get(user)
         try:
             destination = resident if resident is not None else self.decide_worker()
-            payload = await self.hub.call(
-                destination,
-                path,
-                {"identity": user, "kwargs": {"encoded": encoded}},
-            )
-            await self.unwrap_reply(destination, path, payload)
+            await self.hand_user_to(destination, user, encoded)
         except Exception as exc:
             if resident is None:
                 self.remove_user(user)
@@ -2253,6 +2278,25 @@ class UserStickyCommander:
         result = await self.unwrap_reply(source, path, payload)
         return str(result["encoded"])
 
+    async def hand_user_to(self, worker: str, user: str, encoded: str) -> Any:
+        """Deliver one user's encoded slice to ``worker`` and await its answer.
+
+        The single door of the ``add_user`` handover — the move's custody, the
+        login placement and the dump restore all pass through here — so
+        ``pending_users`` always knows which worker is sitting on a delivery
+        and since when: that is what the caretaker's second eye reads. The
+        entry falls with the answer, whatever the answer is.
+        """
+        path = f"{OP_PATH_PREFIX}add_user"
+        self.pending_users.setdefault(worker, time.time())
+        try:
+            payload = await self.hub.call(
+                worker, path, {"identity": user, "kwargs": {"encoded": encoded}}
+            )
+            return await self.unwrap_reply(worker, path, payload)
+        finally:
+            self.pending_users.pop(worker, None)
+
     async def install_in_custody(self, user: str, target: str, encoded: str) -> str:
         """Plant the parcel, re-deciding the room until one takes it.
 
@@ -2261,16 +2305,12 @@ class UserStickyCommander:
         wait's. Every worker is tried at most once — a pool that refused the
         slice everywhere raises rather than spinning on the same rooms.
         """
-        path = f"{OP_PATH_PREFIX}add_user"
         tried: set[str] = set()
         destination: str | None = target
         while destination is not None:
             tried.add(destination)
             try:
-                payload = await self.hub.call(
-                    destination, path, {"identity": user, "kwargs": {"encoded": encoded}}
-                )
-                await self.unwrap_reply(destination, path, payload)
+                await self.hand_user_to(destination, user, encoded)
             except Exception as exc:
                 self.logger.warning(
                     "Install of %s on %s failed (%s: %s); looking for another room",
