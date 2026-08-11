@@ -2305,14 +2305,14 @@ class UserStickyWorker(RoutingClass):
         page["dbevents"].extend(packed["pending_dbevents"])
 
     @route()
-    def add_user(self, identity: str, blob: dict[str, Any]) -> dict[str, Any]:
-        """Install a moved user's slice from the decoded blob — the rebirth.
+    def add_user(self, identity: str, encoded: str) -> dict[str, Any]:
+        """Install a moved user's slice from its encoded wire form — the rebirth.
 
         Operational, like every install primitive: the commander orders it, so
         it needs no event back — the source already spent its copy on the login
         event. The item arrives whole, so its identity and every field it
         carried survive the move; ``identity`` is the routing key the CALL was
-        addressed with and must match the blob's own user.
+        addressed with and must match the carried user.
 
         The room is ready when this returns, and the whole slice is what makes
         it ready: the user's store first, because a page's ``user_view`` is a
@@ -2326,9 +2326,10 @@ class UserStickyWorker(RoutingClass):
         collectors attach to the resident Bag. Only the connections and the
         pages are ever installed twice over; the user is installed once.
         """
+        blob = pickle.loads(base64.b64decode(encoded))
         user = blob["user"]
         if user != identity:
-            raise ValueError(f"add_user: package of {user!r} addressed to {identity!r}")
+            raise ValueError(f"add_user: slice of {user!r} addressed to {identity!r}")
         with self.dispatch_lock:
             entry = self.user_items.get(user)
             if entry is None:
@@ -2339,8 +2340,3 @@ class UserStickyWorker(RoutingClass):
             for page_id, packed in blob["pages"].items():
                 self.install_page(user, page_id, packed)
             return self.wire_entry(entry)
-
-    @route()
-    def decode_user(self, identity: str, encoded: str) -> dict[str, Any]:
-        """Decode a moved user's encoded slice and install it — the descending move."""
-        return self.add_user(identity, pickle.loads(base64.b64decode(encoded)))

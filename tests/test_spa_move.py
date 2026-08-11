@@ -81,7 +81,7 @@ class InstallProbe:
     async def call(
         self, name: str, path: str, data: Any = None, timeout: float | None = None
     ) -> Any:
-        if not path.endswith("decode_user"):
+        if not path.endswith("add_user"):
             return await self.hub_call(name, path, data, timeout=timeout)
         self.destinations.append(name)
         self.arrived.set()
@@ -615,16 +615,17 @@ async def test_a_destination_that_dies_mid_install_leaves_the_user_nowhere(pool:
     target = next(name for name in pool.names if name != source)
     tilt_away(commander, source)
     # The destination sits on the install in a pool thread: the CALL is parked in
-    # the hub with no deadline, so only the worker's death can end it.
+    # the hub with no deadline, so only the worker's death can end it. The stall
+    # shadows install_connection — add_user itself is dispatched through the
+    # route table, where an instance attribute cannot intercept it.
     arrived = threading.Event()
     holding = threading.Event()
 
-    def stall(identity: str, blob: dict[str, Any]) -> dict[str, Any]:
+    def stall(user: str, connection_id: str, packed: dict[str, Any]) -> None:
         arrived.set()
         holding.wait(SPAWN_TIMEOUT)
-        return {}
 
-    pool.workers[target].add_user = stall
+    pool.workers[target].install_connection = stall
     await commander.forward_call("sess-1", "/op/new_connection")
     login = asyncio.create_task(
         commander.forward_call(
@@ -837,7 +838,7 @@ async def test_the_commanded_eviction_carries_what_the_login_push_carries(pages:
 
     pages.commander.assign_user("alice", source)
     await pages.commander.forward_call(
-        "alice", "/op/decode_user", {"encoded": result["encoded"]}
+        "alice", "/op/add_user", {"encoded": result["encoded"]}
     )
     worker = pages.workers[source]
     page = worker.page_items.get("p1")
@@ -1276,7 +1277,7 @@ class RefuseInstall:
     async def call(
         self, name: str, path: str, data: Any = None, timeout: float | None = None
     ) -> Any:
-        if not path.endswith("decode_user"):
+        if not path.endswith("add_user"):
             return await self.hub_call(name, path, data, timeout=timeout)
         self.destinations.append(name)
         if name in self.refused:

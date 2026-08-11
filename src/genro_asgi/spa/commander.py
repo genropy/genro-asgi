@@ -168,7 +168,7 @@ already the user's home, and then it links the arriving connection to the
 resident entry and sends the login with NO ``encoded`` at all. That packageless
 event is the resident-link announcement: nothing travelled, nothing was flagged,
 and ``place_logins`` skips it. The skip leans on one invariant: a user a worker
-holds ALWAYS has a key in ``user_worker_map`` — ``decode_user``'s caller
+holds ALWAYS has a key in ``user_worker_map`` — ``add_user``'s caller
 assigns the map in the same breath, and the login that creates a user on a
 worker ships it out inside the same locked mutation — so the fold of a
 packageless login never finds an unplaced user to flag. Everything below is the
@@ -181,7 +181,7 @@ the worker the connection was sitting on). Only a user nobody holds is a free
 choice; that one the
 fold flags with ``None`` under its key — "this user's placement is in flight" —
 and ``decide_worker`` picks the least-loaded active worker for it. Either way
-``decode_user`` plants the slice, the map is pointed at the destination, the
+``add_user`` plants the slice, the map is pointed at the destination, the
 flag falls and only THEN is the login result released. The room is ready before
 the guest is told its number. A ``forward_call`` that finds the flag up parks on
 ``placement_done`` — the parked coroutines are the queue, there is no structure
@@ -200,7 +200,7 @@ commanded ``evict_user`` — the same parcel a login pushes, asked for instead o
 announced — and writes them all as one pickle. ``start`` reads that file back
 before anything can be routed, renames it ``_loaded`` so a restart that dies
 mid-restore cannot install it twice, and places each slice exactly like a
-login: ``decide_worker``, the map, ``decode_user``. Both halves are
+login: ``decide_worker``, the map, ``add_user``. Both halves are
 best-effort by design — a worker that cannot answer at stop, a package a worker
 refuses at start, are logged and skipped — because the alternative to an
 incomplete register is no register at all.
@@ -224,7 +224,7 @@ under the user's key — every forward of it parks there, before the pick, so
 nothing is routed at a worker the slice is leaving — waits out the user's live
 calls within ``move_quiesce_timeout``, then takes the parcel with the same
 commanded ``evict_user`` the dump uses and plants it with the same
-``decode_user`` a login does. The map moves LAST: until the install is
+``add_user`` a login does. The map moves LAST: until the install is
 confirmed the user is served from its source, and a budget that expires or a
 source that cannot answer simply leaves it there. What has no way back is the
 evict: the source strips itself as it answers, so from there on the commander
@@ -674,7 +674,7 @@ class UserStickyCommander:
         next start finds it and tries again.
 
         Each slice is placed like a login: a worker is decided, the map points
-        at it, and ``decode_user`` rebuilds indexes, collectors, views and
+        at it, and ``add_user`` rebuilds indexes, collectors, views and
         pendings BY CONSTRUCTION — there is nothing to re-index and no trigger
         to re-hook. The SURFACE is re-hung here, from the package's own record
         (``adopt_slice``): the operational install sends no events, and a
@@ -691,7 +691,7 @@ class UserStickyCommander:
         loaded = source.with_name(f"{source.stem}_loaded{source.suffix}")
         loaded.unlink(missing_ok=True)
         source.rename(loaded)
-        path = f"{OP_PATH_PREFIX}decode_user"
+        path = f"{OP_PATH_PREFIX}add_user"
         for user, encoded in packages.items():
             destination = self.decide_worker()
             self.assign_user(user, destination)
@@ -2127,7 +2127,7 @@ class UserStickyCommander:
         worker the slice has just left; past the barrier the map names the
         destination and the join lands where the user actually lives.
         """
-        path = f"{OP_PATH_PREFIX}decode_user"
+        path = f"{OP_PATH_PREFIX}add_user"
         await self.await_move(user)
         resident = self.user_worker_map.get(user)
         try:
@@ -2261,7 +2261,7 @@ class UserStickyCommander:
         wait's. Every worker is tried at most once — a pool that refused the
         slice everywhere raises rather than spinning on the same rooms.
         """
-        path = f"{OP_PATH_PREFIX}decode_user"
+        path = f"{OP_PATH_PREFIX}add_user"
         tried: set[str] = set()
         destination: str | None = target
         while destination is not None:

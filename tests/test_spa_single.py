@@ -177,7 +177,7 @@ async def test_every_reply_carries_only_the_events_of_its_own_call(
         ("/op/new_connection", ["new_user", "new_connection"]),
         ("/op/new_connection", ["new_user", "new_connection"]),
         ("/op/change_connection_user", ["change_connection_user"]),
-        ("/op/decode_user", []),
+        ("/op/add_user", []),
         ("/op/occupancy", []),
     ]
     assert [event["user"] for _, events in seen for event in events] == [
@@ -214,7 +214,7 @@ def gate_the_install(commander: UserStickyCommander, gate: asyncio.Event) -> dic
     original = commander.hub.call
 
     async def gated(name: str, path: str, data: Any = None, timeout: float | None = None) -> Any:
-        if path.endswith("decode_user"):
+        if path.endswith("add_user"):
             seen["identity"] = data["identity"]
             seen["held"] = commander.worker.user_items.get(data["identity"])
             seen["flag"] = commander.user_worker_map.get(data["identity"], "missing")
@@ -293,7 +293,7 @@ async def test_an_install_that_fails_leaves_the_user_nowhere(
     original = single.hub.call
 
     async def failing(name: str, path: str, data: Any = None, timeout: float | None = None) -> Any:
-        if path.endswith("decode_user"):
+        if path.endswith("add_user"):
             raise RuntimeError("no room")
         return await original(name, path, data, timeout=timeout)
 
