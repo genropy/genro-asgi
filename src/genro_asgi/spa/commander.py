@@ -664,10 +664,17 @@ class UserStickyCommander:
     # ------------------------------------------------------------------
 
     async def reconcile_loop(self) -> None:
-        """Keep the living workers == target; woken early by deaths and scale."""
+        """Keep the living workers == target; woken early by deaths and scale.
+
+        The parked wait uses ``asyncio.timeout``, not ``wait_for``: on 3.11 a
+        ``cancel()`` landing while ``wait_for`` waits can be swallowed by its
+        cancellation race, leaving the task uncancellable and ``stop()``
+        parked on it forever (3.12 rebuilt ``wait_for`` on this very block).
+        """
         while True:
             try:
-                await asyncio.wait_for(self._wakeup.wait(), timeout=self.RECONCILE_INTERVAL)
+                async with asyncio.timeout(self.RECONCILE_INTERVAL):
+                    await self._wakeup.wait()
             except TimeoutError:
                 pass
             self._wakeup.clear()
