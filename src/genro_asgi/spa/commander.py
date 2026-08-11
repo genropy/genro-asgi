@@ -155,8 +155,8 @@ sticky key the caller provides — the root avatar identity once logged, the
 session id while anonymous; the commander never reads a cookie (that is
 ``SpaApplication``'s job, phase B). It resolves ``user_worker_map`` and, on a miss,
 sends the caller to the **reception**: the first active worker of the pool, the
-guests' worker. ``guest_occupancy_limit`` is how many users the reception may
-hold before ``check_capacity`` widens the pool. ``forward_envelope`` is the one
+guests' worker. ``reception_threshold`` is the saturation the reception may reach
+before ``check_capacity`` widens the pool. ``forward_envelope`` is the one
 implementation behind it: it answers with the result AND, for a page-addressed
 CALL, the page's pull delivery under ``DELIVERY_KEYS``, carried through
 untouched — the commander is the transport of those changes, never their reader.
@@ -216,8 +216,43 @@ from, because there is ONE road and no shortcut around it. Design §3.5a: if the
 protocol works in the single role, going multi changes nothing but the wire.
 
 Every ``forward_call`` writes itself under the user's ``pending`` in the row and
-clears it when it returns; nothing reads that data in 2a — the
-commander-initiated move does, when it arrives.
+clears it when it returns. ``move_user`` is what reads it: the commander-initiated
+move waits for that half-row to empty before it takes the user anywhere.
+
+**A move is a login the commander asked for.** ``move_user`` raises a barrier
+under the user's key — every forward of it parks there, before the pick, so
+nothing is routed at a worker the slice is leaving — waits out the user's live
+calls within ``move_quiesce_timeout``, then takes the parcel with the same
+commanded ``evict_user`` the dump uses and plants it with the same
+``install_package`` a login does. The map moves LAST: until the install is
+confirmed the user is served from its source, and a budget that expires or a
+source that cannot answer simply leaves it there. What has no way back is the
+evict: the source strips itself as it answers, so from there on the commander
+holds the only copy and keeps offering it rooms — the destination dying sends it
+to another worker, the source included — and only an empty pool loses it, with
+an explicit error.
+
+**The pool's own beat rides the probe return.** Every archived occupancy report
+is fresh knowledge, so ``pool_beat`` runs right behind it and dispatches ONE
+pass: ``rebalance_excess`` non-empty — somebody is over its own threshold — sends
+a rebalance, and nothing else sends a compaction. Excess before slack, one flag
+per force, and the pass is detached: a caretaker never waits on what it started.
+The compaction reads the capacity ledger — ``C`` what the pool may take (the
+reception up to its threshold, a whole gate each for the others), ``O`` what it
+holds in ``load_of`` — and while ``C - O`` stays over ``compaction_margin``, and
+the pool is wider than ``min_workers``, it drains the least loaded NON-reception
+worker with ``move_user`` and retires it. A drain that does not empty ends the
+pass and retires nothing: a worker still holding state is never retired.
+
+The rebalance works in SATURATION instead: what it relieves is the binding
+resource, so a worker one component over its target sheds even while its load
+reads low. The whole excess is summed once and one target has to absorb it —
+non-reception, not hot, and still under ``1.0 - rebalance_margin`` with the excess
+on board — and with nobody able to, the pass widens the pool and ends. The users
+that go are the source's saturation apportioned over recent service seconds:
+heaviest first onto an empty target, lightest first onto a loaded one and only
+above ``rebalance_min_share``, until the budget is covered. A rebalance never
+retires anything.
 """
 
 from __future__ import annotations
@@ -236,6 +271,7 @@ import sys
 import time
 import uuid
 from collections import deque
+from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
 
@@ -266,13 +302,17 @@ from .worker import (
 )
 
 __all__ = [
+    "COMPACTION_MARGIN",
     "CONSUMPTION_BUCKETS",
     "CONSUMPTION_BUCKET_SECONDS",
     "DEFAULT_GROUP",
-    "GUEST_OCCUPANCY_LIMIT",
     "METRICS_WINDOW",
+    "MOVE_QUIESCE_TIMEOUT",
     "PROBE_INTERVAL",
     "PROBE_TIMEOUT",
+    "REBALANCE_MARGIN",
+    "REBALANCE_MIN_SHARE",
+    "RECEPTION_THRESHOLD",
     "TOMBSTONE_SECONDS",
     "UserStickyCommander",
 ]
@@ -313,10 +353,38 @@ OCCUPANCY_OP_PATH = f"{OP_PATH_PREFIX}occupancy"
 #: The routing key of the monitor's register fan-out.
 MONITOR_STATE_OP_PATH = f"{OP_PATH_PREFIX}monitor_state"
 
-#: How many users the reception may hold before the pool is widened. The 2a
-#: reading of occupancy is the head count: no evaluator exists yet, and every
-#: guest sits on the reception. PROVISIONAL — it becomes per-group configuration.
-GUEST_OCCUPANCY_LIMIT = 50
+#: The saturation the reception is judged at: under it the reception keeps the
+#: logins it receives, over it it passes them on (and a pool of one widens).
+#: Lower than the admission gate on purpose — the reception carries the guests
+#: too. PROVISIONAL — it becomes per-group configuration.
+RECEPTION_THRESHOLD = 0.5
+
+#: How much free capacity — in whole admitting workers — the pool keeps beyond
+#: what it holds before the compaction stops folding workers away. The unit is a
+#: worker's gate (1.0 in ratio space), so 1.5 means "a worker and a half of
+#: room": high enough that a compaction never hands its survivors a pool that
+#: the next login re-widens. PROVISIONAL — it becomes per-group configuration.
+COMPACTION_MARGIN = 1.5
+
+#: How far under the gate a rebalance fills its target: the absorber must still
+#: sit at ``1.0 - REBALANCE_MARGIN`` once it has taken the whole excess. The
+#: anti-ping-pong margin — a target filled right up to the gate would be the next
+#: beat's hot worker. PROVISIONAL — it becomes per-group configuration.
+REBALANCE_MARGIN = 0.1
+
+#: The smallest share of its worker's saturation a user must carry to be worth
+#: shedding onto a LOADED target: under it the move buys nothing and costs a
+#: whole slice on the wire. PROVISIONAL — it becomes per-group configuration.
+REBALANCE_MIN_SHARE = 0.02
+
+#: How long a commander-initiated move waits for the moving user's live calls to
+#: drain before giving up on it. The move is held, not the calls: they were
+#: accepted by the source and they finish there.
+MOVE_QUIESCE_TIMEOUT = 10.0
+
+#: How often the quiesce wait re-reads the user's pending calls. Nothing signals
+#: an emptied half-row — ``close_request`` is a plain dict pop — so the wait polls.
+MOVE_QUIESCE_POLL = 0.05
 
 #: The lifecycle op that is a login: the sticky key changes and a placement is due.
 LOGIN_OP = "change_connection_user"
@@ -349,12 +417,19 @@ class UserStickyCommander:
         worker_kwargs: dict[str, Any] | None = None,
         executable: str | None = None,
         max_workers: int | None = None,
-        guest_occupancy_limit: int = GUEST_OCCUPANCY_LIMIT,
         probe_interval: float = PROBE_INTERVAL,
         probe_timeout: float = PROBE_TIMEOUT,
         local_worker: bool = False,
         dump_path: str | None = None,
         memory_limit_mb: int | None = None,
+        admission_threshold: float = 0.8,
+        component_targets: dict[str, float] | None = None,
+        reception_threshold: float = RECEPTION_THRESHOLD,
+        move_quiesce_timeout: float = MOVE_QUIESCE_TIMEOUT,
+        compaction_margin: float = COMPACTION_MARGIN,
+        min_workers: int = 1,
+        rebalance_margin: float = REBALANCE_MARGIN,
+        rebalance_min_share: float = REBALANCE_MIN_SHARE,
     ) -> None:
         """Args:
         workers: how many children to keep alive.
@@ -366,7 +441,6 @@ class UserStickyCommander:
         worker_kwargs: extra constructor kwargs passed to the worker class.
         executable: the interpreter to spawn with (defaults to this one).
         max_workers: ceiling the capacity check never scales past (None = unbounded).
-        guest_occupancy_limit: users on the reception above which the pool widens.
         probe_interval: seconds between two probes of the same worker.
         probe_timeout: how long a worker may take to answer its probe.
         local_worker: hold one worker in this process (the single role, §3.5a);
@@ -375,6 +449,24 @@ class UserStickyCommander:
             at ``start`` — the move across a total restart (None disarms it).
         memory_limit_mb: the per-worker memory budget the evaluator's memory
             component is measured against (None = no memory component at all).
+        admission_threshold: the uniform fraction of every resource a worker may
+            hold before it stops admitting — the denominator of the ratio space.
+        component_targets: per-component overrides of that threshold (keys in
+            ``COMPONENT_NAMES``, values in (0, 1]); an unknown key is a ValueError.
+        reception_threshold: the saturation over which the reception stops keeping
+            the logins it receives — and, in a pool of one, widens the pool.
+        move_quiesce_timeout: how long a move waits for the user's live calls to
+            drain before it aborts and leaves the user on its source.
+        compaction_margin: the free capacity, in whole admitting workers, the pool
+            keeps above what it holds — the compaction folds a worker away only
+            while the headroom stays over it.
+        min_workers: the floor the compaction never goes under. Only compaction
+            reads it: the scale-up has its own ceiling and ``workers`` is just
+            the boot target.
+        rebalance_margin: how far under the gate a rebalance leaves its target
+            once it has absorbed the whole excess — the anti-ping-pong margin.
+        rebalance_min_share: the smallest share of its worker's saturation a user
+            must carry to be shed onto a LOADED target.
         """
         self.target = workers
         self.group = group
@@ -382,14 +474,23 @@ class UserStickyCommander:
         self.worker_kwargs = dict(worker_kwargs or {})
         self.executable = executable or sys.executable
         self.max_workers = max_workers
-        self.guest_occupancy_limit = guest_occupancy_limit
+        self.reception_threshold = reception_threshold
         self.probe_interval = probe_interval
         self.probe_timeout = probe_timeout
         self.local_worker = local_worker
         self.dump_path = dump_path
         self.memory_limit_mb = int(memory_limit_mb) if memory_limit_mb is not None else None
+        self.move_quiesce_timeout = move_quiesce_timeout
+        self.compaction_margin = compaction_margin
+        self.min_workers = min_workers
+        self.rebalance_margin = rebalance_margin
+        self.rebalance_min_share = rebalance_min_share
         # The judge of the occupancy windows this commander archives.
-        self.evaluator = OccupancyEvaluator(self)
+        self.evaluator = OccupancyEvaluator(
+            self,
+            admission_threshold=admission_threshold,
+            component_targets=component_targets,
+        )
         # The in-process worker of the single role and the wire it sits on;
         # both stay None in the multi role.
         self.worker: UserStickyWorker | None = None
@@ -430,6 +531,14 @@ class UserStickyCommander:
         # Fired-and-rearmed at the end of every placement: the coroutines parked
         # on it while a flag is up ARE the queue of waiters.
         self.placement_done = asyncio.Event()
+        # The users a commander-initiated move is carrying right now, each with
+        # the barrier every forward of that user parks on until it lands.
+        self.moving: dict[str, asyncio.Event] = {}
+        # The beat's two forces, one flag each: a pass in flight is never doubled
+        # (one pool, one pass), and the task set is what keeps it alive.
+        self.compacting = False
+        self.rebalancing = False
+        self._pool_tasks: set[asyncio.Task[None]] = set()
         self._reconcile_task: asyncio.Task[None] | None = None
         # Strong refs to the task-class commands in flight: the loop keeps only
         # weak ones, and nobody awaits these.
@@ -751,7 +860,13 @@ class UserStickyCommander:
             self.worker_roster[name]["caretaker"] = None
 
     async def probe_worker(self, name: str) -> None:
-        """Ask one worker for its occupancy and archive what comes back."""
+        """Ask one worker for its occupancy, archive it, and let the beat read it.
+
+        The archived report is fresher knowledge about the pool than anything the
+        commander had a moment ago, so the beat runs right behind it: the probe
+        return IS the pool's heartbeat (the legacy beat rode the push envelope,
+        which the pull probe replaced — declared divergence).
+        """
         try:
             payload = await self.hub.call(
                 name,
@@ -767,6 +882,7 @@ class UserStickyCommander:
             self.logger.debug("Probe of %s skipped (%s: %s)", name, type(exc).__name__, exc)
         else:
             self.record_occupancy(name, report)
+            self.pool_beat()
 
     def next_worker_name(self) -> str:
         """Mint a fresh typed channel name; collision is impossible by construction."""
@@ -1005,11 +1121,41 @@ class UserStickyCommander:
         TYTX parcel the message carries. A broadcast fans out into one item per
         matching page, and items sharing a destination worker are batched, so a
         broadcast over N pages of one worker costs ONE send.
+
+        An ADDRESSED message whose user is being carried waits for the move to
+        land, exactly like a call does: past the barrier the map points at the
+        destination, so the evict→switch window turns into a delayed correct
+        delivery instead of a drop. A filtered broadcast never holds — the
+        fan-out is best-effort by design, and a whole beat cannot park on one
+        user's move. Every EVENT already runs on its own task, so a held message
+        parks nobody else.
         """
+        addressed = self.addressed_user(message)
+        if addressed is not None:
+            await self.await_move(addressed)
         buffer: dict[str, list[dict[str, Any]]] = {}
         for worker, item in self.exchange_destinations(message):
             buffer.setdefault(worker, []).append(item)
         await self.flush_exchange(buffer)
+
+    def addressed_user(self, message: dict[str, Any]) -> str | None:
+        """The user ONE ascending exchange message is addressed to, if any.
+
+        ``None`` for a filtered broadcast (it addresses a set, not a user) and
+        for an address no hop of the chain resolves — there is nothing to wait
+        for either way. The three addressed kinds all reach a user: the user
+        store IS the user, a connection through ``connection_user``, a page
+        through ``page_connection`` first.
+        """
+        if message["filters"] is not None:
+            return None
+        target = message["target"]
+        if message["kind"] == "user_store":
+            return str(target)
+        connection = (
+            target if message["kind"] == "connection_store" else self.page_connection.get(target)
+        )
+        return None if connection is None else self.connection_user.get(connection)
 
     def exchange_destinations(self, message: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
         """Every ``(worker, message)`` pair one ascending message resolves to.
@@ -1282,7 +1428,21 @@ class UserStickyCommander:
         task = asyncio.create_task(self.fold_command(worker, message))
         self._command_tasks.add(task)
         task.add_done_callback(self._command_tasks.discard)
+        task.add_done_callback(self.log_task_error)
         return task
+
+    def log_task_error(self, task: asyncio.Task[None]) -> None:
+        """Leave a line behind when a detached task dies of an exception.
+
+        Nobody awaits a task-class command or a pool pass, so without this the
+        exception is retrieved by nobody and the failure is silent. A cancelled
+        task is the ordinary shutdown path and says nothing.
+        """
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            self.logger.error("Detached task %s failed: %r", task.get_name(), error)
 
     # ------------------------------------------------------------------
     # The fold — one implementation, both drains
@@ -1639,16 +1799,21 @@ class UserStickyCommander:
     def metrics_view(self) -> dict[str, dict[str, Any]]:
         """The evaluator's read of every active worker, scaled for the monitor.
 
-        Occupancy and components come out 0-100 — the monitor draws bars — and
-        the history is the per-row series in that same scale. The rates keep
-        their own units and ``forward`` carries the cumulative counters as they
-        stand. Every number here is the evaluator's: nothing is judged.
+        Occupancy is the evaluator's SATURATION scaled by 100: it lives in the
+        ratio space, so 100 means "at the admission target", not "at the
+        hardware ceiling", and a worker past its target reads over 100. The
+        history is the per-row saturation, on that same axis — the bar and the
+        histogram behind it are read against one scale. Components stay raw
+        fractions of their resource (what the sensor saw, not what it is judged
+        against): they are the reading, not the verdict. The rates keep their
+        own units and ``forward`` carries the cumulative counters as they stand.
+        Every number here is the evaluator's: nothing is judged.
         """
         view: dict[str, dict[str, Any]] = {}
         for name in self.active_workers:
             components = self.evaluator.components_of(name)
             view[name] = {
-                "occupancy": round(self.evaluator.occupancy_of(name) * 100),
+                "occupancy": round(self.evaluator.saturation_of(name) * 100),
                 "components": {key: round(value * 100) for key, value in components.items()},
                 "history": [round(value * 100) for value in self.evaluator.history_of(name)],
                 "rates": self.evaluator.rates_of(name),
@@ -1784,9 +1949,24 @@ class UserStickyCommander:
         return envelope
 
     async def resolve_worker(self, identity: str) -> str:
-        """The worker to route ``identity`` to, once no placement of it is in flight."""
-        await self.await_placement(identity)
+        """The worker to route ``identity`` to, once nothing of it is in flight.
+
+        Two holds, both read BEFORE the pick: a move carrying this identity, and
+        a placement of it. Either one makes the map's answer provisional, and
+        they are read in ONE loop rather than one after the other: a coroutine
+        waking from the placement wait may find a move raised meanwhile, and a
+        move that lands may be followed by a login raising the flag. The loop
+        leaves only when neither is up — and with neither up at the start it
+        awaits nothing at all, exactly as before.
+        """
+        while self.is_held(identity):
+            await self.await_move(identity)
+            await self.await_placement(identity)
         return self.worker_for(identity)
+
+    def is_held(self, identity: str) -> bool:
+        """Whether either hold — a move of this identity, or a placement — is up."""
+        return identity in self.moving or self.user_worker_map.get(identity, "") is None
 
     def worker_for(self, identity: str) -> str:
         """The worker holding ``identity`` — the reception when nobody does.
@@ -1809,38 +1989,68 @@ class UserStickyCommander:
         return reception
 
     def decide_worker(self) -> str:
-        """Where an UNPLACED just-logged user belongs: the least-loaded worker.
+        """Where an UNPLACED just-logged user belongs: reception-first.
 
         Occupancy is the second step of the placement and it only ever sees the
         users nobody holds — ``place_login`` answers the presence question
-        before asking this one. Head count is the 2a reading of load — the
-        evaluator that measures the real thing is out of scope. The capacity
-        check runs AFTER the pick, so a login never lands on the worker its own
-        arrival spawned.
+        before asking this one. The reception KEEPS the login while it stays
+        under ``reception_threshold`` (and a sole worker keeps always); over the
+        threshold it PASSES to the least loaded of the others that still admit.
+        The admission gate never blocks a login: with every other worker over it
+        the last one takes the user anyway, under a warning, and growth is
+        ``check_capacity``'s business. That check runs AFTER the pick, so a login
+        never lands on the worker its own arrival spawned.
         """
         candidates = self.active_workers
         if not candidates:
             raise RuntimeError("no worker available to place a login")
-        chosen = min(candidates, key=lambda name: len(self.users_on(name)))
+        chosen = self.pick_placement(candidates)
         self.check_capacity()
         return chosen
 
-    def check_capacity(self) -> None:
-        """Widen the pool when the reception has no room left for its guests.
+    def pick_placement(self, candidates: list[str]) -> str:
+        """The reception-first pick over ``candidates`` (the active workers)."""
+        reception = candidates[0]
+        others = candidates[1:]
+        if not others or self.evaluator.saturation_of(reception) < self.reception_threshold:
+            return reception
+        admitting = [name for name in others if self.evaluator.saturation_of(name) < 1.0]
+        if not admitting:
+            fallback = others[-1]
+            self.logger.warning(
+                "Every worker past the admission gate; placing the login on %s anyway", fallback
+            )
+            return fallback
+        return min(admitting, key=self.evaluator.load_of)
 
-        A spawn already in flight is waited for instead of being stacked on, and
-        ``max_workers`` is a hard ceiling.
+    def check_capacity(self) -> None:
+        """Widen the pool when the login just placed found no room left.
+
+        A pool of one grows when its reception passes ``reception_threshold`` —
+        the moment it would start passing logins on. A pool of many grows when no
+        NON-reception worker still admits, the reception being the guests' worker
+        rather than a placement target. A spawn already in flight is waited for
+        instead of being stacked on, and ``max_workers`` is a hard ceiling.
         """
-        reception = self.reception
-        if reception is None or len(self.users_on(reception)) < self.guest_occupancy_limit:
+        active = self.active_workers
+        if not active:
             return
-        if len(self.living_workers) > len(self.active_workers):
+        reception, others = active[0], active[1:]
+        if others:
+            if any(self.evaluator.saturation_of(name) < 1.0 for name in others):
+                return
+            reason = "no worker past the reception still admits"
+        else:
+            if self.evaluator.saturation_of(reception) < self.reception_threshold:
+                return
+            reason = f"reception {reception} is over its threshold"
+        if len(self.living_workers) > len(active):
             return
         if self.max_workers is not None and self.target >= self.max_workers:
             self.logger.warning("Pool full at max_workers=%s; not scaling", self.max_workers)
             return
         self.scale(self.target + 1)
-        self.logger.info("Reception %s is full; scaled to %s", reception, self.target)
+        self.logger.info("%s; scaled to %s", reason.capitalize(), self.target)
 
     # ------------------------------------------------------------------
     # The live calls, written under the user they belong to
@@ -1910,8 +2120,15 @@ class UserStickyCommander:
         say exactly that. A RESIDENT user is not removed by a failed install:
         the connection that failed to arrive was never its only one, and taking
         the placement away would evict everything that never moved.
+
+        A user being carried is waited for BEFORE the map is read — the same
+        hold the exchange path takes. Reading the residence during a move would
+        name the source, and the arriving connection would be installed on the
+        worker the slice has just left; past the barrier the map names the
+        destination and the join lands where the user actually lives.
         """
         path = f"{OP_PATH_PREFIX}install_package"
+        await self.await_move(user)
         resident = self.user_worker_map.get(user)
         try:
             destination = resident if resident is not None else self.decide_worker()
@@ -1948,3 +2165,446 @@ class UserStickyCommander:
         """
         while self.user_worker_map.get(identity, "") is None:
             await self.placement_done.wait()
+
+    # ------------------------------------------------------------------
+    # The commander-initiated move: flag, quiesce, custody, switch
+    # ------------------------------------------------------------------
+
+    async def move_user(self, user: str, target: str) -> bool:
+        """Carry one user's whole slice from where it lives to ``target``.
+
+        FLAG → QUIESCE → evict → install → SWITCH. The flag is a barrier under
+        the user's key: every forward of it parks before the pick, so nobody is
+        routed at a worker the slice is leaving. The map keeps pointing at the
+        SOURCE until the switch — the map's ``None`` is the login's flag and
+        this move never touches it.
+
+        The quiesce waits for the user's live calls to finish on the source, and
+        no stale entry is ever swept: ``close_request`` runs in a ``finally``
+        and a member's EOF fails what was in flight, so an entry that outlives
+        its call cannot exist (declared divergence from the legacy sweep). The
+        budget expiring aborts the move — the user stays served where it is.
+
+        Past the evict the package exists NOWHERE else: the source stripped
+        itself the moment it answered, exactly as it does for a login. So the
+        commander holds it in custody and keeps looking for a room — a
+        destination that dies mid-install sends the slice to another worker
+        (the source included, it is a candidate like any other), and only a pool
+        with no worker left at all loses it, loudly.
+
+        Returns whether the user landed on the worker that was ASKED for: a
+        salvaged install saved the slice but did not do what the caller wanted,
+        and a caller that retires the source on the strength of a move must not
+        read that as a drain.
+        """
+        source = self.user_worker_map.get(user)
+        if source is None:
+            raise RuntimeError(f"move of {user} is impossible: it is on no worker")
+        if user in self.moving:
+            raise RuntimeError(f"move of {user} is already in flight")
+        self.moving[user] = asyncio.Event()
+        try:
+            if not await self.quiesce_user(user, source):
+                self.logger.warning(
+                    "Move of %s from %s aborted: its calls did not drain in %ss",
+                    user,
+                    source,
+                    self.move_quiesce_timeout,
+                )
+                return False
+            try:
+                package = await self.evict_for_move(user, source)
+            except Exception as exc:
+                self.logger.warning(
+                    "Move of %s from %s aborted (%s: %s)", user, source, type(exc).__name__, exc
+                )
+                return False
+            destination = await self.install_in_custody(user, target, package)
+            self.assign_user(user, destination)
+            self.logger.info("Moved %s from %s to %s", user, source, destination)
+            return destination == target
+        finally:
+            self.release_move(user)
+
+    async def quiesce_user(self, user: str, worker: str) -> bool:
+        """Wait for the user's live calls on ``worker`` to drain, within the budget.
+
+        Returns whether the half-row emptied in time. A user with no half-row at
+        all has nothing in flight and quiesces at once.
+        """
+        entry = self.worker_roster[worker]["users"].get(user)
+        if entry is None:
+            return True
+        deadline = time.monotonic() + self.move_quiesce_timeout
+        while entry["pending"]:
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(MOVE_QUIESCE_POLL)
+        return True
+
+    async def evict_for_move(self, user: str, source: str) -> str:
+        """Ask the source for the user's parcel — the one road out of a worker.
+
+        Straight to the hub, never through ``forward_call``: the caller is
+        holding this very user's barrier and a forward would park on it.
+        """
+        path = f"{OP_PATH_PREFIX}evict_user"
+        payload = await self.hub.call(source, path, {"identity": user, "kwargs": {}})
+        result = await self.unwrap_reply(source, path, payload)
+        return str(result["package"])
+
+    async def install_in_custody(self, user: str, target: str, package: str) -> str:
+        """Plant the parcel, re-deciding the room until one takes it.
+
+        The CALL carries no deadline: a REPLY or the destination's EOF ends it,
+        and a worker alive but stuck is the caretaker's business, not this
+        wait's. Every worker is tried at most once — a pool that refused the
+        slice everywhere raises rather than spinning on the same rooms.
+        """
+        path = f"{OP_PATH_PREFIX}install_package"
+        tried: set[str] = set()
+        destination: str | None = target
+        while destination is not None:
+            tried.add(destination)
+            try:
+                payload = await self.hub.call(
+                    destination, path, {"identity": user, "kwargs": {"package": package}}
+                )
+                await self.unwrap_reply(destination, path, payload)
+            except Exception as exc:
+                self.logger.warning(
+                    "Install of %s on %s failed (%s: %s); looking for another room",
+                    user,
+                    destination,
+                    type(exc).__name__,
+                    exc,
+                )
+                destination = self.salvage_target(tried)
+            else:
+                return destination
+        raise RuntimeError(f"move of {user} lost its room: no worker left to install it on")
+
+    def salvage_target(self, tried: set[str]) -> str | None:
+        """The least loaded active worker no install of this move has burned yet."""
+        candidates = [name for name in self.active_workers if name not in tried]
+        if not candidates:
+            return None
+        return min(candidates, key=self.evaluator.load_of)
+
+    def release_move(self, user: str) -> None:
+        """Drop the user's barrier and wake everything parked on it."""
+        barrier = self.moving.pop(user)
+        barrier.set()
+
+    async def await_move(self, identity: str) -> None:
+        """Hold a call whose user is being carried until the move lands.
+
+        One barrier per user, so a move of somebody else never parks this call;
+        the registry is re-read on every wakeup, exactly like the placement flag.
+        """
+        while True:
+            barrier = self.moving.get(identity)
+            if barrier is None:
+                return
+            await barrier.wait()
+
+    # ------------------------------------------------------------------
+    # The beat: one pass per probe return, rebalance XOR compaction
+    # ------------------------------------------------------------------
+
+    def pool_beat(self) -> None:
+        """Dispatch the one pass this probe return calls for, if any.
+
+        Excess and slack are the two ways a pool can be wrong, and excess comes
+        first: a worker over its own threshold is somebody's latency right now,
+        while a pool wider than it needs to be only costs memory. So the presence
+        of excess IS the precedence — the two forces never run together, and each
+        is single by its own flag.
+
+        "Never together" is read here, once, over BOTH flags: a compaction in
+        flight is narrowing the pool the rebalance would shed onto, and a
+        rebalance in flight is moving the users the ledger would count. So a
+        beat that finds either force up dispatches nothing and lets it finish;
+        the XOR only ever chooses what a FREE beat starts.
+        """
+        if self.compacting or self.rebalancing:
+            return
+        if self.rebalance_excess():
+            self.trigger_rebalance()
+        else:
+            self.trigger_compaction()
+
+    def threshold_of(self, worker: str) -> float:
+        """The saturation ``worker`` is judged at: its own if reception, else the gate.
+
+        The reception carries the guests as well, so it is asked to stay lower —
+        the same asymmetry the capacity ledger counts it with.
+        """
+        return self.reception_threshold if worker == self.reception else 1.0
+
+    def rebalance_excess(self) -> list[tuple[str, float]]:
+        """Every worker over its OWN threshold, with by how much, hottest first.
+
+        Saturation, not load: what a shed relieves is the binding resource, which
+        is the max.
+        """
+        excess = []
+        for name in self.active_workers:
+            over = self.evaluator.saturation_of(name) - self.threshold_of(name)
+            if over > 0:
+                excess.append((name, over))
+        return sorted(excess, key=lambda item: -item[1])
+
+    def trigger_rebalance(self) -> None:
+        """Start a rebalance pass unless one is already in flight."""
+        if self.rebalancing:
+            return
+        self.rebalancing = True
+        try:
+            self.spawn_pool_pass(self.rebalance_pass())
+        except Exception:
+            self.rebalancing = False
+            raise
+
+    def trigger_compaction(self) -> None:
+        """Start a compaction pass unless one is already in flight."""
+        if self.compacting:
+            return
+        self.compacting = True
+        try:
+            self.spawn_pool_pass(self.compact_pass())
+        except Exception:
+            self.compacting = False
+            raise
+
+    def spawn_pool_pass(self, pass_coroutine: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
+        """Run one pool pass detached: the beat never waits on what it started.
+
+        The loop holds only a weak reference to a task, so the set is what keeps
+        the pass alive; the caretaker that dispatched it goes back to its cadence.
+        """
+        task = asyncio.create_task(pass_coroutine)
+        self._pool_tasks.add(task)
+        task.add_done_callback(self._pool_tasks.discard)
+        task.add_done_callback(self.log_task_error)
+        return task
+
+    async def rebalance_pass(self, now: float | None = None) -> None:
+        """Shed the excess of the hot workers onto the ONE worker that has room.
+
+        The total excess is read once, at the start: the target has to absorb all
+        of it, so it is picked against the sum rather than against the worker
+        being relieved. No target able to take it — nobody is cool enough, or
+        every other worker is hot too — and the pass widens the pool instead and
+        ends: the next beat finds a fresh, empty worker and sheds onto that.
+
+        With a target, each hot worker from the hottest down hands over the users
+        ``pick_rebalance_users`` names for it, one whole ``move_user`` each. A move
+        that does not land ENDS the pass: the pool just changed under the readings
+        this pass was decided on. Nothing is ever retired here — a rebalance
+        levels the pool, only the compaction narrows it.
+        """
+        try:
+            excess = self.rebalance_excess()
+            if not excess:
+                return
+            target = self.pick_rebalance_target(sum(value for _, value in excess))
+            if target is None:
+                self.rebalance_spawn()
+                return
+            for worker, budget in excess:
+                target_empty = not self.users_on(target)
+                for user in self.pick_rebalance_users(worker, budget, target_empty, now):
+                    if self.user_worker_map.get(user) != worker:
+                        continue
+                    if not await self.move_user(user, target):
+                        self.logger.warning(
+                            "Rebalance of %s: %s did not land on %s, ending the pass",
+                            worker,
+                            user,
+                            target,
+                        )
+                        return
+        finally:
+            self.rebalancing = False
+
+    def pick_rebalance_target(self, total_excess: float) -> str | None:
+        """The one worker that absorbs the whole excess, or None when nobody can.
+
+        A candidate is a NON-reception worker that is not hot itself and whose
+        saturation still sits under ``1.0 - rebalance_margin`` once the whole
+        excess has landed on it — a target filled up to the gate would be the next
+        beat's hot worker. Among those the least LOADED wins: the fit is judged on
+        the binding resource, the choice on the whole picture.
+        """
+        ceiling = 1.0 - self.rebalance_margin
+        saturation = self.evaluator.saturation_of
+        eligible = [
+            name
+            for name in self.active_workers[1:]
+            if saturation(name) <= self.threshold_of(name)
+            and saturation(name) + total_excess <= ceiling
+        ]
+        if not eligible:
+            return None
+        return min(eligible, key=self.evaluator.load_of)
+
+    def rebalance_weights(self, worker: str, now: float | None = None) -> dict[str, float]:
+        """``worker``'s saturation apportioned over its MOVABLE users, by recent seconds.
+
+        The share is a user's recent service time over what the whole worker
+        served (guests included: their cost is the worker's, and pretending
+        otherwise would inflate everybody else's share), and the weight is that
+        share of the worker's saturation — the same currency as the excess and the
+        budget, so the wall-time inflation cancels in the ratio.
+
+        Only the users the map places HERE come back weighted: a guest is on no
+        map and never moves (its sticky identity lives on the reception), and a
+        user that already left is not this worker's to shed. A worker whose users
+        served nothing recently weighs nothing: there is no excess of theirs to
+        move.
+        """
+        seconds = {user: self.user_recent_seconds(user, now) for user in self.users_on(worker)}
+        total = sum(seconds.values())
+        if total <= 0.0:
+            return {}
+        saturation = self.evaluator.saturation_of(worker)
+        return {
+            user: saturation * (value / total)
+            for user, value in seconds.items()
+            if self.user_worker_map.get(user) == worker
+        }
+
+    def pick_rebalance_users(
+        self, worker: str, budget: float, target_empty: bool, now: float | None = None
+    ) -> list[str]:
+        """Which users of ``worker`` to shed to cover ``budget``, in the order to move.
+
+        Toward an EMPTY target the HEAVIEST go first: the fewest moves, and a
+        container with nothing in it absorbs the estimate error. Toward a LOADED
+        one the LIGHTEST go first, and only among the users carrying at least
+        ``rebalance_min_share`` of the worker — a nearly idle user sheds nothing
+        and the move would cost a whole slice on the wire. Users accumulate until
+        their weights cover the budget, or until there are none left.
+        """
+        weights = self.rebalance_weights(worker, now)
+        if not weights:
+            return []
+        if target_empty:
+            ordered = sorted(weights, key=lambda user: -weights[user])
+        else:
+            floor = self.rebalance_min_share * self.evaluator.saturation_of(worker)
+            ordered = sorted(
+                (user for user in weights if weights[user] >= floor),
+                key=lambda user: weights[user],
+            )
+        picked: list[str] = []
+        shed = 0.0
+        for user in ordered:
+            if shed >= budget:
+                break
+            picked.append(user)
+            shed += weights[user]
+        return picked
+
+    def rebalance_spawn(self) -> None:
+        """Widen the pool by one because a hot worker has nowhere to shed.
+
+        The scale-up's own guards: a worker already on its way is waited for
+        instead of being stacked on, and ``max_workers`` is a hard ceiling. The
+        pass ends here either way — the fresh worker is cold and empty, which is
+        exactly the target the next beat needs.
+        """
+        if len(self.living_workers) > len(self.active_workers):
+            return
+        if self.max_workers is not None and self.target >= self.max_workers:
+            self.logger.warning(
+                "Pool full at max_workers=%s; the rebalance cannot spawn", self.max_workers
+            )
+            return
+        self.scale(self.target + 1)
+        self.logger.info("A hot worker has no absorber; scaled to %s", self.target)
+
+    # ------------------------------------------------------------------
+    # Compaction: the capacity ledger, and the workers it folds away
+    # ------------------------------------------------------------------
+
+    def capacity_headroom(self) -> float:
+        """The ledger ``C - O``: how much room the pool has beyond what it holds.
+
+        ``C`` is what the pool may take — the reception up to its own threshold
+        plus a whole gate for every other worker — and ``O`` is what it holds,
+        summed in QUANTITY (``load_of``): the ledger asks how much fits, not which
+        resource binds. A pool with no active worker has no capacity to report.
+        """
+        active = self.active_workers
+        if not active:
+            return 0.0
+        capacity = self.reception_threshold + (len(active) - 1) * 1.0
+        occupied = sum(self.evaluator.load_of(name) for name in active)
+        return capacity - occupied
+
+    async def compact_pass(self) -> None:
+        """Fold workers away while the pool has room to spare, one at a time.
+
+        The ledger decides how many: while the headroom stays over
+        ``compaction_margin`` — one whole gate being 1.0 — the least loaded
+        NON-reception worker is drained and retired. The reception is never a
+        candidate: it is the guests' worker, the one address a pool always has.
+        A drain that does not empty its worker STOPS the pass and retires
+        nothing: a worker still holding state is never retired.
+        """
+        try:
+            while True:
+                active = self.active_workers
+                candidates = active[1:]
+                if not candidates or len(active) <= self.min_workers:
+                    return
+                if self.capacity_headroom() <= self.compaction_margin:
+                    return
+                candidate = min(candidates, key=self.evaluator.load_of)
+                if not await self.drain_worker(candidate):
+                    self.logger.warning(
+                        "Compaction stopped: worker %s did not drain, keeping it", candidate
+                    )
+                    return
+                self.retire(candidate)
+                self.logger.info(
+                    "Compaction retired worker %s; target is %s", candidate, self.target
+                )
+        finally:
+            self.compacting = False
+
+    async def drain_worker(self, worker: str) -> bool:
+        """Move every user off ``worker``; returns whether it ended up empty.
+
+        Each user goes to its own admission-rule target, decided one move at a
+        time: the previous arrival changed what the pool reads. A user that left
+        by itself in the meantime — swept with a death, or moved by somebody else
+        — is nobody's move any more. One refused move ends the drain: the caller
+        retires on the strength of this answer.
+        """
+        for user in sorted(self.users_on(worker)):
+            if self.user_worker_map.get(user) != worker:
+                continue
+            target = self.pick_compaction_target(worker)
+            if target is None:
+                self.logger.warning("Drain of %s: no other worker to take %s", worker, user)
+                return False
+            if not await self.move_user(user, target):
+                return False
+        return not self.users_on(worker)
+
+    def pick_compaction_target(self, drained: str) -> str | None:
+        """Where one user of ``drained`` belongs: the admission rule, once.
+
+        The least loaded worker that still admits, and the least loaded of all if
+        none does — the ledger already promised the pool fits, so a gate closed
+        everywhere is a reading in flight, not a reason to abandon the user.
+        None only when ``drained`` is the whole pool.
+        """
+        candidates = [name for name in self.active_workers if name != drained]
+        if not candidates:
+            return None
+        admitting = [name for name in candidates if self.evaluator.saturation_of(name) < 1.0]
+        return min(admitting or candidates, key=self.evaluator.load_of)

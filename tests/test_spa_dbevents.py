@@ -60,7 +60,7 @@ class Notified:
     """
 
     def __init__(self) -> None:
-        self.commander = UserStickyCommander(workers=0, guest_occupancy_limit=1000)
+        self.commander = UserStickyCommander(workers=0)
         self.workers: dict[str, UserStickyWorker] = {}
         self.sends: list[tuple[str, str, Any]] = []
 

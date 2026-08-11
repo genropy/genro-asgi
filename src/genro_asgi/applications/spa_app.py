@@ -113,7 +113,7 @@ COMMANDER_KWARGS = (
     "worker_kwargs",
     "executable",
     "max_workers",
-    "guest_occupancy_limit",
+    "reception_threshold",
     "probe_interval",
     "probe_timeout",
     "local_worker",

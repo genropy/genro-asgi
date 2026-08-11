@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for OccupancyEvaluator: the formula, components, history and rates.
+"""Tests for OccupancyEvaluator: components, the ratio space, history and rates.
 
 Windows are SEEDED through the commander's public ``record_occupancy`` (and
 ``count_forward`` for the rates), exactly as the occupancy probe feeds them — no
@@ -22,11 +22,14 @@ sends (``cpu``, ``rss``, ``executor{busy,total}``).
 
 from __future__ import annotations
 
+import math
 import time
 from typing import Any
 
+import pytest
+
 from genro_asgi.spa.commander import UserStickyCommander
-from genro_asgi.spa.evaluator import SMOOTHING_ROWS, OccupancyEvaluator
+from genro_asgi.spa.evaluator import COMPONENT_NAMES, SMOOTHING_ROWS, OccupancyEvaluator
 
 
 def make_commander(tmp_path: Any, **kwargs: Any) -> UserStickyCommander:
@@ -54,25 +57,27 @@ def report(
 
 
 # ----------------------------------------------------------------------
-# A worker with no rows admits (occupancy 0.0)
+# A worker with no rows admits (both readings 0.0)
 # ----------------------------------------------------------------------
 
 
 def test_fresh_worker_reads_zero_occupancy(tmp_path: Any) -> None:
     commander = make_commander(tmp_path)
-    assert commander.evaluator.occupancy_of("ghost") == 0.0
+    assert commander.evaluator.saturation_of("ghost") == 0.0
+    assert commander.evaluator.load_of("ghost") == 0.0
     assert commander.evaluator.components_of("ghost") == {}
     assert commander.evaluator.history_of("ghost") == []
 
 
 def test_enrolled_worker_with_an_empty_window_reads_zero(tmp_path: Any) -> None:
     commander = make_commander(tmp_path)
-    assert commander.evaluator.occupancy_of("w1") == 0.0
+    assert commander.evaluator.saturation_of("w1") == 0.0
+    assert commander.evaluator.load_of("w1") == 0.0
     assert commander.evaluator.history_of("w1") == []
 
 
 # ----------------------------------------------------------------------
-# The formula: average each component, then take the max
+# The components: average each over the window
 # ----------------------------------------------------------------------
 
 
@@ -80,7 +85,8 @@ def test_executor_component_is_busy_over_total(tmp_path: Any) -> None:
     commander = make_commander(tmp_path)
     commander.record_occupancy("w1", report(busy=7, total=14))
     assert commander.evaluator.components_of("w1") == {"executor": 0.5}
-    assert commander.evaluator.occupancy_of("w1") == 0.5
+    # ratio space: 0.5 of the resource against the 0.8 target
+    assert commander.evaluator.saturation_of("w1") == pytest.approx(0.625)
 
 
 def test_executor_component_is_clamped_when_busy_exceeds_total(tmp_path: Any) -> None:
@@ -89,7 +95,8 @@ def test_executor_component_is_clamped_when_busy_exceeds_total(tmp_path: Any) ->
     # calls in flight on 4 threads the raw ratio is 2.5 — the judgment is "full"
     commander.record_occupancy("w1", report(busy=10, total=4))
     assert commander.evaluator.components_of("w1") == {"executor": 1.0}
-    assert commander.evaluator.occupancy_of("w1") == 1.0
+    # the raw component saturates at 1.0; over the 0.8 target that reads 1.25
+    assert commander.evaluator.saturation_of("w1") == pytest.approx(1.25)
 
 
 def test_cpu_component_is_clamped_to_one_core(tmp_path: Any) -> None:
@@ -106,7 +113,7 @@ def test_occupancy_is_the_max_of_the_averaged_components(tmp_path: Any) -> None:
     commander.record_occupancy("w1", report(cpu=0.2, rss=50 * 1024 * 1024, busy=5, total=10))
     components = commander.evaluator.components_of("w1")
     assert components == {"cpu": 0.2, "executor": 0.5, "memory": 0.5}
-    assert commander.evaluator.occupancy_of("w1") == 0.5
+    assert commander.evaluator.saturation_of("w1") == pytest.approx(0.5 / 0.8)
 
 
 def test_component_is_averaged_before_the_max_is_taken(tmp_path: Any) -> None:
@@ -115,7 +122,7 @@ def test_component_is_averaged_before_the_max_is_taken(tmp_path: Any) -> None:
     commander.record_occupancy("w1", report(busy=10, total=10))
     commander.record_occupancy("w1", report(busy=0, total=10))
     assert commander.evaluator.components_of("w1")["executor"] == 0.5
-    assert commander.evaluator.occupancy_of("w1") == 0.5
+    assert commander.evaluator.saturation_of("w1") == pytest.approx(0.625)
 
 
 def test_smoothing_averages_only_the_last_k_rows(tmp_path: Any) -> None:
@@ -156,7 +163,7 @@ def test_memory_component_is_clamped_at_the_limit(tmp_path: Any) -> None:
     # saturates at "full", the raw rss stays in the archived report
     commander.record_occupancy("w1", report(rss=200 * 1024 * 1024))
     assert commander.evaluator.components_of("w1") == {"memory": 1.0}
-    assert commander.evaluator.occupancy_of("w1") == 1.0
+    assert commander.evaluator.saturation_of("w1") == pytest.approx(1.25)
 
 
 def test_memory_component_present_with_limit_and_rss(tmp_path: Any) -> None:
@@ -218,16 +225,102 @@ def test_component_averaged_only_over_rows_that_carry_it(tmp_path: Any) -> None:
 
 
 # ----------------------------------------------------------------------
-# history_of: one value per WHOLE-window row, the row's own max
+# The ratio space: targets, the GATE reading and the QUANTITY reading
 # ----------------------------------------------------------------------
 
 
-def test_history_is_the_per_row_max_over_the_whole_window(tmp_path: Any) -> None:
+def test_targets_default_to_the_uniform_admission_threshold(tmp_path: Any) -> None:
+    commander = make_commander(tmp_path)
+    assert commander.evaluator.targets == dict.fromkeys(COMPONENT_NAMES, 0.8)
+
+
+def test_component_targets_override_the_uniform_threshold(tmp_path: Any) -> None:
+    commander = make_commander(
+        tmp_path, admission_threshold=0.9, component_targets={"memory": 0.5}
+    )
+    assert commander.evaluator.targets == {"memory": 0.5, "cpu": 0.9, "executor": 0.9}
+
+
+def test_ratios_divide_each_component_by_its_own_target(tmp_path: Any) -> None:
+    commander = make_commander(
+        tmp_path, memory_limit_mb=100, component_targets={"memory": 0.5}
+    )
+    # memory 0.4 against its own 0.5 target -> 0.8; executor 0.4 against 0.8 -> 0.5
+    commander.record_occupancy("w1", report(rss=40 * 1024 * 1024, busy=4, total=10))
+    ratios = commander.evaluator.ratios_of("w1")
+    assert ratios["memory"] == pytest.approx(0.8)
+    assert ratios["executor"] == pytest.approx(0.5)
+
+
+def test_saturation_gates_high_where_load_stays_low(tmp_path: Any) -> None:
     commander = make_commander(tmp_path, memory_limit_mb=100)
-    commander.record_occupancy("w1", report(cpu=0.1, busy=3, total=10))  # max 0.3
-    commander.record_occupancy("w1", report(rss=80 * 1024 * 1024, busy=1, total=10))  # 0.8
+    # one-hot: memory at its target, cpu and executor idle. The GATE reads the
+    # bottleneck (1.0 — the worker is full), the QUANTITY reads the whole
+    # picture and stays well under it: this is the distinction the policies buy.
+    commander.record_occupancy(
+        "w1", report(cpu=0.0, rss=80 * 1024 * 1024, busy=0, total=10)
+    )
+    assert commander.evaluator.saturation_of("w1") == pytest.approx(1.0)
+    assert commander.evaluator.load_of("w1") == pytest.approx(1.0 / math.sqrt(3))
+    assert commander.evaluator.load_of("w1") < commander.evaluator.saturation_of("w1")
+
+
+def test_load_is_the_quadratic_mean_of_the_ratios(tmp_path: Any) -> None:
+    commander = make_commander(tmp_path, admission_threshold=1.0)
+    # cpu 0.6, executor 0.8 against a 1.0 target -> quadratic mean of 0.6 and 0.8
+    commander.record_occupancy("w1", report(cpu=0.6, busy=8, total=10))
+    expected = math.sqrt((0.6**2 + 0.8**2) / 2)
+    assert commander.evaluator.load_of("w1") == pytest.approx(expected)
+    assert commander.evaluator.saturation_of("w1") == pytest.approx(0.8)
+
+
+def test_ratios_empty_for_a_worker_with_no_measurable_component(tmp_path: Any) -> None:
+    commander = make_commander(tmp_path)
+    commander.record_occupancy("w1", report(busy=0, total=0))
+    assert commander.evaluator.ratios_of("w1") == {}
+    assert commander.evaluator.saturation_of("w1") == 0.0
+    assert commander.evaluator.load_of("w1") == 0.0
+
+
+# ----------------------------------------------------------------------
+# Target validation, at the commander constructor
+# ----------------------------------------------------------------------
+
+
+def test_unknown_component_target_is_rejected(tmp_path: Any) -> None:
+    with pytest.raises(ValueError, match="unknown component target"):
+        make_commander(tmp_path, component_targets={"disk": 0.5})
+
+
+@pytest.mark.parametrize("value", [0.0, -0.1, 1.5])
+def test_component_target_outside_the_unit_interval_is_rejected(
+    tmp_path: Any, value: float
+) -> None:
+    with pytest.raises(ValueError, match="target must be in"):
+        make_commander(tmp_path, component_targets={"cpu": value})
+
+
+@pytest.mark.parametrize("value", [0.0, -0.1, 1.5])
+def test_admission_threshold_outside_the_unit_interval_is_rejected(
+    tmp_path: Any, value: float
+) -> None:
+    with pytest.raises(ValueError, match="admission_threshold target must be in"):
+        make_commander(tmp_path, admission_threshold=value)
+
+
+# ----------------------------------------------------------------------
+# history_of: one value per WHOLE-window row, the row's own max RATIO
+# ----------------------------------------------------------------------
+
+
+def test_history_is_the_per_row_saturation_over_the_whole_window(tmp_path: Any) -> None:
+    commander = make_commander(tmp_path, memory_limit_mb=100)
+    commander.record_occupancy("w1", report(cpu=0.1, busy=3, total=10))  # max 0.3 / 0.8
+    commander.record_occupancy("w1", report(rss=80 * 1024 * 1024, busy=1, total=10))  # 0.8 / 0.8
     commander.record_occupancy("w1", report(busy=0, total=0))  # nothing measurable
-    assert commander.evaluator.history_of("w1") == [0.3, 0.8, 0.0]
+    # The histogram shares the bar's axis: 1.0 is the admission target, and the
+    # second row sits exactly on it.
+    assert commander.evaluator.history_of("w1") == [pytest.approx(0.375), 1.0, 0.0]
 
 
 # ----------------------------------------------------------------------

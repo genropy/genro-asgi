@@ -72,7 +72,6 @@ async def single() -> Any:
     commander = UserStickyCommander(
         workers=0,
         local_worker=True,
-        guest_occupancy_limit=1000,
     )
     await commander.start()
     try:
@@ -357,7 +356,6 @@ async def pages() -> Any:
         workers=0,
         local_worker=True,
         worker_class=f"{__name__}:PageWorker",
-        guest_occupancy_limit=1000,
     )
     await commander.start()
     try:
@@ -709,7 +707,6 @@ def restart_commander(dump: Any) -> UserStickyCommander:
     return UserStickyCommander(
         workers=0,
         local_worker=True,
-        guest_occupancy_limit=1000,
         dump_path=str(dump),
     )
 
@@ -801,7 +798,7 @@ async def test_the_restore_skips_a_package_it_cannot_install(tmp_path: Any) -> N
 
 
 async def test_an_unarmed_commander_dumps_nothing(tmp_path: Any) -> None:
-    commander = UserStickyCommander(workers=0, local_worker=True, guest_occupancy_limit=1000)
+    commander = UserStickyCommander(workers=0, local_worker=True)
     await commander.start()
     await commander.forward_call("sess-1", "/op/new_connection")
     await commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})

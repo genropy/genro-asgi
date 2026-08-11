@@ -48,7 +48,7 @@ def commander(tmp_path: Any) -> UserStickyCommander:
 @pytest.fixture
 async def single() -> Any:
     """A commander in the single role: its own worker, in this very process."""
-    running = UserStickyCommander(workers=0, local_worker=True, guest_occupancy_limit=1000)
+    running = UserStickyCommander(workers=0, local_worker=True)
     await running.start()
     try:
         yield running

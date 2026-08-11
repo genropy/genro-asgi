@@ -204,7 +204,6 @@ async def single() -> Any:
         workers=0,
         local_worker=True,
         worker_class=f"{__name__}:PageWorker",
-        guest_occupancy_limit=1000,
     )
     await commander.start()
     try:

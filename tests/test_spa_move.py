@@ -167,8 +167,8 @@ class LocalPool:
 
 @pytest.fixture
 async def pool() -> Any:
-    """Two in-process workers, the guest cap out of the way."""
-    running = LocalPool(guest_occupancy_limit=1000)
+    """Two in-process workers, both idle: the reception keeps until a test tilts it."""
+    running = LocalPool()
     await running.start(2)
     try:
         yield running
@@ -187,6 +187,29 @@ def enroll(commander: UserStickyCommander, name: str, status: str = "active") ->
     commander.worker_roster[name] = commander.new_roster_row(0, None)
     commander.worker_roster[name]["status"] = status
     return name
+
+
+def load(commander: UserStickyCommander, name: str, saturation: float) -> None:
+    """Seed the worker's window so its cpu component reads ``saturation``.
+
+    One reading is enough: the evaluator averages the rows it finds. cpu is
+    judged against its own target, so the report carries ``saturation`` times it.
+    """
+    cpu = saturation * commander.evaluator.targets["cpu"]
+    commander.worker_roster[name]["occupancy"].clear()
+    commander.record_occupancy(
+        name, {"cpu": cpu, "rss": None, "reusable": None, "executor": {"busy": 0, "total": 0}}
+    )
+
+
+def tilt_away(commander: UserStickyCommander, reception: str) -> None:
+    """Put the reception over its threshold, so the next login is passed on.
+
+    A ballast user rides along: a reception that keeps nobody is not what these
+    paths are about, and the saturation is what actually tilts the placement.
+    """
+    commander.assign_user("ballast", reception)
+    load(commander, reception, 0.9)
 
 
 # ----------------------------------------------------------------------
@@ -230,23 +253,71 @@ def test_with_no_active_worker_there_is_nowhere_to_go(commander: UserStickyComma
         commander.worker_for("alice")
 
 
-def test_a_login_is_placed_on_the_least_loaded_worker(commander: UserStickyCommander) -> None:
+def test_the_reception_keeps_the_login_while_it_is_under_its_threshold(
+    commander: UserStickyCommander,
+) -> None:
     enroll(commander, "W:w-1")
     enroll(commander, "W:w-2")
-    for user in ("a", "b", "c"):
-        commander.assign_user(user, "W:w-1")
-    commander.assign_user("d", "W:w-2")
-    assert commander.decide_worker() == "W:w-2"
+    load(commander, "W:w-1", 0.4)
+    assert commander.decide_worker() == "W:w-1"
 
 
-def test_the_reception_filling_up_widens_the_pool(commander: UserStickyCommander) -> None:
-    commander.guest_occupancy_limit = 3
+def test_the_sole_worker_keeps_the_login_however_saturated(
+    commander: UserStickyCommander,
+) -> None:
     enroll(commander, "W:w-1")
-    for user in ("a", "b"):
-        commander.assign_user(user, "W:w-1")
+    load(commander, "W:w-1", 0.9)
+    assert commander.decide_worker() == "W:w-1"
+
+
+def test_a_reception_over_its_threshold_passes_to_the_least_loaded_other(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    enroll(commander, "W:w-3")
+    load(commander, "W:w-1", 0.6)
+    load(commander, "W:w-2", 0.8)
+    load(commander, "W:w-3", 0.3)
+    assert commander.decide_worker() == "W:w-3"
+
+
+def test_with_every_other_worker_past_the_gate_the_login_lands_anyway(
+    commander: UserStickyCommander, caplog: Any
+) -> None:
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    enroll(commander, "W:w-3")
+    load(commander, "W:w-1", 0.6)
+    load(commander, "W:w-2", 1.2)
+    load(commander, "W:w-3", 1.1)
+    with caplog.at_level("WARNING"):
+        assert commander.decide_worker() == "W:w-3"
+    assert "admission gate" in caplog.text
+
+
+def test_a_pool_of_one_widens_when_its_reception_passes_the_threshold(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    load(commander, "W:w-1", 0.4)
     commander.check_capacity()
     assert commander.target == 0
-    commander.assign_user("c", "W:w-1")
+    load(commander, "W:w-1", 0.9)
+    commander.check_capacity()
+    assert commander.target == 1
+
+
+def test_a_pool_of_many_widens_only_when_nobody_past_the_reception_admits(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    load(commander, "W:w-1", 1.5)
+    load(commander, "W:w-2", 0.9)
+    commander.check_capacity()
+    assert commander.target == 0
+    load(commander, "W:w-2", 1.2)
     commander.check_capacity()
     assert commander.target == 1
 
@@ -254,20 +325,18 @@ def test_the_reception_filling_up_widens_the_pool(commander: UserStickyCommander
 def test_the_capacity_check_waits_for_a_spawn_already_in_flight(
     commander: UserStickyCommander,
 ) -> None:
-    commander.guest_occupancy_limit = 1
     enroll(commander, "W:w-1")
     enroll(commander, "W:w-2", status="nascent")
-    commander.assign_user("a", "W:w-1")
+    load(commander, "W:w-1", 0.9)
     commander.check_capacity()
     assert commander.target == 0
 
 
 def test_the_capacity_check_never_passes_max_workers(commander: UserStickyCommander) -> None:
-    commander.guest_occupancy_limit = 1
     commander.max_workers = 1
     commander.target = 1
     enroll(commander, "W:w-1")
-    commander.assign_user("a", "W:w-1")
+    load(commander, "W:w-1", 0.9)
     commander.check_capacity()
     assert commander.target == 1
 
@@ -389,6 +458,43 @@ async def test_a_waiter_that_wakes_into_a_re_raised_flag_parks_again(
     assert await parked == "W:w-2"
 
 
+async def test_a_waiter_that_wakes_into_a_move_parks_on_it(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    commander.user_worker_map["alice"] = None
+    parked = asyncio.create_task(commander.resolve_worker("alice"))
+    await asyncio.sleep(0)
+    # The placement lands and a move of the same user starts before the waiter is
+    # scheduled: two holds read once each, in order, would let it through here
+    # with the map still naming the source.
+    commander.assign_user("alice", "W:w-1")
+    commander.moving["alice"] = asyncio.Event()
+    commander.release_placement()
+    await asyncio.sleep(0)
+    assert not parked.done()
+    # It resolves the worker the move carried the user to.
+    commander.assign_user("alice", "W:w-2")
+    commander.release_move("alice")
+    assert await parked == "W:w-2"
+
+
+def test_an_identity_nothing_holds_is_resolved_without_a_wait(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    commander.assign_user("alice", "W:w-1")
+    assert commander.is_held("alice") is False
+    assert commander.is_held("sess-1") is False
+    # Zero awaits on the no-hold path: driven by hand, the coroutine must
+    # complete on the first send, never yielding control back.
+    coro = commander.resolve_worker("alice")
+    with pytest.raises(StopIteration) as excinfo:
+        coro.send(None)
+    assert excinfo.value.value == "W:w-1"
+
+
 # ----------------------------------------------------------------------
 # The push login over two in-process workers
 # ----------------------------------------------------------------------
@@ -405,8 +511,7 @@ async def test_a_guest_call_lands_on_the_reception(pool: Any) -> None:
 async def test_the_login_returns_only_once_the_room_is_ready(pool: Any) -> None:
     source = pool.commander.reception
     target = next(name for name in pool.names if name != source)
-    # Ballast on the reception so the second worker is the least loaded one.
-    pool.commander.assign_user("ballast", source)
+    tilt_away(pool.commander, source)
     await pool.commander.forward_call("sess-1", "/op/new_connection")
     entry = await pool.commander.forward_call(
         "sess-1", "/op/change_connection_user", {"user": "alice", "tag": "carried"}
@@ -423,7 +528,6 @@ async def test_the_login_returns_only_once_the_room_is_ready(pool: Any) -> None:
 async def test_a_login_that_lands_back_home_still_travels(pool: Any) -> None:
     source = pool.commander.reception
     other = next(name for name in pool.names if name != source)
-    # Load the other worker so the reception is the least loaded one.
     pool.commander.assign_user("ballast", other)
     await pool.commander.forward_call("sess-1", "/op/new_connection")
     await pool.commander.forward_call(
@@ -439,7 +543,7 @@ async def test_a_call_issued_while_the_flag_is_up_waits_for_the_room(pool: Any) 
     commander = pool.commander
     source = commander.reception
     target = next(name for name in pool.names if name != source)
-    commander.assign_user("ballast", source)
+    tilt_away(commander, source)
     probe = InstallProbe(commander)
     probe.hold()
     await commander.forward_call("sess-1", "/op/new_connection")
@@ -509,7 +613,7 @@ async def test_a_destination_that_dies_mid_install_leaves_the_user_nowhere(pool:
     commander = pool.commander
     source = commander.reception
     target = next(name for name in pool.names if name != source)
-    commander.assign_user("ballast", source)
+    tilt_away(commander, source)
     # The destination sits on the install in a pool thread: the CALL is parked in
     # the hub with no deadline, so only the worker's death can end it.
     arrived = threading.Event()
@@ -545,7 +649,7 @@ async def test_a_destination_that_dies_mid_install_leaves_the_user_nowhere(pool:
 @pytest.fixture
 async def pages() -> Any:
     """The same two-worker pool, with the page-addressed op available."""
-    running = LocalPool(worker_class=PageWorker, guest_occupancy_limit=1000)
+    running = LocalPool(worker_class=PageWorker)
     await running.start(2)
     try:
         yield running
@@ -604,7 +708,7 @@ async def drain_over_the_wire(pool: Any, user: str, page_id: str = "p1") -> dict
 async def test_the_pendings_of_a_moved_page_arrive_in_the_order_they_left(pages: Any) -> None:
     source = pages.commander.reception
     target = next(name for name in pages.names if name != source)
-    pages.commander.assign_user("ballast", source)
+    tilt_away(pages.commander, source)
     seeded = await seed_live_guest(pages, source)
     await pages.commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
     assert pages.commander.user_worker_map["alice"] == target
@@ -624,7 +728,7 @@ async def test_the_pendings_of_a_moved_page_arrive_in_the_order_they_left(pages:
 async def test_the_hydration_of_a_moved_store_captures_nothing(pages: Any) -> None:
     source = pages.commander.reception
     target = next(name for name in pages.names if name != source)
-    pages.commander.assign_user("ballast", source)
+    tilt_away(pages.commander, source)
     seeded = await seed_live_guest(pages, source)
     await pages.commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
     # The collectors are attached to Bags that arrived already full, so what is
@@ -638,7 +742,7 @@ async def test_the_hydration_of_a_moved_store_captures_nothing(pages: Any) -> No
 async def test_a_moved_page_lives_again_with_its_stores_and_subscriptions(pages: Any) -> None:
     source = pages.commander.reception
     target = next(name for name in pages.names if name != source)
-    pages.commander.assign_user("ballast", source)
+    tilt_away(pages.commander, source)
     await seed_live_guest(pages, source)
     await pages.commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
     worker = pages.workers[target]
@@ -670,7 +774,7 @@ async def test_the_page_filter_survives_the_move(pages: Any) -> None:
     """``subscribed_paths`` is replayed onto the reborn collector, filter and all."""
     source = pages.commander.reception
     target = next(name for name in pages.names if name != source)
-    pages.commander.assign_user("ballast", source)
+    tilt_away(pages.commander, source)
     await seed_live_guest(pages, source)
     await pages.commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
     worker = pages.workers[target]
@@ -686,7 +790,7 @@ async def test_the_moved_connection_carries_its_own_store(pages: Any) -> None:
     """The connection store travels inside the blob, hydrated at destination."""
     source = pages.commander.reception
     target = next(name for name in pages.names if name != source)
-    pages.commander.assign_user("ballast", source)
+    tilt_away(pages.commander, source)
     await seed_live_guest(pages, source)
     pages.workers[source].connection_items.get("sess-1")["store"]["device.width"] = 1280
 
@@ -700,7 +804,7 @@ async def test_the_moved_connection_carries_its_own_store(pages: Any) -> None:
 async def test_a_dbevent_notified_after_the_move_reaches_the_moved_page(pages: Any) -> None:
     source = pages.commander.reception
     target = next(name for name in pages.names if name != source)
-    pages.commander.assign_user("ballast", source)
+    tilt_away(pages.commander, source)
     await seed_live_guest(pages, source)
     await pages.commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
     await drain_over_the_wire(pages, "alice")
@@ -720,7 +824,7 @@ async def test_the_commanded_eviction_carries_what_the_login_push_carries(pages:
     """``evict_user`` on order builds the same parcel, and it rebuilds the same slice."""
     source = pages.commander.reception
     target = next(name for name in pages.names if name != source)
-    pages.commander.assign_user("ballast", source)
+    tilt_away(pages.commander, source)
     seeded = await seed_live_guest(pages, source)
     await pages.commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
     assert pages.commander.user_worker_map["alice"] == target
@@ -808,7 +912,7 @@ async def test_the_join_lands_the_arrival_on_the_resident_store(pages: Any) -> N
     commander = pages.commander
     source = commander.reception
     target = next(name for name in pages.names if name != source)
-    commander.assign_user("ballast", source)
+    tilt_away(commander, source)
     await commander.forward_call(
         "sess-1", "/op/new_page", {"page_id": "p1", "session_id": "sess-1"}
     )
@@ -838,7 +942,7 @@ async def test_a_failed_join_leaves_the_resident_placement_alone(pool: Any) -> N
     commander = pool.commander
     source = commander.reception
     target = next(name for name in pool.names if name != source)
-    commander.assign_user("ballast", source)
+    tilt_away(commander, source)
     await commander.forward_call("sess-1", "/op/new_connection")
     await commander.forward_call(
         "sess-1", "/op/change_connection_user", {"user": "alice", "tag": "carried"}
@@ -860,7 +964,7 @@ async def test_only_an_unplaced_login_is_a_free_choice(pool: Any) -> None:
     commander = pool.commander
     source = commander.reception
     target = next(name for name in pool.names if name != source)
-    commander.assign_user("ballast", source)
+    tilt_away(commander, source)
     decided: list[str] = []
     choose = commander.decide_worker
 
@@ -1019,7 +1123,7 @@ async def logged_in_elsewhere(pool: Any) -> tuple[str, str]:
     commander = pool.commander
     source = commander.reception
     target = next(name for name in pool.names if name != source)
-    commander.assign_user("ballast", source)
+    tilt_away(commander, source)
     await commander.forward_call(
         "sess-1", "/op/new_page", {"page_id": "p1", "session_id": "sess-1"}
     )
@@ -1098,7 +1202,7 @@ async def test_the_second_connection_is_served_beside_the_first(pages: Any) -> N
     commander = pages.commander
     source = commander.reception
     target = next(name for name in pages.names if name != source)
-    commander.assign_user("ballast", source)
+    tilt_away(commander, source)
     await commander.forward_call(
         "sess-1", "/op/new_page", {"page_id": "p1", "session_id": "sess-1"}
     )
@@ -1151,6 +1255,663 @@ async def test_the_second_connection_is_served_beside_the_first(pages: Any) -> N
 
 
 # ----------------------------------------------------------------------
+# The move the commander ORDERS: flag, quiesce, custody, switch
+# ----------------------------------------------------------------------
+
+
+class RefuseInstall:
+    """Refuse every install addressed to the named workers; pass everything else.
+
+    The deterministic form of a destination dying with the parcel in the air:
+    what the commander does next is look for another room.
+    """
+
+    def __init__(self, commander: UserStickyCommander, refused: list[str]) -> None:
+        self.commander = commander
+        self.hub_call = commander.hub.call
+        self.refused = set(refused)
+        self.destinations: list[str] = []
+        commander.hub.call = self.call  # type: ignore[method-assign]
+
+    async def call(
+        self, name: str, path: str, data: Any = None, timeout: float | None = None
+    ) -> Any:
+        if not path.endswith("install_package"):
+            return await self.hub_call(name, path, data, timeout=timeout)
+        self.destinations.append(name)
+        if name in self.refused:
+            return {"events": [], "error": "no room here"}
+        return await self.hub_call(name, path, data, timeout=timeout)
+
+
+@pytest.fixture
+async def impatient() -> Any:
+    """The page pool with a quiesce budget short enough to expire inside a test."""
+    running = LocalPool(
+        worker_class=PageWorker, move_quiesce_timeout=0.1
+    )
+    await running.start(2)
+    try:
+        yield running
+    finally:
+        await running.stop()
+
+
+async def seed_moving_user(pool: Any, page_id: str = "p1") -> str:
+    """A logged user with one live page; returns the worker it landed on."""
+    await seed_live_guest(pool, pool.commander.reception, page_id)
+    await pool.commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
+    return str(pool.commander.user_worker_map["alice"])
+
+
+def other_than(pool: Any, *taken: str) -> str:
+    """Any worker of the pool that is none of ``taken``."""
+    return next(name for name in pool.names if name not in taken)
+
+
+async def test_a_commanded_move_carries_the_whole_slice(pages: Any) -> None:
+    commander = pages.commander
+    source = await seed_moving_user(pages)
+    target = other_than(pages, source)
+    assert await commander.move_user("alice", target) is True
+    assert commander.user_worker_map["alice"] == target
+    assert commander.users_on(target) == {"alice"}
+    assert pages.workers[source].user_items.get("alice") is None
+    # Everything the login push carries, the commanded move carries too.
+    worker = pages.workers[target]
+    assert worker.user_items.get("alice")["store"]["prefs.theme"] == "dark"
+    page = worker.page_items.get("p1")
+    assert page["store"]["counter"] == 1
+    assert page["store_subscriptions"] == {"prefs"}
+    assert page["table_subscriptions"] == {"orders"}
+    assert "alice" not in commander.moving
+
+
+async def test_a_call_issued_during_a_move_is_served_by_the_destination(pages: Any) -> None:
+    commander = pages.commander
+    source = await seed_moving_user(pages)
+    target = other_than(pages, source)
+    await drain_over_the_wire(pages, "alice")
+    probe = InstallProbe(commander)
+    probe.hold()
+    move = asyncio.create_task(commander.move_user("alice", target))
+    await probe.arrived.wait()
+    # The map still points at the source: nothing is routed off a half-done move.
+    assert commander.user_worker_map["alice"] == source
+    parked = asyncio.create_task(
+        commander.forward_call("alice", "/op/page_ping", {"page_id": "p1"})
+    )
+    await asyncio.sleep(0)
+    assert not parked.done()
+    probe.release()
+    assert await move is True
+    # It waited for the room and was answered by the worker that got it — the
+    # source has no page p1 left to answer with.
+    assert (await parked)["page_id"] == "p1"
+    assert probe.destinations == [target]
+    assert pages.workers[source].page_items.get("p1") is None
+
+
+async def test_a_store_change_addressed_during_a_move_lands_on_the_destination(
+    pages: Any,
+) -> None:
+    commander = pages.commander
+    source = await seed_moving_user(pages)
+    target = other_than(pages, source)
+    await drain_over_the_wire(pages, "alice")
+    commander.assign_user("bob", source)
+    probe = InstallProbe(commander)
+    probe.hold()
+    move = asyncio.create_task(commander.move_user("alice", target))
+    await probe.arrived.wait()
+    # The slice has already left the source and the map still names it: an
+    # address resolved now would be shipped to a worker that no longer holds
+    # alice, and the change would be gone for good.
+    assert pages.workers[source].user_items.get("alice") is None
+    await commander.forward_call(
+        "bob",
+        "/op/set_datachange",
+        {
+            "change": to_tytx(a_change("prefs.lang", "it"), "json"),
+            "kind": "user_store",
+            "target": "alice",
+        },
+    )
+    await asyncio.sleep(0)
+    probe.release()
+    assert await move is True
+    # It was held, not dropped: past the barrier the map names the destination,
+    # and the write lands on the store that travelled there.
+    await until(lambda: pages.workers[target].user_items.get("alice")["store"]["prefs.lang"])
+    delivered = await drain_over_the_wire(pages, "alice")
+    assert [change["key"]["path"] for change in delivered["datachanges"]] == ["prefs.lang"]
+
+
+async def test_every_addressed_exchange_kind_waits_for_the_move(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    commander.assign_user("alice", "W:w-1")
+    commander.connection_user["sess-1"] = "alice"
+    commander.page_connection["p1"] = "sess-1"
+    shipped: list[list[str]] = []
+
+    async def collect(buffer: dict[str, list[dict[str, Any]]]) -> None:
+        shipped.append(list(buffer))
+
+    commander.flush_exchange = collect  # type: ignore[method-assign]
+    commander.moving["alice"] = asyncio.Event()
+    addressed = [
+        asyncio.create_task(
+            commander.route_exchange({"kind": kind, "target": target, "filters": None})
+        )
+        for kind, target in (
+            ("user_store", "alice"),
+            ("connection_store", "sess-1"),
+            ("page_store", "p1"),
+        )
+    ]
+    await asyncio.sleep(0)
+    # A filtered broadcast addresses a set, not a user: it never holds, and it
+    # ships against the map as it reads right now.
+    await commander.route_exchange({"kind": "page_store", "target": None, "filters": "user:alice"})
+    assert shipped == [["W:w-1"]]
+    assert not any(task.done() for task in addressed)
+    # All three chains reach alice, and all three resolve past the barrier.
+    commander.assign_user("alice", "W:w-2")
+    commander.release_move("alice")
+    await asyncio.gather(*addressed)
+    assert shipped[1:] == [["W:w-2"], ["W:w-2"], ["W:w-2"]]
+
+
+async def test_a_login_arriving_during_a_move_joins_on_the_destination(pool: Any) -> None:
+    commander = pool.commander
+    reception = str(commander.reception)
+    source = other_than(pool, reception)
+    tilt_away(commander, reception)
+    await commander.forward_call("sess-1", "/op/new_connection")
+    await commander.forward_call(
+        "sess-1", "/op/change_connection_user", {"user": "alice", "tag": "carried"}
+    )
+    assert commander.user_worker_map["alice"] == source
+    probe = InstallProbe(commander)
+    probe.hold()
+    move = asyncio.create_task(commander.move_user("alice", reception))
+    await probe.arrived.wait()
+    # A second guest logs in as alice while her slice is in the commander's
+    # custody: the map still names the source, and a residence read now would
+    # install the arriving connection on the worker she has just left.
+    await commander.forward_call("sess-2", "/op/new_connection")
+    joining = asyncio.create_task(
+        commander.forward_call("sess-2", "/op/change_connection_user", {"user": "alice"})
+    )
+    await asyncio.sleep(0)
+    # The move is still in flight, so the barrier that would hold the join
+    # is genuinely open — not merely a join that hasn't been scheduled yet.
+    assert "alice" in commander.moving
+    probe.release()
+    assert await move is True
+    await joining
+    # Held, not misplaced: the join landed on the worker the move chose, and
+    # both connections sit on the one slice.
+    assert commander.user_worker_map["alice"] == reception
+    assert pool.workers[reception].user_items.get("alice")["connections"] == {"sess-1", "sess-2"}
+    assert pool.workers[source].user_items.get("alice") is None
+
+
+async def test_the_quiesce_budget_expiring_leaves_the_user_where_it_is(impatient: Any) -> None:
+    commander = impatient.commander
+    source = await seed_moving_user(impatient)
+    target = other_than(impatient, source)
+    # One live call that never closes: the user cannot be taken anywhere.
+    commander.open_request(source, "alice", "/op/page_ping")
+    assert await commander.move_user("alice", target) is False
+    assert commander.user_worker_map["alice"] == source
+    assert impatient.workers[source].user_items.get("alice") is not None
+    assert impatient.workers[target].user_items.get("alice") is None
+    assert "alice" not in commander.moving
+
+
+async def test_a_call_held_by_an_aborted_move_is_released(impatient: Any) -> None:
+    commander = impatient.commander
+    source = await seed_moving_user(impatient)
+    target = other_than(impatient, source)
+    commander.open_request(source, "alice", "/op/page_ping")
+    move = asyncio.create_task(commander.move_user("alice", target))
+    await until(lambda: "alice" in commander.moving)
+    parked = asyncio.create_task(
+        commander.forward_call("alice", "/op/page_ping", {"page_id": "p1"})
+    )
+    await asyncio.sleep(0)
+    assert not parked.done()
+    assert await move is False
+    # The barrier falls on the way out, whatever the outcome was.
+    assert (await parked)["page_id"] == "p1"
+
+
+async def test_a_refused_room_sends_the_slice_back_to_the_source(pages: Any) -> None:
+    commander = pages.commander
+    source = await seed_moving_user(pages)
+    target = other_than(pages, source)
+    refusal = RefuseInstall(commander, [target])
+    # The parcel is placed, but not where it was asked for: not a drain.
+    assert await commander.move_user("alice", target) is False
+    assert refusal.destinations == [target, source]
+    assert commander.user_worker_map["alice"] == source
+    assert pages.workers[source].user_items.get("alice")["store"]["prefs.theme"] == "dark"
+
+
+async def test_a_room_that_refused_the_slice_is_never_offered_it_twice(pages: Any) -> None:
+    commander = pages.commander
+    source = await seed_moving_user(pages)
+    third = await pages.add_worker()
+    target = other_than(pages, source, third)
+    refusal = RefuseInstall(commander, [target, source])
+    assert await commander.move_user("alice", target) is False
+    assert refusal.destinations == [target, source, third]
+    assert commander.user_worker_map["alice"] == third
+    assert pages.workers[third].user_items.get("alice")["store"]["prefs.theme"] == "dark"
+
+
+# ----------------------------------------------------------------------
+# The beat and the compaction: the pool folding itself away
+# ----------------------------------------------------------------------
+
+
+def test_the_ledger_counts_the_reception_at_its_own_threshold(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    # C = 0.5 + 1.0, O = 0: an idle pool of two has one whole worker to spare.
+    assert commander.capacity_headroom() == pytest.approx(1.5)
+    load(commander, "W:w-2", 0.9)
+    assert commander.capacity_headroom() == pytest.approx(0.6)
+
+
+def test_a_pool_with_no_active_worker_reports_no_headroom(
+    commander: UserStickyCommander,
+) -> None:
+    assert commander.capacity_headroom() == 0.0
+
+
+def test_the_excess_is_read_against_each_worker_s_own_threshold(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    enroll(commander, "W:w-3")
+    load(commander, "W:w-1", 0.6)  # the reception: over its 0.5
+    load(commander, "W:w-2", 0.9)  # under the gate: not hot
+    load(commander, "W:w-3", 1.4)  # over the gate — its cpu component saturates at 1.0
+    assert commander.rebalance_excess() == [
+        ("W:w-3", pytest.approx(0.25)),
+        ("W:w-1", pytest.approx(0.1)),
+    ]
+
+
+async def test_excess_sends_the_beat_to_the_rebalance_and_nowhere_else(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    load(commander, "W:w-1", 0.9)
+    commander.pool_beat()
+    assert (commander.rebalancing, commander.compacting) == (True, False)
+    await asyncio.sleep(0)
+
+
+async def test_a_pool_with_nothing_to_shed_is_offered_to_the_compaction(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    load(commander, "W:w-1", 0.4)
+    commander.pool_beat()
+    assert (commander.rebalancing, commander.compacting) == (False, True)
+    await asyncio.sleep(0)
+
+
+async def test_a_compaction_in_flight_holds_the_beat_off_the_rebalance(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    load(commander, "W:w-1", 0.9)  # excess is there: a free beat would shed
+    commander.compacting = True
+    commander.pool_beat()
+    assert commander.rebalancing is False
+
+
+async def test_a_rebalance_in_flight_holds_the_beat_off_the_compaction(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    load(commander, "W:w-1", 0.4)  # nothing to shed: a free beat would compact
+    commander.rebalancing = True
+    commander.pool_beat()
+    assert commander.compacting is False
+
+
+async def test_the_probe_return_is_what_sets_the_beat_going() -> None:
+    """The beat's attachment point: a returned probe, not a clock of its own."""
+    running = LocalPool()
+    await running.start(1)
+    try:
+        commander = running.commander
+        name = running.names[0]
+        assert (commander.rebalancing, commander.compacting) == (False, False)
+        await commander.probe_worker(name)
+        # The archived row is fresh knowledge about the pool, and the pass that
+        # reads it was dispatched by the return itself.
+        assert commander.worker_roster[name]["occupancy"][-1]["report"]["worker"] == name
+        assert (commander.rebalancing, commander.compacting) == (False, True)
+        await asyncio.sleep(0)
+    finally:
+        await running.stop()
+
+
+async def test_a_rebalance_already_in_flight_is_never_doubled(
+    commander: UserStickyCommander,
+) -> None:
+    spawned = []
+    original = commander.spawn_pool_pass
+
+    def record(pass_coroutine: Any) -> Any:
+        spawned.append(pass_coroutine)
+        return original(pass_coroutine)
+
+    commander.spawn_pool_pass = record  # type: ignore[method-assign]
+    enroll(commander, "W:w-1")
+    commander.trigger_rebalance()
+    commander.trigger_rebalance()
+    assert len(spawned) == 1
+    await asyncio.sleep(0)
+    assert commander.rebalancing is False
+
+
+async def test_a_pool_pass_that_raises_leaves_its_error_on_the_log(
+    commander: UserStickyCommander, caplog: Any
+) -> None:
+    async def failing_pass() -> None:
+        raise RuntimeError("the pass fell over")
+
+    with caplog.at_level("ERROR"):
+        task = commander.spawn_pool_pass(failing_pass())
+        with pytest.raises(RuntimeError):
+            await task
+        await asyncio.sleep(0)
+    # Nobody awaits a detached pass in production: without the errback the
+    # exception would be retrieved by nobody and the failure would be silent.
+    assert "the pass fell over" in caplog.text
+
+
+async def test_a_compaction_already_in_flight_is_never_doubled(
+    commander: UserStickyCommander,
+) -> None:
+    spawned = []
+    original = commander.spawn_pool_pass
+
+    def record(pass_coroutine: Any) -> Any:
+        spawned.append(pass_coroutine)
+        return original(pass_coroutine)
+
+    commander.spawn_pool_pass = record  # type: ignore[method-assign]
+    enroll(commander, "W:w-1")
+    commander.trigger_compaction()
+    commander.trigger_compaction()
+    assert len(spawned) == 1
+    await asyncio.sleep(0)
+    assert commander.compacting is False
+
+
+async def test_the_compaction_folds_an_idle_pool_onto_its_reception() -> None:
+    running = LocalPool(compaction_margin=0.4)
+    await running.start(3)
+    commander = running.commander
+    reception = str(commander.reception)
+    tilt_away(commander, reception)
+    await commander.forward_call("sess-1", "/op/new_connection")
+    await commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
+    host = commander.user_worker_map["alice"]
+    assert host != reception
+    load(commander, reception, 0.0)  # the tilt did its job: the ledger reads an idle pool
+    try:
+        await commander.compact_pass()
+        # Down to the floor, and the reception is the survivor: never a candidate.
+        assert commander.active_workers == [reception]
+        assert commander.user_worker_map["alice"] == reception
+        assert running.workers[reception].user_items.get("alice") is not None
+    finally:
+        await running.stop()
+
+
+async def test_the_compaction_never_folds_below_the_floor() -> None:
+    running = LocalPool(compaction_margin=0.4, min_workers=2)
+    await running.start(3)
+    commander = running.commander
+    for name in commander.active_workers:
+        load(commander, name, 0.0)
+    try:
+        await commander.compact_pass()
+        # The ledger would fold the pool onto its reception; min_workers is what
+        # stops it, one retire in.
+        assert len(commander.active_workers) == 2
+        assert commander.capacity_headroom() > commander.compaction_margin
+    finally:
+        await running.stop()
+
+
+async def test_a_worker_that_does_not_drain_is_not_retired() -> None:
+    running = LocalPool(compaction_margin=0.4, move_quiesce_timeout=0.1)
+    await running.start(2)
+    commander = running.commander
+    reception = str(commander.reception)
+    tilt_away(commander, reception)
+    await commander.forward_call("sess-1", "/op/new_connection")
+    await commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
+    host = str(commander.user_worker_map["alice"])
+    load(commander, reception, 0.0)
+    # One call that never closes: alice cannot be taken anywhere, so the worker
+    # holding her cannot be emptied — and a worker holding state is never retired.
+    commander.open_request(host, "alice", "/op/page_ping")
+    try:
+        await commander.compact_pass()
+        assert host in commander.active_workers
+        assert commander.user_worker_map["alice"] == host
+    finally:
+        await running.stop()
+
+
+# ----------------------------------------------------------------------
+# The rebalance: the hot worker shedding what it cannot hold
+# ----------------------------------------------------------------------
+
+
+def memory_hot(commander: UserStickyCommander, name: str, fraction: float) -> None:
+    """Seed the worker's window so its MEMORY component reads ``fraction``.
+
+    The decisive case of the ratio space: one component over its target with the
+    others nearly idle, so the worker gates high while its load stays low.
+    """
+    limit = commander.memory_limit_mb or 0
+    commander.worker_roster[name]["occupancy"].clear()
+    commander.record_occupancy(
+        name,
+        {
+            "cpu": 0.05,
+            "rss": int(fraction * limit * 1024 * 1024),
+            "reusable": 0,
+            "executor": {"busy": 0, "total": 0},
+        },
+    )
+
+
+def seed_shed(commander: UserStickyCommander, worker: str, seconds: dict[str, float]) -> None:
+    """Put users on ``worker``, each with the service time it spent recently."""
+    for user, value in seconds.items():
+        commander.assign_user(user, worker)
+        commander.count_user_consumption(user, value)
+
+
+async def two_users_on_one_worker(running: LocalPool) -> tuple[str, str]:
+    """Log alice and bob in past a tilted reception; returns their worker and a cool one."""
+    commander = running.commander
+    reception = str(commander.reception)
+    tilt_away(commander, reception)
+    for session, user in (("sess-1", "alice"), ("sess-2", "bob")):
+        await commander.forward_call(session, "/op/new_connection")
+        await commander.forward_call(session, "/op/change_connection_user", {"user": user})
+    load(commander, reception, 0.0)  # the tilt did its job: only the shed matters now
+    host = str(commander.user_worker_map["alice"])
+    assert commander.user_worker_map["bob"] == host
+    cool = next(name for name in commander.active_workers if name not in (reception, host))
+    return host, cool
+
+
+def test_a_target_is_only_eligible_while_the_whole_excess_fits_under_the_margin(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    enroll(commander, "W:w-3")
+    load(commander, "W:w-1", 0.0)
+    load(commander, "W:w-2", 0.85)
+    load(commander, "W:w-3", 0.5)
+    # The ceiling is 0.9: 0.85 + 0.1 is over it, 0.5 + 0.1 is not.
+    assert commander.pick_rebalance_target(0.1) == "W:w-3"
+    # An excess nobody can take under the margin leaves the pass without a target.
+    assert commander.pick_rebalance_target(0.45) is None
+
+
+def test_the_reception_is_never_a_rebalance_target(commander: UserStickyCommander) -> None:
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    load(commander, "W:w-1", 0.0)  # the coolest worker there is, and out of the question
+    load(commander, "W:w-2", 1.4)  # hot: not a target for its own excess either
+    assert commander.pick_rebalance_target(0.25) is None
+
+
+def test_toward_an_empty_target_the_heaviest_users_go_first(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    load(commander, "W:w-2", 1.0)
+    seed_shed(commander, "W:w-2", {"alice": 5.0, "bob": 3.0, "carol": 2.0})
+    # Weights 0.5 / 0.3 / 0.2: two users cover a budget of 0.6, carol is not needed.
+    assert commander.pick_rebalance_users("W:w-2", 0.6, target_empty=True) == ["alice", "bob"]
+
+
+def test_toward_a_loaded_target_the_lightest_users_go_first(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    load(commander, "W:w-2", 1.0)
+    seed_shed(commander, "W:w-2", {"alice": 5.0, "bob": 3.0, "carol": 2.0})
+    assert commander.pick_rebalance_users("W:w-2", 0.4, target_empty=False) == ["carol", "bob"]
+
+
+def test_an_idle_user_is_never_shed_onto_a_loaded_target(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    load(commander, "W:w-2", 1.0)
+    seed_shed(commander, "W:w-2", {"alice": 100.0, "dozer": 0.5})
+    # dozer carries 0.5% of the worker, under the 2% floor: the move would buy nothing.
+    assert commander.pick_rebalance_users("W:w-2", 0.5, target_empty=False) == ["alice"]
+    # The floor is the loaded target's rule alone — an empty one takes whatever comes.
+    assert commander.pick_rebalance_users("W:w-2", 1.0, target_empty=True) == ["alice", "dozer"]
+
+
+def test_a_worker_whose_users_served_nothing_recently_weighs_nothing(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    load(commander, "W:w-1", 1.0)
+    commander.assign_user("alice", "W:w-1")
+    assert commander.rebalance_weights("W:w-1") == {}
+
+
+def test_a_guest_costs_its_worker_but_is_never_shed(commander: UserStickyCommander) -> None:
+    enroll(commander, "W:w-1")
+    load(commander, "W:w-1", 1.0)
+    commander.assign_user("alice", "W:w-1")
+    commander.open_request("W:w-1", "sess-9", "/op/page_ping")  # a guest: a row, no map entry
+    commander.count_user_consumption("alice", 1.0)
+    commander.count_user_consumption("sess-9", 3.0)
+    # The guest's three seconds stay with the worker: alice carries a quarter of it.
+    assert commander.rebalance_weights("W:w-1") == {"alice": pytest.approx(0.25)}
+
+
+async def test_a_memory_hot_worker_sheds_by_weight_until_its_excess_is_covered() -> None:
+    running = LocalPool(memory_limit_mb=100)
+    commander = running.commander
+    await running.start(3)
+    try:
+        host, cool = await two_users_on_one_worker(running)
+        memory_hot(commander, host, 0.9)
+        commander.count_user_consumption("alice", 3.0)
+        commander.count_user_consumption("bob", 1.0)
+        # The decisive case of P2: the gate is over 1.0 while the load reads well
+        # under it — the max is what sheds.
+        assert commander.evaluator.saturation_of(host) == pytest.approx(1.125)
+        assert commander.evaluator.load_of(host) < 0.9
+        await commander.rebalance_pass()
+        # Excess 0.125, and alice's three quarters of 1.125 cover it alone.
+        assert commander.user_worker_map["alice"] == cool
+        assert commander.user_worker_map["bob"] == host
+    finally:
+        await running.stop()
+
+
+async def test_a_hot_worker_with_no_absorber_widens_the_pool(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    commander.target = 2
+    load(commander, "W:w-1", 0.4)  # the reception is cool, and never a target
+    load(commander, "W:w-2", 1.4)  # the only other worker, and it is the hot one
+    await commander.rebalance_pass()
+    assert commander.target == 3
+
+
+async def test_a_hot_pool_at_the_ceiling_widens_no_further(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    commander.target = 2
+    commander.max_workers = 2
+    load(commander, "W:w-1", 0.4)  # the reception is cool, and never a target
+    load(commander, "W:w-2", 1.4)  # hot, with nowhere to shed and no room to grow
+    await commander.rebalance_pass()
+    assert commander.target == 2
+
+
+async def test_a_move_that_fails_ends_the_pass_and_retires_nobody() -> None:
+    running = LocalPool(memory_limit_mb=100, move_quiesce_timeout=0.1)
+    commander = running.commander
+    await running.start(3)
+    try:
+        host, cool = await two_users_on_one_worker(running)
+        memory_hot(commander, host, 0.9)
+        commander.count_user_consumption("alice", 3.0)
+        commander.count_user_consumption("bob", 1.0)
+        # One call that never closes: alice is the first pick and she cannot leave.
+        commander.open_request(host, "alice", "/op/page_ping")
+        await commander.rebalance_pass()
+        assert len(commander.active_workers) == 3
+        assert commander.user_worker_map["alice"] == host
+        # The pass ended on the refusal: bob was next in line and never went.
+        assert commander.user_worker_map["bob"] == host
+        assert commander.users_on(cool) == set()
+    finally:
+        await running.stop()
+
+
+# ----------------------------------------------------------------------
 # The same sequence over a real socket and a real child
 # ----------------------------------------------------------------------
 
@@ -1159,7 +1920,6 @@ async def test_the_second_connection_is_served_beside_the_first(pages: Any) -> N
 async def test_the_login_survives_real_children_over_uds() -> None:
     running = UserStickyCommander(
         workers=0,
-        guest_occupancy_limit=1000,
         worker_kwargs={"max_threads": 2},
     )
     await running.start()
@@ -1168,7 +1928,7 @@ async def test_the_login_survives_real_children_over_uds() -> None:
         await running.wait_workers_ready(2)
         source = running.reception
         target = next(name for name in running.active_workers if name != source)
-        running.assign_user("ballast", source)
+        tilt_away(running, source)
         await running.forward_call("sess-1", "/op/new_connection")
         entry = await running.forward_call(
             "sess-1", "/op/change_connection_user", {"user": "alice", "tag": "carried"}

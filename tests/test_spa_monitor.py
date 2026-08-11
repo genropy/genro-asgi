@@ -36,7 +36,7 @@ from genro_asgi.spa.worker import UserStickyWorker
 @pytest.fixture
 async def single() -> Any:
     """A commander in the single role: no child, its own worker, no heartbeat."""
-    commander = UserStickyCommander(workers=0, local_worker=True, guest_occupancy_limit=1000)
+    commander = UserStickyCommander(workers=0, local_worker=True)
     await commander.start()
     try:
         yield commander
@@ -166,9 +166,12 @@ def test_metrics_view_scales_the_evaluator_read_for_the_bars(
     commander.count_forward("W:w-1", 0.5)
     view = commander.metrics_view()
     assert set(view) == {"W:w-1"}
-    assert view["W:w-1"]["occupancy"] == 40
+    # occupancy is the SATURATION: the max ratio against the 0.8 admission
+    # target (cpu 0.4 / 0.8 = 0.5), while the components stay raw fractions
+    assert view["W:w-1"]["occupancy"] == 50
     assert view["W:w-1"]["components"] == {"cpu": 40, "executor": 25}
-    assert view["W:w-1"]["history"] == [40]
+    # the history is the per-row SATURATION, on the bar's own axis
+    assert view["W:w-1"]["history"] == [50]
     assert view["W:w-1"]["forward"] == {"requests": 1, "errors": 0, "seconds": 0.5}
 
 

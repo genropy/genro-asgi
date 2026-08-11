@@ -55,18 +55,18 @@ def test_commander_kwargs_are_peeled_and_forwarded() -> None:
         workers=0,
         local_worker=True,
         group="site-group",
-        guest_occupancy_limit=7,
+        reception_threshold=0.7,
     )
     assert app.commander.built_with == {
         "workers": 0,
         "local_worker": True,
         "group": "site-group",
-        "guest_occupancy_limit": 7,
+        "reception_threshold": 0.7,
     }
     assert app.commander.target == 0
     assert app.commander.local_worker is True
     assert app.commander.group == "site-group"
-    assert app.commander.guest_occupancy_limit == 7
+    assert app.commander.reception_threshold == 0.7
 
 
 def test_unpassed_commander_kwargs_keep_the_commander_defaults() -> None:
@@ -104,7 +104,7 @@ def test_an_unknown_kwarg_still_raises_at_the_end_of_the_chain() -> None:
 
 
 async def test_the_lifecycle_hooks_drive_a_real_single_role_pool() -> None:
-    app = SpaApplication(workers=0, local_worker=True, guest_occupancy_limit=1000)
+    app = SpaApplication(workers=0, local_worker=True)
     await app.on_startup()
     try:
         assert app.commander.worker is not None

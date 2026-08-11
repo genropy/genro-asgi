@@ -40,10 +40,22 @@ The occupancy formula: three components per row —
   raw ``busy``/``total`` stay unclamped in the archived reports.
 
 Each component is FIRST averaged over the last ``SMOOTHING_ROWS`` rows (absorbing
-the transient spikes that dominate a naive read), THEN the worker's occupancy is
-the MAX of the present averaged components (the bottleneck answers "can I take
-another user?"; an average across incommensurable resources does not). A worker
-with no rows (just born) reads 0.0 — it admits.
+the transient spikes that dominate a naive read), THEN divided by its own TARGET
+— the fraction of that resource a worker may hold before it stops admitting. The
+result is the RATIO SPACE the pool policies live in: every component reads as
+``component / target``, so 1.0 is "at the target" whatever the resource and the
+components become commensurable.
+
+Two readings are taken off those ratios:
+
+- ``saturation_of`` = their MAX — the GATE. The bottleneck answers "can I take
+  another user?"; one component at its target closes the worker even if the
+  others are idle;
+- ``load_of`` = their QUADRATIC MEAN — the QUANTITY. Ordering candidates wants
+  the whole picture, not just the worst component, and the quadratic mean keeps
+  the worst one dominant while the others still count.
+
+A worker with no rows (just born) reads 0.0 on both — it admits.
 
 Owned by the commander (semantic parent: ``self.commander``). The window depth
 and the report shape are the commander's; this object never mutates them.
@@ -51,12 +63,13 @@ and the report shape are the commander's; this object never mutates them.
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .commander import UserStickyCommander
 
-__all__ = ["SMOOTHING_ROWS", "OccupancyEvaluator"]
+__all__ = ["COMPONENT_NAMES", "SMOOTHING_ROWS", "OccupancyEvaluator"]
 
 #: Bytes per configured megabyte of the memory limit.
 _MB = 1024 * 1024
@@ -65,6 +78,10 @@ _MB = 1024 * 1024
 #: before the max is taken (~30s at the default 5s probe interval).
 #: PROVISIONAL: it becomes configuration with the per-group config.
 SMOOTHING_ROWS = 6
+
+#: Every component a reading can carry — the only keys ``component_targets``
+#: may name.
+COMPONENT_NAMES = ("memory", "cpu", "executor")
 
 
 class OccupancyEvaluator:
@@ -75,21 +92,70 @@ class OccupancyEvaluator:
     it stands.
     """
 
-    def __init__(self, commander: UserStickyCommander) -> None:
+    def __init__(
+        self,
+        commander: UserStickyCommander,
+        *,
+        admission_threshold: float = 0.8,
+        component_targets: dict[str, float] | None = None,
+    ) -> None:
         """Args:
         commander: the UserStickyCommander owning this evaluator (semantic parent).
+        admission_threshold: the uniform target every component is judged against.
+        component_targets: per-component overrides of that uniform target; keys
+            must be in ``COMPONENT_NAMES`` and values in (0, 1].
+
+        Raises:
+            ValueError: on an unknown component key or a target outside (0, 1].
         """
         self.commander = commander
+        self.targets = self.build_targets(admission_threshold, component_targets)
 
-    def occupancy_of(self, worker_id: str) -> float:
-        """The worker's occupancy in [0, 1]: the max of its averaged components.
+    def build_targets(
+        self, admission_threshold: float, component_targets: dict[str, float] | None
+    ) -> dict[str, float]:
+        """The per-component targets: the uniform default under the overrides."""
+        overrides = dict(component_targets or {})
+        unknown = set(overrides) - set(COMPONENT_NAMES)
+        if unknown:
+            raise ValueError(
+                f"unknown component target {sorted(unknown)}: "
+                f"known components are {list(COMPONENT_NAMES)}"
+            )
+        for name, value in [("admission_threshold", admission_threshold), *overrides.items()]:
+            if not 0.0 < value <= 1.0:
+                raise ValueError(f"{name} target must be in (0, 1], got {value}")
+        return {name: overrides.get(name, admission_threshold) for name in COMPONENT_NAMES}
 
-        0.0 when the worker has no rows in the window (just born: it admits).
+    def ratios_of(self, worker_id: str) -> dict[str, float]:
+        """The averaged components divided by their targets — the ratio space.
+
+        Empty when the worker has no measurable component in the window.
         """
         components = self.components_of(worker_id)
-        if not components:
+        return {name: value / self.targets[name] for name, value in components.items()}
+
+    def saturation_of(self, worker_id: str) -> float:
+        """The GATE reading: the max of the worker's component ratios.
+
+        1.0 is "at the target" — the bottleneck decides whether the worker still
+        admits. 0.0 when the worker has no rows in the window (just born).
+        """
+        ratios = self.ratios_of(worker_id)
+        if not ratios:
             return 0.0
-        return max(components.values())
+        return max(ratios.values())
+
+    def load_of(self, worker_id: str) -> float:
+        """The QUANTITY reading: the quadratic mean of the worker's component ratios.
+
+        The whole picture rather than the worst component alone — what orders
+        candidates when several still admit. 0.0 with no rows in the window.
+        """
+        ratios = self.ratios_of(worker_id)
+        if not ratios:
+            return 0.0
+        return math.sqrt(sum(value * value for value in ratios.values()) / len(ratios))
 
     def components_of(self, worker_id: str) -> dict[str, float]:
         """The averaged components present for this worker (memory/cpu/executor).
@@ -112,10 +178,12 @@ class OccupancyEvaluator:
         return {name: sums[name] / counts[name] for name in sums}
 
     def history_of(self, worker_id: str) -> list[float]:
-        """Per-row occupancy across the WHOLE window (the max component of each row).
+        """Per-row saturation across the WHOLE window (the max RATIO of each row).
 
-        One value per archived row, in order — the histogram the monitor draws. A
-        row with no measurable component contributes 0.0.
+        One value per archived row, in order — the histogram the monitor draws,
+        on the same axis as ``saturation_of``: 1.0 is "at the target", and a row
+        past it reads over 1.0. A row with no measurable component contributes
+        0.0.
         """
         window = self.commander.window_of(worker_id)
         if not window:
@@ -123,7 +191,8 @@ class OccupancyEvaluator:
         history: list[float] = []
         for row in window:
             components = self.row_components(row.get("report") or {})
-            history.append(max(components.values()) if components else 0.0)
+            ratios = [value / self.targets[name] for name, value in components.items()]
+            history.append(max(ratios) if ratios else 0.0)
         return history
 
     def rates_of(self, worker_id: str) -> dict[str, float | None]:

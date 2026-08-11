@@ -91,7 +91,6 @@ async def site() -> Any:
         workers=0,
         local_worker=True,
         worker_class=f"{__name__}:SiteWorker",
-        guest_occupancy_limit=1000,
     )
     # One server for the whole test: an application is owned by one and only one.
     spa_server(spa)
