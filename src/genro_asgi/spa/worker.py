@@ -228,6 +228,7 @@ import base64
 import functools
 import logging
 import pickle
+import resource
 import threading
 import time
 from contextvars import ContextVar
@@ -489,6 +490,9 @@ class UserStickyWorker(RoutingClass):
         # The lock requests parked on their grant, by request id.
         self.global_grants: dict[str, asyncio.Future[Any]] = {}
         self.last_seq = 0
+        # The CPU probe's previous reading: a fraction needs two ticks to exist.
+        self.cpu_probe_ts: float | None = None
+        self.cpu_probe_used: float | None = None
         self.logger = logging.getLogger(__name__)
         self.channel: Any = None
         # The consumer seam for the http CALL form: a WSGI callable assigned by
@@ -848,15 +852,165 @@ class UserStickyWorker(RoutingClass):
         """
         return self.occupancy_report()
 
+    @route()
+    async def monitor_state(self, identity: str | None = None) -> dict[str, Any]:
+        """Answer the monitor's fan-out with a scalar projection of the registers.
+
+        One projected row per register entry — identity, ancestry, the activity
+        clocks, the edge counts — never the working fields (stores, page
+        ``data``, pending ``dbevents``, subscription sets): application content
+        is the page's business, not the observer's. Every read is a scalar or
+        an atomic copy, so the photo needs no ``dispatch_lock`` and the loop
+        takes it itself; a row swept while it is taken is simply not in it —
+        the monitor is a poll, the next one shows the world as it settled.
+        What only the commander knows — the per-user consumption — is fused up
+        there, on arrival. ``identity`` is the CALL form's first argument and
+        means nothing here — the fan-out addresses the worker.
+        """
+        now = time.time()
+        return {
+            "worker": self.name,
+            "users": self.monitor_users(now),
+            "connections": self.monitor_connections(now),
+            "pages": self.monitor_pages(now),
+        }
+
+    def monitor_clocks(self, row: dict[str, Any], now: float) -> dict[str, Any]:
+        """The activity clocks of one register row, aged at photo time.
+
+        ``last_refresh_ts`` is the technical contact (every page CALL stamps it
+        up the chain) and ``age_s`` its age, computed by the same clock that
+        wrote the stamp — floored at 0.0: the photo clock is taken once before
+        the walk, and a row stamped WHILE the photo is being taken is simply
+        brand new, not from the future. ``last_user_ts`` and ``last_rpc_ts``
+        are the daemon's client-reported clocks (siteregister.py:678-690: last
+        human input, last real RPC) — None until the page protocol carries the
+        ping kwargs that feed them.
+        """
+        refresh_ts = row["last_refresh_ts"]
+        return {
+            "last_refresh_ts": refresh_ts,
+            "age_s": max(0.0, now - refresh_ts),
+            "last_user_ts": row.get("last_user_ts"),
+            "last_rpc_ts": row.get("last_rpc_ts"),
+        }
+
+    def monitor_users(self, now: float) -> list[dict[str, Any]]:
+        """One projected user row: clocks plus connection and page counts.
+
+        The tolerant walk of a lock-free photo: ``keys()`` is a snapshot, and a
+        row (or an edge's far end) swept before its read is skipped. ``list``
+        on a live set is one atomic copy under the GIL.
+        """
+        rows: list[dict[str, Any]] = []
+        for key in self.user_items.keys():
+            row = self.user_items.get(key)
+            if row is None:
+                continue
+            connection_ids = list(row["connections"])
+            pages = 0
+            for connection_id in connection_ids:
+                connection = self.connection_items.get(connection_id)
+                if connection is not None:
+                    pages += len(connection["pages"])
+            rows.append(
+                {
+                    "register_item_id": key,
+                    "connections": len(connection_ids),
+                    "pages": pages,
+                    **self.monitor_clocks(row, now),
+                }
+            )
+        return rows
+
+    def monitor_connections(self, now: float) -> list[dict[str, Any]]:
+        """One projected connection row: owner, clocks, page count."""
+        rows: list[dict[str, Any]] = []
+        for key in self.connection_items.keys():
+            row = self.connection_items.get(key)
+            if row is None:
+                continue
+            rows.append(
+                {
+                    "register_item_id": key,
+                    "user": row["user"],
+                    "pages": len(row["pages"]),
+                    **self.monitor_clocks(row, now),
+                }
+            )
+        return rows
+
+    def monitor_pages(self, now: float) -> list[dict[str, Any]]:
+        """One projected page row: ancestry and clocks, never the working fields."""
+        rows: list[dict[str, Any]] = []
+        for key in self.page_items.keys():
+            row = self.page_items.get(key)
+            if row is None:
+                continue
+            rows.append(
+                {
+                    "register_item_id": key,
+                    "connection_id": row["connection_id"],
+                    "root_page_id": row["root_page_id"],
+                    "parent_page_id": row["parent_page_id"],
+                    "avatar_key": row["avatar_key"],
+                    **self.monitor_clocks(row, now),
+                }
+            )
+        return rows
+
     def occupancy_report(self) -> dict[str, Any]:
-        """The counters the commander archives: what the registers can answer."""
+        """The worker's raw sensor readings: no percentage, no judgement.
+
+        What the registers can answer, plus the three process gauges the
+        commander's evaluator interprets. ``cpu`` is a fraction of the interval
+        since the previous report (None on the first one), ``rss`` is bytes
+        (None where ``/proc`` is absent), ``executor`` is the pressure on the
+        sync-op dispatch pool — never the WSGI rail's ``http_pool``.
+        """
+        metrics = self.pool.metrics
         return {
             "worker": self.name,
             "users": len(self.user_items),
             "pages": len(self.page_items),
             "pending": self.outbox.pending(),
             "seq": self.last_seq,
+            "cpu": self.cpu_fraction(),
+            "rss": self.rss_bytes(),
+            "executor": {"busy": metrics["busy"], "total": metrics["total"]},
         }
+
+    def cpu_fraction(self) -> float | None:
+        """CPU used by this process as a fraction of the wall time since the last call.
+
+        Delta of ``getrusage(RUSAGE_SELF)`` user+system time between two probes,
+        over the elapsed monotonic wall clock. None on the first call: there is
+        no previous probe to diff against. The probe state lives on this
+        instance, never at module level.
+        """
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        used = usage.ru_utime + usage.ru_stime
+        now = time.monotonic()
+        previous_ts, previous_used = self.cpu_probe_ts, self.cpu_probe_used
+        self.cpu_probe_ts, self.cpu_probe_used = now, used
+        if previous_ts is None or previous_used is None or now <= previous_ts:
+            return None
+        return (used - previous_used) / (now - previous_ts)
+
+    def rss_bytes(self) -> int | None:
+        """Resident set size in bytes, read from ``/proc/self/status`` (``VmRSS``).
+
+        None when the file does not exist (no ``/proc``, e.g. macOS) or the
+        field is missing. Deliberately /proc-only: no psutil dependency.
+        """
+        try:
+            with open("/proc/self/status", encoding="ascii") as status:
+                for line in status:
+                    if line.startswith("VmRSS:"):
+                        return int(line.split()[1]) * 1024
+        except OSError:
+            return None
+        return None
 
     # ------------------------------------------------------------------
     # The live stores: one drain point, one forwarded-write primitive.

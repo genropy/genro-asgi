@@ -26,11 +26,20 @@ from __future__ import annotations
 import asyncio
 import re
 import signal
+import time
 from typing import Any
 
 import pytest
 
-from genro_asgi.spa.commander import LOGIN_OP, METRICS_WINDOW, UserStickyCommander
+from genro_asgi.channel.hub import ChannelCallError
+from genro_asgi.spa.commander import (
+    CONSUMPTION_BUCKET_SECONDS,
+    CONSUMPTION_BUCKETS,
+    LOGIN_OP,
+    METRICS_WINDOW,
+    TOMBSTONE_SECONDS,
+    UserStickyCommander,
+)
 
 
 async def swallow_frame(frame: Any) -> None:
@@ -204,6 +213,57 @@ def test_a_child_that_dies_before_registering_is_logged_with_its_exit_code(
         commander.reconcile()
     assert "exit code 3" in caplog.text
     assert commander.worker_roster["W:w-3"]["status"] == "dead"
+
+
+def test_a_child_that_never_registers_is_stillborn_and_buriable(
+    commander: UserStickyCommander, caplog: Any
+) -> None:
+    """No REGISTER means no channel_lost: the READY_TIMEOUT path must stamp the
+    death itself, or the row sits in draining forever, unburiable."""
+    commander.worker_roster["W:mute"] = commander.new_roster_row(999, None)
+    commander.worker_roster["W:mute"]["spawned_at"] = (
+        time.monotonic() - commander.READY_TIMEOUT - 1
+    )
+    with caplog.at_level("WARNING"):
+        commander.reconcile()
+    entry = commander.worker_roster["W:mute"]
+    assert entry["status"] == "dead"
+    assert entry["death"] == "stillborn"
+    assert entry["died_at"] is not None
+    entry["died_at"] = time.monotonic() - TOMBSTONE_SECONDS - 1
+    commander.reconcile()
+    assert "W:mute" not in commander.worker_roster
+
+
+def test_retiring_a_nascent_worker_takes_the_stillborn_exit(
+    commander: UserStickyCommander,
+) -> None:
+    """A nascent has no channel, so draining could never complete: whether the
+    retirement comes from retire(), scale() or the cull, it dies on the spot —
+    stamped, buriable, never a permanent draining row."""
+    commander.worker_roster["W:new"] = commander.new_roster_row(999, None)
+    commander.retire_worker("W:new")
+    entry = commander.worker_roster["W:new"]
+    assert entry["status"] == "dead"
+    assert entry["death"] == "stillborn"
+    assert entry["died_at"] is not None
+    entry["died_at"] = time.monotonic() - TOMBSTONE_SECONDS - 1
+    commander.reconcile()
+    assert "W:new" not in commander.worker_roster
+
+
+def test_retire_refuses_a_worker_that_is_not_living(commander: UserStickyCommander) -> None:
+    """A tombstone flipped back to draining would be unburiable, and the target
+    would shrink for a corpse: only nascent and active are retirable."""
+    commander.target = 2
+    commander.worker_roster["W:w-1"]["status"] = "dead"
+    commander.worker_roster["W:w-2"]["status"] = "draining"
+    for name in ("W:w-1", "W:w-2"):
+        with pytest.raises(ValueError):
+            commander.retire(name)
+    assert commander.target == 2
+    assert commander.worker_roster["W:w-1"]["status"] == "dead"
+    assert commander.worker_roster["W:w-2"]["status"] == "draining"
 
 
 async def test_a_deliberate_retire_sweeps_the_users_it_held(
@@ -428,7 +488,17 @@ async def test_the_caretaker_archives_the_report_the_worker_answered(
     await until(lambda: bool(watched_pool.worker_roster[name]["occupancy"]))
     report = watched_pool.worker_roster[name]["occupancy"][-1]["report"]
     assert report["worker"] == name
-    assert set(report) == {"worker", "users", "pages", "pending", "seq"}
+    assert set(report) == {
+        "worker",
+        "users",
+        "pages",
+        "pending",
+        "seq",
+        "cpu",
+        "rss",
+        "executor",
+    }
+    assert set(report["executor"]) == {"busy", "total"}
 
 
 async def test_a_caretaker_survives_a_probe_that_raises(
@@ -525,3 +595,277 @@ async def test_a_member_joining_mid_stop_leaves_no_caretaker_behind(
     assert all(row["caretaker"] is None for row in pool.worker_roster.values())
     with pytest.raises(asyncio.CancelledError):
         await born[0]
+
+
+# ----------------------------------------------------------------------
+# The forward counters: per-worker cumulative, per-user consumption
+# ----------------------------------------------------------------------
+
+
+def answer(commander: UserStickyCommander, payload: dict[str, Any]) -> None:
+    """Make every ``hub.call`` of this commander answer with *payload*."""
+
+    async def call(worker: str, path: str, data: Any, timeout: Any = None) -> dict[str, Any]:
+        return payload
+
+    commander.hub.call = call  # type: ignore[method-assign]
+
+
+def explode(commander: UserStickyCommander) -> None:
+    """Make every ``hub.call`` of this commander raise before answering."""
+
+    async def call(worker: str, path: str, data: Any, timeout: Any = None) -> dict[str, Any]:
+        raise ChannelCallError("W:w-1", "/op", {"message": "boom"})
+
+    commander.hub.call = call  # type: ignore[method-assign]
+
+
+def test_count_forward_folds_requests_errors_and_seconds(
+    commander: UserStickyCommander,
+) -> None:
+    commander.count_forward("W:w-1", 0.5)
+    commander.count_forward("W:w-1", 0.25, error=True)
+    assert commander.forward_counters["W:w-1"] == {
+        "requests": 1,
+        "errors": 1,
+        "seconds": 0.75,
+    }
+
+
+def test_a_fresh_consumption_entry_is_a_fixed_ring_of_never_written_slots(
+    commander: UserStickyCommander,
+) -> None:
+    entry = commander.new_consumption_entry()
+    assert entry["requests"] == 0 and entry["seconds"] == 0.0
+    assert len(entry["buckets"]) == CONSUMPTION_BUCKETS
+    assert all(slot == {"epoch": -1, "requests": 0, "seconds": 0.0} for slot in entry["buckets"])
+
+
+def test_consumption_accumulates_cumulatively_and_in_the_current_bucket(
+    commander: UserStickyCommander,
+) -> None:
+    now = 1000.0
+    commander.count_user_consumption("alice", 0.4, now=now)
+    commander.count_user_consumption("alice", 0.6, now=now + 1.0)
+    entry = commander.user_consumption["alice"]
+    assert entry["requests"] == 2
+    assert entry["seconds"] == pytest.approx(1.0)
+    epoch = int(now // CONSUMPTION_BUCKET_SECONDS)
+    slot = entry["buckets"][epoch % CONSUMPTION_BUCKETS]
+    assert slot["epoch"] == epoch
+    assert slot["requests"] == 2
+    assert slot["seconds"] == pytest.approx(1.0)
+
+
+def test_a_stale_slot_is_reset_before_the_forward_lands(
+    commander: UserStickyCommander,
+) -> None:
+    """A slot the ring wrapped onto belongs to its new epoch alone."""
+    span = CONSUMPTION_BUCKET_SECONDS * CONSUMPTION_BUCKETS
+    commander.count_user_consumption("alice", 0.4, now=1000.0)
+    commander.count_user_consumption("alice", 0.1, now=1000.0 + span)
+    epoch = int((1000.0 + span) // CONSUMPTION_BUCKET_SECONDS)
+    slot = commander.user_consumption["alice"]["buckets"][epoch % CONSUMPTION_BUCKETS]
+    assert slot == {"epoch": epoch, "requests": 1, "seconds": pytest.approx(0.1)}
+    assert commander.user_consumption["alice"]["requests"] == 2
+
+
+def test_recent_seconds_sums_the_window_and_excludes_what_fell_out_of_it(
+    commander: UserStickyCommander,
+) -> None:
+    now = 1000.0
+    commander.count_user_consumption("alice", 0.4, now=now)
+    commander.count_user_consumption("alice", 0.2, now=now + CONSUMPTION_BUCKET_SECONDS)
+    assert commander.user_recent_seconds("alice", now=now + CONSUMPTION_BUCKET_SECONDS) == (
+        pytest.approx(0.6)
+    )
+    later = now + CONSUMPTION_BUCKET_SECONDS * CONSUMPTION_BUCKETS
+    assert commander.user_recent_seconds("alice", now=later) == pytest.approx(0.2)
+
+
+def test_an_unknown_user_consumed_nothing(commander: UserStickyCommander) -> None:
+    assert commander.user_recent_seconds("nobody") == 0.0
+
+
+def test_forgetting_a_user_drops_its_consumption(commander: UserStickyCommander) -> None:
+    commander.count_user_consumption("alice", 0.4, now=1000.0)
+    commander.forget_users(["alice", "ghost"])
+    assert commander.user_consumption == {}
+
+
+async def test_a_forward_clocks_the_worker_and_the_user_it_belongs_to(
+    commander: UserStickyCommander,
+) -> None:
+    commander.fold_events("W:w-1", [event("new_user", 1, user="alice")])
+    answer(commander, {"result": 7})
+    assert await commander.forward_call("alice", "/op") == 7
+    counters = commander.forward_counters["W:w-1"]
+    assert counters["requests"] == 1 and counters["errors"] == 0
+    assert counters["seconds"] >= 0.0
+    assert commander.user_consumption["alice"]["requests"] == 1
+
+
+async def test_a_forward_of_an_unheld_identity_clocks_the_worker_only(
+    commander: UserStickyCommander,
+) -> None:
+    """A guest the surface does not hold yet is not attributed a consumption."""
+    answer(commander, {"result": 7})
+    await commander.forward_call("guest", "/op")
+    assert commander.forward_counters["W:w-1"]["requests"] == 1
+    assert commander.user_consumption == {}
+
+
+async def test_a_failed_forward_is_counted_as_an_error_and_re_raised(
+    commander: UserStickyCommander,
+) -> None:
+    commander.fold_events("W:w-1", [event("new_user", 1, user="alice")])
+    explode(commander)
+    with pytest.raises(ChannelCallError):
+        await commander.forward_call("alice", "/op")
+    counters = commander.forward_counters["W:w-1"]
+    assert counters["requests"] == 0 and counters["errors"] == 1
+    assert commander.user_consumption == {}
+
+
+async def test_the_login_fold_cannot_resurrect_the_guest_consumption(
+    commander: UserStickyCommander,
+) -> None:
+    """Clock and attribution run BEFORE the fold (the legacy order): the guest
+    the REPLY logs in is counted while the surface still holds it, then
+    forgotten with it — never re-created after its own removal."""
+    commander.fold_events("W:w-1", [event("new_user", 1, user="s-1")])
+    answer(
+        commander,
+        {
+            "result": 7,
+            "events": [event(LOGIN_OP, 2, user="alice", previous_user="s-1", session_id="c-1")],
+        },
+    )
+    assert await commander.forward_call("s-1", "/op") == 7
+    assert "s-1" not in commander.user_consumption
+
+
+async def test_a_removal_mid_flight_cannot_resurrect_the_consumption(
+    commander: UserStickyCommander,
+) -> None:
+    """The membership is read at count time: an identity a concurrent fold
+    removed while the forward was in flight is not billed back into existence
+    (the orphan would be unreachable by forget_users forever)."""
+    commander.fold_events("W:w-1", [event("new_user", 1, user="alice")])
+
+    async def call(worker: str, path: str, data: Any, timeout: Any = None) -> dict[str, Any]:
+        commander.remove_user("alice")  # the concurrent fold lands mid-flight
+        return {"result": 7}
+
+    commander.hub.call = call  # type: ignore[method-assign]
+    await commander.forward_call("alice", "/op")
+    assert commander.user_consumption == {}
+
+
+async def test_the_fold_runs_off_the_forward_clock(
+    commander: UserStickyCommander,
+) -> None:
+    """During the REPLY fold the forward already stands in the ledger: the
+    placement round trip of another user is never billed to this one."""
+    commander.fold_events("W:w-1", [event("new_user", 1, user="s-1")])
+    ledger_during_fold: list[dict[str, Any]] = []
+
+    async def call(worker: str, path: str, data: Any, timeout: Any = None) -> dict[str, Any]:
+        if path == "/op":
+            login = event(
+                LOGIN_OP, 2, user="alice", previous_user="s-1", session_id="c-1", package="pkg"
+            )
+            return {"result": 7, "events": [login]}
+        # the placement leg of the fold: the forward must already be counted
+        ledger_during_fold.append(dict(commander.forward_counters["W:w-1"]))
+        return {"result": None}
+
+    commander.hub.call = call  # type: ignore[method-assign]
+    await commander.forward_call("s-1", "/op")
+    assert ledger_during_fold and ledger_during_fold[0]["requests"] == 1
+
+
+def test_the_archived_row_carries_the_counters_snapshot(
+    commander: UserStickyCommander,
+) -> None:
+    """The snapshot is a copy: the counters that keep moving never rewrite it."""
+    commander.count_forward("W:w-1", 0.5)
+    commander.record_occupancy("W:w-1", {"users": 1})
+    commander.count_forward("W:w-1", 0.5)
+    row = commander.worker_roster["W:w-1"]["occupancy"][-1]
+    assert row["forward"] == {"requests": 1, "errors": 0, "seconds": 0.5}
+
+
+def test_a_worker_that_never_forwarded_archives_zeros(
+    commander: UserStickyCommander,
+) -> None:
+    commander.record_occupancy("W:w-1", {"users": 0})
+    row = commander.worker_roster["W:w-1"]["occupancy"][-1]
+    assert row["forward"] == {"requests": 0, "errors": 0, "seconds": 0.0}
+
+
+def test_retiring_a_worker_keeps_its_counters(commander: UserStickyCommander) -> None:
+    """The ledger follows the roster rule: only the burial drops it, never the drain."""
+    commander.count_forward("W:w-1", 0.5)
+    commander.retire_worker("W:w-1")
+    assert commander.forward_counters["W:w-1"]["requests"] == 1
+
+
+async def test_the_death_is_stamped_on_the_tombstone(commander: UserStickyCommander) -> None:
+    commander.worker_roster["W:w-1"]["status"] = "draining"
+    await commander.channel_lost(FakeMember("W:w-1"))
+    await commander.channel_lost(FakeMember("W:w-2"))
+    retired, crashed = commander.worker_roster["W:w-1"], commander.worker_roster["W:w-2"]
+    assert retired["status"] == crashed["status"] == "dead"
+    assert retired["death"] == "retired"
+    assert crashed["death"] == "crash"
+    assert retired["died_at"] is not None and crashed["died_at"] is not None
+
+
+def test_a_worker_dead_within_the_lapse_keeps_its_tombstone(
+    commander: UserStickyCommander,
+) -> None:
+    commander.count_forward("W:w-1", 0.5)
+    entry = commander.worker_roster["W:w-1"]
+    entry["status"] = "dead"
+    entry["death"] = "crash"
+    entry["died_at"] = time.monotonic()
+    commander.reconcile()
+    assert "W:w-1" in commander.worker_roster
+    assert "W:w-1" in commander.forward_counters
+
+
+def test_a_worker_dead_past_the_lapse_is_buried_with_its_counters(
+    commander: UserStickyCommander, caplog: Any
+) -> None:
+    """One exit for row and ledger; the obituary log line is the durable trace."""
+    commander.count_forward("W:w-1", 0.5)
+    entry = commander.worker_roster["W:w-1"]
+    entry["status"] = "dead"
+    entry["death"] = "crash"
+    entry["died_at"] = time.monotonic() - TOMBSTONE_SECONDS - 1
+    with caplog.at_level("INFO"):
+        commander.reconcile()
+    assert "W:w-1" not in commander.worker_roster
+    assert "W:w-1" not in commander.forward_counters
+    assert "buried" in caplog.text and "death=crash" in caplog.text
+    # the living neighbour is untouched
+    assert "W:w-2" in commander.worker_roster
+
+
+def test_removing_a_user_forgets_its_consumption(commander: UserStickyCommander) -> None:
+    commander.fold_events("W:w-1", [event("new_user", 1, user="alice")])
+    commander.count_user_consumption("alice", 0.4, now=1000.0)
+    commander.remove_user("alice")
+    assert commander.user_consumption == {}
+
+
+def test_sweeping_a_worker_forgets_the_consumption_of_its_users(
+    commander: UserStickyCommander,
+) -> None:
+    commander.fold_events("W:w-1", [event("new_user", 1, user="alice")])
+    commander.fold_events("W:w-2", [event("new_user", 1, user="bob")])
+    commander.count_user_consumption("alice", 0.4, now=1000.0)
+    commander.count_user_consumption("bob", 0.4, now=1000.0)
+    commander.sweep_worker("W:w-1")
+    assert set(commander.user_consumption) == {"bob"}

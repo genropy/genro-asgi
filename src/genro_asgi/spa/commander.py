@@ -24,13 +24,17 @@ sits.
 
 **The surface registries are plain dicts, deliberately not the Register
 machine of the worker** (the validated lesson: keys and locations up here,
-contents down there). There are exactly six, in four groups:
+contents down there). There are exactly eight, in five groups:
 
 - ``worker_roster`` — worker name → the ROW that holds everything that is that
-  worker's:
-  ``{status, pid, group, spawned_at, process, users, occupancy, caretaker}``.
+  worker's: ``{status, pid, group, spawned_at, died_at, death, process, users,
+  occupancy, caretaker}``.
   ``status`` walks ``nascent`` (spawned, not yet presented) →
-  ``active`` (REGISTER seen) → ``draining`` (deliberately retired) → ``dead``;
+  ``active`` (REGISTER seen) → ``draining`` (deliberately retired) → ``dead``
+  — except a nascent one, which jumps straight to ``dead`` when culled or
+  retired (no channel means no drain to complete); ``died_at``/``death``
+  (``retired``/``crash``/``stillborn``) are the tombstone stamps
+  ``bury_workers`` reads;
   ``users`` maps each held user to ``{pending, last_activity_ts, occupancy}``
   (``pending`` is that user's live calls, ``occupancy`` a field the future
   evaluator fills — 2a never computes it); ``occupancy`` is the window of the
@@ -51,6 +55,11 @@ contents down there). There are exactly six, in four groups:
   ``new_page`` and ``drop_page`` events the REPLYs already carry, plus the
   ``drop_user`` cascade and the drops an expiry sweep ascends — so a live page
   costs no traffic of its own.
+- ``forward_counters`` / ``user_consumption`` — the forward LEDGER, fed by
+  ``forward_envelope``'s clock: per-worker cumulative counters
+  (``{requests, errors, seconds}``, dropped only by the burial), and per-user
+  cumulative consumption plus its recent-window bucket ring (dropped with the
+  user by ``forget_users``).
 
 The four tree structures are aligned BY CONSTRUCTION: nothing outside
 ``register_connection`` / ``drop_connection`` / ``register_page`` /
@@ -235,6 +244,7 @@ from genro_tytx import from_tytx, to_tytx
 from ..channel.frame import Frame
 from ..channel.hub import ChannelCallError, ChannelHub, ChannelMember
 from ..channel.local import LocalChannel
+from .evaluator import OccupancyEvaluator
 from .global_store import (
     GLOBAL_CHANGES_PATH,
     GLOBAL_GRANT_PATH,
@@ -256,11 +266,14 @@ from .worker import (
 )
 
 __all__ = [
+    "CONSUMPTION_BUCKETS",
+    "CONSUMPTION_BUCKET_SECONDS",
     "DEFAULT_GROUP",
     "GUEST_OCCUPANCY_LIMIT",
     "METRICS_WINDOW",
     "PROBE_INTERVAL",
     "PROBE_TIMEOUT",
+    "TOMBSTONE_SECONDS",
     "UserStickyCommander",
 ]
 
@@ -272,6 +285,13 @@ DEFAULT_GROUP = "default"
 #: every 5s). PROVISIONAL, transcribed from the legacy commander.
 METRICS_WINDOW = 60
 
+#: The per-user consumption window: a ring of ``CONSUMPTION_BUCKETS`` slots of
+#: ``CONSUMPTION_BUCKET_SECONDS`` each — 6 buckets of 5s = a ~30s window, the
+#: mirror of the evaluator's smoothing window. ``user_recent_seconds`` sums the
+#: buckets still inside it. PROVISIONAL, transcribed from the legacy commander.
+CONSUMPTION_BUCKET_SECONDS = 5.0
+CONSUMPTION_BUCKETS = 6
+
 #: Seconds between two probes of the same worker. PROVISIONAL — it becomes
 #: per-group configuration.
 PROBE_INTERVAL = 5.0
@@ -281,8 +301,17 @@ PROBE_INTERVAL = 5.0
 #: to lose, and the silence IS the information. PROVISIONAL, as above.
 PROBE_TIMEOUT = 10.0
 
+#: How long a dead worker's roster row — and its forward counters — outlives
+#: it before ``reconcile`` buries both, logging the obituary. Long enough for
+#: every late reference to settle and for a warm autopsy; the log line is the
+#: durable record. PROVISIONAL — it becomes per-group configuration.
+TOMBSTONE_SECONDS = 3600.0
+
 #: The routing key of the occupancy probe.
 OCCUPANCY_OP_PATH = f"{OP_PATH_PREFIX}occupancy"
+
+#: The routing key of the monitor's register fan-out.
+MONITOR_STATE_OP_PATH = f"{OP_PATH_PREFIX}monitor_state"
 
 #: How many users the reception may hold before the pool is widened. The 2a
 #: reading of occupancy is the head count: no evaluator exists yet, and every
@@ -325,6 +354,7 @@ class UserStickyCommander:
         probe_timeout: float = PROBE_TIMEOUT,
         local_worker: bool = False,
         dump_path: str | None = None,
+        memory_limit_mb: int | None = None,
     ) -> None:
         """Args:
         workers: how many children to keep alive.
@@ -343,6 +373,8 @@ class UserStickyCommander:
             pair it with ``workers=0`` to spawn no child at all.
         dump_path: file the whole register is dumped to at ``stop`` and read back
             at ``start`` — the move across a total restart (None disarms it).
+        memory_limit_mb: the per-worker memory budget the evaluator's memory
+            component is measured against (None = no memory component at all).
         """
         self.target = workers
         self.group = group
@@ -355,6 +387,9 @@ class UserStickyCommander:
         self.probe_timeout = probe_timeout
         self.local_worker = local_worker
         self.dump_path = dump_path
+        self.memory_limit_mb = int(memory_limit_mb) if memory_limit_mb is not None else None
+        # The judge of the occupancy windows this commander archives.
+        self.evaluator = OccupancyEvaluator(self)
         # The in-process worker of the single role and the wire it sits on;
         # both stay None in the multi role.
         self.worker: UserStickyWorker | None = None
@@ -372,6 +407,10 @@ class UserStickyCommander:
         # the map is the flag "this user's placement is in flight".
         self.worker_roster: dict[str, dict[str, Any]] = {}
         self.user_worker_map: dict[str, str | None] = {}
+        # What the forwards cost, read two ways: cumulative per worker, and per
+        # user both cumulative and over the recent-consumption ring.
+        self.forward_counters: dict[str, dict[str, Any]] = {}
+        self.user_consumption: dict[str, dict[str, Any]] = {}
         # The middle link of the ownership chain: which user each connection is,
         # and the same edge read downward — the two sides move together.
         self.connection_user: dict[str, str] = {}
@@ -605,9 +644,18 @@ class UserStickyCommander:
         self._wakeup.set()
 
     def retire(self, name: str) -> None:
-        """Retire one named worker and lower the target so reconcile keeps it out."""
-        if name not in self.worker_roster:
+        """Retire one named worker and lower the target so reconcile keeps it out.
+
+        Only a living worker (``nascent`` or ``active``) is retirable: a
+        draining one is already leaving, and a dead one is a tombstone —
+        flipping it back to ``draining`` would make it unburiable (its
+        ``channel_lost`` already fired) and shrink the target for a corpse.
+        """
+        entry = self.worker_roster.get(name)
+        if entry is None:
             raise KeyError(f"no such worker to retire: {name!r}")
+        if entry["status"] not in ("nascent", "active"):
+            raise ValueError(f"worker {name!r} is {entry['status']}: not retirable")
         self.target = max(0, self.target - 1)
         self.retire_worker(name)
 
@@ -626,7 +674,7 @@ class UserStickyCommander:
             self.reconcile()
 
     def reconcile(self) -> None:
-        """Cull the children that will never present themselves, spawn the shortfall."""
+        """Cull the stillborn, bury the long-dead, spawn the shortfall."""
         now = time.monotonic()
         for name, entry in list(self.worker_roster.items()):
             if entry["status"] != "nascent":
@@ -637,11 +685,39 @@ class UserStickyCommander:
                     "Worker %s died before registering (exit code %s)", name, process.poll()
                 )
                 entry["status"] = "dead"
+                entry["died_at"] = now
+                entry["death"] = "stillborn"
             elif now - entry["spawned_at"] > self.READY_TIMEOUT:
-                self.logger.warning("Worker %s never registered: retiring", name)
-                self.retire_worker(name)
+                self.logger.warning("Worker %s never registered: killing", name)
+                self.retire_worker(name)  # nascent: the stillborn exit
+        self.bury_workers(now)
         for _ in range(max(0, self.target - len(self.living_workers))):
             self.spawn_worker()
+
+    def bury_workers(self, now: float) -> None:
+        """Drop the rows (and counters) of workers dead past ``TOMBSTONE_SECONDS``.
+
+        The tombstone has served by then — every late reference has settled —
+        so the record leaves memory through this one exit, and the obituary
+        line is its durable trace in the log.
+        """
+        for name, entry in list(self.worker_roster.items()):
+            if entry["status"] != "dead" or now - entry["died_at"] <= TOMBSTONE_SECONDS:
+                continue
+            counters = self.forward_counters.pop(name, None) or {}
+            self.logger.info(
+                "Worker %s buried: pid=%s group=%s lifetime=%.0fs death=%s "
+                "requests=%s errors=%s seconds=%.1f",
+                name,
+                entry["pid"],
+                entry["group"],
+                entry["died_at"] - entry["spawned_at"],
+                entry["death"],
+                counters.get("requests", 0),
+                counters.get("errors", 0),
+                counters.get("seconds", 0.0),
+            )
+            del self.worker_roster[name]
 
     async def caretaker(self, name: str) -> None:
         """Probe ONE worker on its own cadence, forever — the legacy per-child beat.
@@ -694,13 +770,17 @@ class UserStickyCommander:
 
         The row is born ``nascent`` and empty — the users arrive with the fold,
         the occupancy window with the reports, the caretaker with the REGISTER.
-        It is never dropped: the roster is the record of who existed.
+        It outlives its worker as the tombstone (late frames and probes still
+        resolve the name; ``dead`` stays distinct from never-existed) until
+        ``bury_workers`` drops it, ``TOMBSTONE_SECONDS`` after the death.
         """
         return {
             "status": "nascent",
             "pid": pid,
             "group": self.group,
             "spawned_at": time.monotonic(),
+            "died_at": None,
+            "death": None,
             "process": process,
             "users": {},
             "occupancy": deque(maxlen=METRICS_WINDOW),
@@ -764,8 +844,21 @@ class UserStickyCommander:
         return name
 
     def retire_worker(self, name: str) -> None:
-        """Deliberately drain one worker: no death signal, no relaunch."""
+        """Deliberately drain one worker: no death signal, no relaunch.
+
+        A nascent one cannot drain: it never REGISTERed, so no ``channel_lost``
+        will ever complete the retirement — it takes the stillborn exit
+        instead, killed outright (it holds nothing to drain) and stamped dead
+        here, whether the retirement came from ``retire``, ``scale`` or the
+        READY_TIMEOUT cull.
+        """
         entry = self.worker_roster[name]
+        if entry["status"] == "nascent":
+            self.signal_worker(name, signal.SIGKILL)
+            entry["status"] = "dead"
+            entry["died_at"] = time.monotonic()
+            entry["death"] = "stillborn"
+            return
         entry["status"] = "draining"
         self.signal_worker(name, signal.SIGTERM)
 
@@ -834,6 +927,8 @@ class UserStickyCommander:
             return
         deliberate = entry["status"] == "draining"
         entry["status"] = "dead"
+        entry["died_at"] = time.monotonic()
+        entry["death"] = "retired" if deliberate else "crash"
         self.cancel_caretaker(member.name)
         if self.global_lock.held_by(member.name):
             self.global_lock.release()
@@ -1416,6 +1511,7 @@ class UserStickyCommander:
         worker = self.user_worker_map.pop(user, None)
         if worker is not None:
             del self.worker_roster[worker]["users"][user]
+        self.forget_users([user])
         for session_id in sorted(self.user_connections.pop(user, set())):
             for page_id in sorted(self.connection_pages.pop(session_id, set())):
                 del self.page_connection[page_id]
@@ -1433,10 +1529,180 @@ class UserStickyCommander:
         """The users this worker holds, read from its row."""
         return set(self.worker_roster[worker]["users"])
 
+    def count_forward(self, worker: str, seconds: float, error: bool = False) -> None:
+        """Fold one forward into the worker's cumulative counters.
+
+        ``requests`` counts the forwards that completed (an error REPLY is a
+        completed forward: the worker answered), ``errors`` the TRANSPORT
+        failures — the CALL itself raised, counted here and re-raised — and
+        ``seconds`` accumulates the wall time of every forward either way.
+        """
+        counters = self.forward_counters.setdefault(
+            worker, {"requests": 0, "errors": 0, "seconds": 0.0}
+        )
+        if error:
+            counters["errors"] += 1
+        else:
+            counters["requests"] += 1
+        counters["seconds"] += seconds
+
+    def count_user_consumption(self, user: str, seconds: float, now: float | None = None) -> None:
+        """Fold one forward's cost into the user's consumption: cumulative + windowed.
+
+        The cumulative ``{requests, seconds}`` is what the population view reads.
+        Alongside it, ``buckets`` is the ring the rebalance reads for RECENT load:
+        the epoch is ``int(now // CONSUMPTION_BUCKET_SECONDS)`` and the slot
+        ``epoch % CONSUMPTION_BUCKETS``; a slot holding a different epoch is stale,
+        so it is reset before this forward lands.
+        """
+        now = time.time() if now is None else now
+        entry = self.user_consumption.setdefault(user, self.new_consumption_entry())
+        entry["requests"] += 1
+        entry["seconds"] += seconds
+        epoch = int(now // CONSUMPTION_BUCKET_SECONDS)
+        slot = entry["buckets"][epoch % CONSUMPTION_BUCKETS]
+        if slot["epoch"] != epoch:
+            slot["epoch"] = epoch
+            slot["requests"] = 0
+            slot["seconds"] = 0.0
+        slot["requests"] += 1
+        slot["seconds"] += seconds
+
+    def new_consumption_entry(self) -> dict[str, Any]:
+        """A fresh consumption entry: cumulative counters plus an empty bucket ring.
+
+        The ring is a FIXED list of ``CONSUMPTION_BUCKETS`` slots; ``epoch = -1``
+        marks a slot never written (older than any real epoch, so the window
+        ignores it). The slots are filled in place and the list is never resized.
+        """
+        return {
+            "requests": 0,
+            "seconds": 0.0,
+            "buckets": [
+                {"epoch": -1, "requests": 0, "seconds": 0.0} for _ in range(CONSUMPTION_BUCKETS)
+            ],
+        }
+
+    def user_recent_seconds(self, user: str, now: float | None = None) -> float:
+        """The user's service time over the current consumption window.
+
+        The sum of ``seconds`` across the buckets whose epoch is within the last
+        ``CONSUMPTION_BUCKETS`` epochs (stale ones excluded). An unknown user, or
+        one with no bucket in the window, reads 0.0.
+        """
+        entry = self.user_consumption.get(user)
+        if entry is None:
+            return 0.0
+        now = time.time() if now is None else now
+        epoch = int(now // CONSUMPTION_BUCKET_SECONDS)
+        oldest = epoch - CONSUMPTION_BUCKETS + 1
+        return sum(bucket["seconds"] for bucket in entry["buckets"] if bucket["epoch"] >= oldest)
+
+    def forget_users(self, users: list[str] | set[str]) -> None:
+        """Drop the consumption entries of users that left the surface."""
+        for user in users:
+            self.user_consumption.pop(user, None)
+
     def record_occupancy(self, worker: str, report: dict[str, Any]) -> None:
-        """Archive one raw occupancy reading in the worker's window."""
+        """Archive one raw occupancy reading in the worker's window.
+
+        Each row is ``{ts, report, forward}``: the arrival time, the worker's raw
+        readings, and a snapshot of its cumulative forward counters at that
+        moment. ``forward`` is copied (the live counters keep moving), ``report``
+        is stored as handed — every report arrives deserialized off the wire, so
+        nobody else holds it; copy it here if one is ever built locally.
+        Interpreting the window is the evaluator's job, not archived here.
+        """
         window = self.worker_roster[worker]["occupancy"]
-        window.append({"ts": time.time(), "report": report})
+        counters = self.forward_counters.get(worker) or {
+            "requests": 0,
+            "errors": 0,
+            "seconds": 0.0,
+        }
+        window.append({"ts": time.time(), "report": report, "forward": dict(counters)})
+
+    def window_of(self, worker: str) -> deque[dict[str, Any]] | None:
+        """The archived occupancy window of one worker, None when it is unknown.
+
+        A worker the roster holds but that has answered no probe yet reads as an
+        empty deque — it exists, it has said nothing.
+        """
+        return self.worker_roster.get(worker, {}).get("occupancy")
+
+    def metrics_view(self) -> dict[str, dict[str, Any]]:
+        """The evaluator's read of every active worker, scaled for the monitor.
+
+        Occupancy and components come out 0-100 — the monitor draws bars — and
+        the history is the per-row series in that same scale. The rates keep
+        their own units and ``forward`` carries the cumulative counters as they
+        stand. Every number here is the evaluator's: nothing is judged.
+        """
+        view: dict[str, dict[str, Any]] = {}
+        for name in self.active_workers:
+            components = self.evaluator.components_of(name)
+            view[name] = {
+                "occupancy": round(self.evaluator.occupancy_of(name) * 100),
+                "components": {key: round(value * 100) for key, value in components.items()},
+                "history": [round(value * 100) for value in self.evaluator.history_of(name)],
+                "rates": self.evaluator.rates_of(name),
+                # a copy, like the archived snapshot: the view is the consumer's
+                # to annotate, the ledger is not
+                "forward": dict(
+                    self.forward_counters.get(name)
+                    or {"requests": 0, "errors": 0, "seconds": 0.0}
+                ),
+            }
+        return view
+
+    async def fetch_monitor_state(self, worker: str) -> dict[str, Any] | None:
+        """One worker's monitor rows, None if it does not answer.
+
+        The fan-out's per-worker leg, deadlined like the probe: silence, a
+        refusal or a garbled answer all read the same from here, and become an
+        error row upstream. One worker gone must not take the whole view down.
+        """
+        try:
+            payload = await self.hub.call(
+                worker,
+                MONITOR_STATE_OP_PATH,
+                {"identity": None, "kwargs": {}},
+                timeout=self.probe_timeout,
+            )
+            return await self.unwrap_reply(worker, MONITOR_STATE_OP_PATH, payload)
+        except Exception as exc:
+            self.logger.debug("Monitor state of %s unreachable (%s)", worker, exc)
+            return None
+
+    async def population(self) -> dict[str, Any]:
+        """Every active worker's registers, with this commander's consumption fused.
+
+        A concurrent ``monitor_state`` fan-out over the channel: the workers
+        have no HTTP of their own, so the CALL carries what the legacy monitor
+        fetched over one. Each user row grows a ``consumption`` field holding
+        the CUMULATIVE counters alone — the bucket ring is the rebalance's
+        private window and never leaves the commander.
+        """
+        names = self.active_workers
+        states = await asyncio.gather(*(self.fetch_monitor_state(name) for name in names))
+        workers: list[dict[str, Any]] = []
+        for name, state in zip(names, states, strict=True):
+            row: dict[str, Any] = {"id": name, "group": self.worker_roster[name]["group"]}
+            if state is None:
+                row["error"] = "unreachable"
+            else:
+                users = state.get("users") or []
+                for user_row in users:
+                    consumption = self.user_consumption.get(user_row.get("register_item_id"))
+                    if consumption is not None:
+                        user_row["consumption"] = {
+                            "requests": consumption["requests"],
+                            "seconds": consumption["seconds"],
+                        }
+                row["users"] = users
+                row["connections"] = state.get("connections") or []
+                row["pages"] = state.get("pages") or []
+            workers.append(row)
+        return {"workers": workers}
 
     # ------------------------------------------------------------------
     # The front face: sticky routing, the reception, the capacity check
@@ -1476,13 +1742,33 @@ class UserStickyCommander:
         addressed no page brings neither key, so neither appears here. A CALL
         that FAILED still carried its drain: the raised ``ChannelCallError``
         holds the whole REPLY as ``payload``, delivery keys included.
+
+        Every forward is clocked into the worker's cumulative counters
+        (``count_forward``) and, when the surface still holds the identity AT
+        COUNT TIME, into that user's consumption — around the CALL alone,
+        BEFORE the REPLY fold (the legacy order): the fold's own work (placing
+        another user's login) stays off this clock and off this identity. The
+        membership is read at the count, not before the call, so an identity a
+        CONCURRENT fold removed while this forward was in flight is not billed
+        back into existence. A CALL that fails in transport is counted as an
+        error and re-raised; an error REPLY is a completed forward — its
+        exception rises from the drain, after the count.
         """
         worker = await self.resolve_worker(identity)
         request_id = self.open_request(worker, identity, path)
         try:
-            payload = await self.hub.call(
-                worker, path, {"identity": identity, "kwargs": kwargs or {}}, timeout=timeout
-            )
+            start = time.monotonic()
+            try:
+                payload = await self.hub.call(
+                    worker, path, {"identity": identity, "kwargs": kwargs or {}}, timeout=timeout
+                )
+            except Exception:
+                self.count_forward(worker, time.monotonic() - start, error=True)
+                raise
+            elapsed = time.monotonic() - start
+            self.count_forward(worker, elapsed)
+            if identity in self.user_worker_map:
+                self.count_user_consumption(identity, elapsed)
             result = await self.unwrap_reply(worker, path, payload)
         finally:
             self.close_request(worker, identity, request_id)

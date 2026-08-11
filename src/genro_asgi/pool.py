@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -41,7 +42,9 @@ class WorkPool:
     """One thread pool for blocking (sync) handlers, owned by the server.
 
     Constructor kwarg: ``max_threads`` — the executor's ``max_workers``
-    (``None`` uses the stdlib default, ``min(32, cpu + 4)``). Threads are
+    (``None`` uses the stdlib default: ``min(32, cpus + 4)``, where ``cpus``
+    are the CPUs granted to the process on interpreters that have
+    ``os.process_cpu_count``, the machine's on older ones). Threads are
     named ``genro-pool*`` so a handler can assert it ran off the loop.
     """
 
@@ -49,6 +52,8 @@ class WorkPool:
         self.server = server
         self._max_threads = max_threads
         self._executor: ThreadPoolExecutor | None = None
+        self._busy = 0
+        self._total = 0
 
     @property
     def provisioned(self) -> bool:
@@ -56,9 +61,38 @@ class WorkPool:
         return self._executor is not None
 
     @property
+    def metrics(self) -> dict[str, int]:
+        """Pressure gauges of the pool: the slots that exist, the calls in flight.
+
+        ``busy`` counts every ``run()`` entered and not yet exited — DEMAND, not
+        slots held: past saturation the excess is queued inside the executor and
+        still counts, so ``busy`` can exceed ``total`` (the consumers clamp).
+
+        Zeros until the executor is provisioned — before the first sync dispatch
+        there is nothing to measure, and reporting the configured size of a pool
+        that does not exist would read as pressure that isn't there.
+
+        ``total`` mirrors our own argument resolution, frozen at provision —
+        never a private executor attribute.
+        """
+        if not self.provisioned:
+            return {"total": 0, "busy": 0}
+        return {"total": self._total, "busy": self._busy}
+
+    @property
     def executor(self) -> ThreadPoolExecutor:
-        """The pool's executor, created on first access (lazy provisioning)."""
+        """The pool's executor, created on first access (lazy provisioning).
+
+        The moment of truth for ``total``: the slot count is resolved and
+        frozen HERE, where the stdlib takes the same decision — from the CPUs
+        granted to the process (``os.process_cpu_count``) on interpreters that
+        have it, the machine's otherwise, exactly mirroring the executor's own
+        default on each. A later affinity change cannot move the threads the
+        pool already built, so the frozen number stays the true one.
+        """
         if self._executor is None:
+            cpus = getattr(os, "process_cpu_count", os.cpu_count)() or 1
+            self._total = self._max_threads if self._max_threads is not None else min(32, cpus + 4)
             self._executor = ThreadPoolExecutor(
                 max_workers=self._max_threads,
                 thread_name_prefix="genro-pool",
@@ -74,7 +108,11 @@ class WorkPool:
         """
         loop = asyncio.get_running_loop()
         ctx = contextvars.copy_context()
-        return await loop.run_in_executor(self.executor, ctx.run, fn, *args)
+        self._busy += 1
+        try:
+            return await loop.run_in_executor(self.executor, ctx.run, fn, *args)
+        finally:
+            self._busy -= 1
 
     def shutdown(self, wait: bool = True) -> None:
         """Tear the executor down — a no-op if it was never provisioned.
@@ -85,3 +123,4 @@ class WorkPool:
         if self.provisioned:
             self.executor.shutdown(wait=wait)
             self._executor = None
+            self._total = 0

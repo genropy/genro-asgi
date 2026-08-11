@@ -627,6 +627,64 @@ async def test_the_occupancy_op_answers_what_the_registers_can_tell(
     assert harness.events == []
 
 
+async def test_the_report_carries_the_three_process_gauges(
+    harness: WorkerHarness,
+) -> None:
+    """Raw sensor readings, no judgement: cpu, rss and the dispatch pressure."""
+    report = harness.worker.occupancy_report()
+    # First report: no previous probe to diff against.
+    assert report["cpu"] is None
+    assert report["rss"] is None or isinstance(report["rss"], int)
+    # Nothing sync dispatched yet — the pool is unprovisioned, so zeros.
+    assert report["executor"] == {"busy": 0, "total": 0}
+
+
+async def test_cpu_fraction_needs_two_probes_to_exist(
+    harness: WorkerHarness,
+) -> None:
+    assert harness.worker.cpu_fraction() is None
+    second = harness.worker.cpu_fraction()
+    assert isinstance(second, float)
+    assert second >= 0.0
+
+
+async def test_rss_bytes_is_none_where_proc_is_absent(
+    harness: WorkerHarness,
+) -> None:
+    """Platform-dependent by design: /proc-only, no psutil dependency."""
+    rss = harness.worker.rss_bytes()
+    assert rss is None or (isinstance(rss, int) and rss > 0)
+
+
+async def test_the_executor_gauge_measures_the_sync_op_pool_only(
+    harness: WorkerHarness,
+) -> None:
+    """``http_pool`` is the WSGI rail's and is never measured.
+
+    Idle, the twin pools are indistinguishable — so each half holds ONE of
+    them busy behind a gate while the report is read: the rail's burst must
+    not reach the gauge, the op pool's must.
+    """
+    gate = threading.Event()
+    holding = asyncio.create_task(harness.worker.http_pool.run(gate.wait))
+    try:
+        await asyncio.sleep(0)  # the task's first step runs run() up to the executor await
+        assert harness.worker.http_pool.metrics["busy"] == 1
+        assert harness.worker.occupancy_report()["executor"]["busy"] == 0
+    finally:
+        gate.set()  # ALWAYS released: a red assert must not wedge the pool thread
+        await holding
+    gate.clear()
+    holding = asyncio.create_task(harness.worker.pool.run(gate.wait))
+    try:
+        await asyncio.sleep(0)
+        assert harness.worker.pool.metrics["busy"] == 1
+        assert harness.worker.occupancy_report()["executor"]["busy"] == 1
+    finally:
+        gate.set()
+        await holding
+
+
 async def test_shutdown_stops_the_tasks_and_closes_the_channel_without_orphan(
     harness: WorkerHarness,
 ) -> None:

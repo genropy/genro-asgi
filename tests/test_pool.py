@@ -114,3 +114,43 @@ class TestContextPropagation:
         # registry's ContextVar and sees the request being served
         body = next(m["body"] for m in sent if m["type"] == "http.response.body")
         assert body == b"current:/sync-current"
+
+
+class TestMetrics:
+    async def test_metrics_are_zeros_until_the_pool_is_provisioned(self) -> None:
+        """Zeros, honestly: a pool that does not exist reports no pressure."""
+        server = make_server()
+        assert server.pool.metrics == {"total": 0, "busy": 0}
+
+    async def test_busy_returns_to_zero_after_a_run(self) -> None:
+        server = make_server()
+        await server.run_sync(lambda: None)
+        assert server.pool.metrics["busy"] == 0
+
+    async def test_total_mirrors_max_threads(self) -> None:
+        """The resolution is ours, not read off a private executor attribute."""
+        server = BaseServer(applications=[ThrowawayApp(mount="", name="primary")], max_threads=3)
+        await server.run_sync(lambda: None)
+        assert server.pool.metrics["total"] == 3
+
+    async def test_total_mirrors_the_executor_own_resolution(self) -> None:
+        """The mirror against the reality, on ANY interpreter: the frozen total
+        equals the thread count the stdlib default actually decided (3.13 moved
+        it from cpu_count to process_cpu_count — the mirror must move with it).
+        Reading the private attribute is legitimate HERE: this is the one test
+        that verifies the mirror, so the source never has to."""
+        server = make_server()
+        await server.run_sync(lambda: None)
+        assert server.pool.metrics["total"] == server.pool.executor._max_workers
+
+    async def test_busy_counts_the_call_in_flight_while_it_runs(self) -> None:
+        """``busy`` is demand — every run() entered and not yet exited, queued
+        included — not slots held; past saturation it exceeds ``total``."""
+        server = make_server()
+        seen: list[int] = []
+
+        def probe() -> None:
+            seen.append(server.pool.metrics["busy"])
+
+        await server.run_sync(probe)
+        assert seen == [1]
