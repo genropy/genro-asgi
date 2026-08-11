@@ -225,6 +225,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ctypes
 import functools
 import logging
 import pickle
@@ -372,6 +373,29 @@ GUEST_MAX_AGE = 40
 CONNECTION_MAX_AGE = 7200
 
 
+class MallInfo2(ctypes.Structure):
+    """The glibc ``mallinfo2()`` result: ten ``size_t`` fields, in order.
+
+    A type declaration, not state: ctypes needs a class to set as ``restype``.
+    ``fordblks`` — total free bytes held by the C heap — is the one field the
+    worker's ``reusable_bytes()`` reads. The legacy ``mallinfo()`` is never
+    used: its ``int`` fields overflow past 2 GB.
+    """
+
+    _fields_ = [
+        ("arena", ctypes.c_size_t),
+        ("ordblks", ctypes.c_size_t),
+        ("smblks", ctypes.c_size_t),
+        ("hblks", ctypes.c_size_t),
+        ("hblkhd", ctypes.c_size_t),
+        ("usmblks", ctypes.c_size_t),
+        ("fsmblks", ctypes.c_size_t),
+        ("uordblks", ctypes.c_size_t),
+        ("fordblks", ctypes.c_size_t),
+        ("keepcost", ctypes.c_size_t),
+    ]
+
+
 class Outbox:
     """FIFO of shaped ascending messages, acked per-seq by the drainer.
 
@@ -493,6 +517,9 @@ class UserStickyWorker(RoutingClass):
         # The CPU probe's previous reading: a fraction needs two ticks to exist.
         self.cpu_probe_ts: float | None = None
         self.cpu_probe_used: float | None = None
+        # The glibc heap gauges, resolved ONCE: a missing symbol (macOS, musl,
+        # glibc < 2.33) leaves the handle None and turns the feature off.
+        self.libc_malloc_trim, self.libc_mallinfo2 = self.resolve_heap_symbols()
         self.logger = logging.getLogger(__name__)
         self.channel: Any = None
         # The consumer seam for the http CALL form: a WSGI callable assigned by
@@ -962,12 +989,21 @@ class UserStickyWorker(RoutingClass):
     def occupancy_report(self) -> dict[str, Any]:
         """The worker's raw sensor readings: no percentage, no judgement.
 
-        What the registers can answer, plus the three process gauges the
+        What the registers can answer, plus the five process gauges the
         commander's evaluator interprets. ``cpu`` is a fraction of the interval
         since the previous report (None on the first one), ``rss`` is bytes
-        (None where ``/proc`` is absent), ``executor`` is the pressure on the
-        sync-op dispatch pool — never the WSGI rail's ``http_pool``.
+        (None where ``/proc`` is absent), ``reusable`` is the free bytes the C
+        heap still holds after the trim (None where ``mallinfo2`` is missing),
+        ``trim_s`` is that trim's duration in seconds (None off glibc) — the
+        cost reading the policy layer (#5) needs before deciding a commanded,
+        conditional trim, ``executor`` is the pressure on the sync-op dispatch
+        pool — never the WSGI rail's ``http_pool``.
+
+        The heap is trimmed before the RSS is read: the probe lands here, so
+        every reported RSS is measured after the allocator gave back what it
+        was only holding.
         """
+        trim_s = self.trim_heap()
         metrics = self.pool.metrics
         return {
             "worker": self.name,
@@ -977,6 +1013,8 @@ class UserStickyWorker(RoutingClass):
             "seq": self.last_seq,
             "cpu": self.cpu_fraction(),
             "rss": self.rss_bytes(),
+            "reusable": self.reusable_bytes(),
+            "trim_s": trim_s,
             "executor": {"busy": metrics["busy"], "total": metrics["total"]},
         }
 
@@ -1011,6 +1049,69 @@ class UserStickyWorker(RoutingClass):
         except OSError:
             return None
         return None
+
+    def resolve_heap_symbols(self) -> tuple[Any | None, Any | None]:
+        """The ``malloc_trim``/``mallinfo2`` handles, or None where glibc is absent.
+
+        Called once from ``__init__``: the process C library is not going to
+        change underneath a running worker. ``restype``/``argtypes`` are set
+        here, so the callers just call. Both handles are independent — a libc
+        with one symbol and not the other loses only that gauge. A C runtime
+        with no global handle at all (Windows raises TypeError, a restricted
+        loader OSError) loses both — the same degradation contract as
+        ``rss_bytes`` where ``/proc`` is absent.
+        """
+        try:
+            libc = ctypes.CDLL(None)
+        except (OSError, TypeError):
+            return None, None
+        trim = getattr(libc, "malloc_trim", None)
+        if trim is not None:
+            trim.argtypes = [ctypes.c_size_t]
+            trim.restype = ctypes.c_int
+        info = getattr(libc, "mallinfo2", None)
+        if info is not None:
+            info.argtypes = []
+            info.restype = MallInfo2
+        return trim, info
+
+    def trim_heap(self) -> float | None:
+        """Return the C heap's free pages to the OS (``malloc_trim(0)``).
+
+        Linux/glibc only: a silent no-op answering None where the symbol is
+        missing, same contract as ``rss_bytes()``. An in-process call — no
+        restart, no object touched — whose point is that the RSS read right
+        after is not measuring memory the allocator already considers free.
+        Returns the walk's duration in seconds: the trim runs on the loop and
+        takes the arena locks, so its cost is a reading the policy layer
+        (issue #5) needs before deciding a commanded, conditional trim.
+        ``malloc_trim``'s own return (whether anything was released) carries
+        no decision and is discarded.
+        """
+        if self.libc_malloc_trim is None:
+            return None
+        start = time.monotonic()
+        self.libc_malloc_trim(0)
+        return time.monotonic() - start
+
+    def reusable_bytes(self) -> int | None:
+        """Free bytes held by the C heap (``mallinfo2().fordblks``).
+
+        The honest half of the memory reading: the free bytes the C heap still
+        holds after the trim, which the allocator can hand out again without
+        growing. An ESTIMATE, bounded on both sides: ``mallinfo2`` reports the
+        MAIN arena only while the trim frees every arena, so free bytes parked
+        in a threaded worker's secondary arenas count in ``rss`` and not here
+        (``rss - reusable`` then OVER-reads live memory — the busier the
+        worker, the more arenas); conversely the trim madvises chunks away
+        while they keep counting in ``fordblks`` (an under-read, floored by
+        the evaluator's clamp). None where ``mallinfo2`` is missing (macOS,
+        musl, glibc < 2.33) — the evaluator then reads plain RSS, exactly as
+        before this gauge existed.
+        """
+        if self.libc_mallinfo2 is None:
+            return None
+        return int(self.libc_mallinfo2().fordblks)
 
     # ------------------------------------------------------------------
     # The live stores: one drain point, one forwarded-write primitive.

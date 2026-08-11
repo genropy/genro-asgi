@@ -29,6 +29,7 @@ open the same sink ``service_call`` opens, through ``call_sink``.
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import threading
 import time
 from contextlib import contextmanager
@@ -627,16 +628,57 @@ async def test_the_occupancy_op_answers_what_the_registers_can_tell(
     assert harness.events == []
 
 
-async def test_the_report_carries_the_three_process_gauges(
+async def test_the_report_carries_the_five_process_gauges(
     harness: WorkerHarness,
 ) -> None:
-    """Raw sensor readings, no judgement: cpu, rss and the dispatch pressure."""
+    """Raw sensor readings, no judgement: cpu, rss, reusable, trim_s, pressure."""
     report = harness.worker.occupancy_report()
     # First report: no previous probe to diff against.
     assert report["cpu"] is None
     assert report["rss"] is None or isinstance(report["rss"], int)
+    assert report["reusable"] is None or isinstance(report["reusable"], int)
+    assert report["trim_s"] is None or (
+        isinstance(report["trim_s"], float) and report["trim_s"] >= 0.0
+    )
     # Nothing sync dispatched yet — the pool is unprovisioned, so zeros.
     assert report["executor"] == {"busy": 0, "total": 0}
+
+
+async def test_the_report_trims_the_heap_before_reading_the_rss(
+    harness: WorkerHarness,
+) -> None:
+    """Order is the point: a trimmed heap is what makes the RSS reading honest."""
+    calls: list[str] = []
+
+    def record_trim() -> float:
+        calls.append("trim")
+        return 0.0
+
+    def record_rss() -> int:
+        calls.append("rss")
+        return 4096
+
+    harness.worker.trim_heap = record_trim  # type: ignore[method-assign]
+    harness.worker.rss_bytes = record_rss  # type: ignore[method-assign]
+    report = harness.worker.occupancy_report()
+    assert calls == ["trim", "rss"]
+    assert report["rss"] == 4096
+
+
+async def test_the_report_carries_what_the_reusable_gauge_measured(
+    harness: WorkerHarness,
+) -> None:
+    """The field is wired to the gauge, not hand-written: the sentinel travels."""
+    harness.worker.reusable_bytes = lambda: 123456  # type: ignore[method-assign]
+    assert harness.worker.occupancy_report()["reusable"] == 123456
+
+
+async def test_the_report_carries_what_the_trim_measured(
+    harness: WorkerHarness,
+) -> None:
+    """Same pin as reusable: trim_s is wired to the gauge, not hand-written."""
+    harness.worker.trim_heap = lambda: 0.5  # type: ignore[method-assign]
+    assert harness.worker.occupancy_report()["trim_s"] == 0.5
 
 
 async def test_cpu_fraction_needs_two_probes_to_exist(
@@ -654,6 +696,55 @@ async def test_rss_bytes_is_none_where_proc_is_absent(
     """Platform-dependent by design: /proc-only, no psutil dependency."""
     rss = harness.worker.rss_bytes()
     assert rss is None or (isinstance(rss, int) and rss > 0)
+
+
+async def test_the_heap_gauges_are_off_where_glibc_is_absent(
+    harness: WorkerHarness,
+) -> None:
+    """The no-glibc path, forced: the handles are None, both gauges degrade."""
+    harness.worker.libc_malloc_trim = None
+    harness.worker.libc_mallinfo2 = None
+    assert harness.worker.trim_heap() is None  # a silent no-op, never an error
+    assert harness.worker.reusable_bytes() is None
+
+
+def has_glibc_symbol(name: str) -> bool:
+    """Whether the process C library exposes ``name``.
+
+    False also where ``CDLL(None)`` itself fails — the same guard the
+    worker's ``resolve_heap_symbols`` holds, so collection never breaks on a
+    platform with no global libc handle.
+    """
+    try:
+        return hasattr(ctypes.CDLL(None), name)
+    except (OSError, TypeError):
+        return False
+
+
+@pytest.mark.skipif(
+    not has_glibc_symbol("mallinfo2"),
+    reason="mallinfo2 needs glibc >= 2.33",
+)
+async def test_reusable_bytes_reads_the_glibc_heap(
+    harness: WorkerHarness,
+) -> None:
+    """Where glibc answers: free bytes held by the C heap, a plain count."""
+    reusable = harness.worker.reusable_bytes()
+    assert isinstance(reusable, int)
+    assert reusable >= 0
+
+
+@pytest.mark.skipif(
+    not has_glibc_symbol("malloc_trim"),
+    reason="malloc_trim needs glibc",
+)
+async def test_trim_heap_runs_where_glibc_answers(
+    harness: WorkerHarness,
+) -> None:
+    """The trim is callable and answers its own duration — the cost reading."""
+    duration = harness.worker.trim_heap()
+    assert isinstance(duration, float)
+    assert duration >= 0.0
 
 
 async def test_the_executor_gauge_measures_the_sync_op_pool_only(

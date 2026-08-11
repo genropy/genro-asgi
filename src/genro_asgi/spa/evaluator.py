@@ -23,10 +23,15 @@ at what forward rate.
 
 The occupancy formula: three components per row —
 
-- ``memory`` = ``min(rss / (memory_limit_mb * 1MB), 1.0)``, present ONLY when
-  the reading has an ``rss`` (``/proc`` present) AND a ``memory_limit_mb`` is
-  configured — rss beyond the limit is the normal pre-restart state, and the
-  judgment saturates at "full" (the raw rss stays in the archived reports);
+- ``memory`` = ``(rss - reusable) / (memory_limit_mb * 1MB)`` clamped to
+  [0, 1], present ONLY when the reading has an ``rss`` (``/proc`` present) AND
+  a ``memory_limit_mb`` is configured — the ``reusable`` gauge is the free
+  bytes the C heap still holds, so the numerator APPROXIMATES the live memory
+  rather than the RSS ratchet (a main-arena gauge: the estimate's bounds are
+  on ``row_components``); it counts as 0 when the reading has no ``reusable``
+  (no glibc), degrading to the plain rss ratio. rss beyond the limit is the
+  normal pre-restart state, and the judgment saturates at "full" (the raw
+  gauges stay in the archived reports);
 - ``cpu`` = ``min(cpu, 1.0)`` — the measured wall is one core (the GIL), so a
   single process saturates at 1.0;
 - ``executor`` = ``min(busy / total, 1.0)`` of the dispatch thread pool — the
@@ -155,9 +160,18 @@ class OccupancyEvaluator:
     def row_components(self, report: dict[str, Any]) -> dict[str, float]:
         """The occupancy components measurable in ONE raw reading.
 
-        ``memory`` (clamped to 1.0 — beyond the limit is still "full") only when
-        the reading has an ``rss`` and the commander has a configured
-        ``memory_limit_mb``; ``cpu`` (clamped to one core) only when the
+        ``memory`` judges the ESTIMATED live memory ``rss - reusable`` against
+        the limit, clamped to [0, 1] — beyond the limit is still "full", and
+        the 0 floor holds where the free heap the worker just trimmed still
+        counts in ``reusable`` (an under-read). The estimate is bounded on the
+        other side too: the gauge reads the allocator's MAIN arena only, so
+        free bytes in a threaded worker's secondary arenas stay invisible and
+        the subtraction can OVER-read live memory on busy workers (accuracy
+        limit recorded for the #5 admission policy). A missing or None
+        ``reusable`` counts as 0, so the reading degrades to the plain rss
+        ratio. Present only when the reading has an ``rss`` and the commander
+        has a configured ``memory_limit_mb``;
+        ``cpu`` (clamped to one core) only when the
         reading carries a cpu fraction (None on the worker's first tick);
         ``executor`` (clamped to 1.0 — the pool's ``busy`` counts queued work)
         only when the pool has a non-zero ``total``.
@@ -166,7 +180,8 @@ class OccupancyEvaluator:
         limit = self.commander.memory_limit_mb
         rss = report.get("rss")
         if rss is not None and limit:
-            components["memory"] = min(rss / (limit * _MB), 1.0)
+            live = rss - (report.get("reusable") or 0)
+            components["memory"] = max(0.0, min(live / (limit * _MB), 1.0))
         cpu = report.get("cpu")
         if cpu is not None:
             components["cpu"] = min(cpu, 1.0)

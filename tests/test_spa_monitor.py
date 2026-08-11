@@ -54,10 +54,19 @@ def commander(tmp_path: Any) -> UserStickyCommander:
 
 
 def report(
-    cpu: float | None = None, rss: int | None = None, busy: int = 0, total: int = 0
+    cpu: float | None = None,
+    rss: int | None = None,
+    busy: int = 0,
+    total: int = 0,
+    reusable: int | None = None,
 ) -> dict[str, Any]:
     """A raw occupancy reading with only the fields the formula reads set."""
-    return {"cpu": cpu, "rss": rss, "executor": {"busy": busy, "total": total}}
+    return {
+        "cpu": cpu,
+        "rss": rss,
+        "reusable": reusable,
+        "executor": {"busy": busy, "total": total},
+    }
 
 
 def explode(running: UserStickyCommander) -> None:
@@ -161,6 +170,17 @@ def test_metrics_view_scales_the_evaluator_read_for_the_bars(
     assert view["W:w-1"]["components"] == {"cpu": 40, "executor": 25}
     assert view["W:w-1"]["history"] == [40]
     assert view["W:w-1"]["forward"] == {"requests": 1, "errors": 0, "seconds": 0.5}
+
+
+def test_metrics_view_memory_bar_reads_live_memory(
+    commander: UserStickyCommander,
+) -> None:
+    """The bar judges rss minus the reusable heap against the configured limit."""
+    commander.memory_limit_mb = 100
+    commander.record_occupancy(
+        "W:w-1", report(rss=80 * 1024 * 1024, reusable=30 * 1024 * 1024)
+    )
+    assert commander.metrics_view()["W:w-1"]["components"]["memory"] == 50
 
 
 def test_metrics_view_hands_out_a_copy_of_the_counters(

@@ -38,10 +38,19 @@ def make_commander(tmp_path: Any, **kwargs: Any) -> UserStickyCommander:
 
 
 def report(
-    cpu: float | None = None, rss: int | None = None, busy: int = 0, total: int = 0
+    cpu: float | None = None,
+    rss: int | None = None,
+    busy: int = 0,
+    total: int = 0,
+    reusable: int | None = None,
 ) -> dict[str, Any]:
     """A raw occupancy reading with only the fields the formula reads set."""
-    return {"cpu": cpu, "rss": rss, "executor": {"busy": busy, "total": total}}
+    return {
+        "cpu": cpu,
+        "rss": rss,
+        "reusable": reusable,
+        "executor": {"busy": busy, "total": total},
+    }
 
 
 # ----------------------------------------------------------------------
@@ -154,6 +163,48 @@ def test_memory_component_present_with_limit_and_rss(tmp_path: Any) -> None:
     commander = make_commander(tmp_path, memory_limit_mb=200)
     commander.record_occupancy("w1", report(rss=100 * 1024 * 1024))
     assert commander.evaluator.components_of("w1") == {"memory": 0.5}
+
+
+def test_reusable_lowers_the_memory_component(tmp_path: Any) -> None:
+    commander = make_commander(tmp_path, memory_limit_mb=200)
+    # 100MB resident of which 50MB is free heap: the live memory is 50MB
+    commander.record_occupancy(
+        "w1", report(rss=100 * 1024 * 1024, reusable=50 * 1024 * 1024)
+    )
+    assert commander.evaluator.components_of("w1") == {"memory": 0.25}
+
+
+def test_memory_degrades_to_the_rss_ratio_without_reusable(tmp_path: Any) -> None:
+    commander = make_commander(tmp_path, memory_limit_mb=200)
+    # None (no glibc) and the field missing altogether both count as 0
+    commander.record_occupancy("w1", report(rss=100 * 1024 * 1024, reusable=None))
+    assert commander.evaluator.components_of("w1") == {"memory": 0.5}
+    assert commander.evaluator.row_components({"rss": 100 * 1024 * 1024}) == {
+        "memory": 0.5
+    }
+
+
+def test_memory_component_floors_at_zero_when_reusable_exceeds_rss(
+    tmp_path: Any,
+) -> None:
+    commander = make_commander(tmp_path, memory_limit_mb=200)
+    # the trim madvises free chunks away while they still count as reusable:
+    # the subtraction goes negative and the clamp floors it
+    commander.record_occupancy(
+        "w1", report(rss=50 * 1024 * 1024, reusable=80 * 1024 * 1024)
+    )
+    assert commander.evaluator.components_of("w1") == {"memory": 0.0}
+
+
+def test_memory_component_saturates_on_live_memory_past_the_limit(
+    tmp_path: Any,
+) -> None:
+    commander = make_commander(tmp_path, memory_limit_mb=100)
+    # 300MB resident, 50MB reusable -> 250MB live, still beyond the limit
+    commander.record_occupancy(
+        "w1", report(rss=300 * 1024 * 1024, reusable=50 * 1024 * 1024)
+    )
+    assert commander.evaluator.components_of("w1") == {"memory": 1.0}
 
 
 def test_component_averaged_only_over_rows_that_carry_it(tmp_path: Any) -> None:

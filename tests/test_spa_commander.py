@@ -496,6 +496,8 @@ async def test_the_caretaker_archives_the_report_the_worker_answered(
         "seq",
         "cpu",
         "rss",
+        "reusable",
+        "trim_s",
         "executor",
     }
     assert set(report["executor"]) == {"busy", "total"}
