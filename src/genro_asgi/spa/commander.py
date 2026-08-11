@@ -1560,10 +1560,6 @@ class UserStickyCommander:
         if not siblings:
             del self.user_connections[user]
 
-    def connections_of(self, user: str) -> list[str]:
-        """Every connection of a user, sorted — the edge set read downward."""
-        return sorted(self.user_connections.get(user, set()))
-
     def relabel_user(self, user: str, previous_user: str | None, session_id: str) -> None:
         """The login: the CONNECTION changes owner, and no page edge ever moves.
 
@@ -1592,7 +1588,7 @@ class UserStickyCommander:
         if (
             previous_user is not None
             and previous_user != user
-            and not self.connections_of(previous_user)
+            and not self.user_connections.get(previous_user)
         ):
             self.remove_user(previous_user)
         if user not in self.user_worker_map:
@@ -1847,7 +1843,7 @@ class UserStickyCommander:
                 "occupancy": round(self.evaluator.worker_saturation(name) * 100),
                 "components": {key: round(value * 100) for key, value in components.items()},
                 "history": [round(value * 100) for value in self.evaluator.worker_history(name)],
-                "rates": self.evaluator.rates_of(name),
+                "rates": self.evaluator.worker_rates(name),
                 # a copy, like the archived snapshot: the view is the consumer's
                 # to annotate, the ledger is not
                 "forward": dict(

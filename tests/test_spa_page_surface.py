@@ -177,7 +177,7 @@ def test_a_new_page_naming_an_unknown_connection_self_heals_it(
     )
 
     assert commander.connection_user == {"s1": "alice"}
-    assert commander.connections_of("alice") == ["s1"]
+    assert sorted(commander.user_connections["alice"]) == ["s1"]
     assert commander.page_worker("p1") == "W:w-1"
 
 
@@ -310,7 +310,7 @@ def test_the_connections_of_a_user_are_read_off_the_one_map(
 ) -> None:
     two_connections(commander)
 
-    assert commander.connections_of("alice") == ["s1", "s2"]
+    assert sorted(commander.user_connections["alice"]) == ["s1", "s2"]
     assert commander.pages_of_connection("s2") == ["p2"]
 
 
@@ -395,7 +395,7 @@ def test_the_login_of_a_second_connection_never_flags_a_resident_user(
 
     # S2: alice is at home, not in flight, and her first connection never moved.
     assert commander.user_worker_map == {"alice": "W:w-1"}
-    assert commander.connections_of("alice") == ["s1", "s2"]
+    assert sorted(commander.user_connections["alice"]) == ["s1", "s2"]
     assert commander.page_connection == {"p1": "s1", "p2": "s2"}
     assert commander.page_worker("p1") == "W:w-1"
     # p2 came over with its connection: its owner derives to alice, its worker

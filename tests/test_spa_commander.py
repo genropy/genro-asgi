@@ -338,7 +338,7 @@ def test_the_tree_is_aligned_after_a_full_lifecycle(commander: UserStickyCommand
     populate_tree(commander)
     assert_tree_aligned(commander)
 
-    assert commander.connections_of("alice") == ["s1", "s2"]
+    assert sorted(commander.user_connections["alice"]) == ["s1", "s2"]
     assert commander.pages_of_connection("s2") == ["p2", "p3"]
     assert [commander.page_worker(page) for page in ("p1", "p2", "p3")] == ["W:w-1"] * 3
 
@@ -363,7 +363,7 @@ def test_a_login_moves_the_edge_and_orphans_nothing(commander: UserStickyCommand
     )
 
     assert_tree_aligned(commander)
-    assert commander.connections_of("alice") == ["s1", "s2", "s9"]
+    assert sorted(commander.user_connections["alice"]) == ["s1", "s2", "s9"]
     assert "bob" not in commander.user_connections
     # p9 came over with s9: its owner derives to alice without any page write.
     assert commander.page_connection == {"p1": "s1", "p2": "s2", "p3": "s2", "p9": "s9"}

@@ -247,7 +247,7 @@ def test_ratios_divide_each_component_by_its_own_target(tmp_path: Any) -> None:
     )
     # memory 0.4 against its own 0.5 target -> 0.8; executor 0.4 against 0.8 -> 0.5
     commander.record_occupancy("w1", report(rss=40 * 1024 * 1024, busy=4, total=10))
-    ratios = commander.evaluator.ratios_of("w1")
+    ratios = commander.evaluator.worker_ratios("w1")
     assert ratios["memory"] == pytest.approx(0.8)
     assert ratios["executor"] == pytest.approx(0.5)
 
@@ -277,7 +277,7 @@ def test_load_is_the_quadratic_mean_of_the_ratios(tmp_path: Any) -> None:
 def test_ratios_empty_for_a_worker_with_no_measurable_component(tmp_path: Any) -> None:
     commander = make_commander(tmp_path)
     commander.record_occupancy("w1", report(busy=0, total=0))
-    assert commander.evaluator.ratios_of("w1") == {}
+    assert commander.evaluator.worker_ratios("w1") == {}
     assert commander.evaluator.worker_saturation("w1") == 0.0
     assert commander.evaluator.worker_load("w1") == 0.0
 
@@ -324,19 +324,19 @@ def test_history_is_the_per_row_saturation_over_the_whole_window(tmp_path: Any) 
 
 
 # ----------------------------------------------------------------------
-# rates_of: rps and latency from the forward-counter deltas
+# worker_rates: rps and latency from the forward-counter deltas
 # ----------------------------------------------------------------------
 
 
 def test_rates_none_with_fewer_than_two_rows(tmp_path: Any) -> None:
     commander = make_commander(tmp_path)
     commander.record_occupancy("w1", report(busy=1, total=10))
-    assert commander.evaluator.rates_of("w1") == {"rps": None, "latency_ms": None}
+    assert commander.evaluator.worker_rates("w1") == {"rps": None, "latency_ms": None}
 
 
 def test_rates_none_for_an_unknown_worker(tmp_path: Any) -> None:
     commander = make_commander(tmp_path)
-    assert commander.evaluator.rates_of("ghost") == {"rps": None, "latency_ms": None}
+    assert commander.evaluator.worker_rates("ghost") == {"rps": None, "latency_ms": None}
 
 
 def test_rates_from_the_counter_deltas_between_first_and_last_row(tmp_path: Any) -> None:
@@ -348,7 +348,7 @@ def test_rates_from_the_counter_deltas_between_first_and_last_row(tmp_path: Any)
     # nudge the second row's ts so the elapsed wall is measurable and positive
     time.sleep(0.01)
     commander.record_occupancy("w1", report(busy=0, total=10))
-    rates = commander.evaluator.rates_of("w1")
+    rates = commander.evaluator.worker_rates("w1")
     assert rates["rps"] is not None and rates["rps"] > 0
     # mean forward time: 2.0s over 10 requests = 200ms
     assert rates["latency_ms"] is not None
@@ -361,7 +361,7 @@ def test_rates_latency_none_when_no_request_completed(tmp_path: Any) -> None:
     time.sleep(0.01)
     commander.record_occupancy("w1", report(busy=0, total=10))
     # no forward between the two rows -> zero request delta -> latency None
-    assert commander.evaluator.rates_of("w1")["latency_ms"] is None
+    assert commander.evaluator.worker_rates("w1")["latency_ms"] is None
 
 
 # ----------------------------------------------------------------------

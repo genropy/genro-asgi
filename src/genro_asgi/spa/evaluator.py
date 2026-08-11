@@ -127,7 +127,7 @@ class OccupancyEvaluator:
                 raise ValueError(f"{name} target must be in (0, 1], got {value}")
         return {name: overrides.get(name, admission_threshold) for name in COMPONENT_NAMES}
 
-    def ratios_of(self, worker_id: str) -> dict[str, float]:
+    def worker_ratios(self, worker_id: str) -> dict[str, float]:
         """The averaged components divided by their targets — the ratio space.
 
         Empty when the worker has no measurable component in the window.
@@ -141,7 +141,7 @@ class OccupancyEvaluator:
         1.0 is "at the target" — the bottleneck decides whether the worker still
         admits. 0.0 when the worker has no rows in the window (just born).
         """
-        ratios = self.ratios_of(worker_id)
+        ratios = self.worker_ratios(worker_id)
         if not ratios:
             return 0.0
         return max(ratios.values())
@@ -152,7 +152,7 @@ class OccupancyEvaluator:
         The whole picture rather than the worst component alone — what orders
         candidates when several still admit. 0.0 with no rows in the window.
         """
-        ratios = self.ratios_of(worker_id)
+        ratios = self.worker_ratios(worker_id)
         if not ratios:
             return 0.0
         return math.sqrt(sum(value * value for value in ratios.values()) / len(ratios))
@@ -195,7 +195,7 @@ class OccupancyEvaluator:
             history.append(max(ratios) if ratios else 0.0)
         return history
 
-    def rates_of(self, worker_id: str) -> dict[str, float | None]:
+    def worker_rates(self, worker_id: str) -> dict[str, float | None]:
         """Forward ``rps`` and ``latency_ms`` from the counter DELTAS across the window.
 
         Computed from the forward-counter snapshots frozen in the first and last
