@@ -163,11 +163,20 @@ story converge with the laboratory track. Decide then, not now.
 
 ## 6. How to restart the work (the superworkflow brief)
 
-From a fresh machine/session:
+**Step zero — give the project its own repository** (the session that produced
+this kit could not create org repos; the script does it in one command,
+preserving the kit's commit history via `git subtree split`):
 
 ```bash
-git clone https://github.com/genropy/genro-asgi -b claude/genro-cocktail-roadmap-ldcwgz
-cd genro-asgi/genro-cocktail
+git clone -b claude/genro-cocktail-roadmap-ldcwgz https://github.com/genropy/genro-asgi
+cd genro-asgi
+./genro-cocktail/scripts/bootstrap-repo.sh          # -> github.com/genropy/genro-cocktail
+```
+
+Then, from the new repository (or directly from the branch clone above,
+inside `genro-asgi/genro-cocktail/`):
+
+```bash
 pip install genro-asgi websockets
 (cd prototype && python smoke.py)     # must print: ALL SMOKE CHECKS PASSED
 open docs/design/ricettario.html      # the visual spec, in a browser
