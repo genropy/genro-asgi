@@ -215,9 +215,23 @@ class RoutedApplication(BaseApplication, RoutingClass):
             return acall
 
         def call() -> Any:
-            return node(**kwargs)
+            try:
+                return node(**kwargs)
+            finally:
+                self.route_cleanup()
 
         return call
+
+    def route_cleanup(self) -> None:
+        """Per-dispatch cleanup on the executor thread — a consumer seam.
+
+        The sync dispatch runs this on the SAME pool thread the handler just
+        ran on, after it returned or raised: the place to release whatever
+        thread-local resources the handler's code opened (a legacy db
+        connection lives and must die on its own thread). No-op by default,
+        same consumer-seam discipline as ``wsgi_app`` and ``build_registry``.
+        The async path never calls it — an async handler owns its awaits.
+        """
 
     def bind_kwargs(self, node: RouterNode, request: Request) -> dict[str, Any]:
         """Reconcile the request kwargs with the handler's declared parameters.

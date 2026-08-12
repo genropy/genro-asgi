@@ -339,6 +339,57 @@ class TestExecutionVehicle:
         assert int(response_body(sent)) == threading.get_ident()
 
 
+class CleanupApp(RoutedApplication):
+    """Test app: ``route_cleanup`` records the thread it ran on, per dispatch."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.cleanups: list[int] = []
+
+    @route()
+    def sync_ident(self) -> int:
+        return threading.get_ident()
+
+    @route()
+    async def async_hello(self) -> dict[str, str]:
+        return {"hello": "async"}
+
+    @route()
+    def failing(self) -> None:
+        raise RuntimeError("boom")
+
+    def route_cleanup(self) -> None:
+        self.cleanups.append(threading.get_ident())
+
+
+class TestRouteCleanup:
+    async def test_the_cleanup_runs_on_the_handler_thread(
+        self, http_request, response_body
+    ) -> None:
+        app = CleanupApp(mount="")
+        server = AsgiServer(applications=[app])
+        sent = await http_request(server, "/sync_ident")
+        # Same dispatch, same pool thread: what the handler opened, the
+        # cleanup can close.
+        assert app.cleanups == [int(response_body(sent))]
+
+    async def test_the_cleanup_runs_when_the_handler_raises(
+        self, http_request, response_status
+    ) -> None:
+        app = CleanupApp(mount="")
+        server = AsgiServer(applications=[app])
+        sent = await http_request(server, "/failing")
+        assert response_status(sent) == 500
+        assert len(app.cleanups) == 1
+
+    async def test_the_async_path_never_cleans(self, http_request, response_status) -> None:
+        app = CleanupApp(mount="")
+        server = AsgiServer(applications=[app])
+        sent = await http_request(server, "/async_hello")
+        assert response_status(sent) == 200
+        assert app.cleanups == []
+
+
 class TestAsyncBodyTypeError:
     async def test_async_handler_body_typeerror_is_500(
         self, http_request, response_status
