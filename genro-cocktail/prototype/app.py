@@ -1,7 +1,9 @@
 """genro-cocktail — the application.
 
 A plain ``RoutedApplication`` mounted at the site root. Handlers return HTML
-built by ``ui.pages``; HTMX turns fragment endpoints into interactivity.
+built by ``ui.pages``; HTMX turns fragment endpoints into interactivity; the
+sliders talk to the ``/ws`` websocket (see ``serve.py``) for live stats and
+autosave.
 
 The base-class overrides at the top are the three genro-asgi idioms every
 HTML app currently needs (see docs/FEASIBILITY.md §3):
@@ -10,6 +12,10 @@ HTML app currently needs (see docs/FEASIBILITY.md §3):
 - URL-decoding of form bodies (genro-tytx's ``from_qs`` skips percent
   decoding — upstream bug, worked around here in one place);
 - an explicit POST guard, since routes have no HTTP-method dispatch.
+
+Identity is playful-lazy: your creations belong to your OIDC identity when
+you are signed in, to your anonymous session otherwise. ``mix_owner`` is that
+one rule, shared with the websocket side.
 """
 
 from __future__ import annotations
@@ -44,6 +50,15 @@ def domain_errors():
         raise HTTPNotFound(str(exc)) from exc
 
 
+def mix_owner(session, avatar) -> str:
+    """Who owns what you mix: your login if you have one, your session if not."""
+    if avatar is not None:
+        return f"user:{avatar.identity}"
+    if session is not None:
+        return f"anon:{session.id}"
+    return ""
+
+
 class CocktailApp(RoutedApplication):
     mount = ""
 
@@ -70,6 +85,16 @@ class CocktailApp(RoutedApplication):
     def db(self):
         return self.server.databases["default"]
 
+    @staticmethod
+    def _ctx(_request) -> dict:
+        session = _request.session if _request else None
+        avatar = _request.avatar() if _request else None
+        return {
+            "user": avatar.identity if avatar else None,
+            "session_id": session.id if session else "",
+            "owner": mix_owner(session, avatar),
+        }
+
     # -- static assets -------------------------------------------------------
 
     @route()
@@ -80,93 +105,119 @@ class CocktailApp(RoutedApplication):
         media = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
         return self.result_wrapper(target, media_type=media)
 
-    # -- pages ---------------------------------------------------------------
+    # -- the bar ---------------------------------------------------------------
 
     @route(media_type="text/html")
-    def index(self) -> str:
-        return pages.dashboard(self.db.dashboard_data())
+    def index(self, tag: str = "", _request=None) -> str:
+        ctx = self._ctx(_request)
+        return pages.bar_page(
+            self.db.list_cocktails(owner=ctx["owner"], tag=str(tag)),
+            self.db.all_tags(), str(tag), ctx,
+        )
 
     @route(media_type="text/html")
-    def ingredients(self) -> str:
-        return pages.ingredients_page(self.db.list_ingredients())
+    def bar_grid(self, tag: str = "", q: str = "", _request=None) -> str:
+        ctx = self._ctx(_request)
+        return pages.bar_grid_fragment(
+            self.db.list_cocktails(owner=ctx["owner"], tag=str(tag), q=str(q))
+        )
 
     @route(media_type="text/html")
-    def recipes(self) -> str:
-        return pages.recipes_page(self.db.list_recipes())
-
-    @route(media_type="text/html")
-    def recipe(self, *parts) -> str:
-        if not parts:
-            raise HTTPNotFound("which recipe?")
+    def new_cocktail(self, name: str = "", _request=None) -> str:
+        self._require_post(_request)
+        ctx = self._ctx(_request)
         with domain_errors():
-            return pages.recipe_page(self.db.recipe_detail(int(parts[0])))
+            new_id = self.db.create_cocktail(ctx["owner"], str(name))
+        _request.response.set_header("HX-Redirect", f"/cocktail/{new_id}")
+        return ""
 
     @route(media_type="text/html")
-    def batches(self) -> str:
-        return pages.batches_page(self.db.list_batches())
+    def fork(self, cocktail_id: int = 0, _request=None) -> str:
+        self._require_post(_request)
+        ctx = self._ctx(_request)
+        with domain_errors():
+            new_id = self.db.fork_cocktail(cocktail_id, ctx["owner"])
+        _request.response.set_header("HX-Redirect", f"/cocktail/{new_id}")
+        return ""
 
-    # -- HTMX fragments ---------------------------------------------------------
+    # -- the mixing lab -----------------------------------------------------------
 
     @route(media_type="text/html")
-    def ingredients_table(self, q: str = "") -> str:
-        return pages.ingredients_table_fragment(self.db.list_ingredients(str(q)), str(q))
+    def cocktail(self, *parts, _request=None) -> str:
+        if not parts:
+            raise HTTPNotFound("which cocktail?")
+        ctx = self._ctx(_request)
+        with domain_errors():
+            detail = self.db.cocktail_detail(int(parts[0]))
+        owned = self.db.owns(detail["cocktail"]["id"], ctx["owner"])
+        return pages.cocktail_page(detail, owned, ctx)
+
+    @route(media_type="text/html")
+    def update_meta(
+        self, cocktail_id: int = 0, name: str = "", tags: str = "", emoji: str = "",
+        _request=None,
+    ) -> str:
+        self._require_post(_request)
+        ctx = self._ctx(_request)
+        with domain_errors():
+            self.db.update_meta(cocktail_id, ctx["owner"], str(name), str(tags), str(emoji))
+        _request.response.set_header("HX-Refresh", "true")
+        return ""
+
+    @route(media_type="text/html")
+    def delete_cocktail(self, cocktail_id: int = 0, _request=None) -> str:
+        self._require_post(_request)
+        ctx = self._ctx(_request)
+        with domain_errors():
+            self.db.delete_cocktail(cocktail_id, ctx["owner"])
+        _request.response.set_header("HX-Redirect", "/")
+        return ""
+
+    @route(media_type="text/html")
+    def line_add(self, cocktail_id: int = 0, ingredient_id: int = 0, _request=None) -> str:
+        self._require_post(_request)
+        ctx = self._ctx(_request)
+        if not self.db.owns(cocktail_id, ctx["owner"]):
+            raise HTTPBadRequest("not yours — fork it first")
+        with domain_errors():
+            self.db.set_qtys(cocktail_id, ctx["owner"], {int(ingredient_id): 30.0})
+            detail = self.db.cocktail_detail(cocktail_id)
+        return pages.mixer_fragment(detail, owned=True)
+
+    @route(media_type="text/html")
+    def line_remove(self, cocktail_id: int = 0, ingredient_id: int = 0, _request=None) -> str:
+        self._require_post(_request)
+        ctx = self._ctx(_request)
+        if not self.db.owns(cocktail_id, ctx["owner"]):
+            raise HTTPBadRequest("not yours — fork it first")
+        with domain_errors():
+            self.db.set_qtys(cocktail_id, ctx["owner"], {int(ingredient_id): 0.0})
+            detail = self.db.cocktail_detail(cocktail_id)
+        return pages.mixer_fragment(detail, owned=True)
+
+    # -- the shelf ---------------------------------------------------------------
+
+    @route(media_type="text/html")
+    def ingredients(self, _request=None) -> str:
+        return pages.ingredients_page(self.db.list_ingredients(), self._ctx(_request))
+
+    @route(media_type="text/html")
+    def shelf_grid(self, q: str = "") -> str:
+        return pages.shelf_grid_fragment(self.db.list_ingredients(str(q)), str(q))
 
     @route(media_type="text/html")
     def ingredient_add(
         self,
         name: str = "",
-        unit: str = "g",
+        emoji: str = "",
         category: str = "",
-        cost_per_unit: float = 0.0,
-        stock_qty: float = 0.0,
-        reorder_level: float = 0.0,
+        abv: float = 0.0,
+        cost_per_ml: float = 0.0,
         _request=None,
     ) -> str:
         self._require_post(_request)
         if not str(name).strip():
             raise HTTPBadRequest("name is required")
         with domain_errors():
-            self.db.add_ingredient(
-                str(name).strip(), unit, cost_per_unit, stock_qty, reorder_level, category
-            )
-        return pages.ingredients_table_fragment(self.db.list_ingredients(), "")
-
-    @route(media_type="text/html")
-    def recipe_stats(self, recipe_id: int = 0) -> str:
-        with domain_errors():
-            return pages.recipe_stats_fragment(self.db.recipe_detail(recipe_id))
-
-    @route(media_type="text/html")
-    def bom(self, recipe_id: int = 0) -> str:
-        with domain_errors():
-            return pages.bom_fragment(self.db.recipe_detail(recipe_id))
-
-    @route(media_type="text/html")
-    def line_add(
-        self, recipe_id: int = 0, component: str = "", qty: float = 0.0, _request=None
-    ) -> str:
-        self._require_post(_request)
-        kind, _, component_id = str(component).partition(":")
-        if not component_id:
-            raise HTTPBadRequest("pick a component")
-        with domain_errors():
-            self.db.add_line(recipe_id, kind, int(component_id), qty)
-            return pages.bom_fragment(self.db.recipe_detail(recipe_id))
-
-    @route(media_type="text/html")
-    def line_delete(self, line_id: int = 0, recipe_id: int = 0, _request=None) -> str:
-        self._require_post(_request)
-        with domain_errors():
-            self.db.delete_line(line_id)
-            return pages.bom_fragment(self.db.recipe_detail(recipe_id))
-
-    @route(media_type="text/html")
-    def produce(self, recipe_id: int = 0, multiplier: float = 1.0, _request=None) -> str:
-        self._require_post(_request)
-        with domain_errors():
-            result = self.db.produce_batch(recipe_id, multiplier)
-        if result["ok"]:
-            # Anything on the page listening for this event refreshes itself
-            # (the recipe stats strip does).
-            _request.response.set_header("HX-Trigger", "batchProduced")
-        return pages.produce_result_fragment(result)
+            self.db.add_ingredient(str(name).strip(), str(emoji), abv, cost_per_ml, category)
+        return pages.shelf_grid_fragment(self.db.list_ingredients(), "")

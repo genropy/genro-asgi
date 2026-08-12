@@ -5,72 +5,75 @@
 
 ## What this is
 
-The theoretical and practical foundations for **genro-cocktail**: a bill-of-materials
-(BOM) management application for a mixology lab — syrups, bitters, premixes,
-spirits — built as a showcase of the new Genropy stack:
+The theoretical and practical foundations for **genro-cocktail**: a playful
+cocktail lab — the classics teach you how cocktails work, sliders let you
+bend them into something of your own — built as a showcase of the new
+Genropy stack:
 
-- **genro-asgi** — the ASGI server core (routing, sessions, auth, config, tasks)
-- **genro-builders** — server-side HTML generation (the `contrib/html` dialect)
-- **HTMX** — client-side interactivity without a JS build chain
-- **SQLite** — persistence through genro-asgi's `databases` config section
+- **genro-asgi** — the ASGI server core (routing, sessions, OIDC social
+  login, config), plus a **websocket motor on a server subclass**
+- **genro-builders** — server-side HTML generation (the `contrib/html`
+  dialect, HTMX-tuned)
+- **HTMX** — discrete interactivity (fork, filter, add/remove) without a JS
+  build chain; ~70 lines of vanilla JS drive the sliders over the websocket
+- **SQLite** — persistence through genro-asgi's `databases` config seam
 
 The intended first audience is Nexus Mixology (nexusmixology.com), as a
 demonstration of what the stack can do; the working goal is a small,
-polished, end-to-end product.
+polished, fun product.
 
 ## Layout
 
 | Path | Contents |
 |---|---|
 | `docs/GENRO-ASGI-ROADMAP.md` | State of genro-asgi 0.28: what exists, how it works, maturity, what is missing |
-| `docs/FEASIBILITY.md` | The verdict on HTMX + genro-builders + DB on genro-asgi, with every verified idiom and gotcha |
-| `docs/DOMAIN.md` | The BOM domain model: entities, invariants, cost rollup, batch production |
+| `docs/FEASIBILITY.md` | The verified verdict on HTMX + genro-builders + SQLite + websockets + OAuth on genro-asgi, with every idiom and gotcha |
+| `docs/DOMAIN.md` | The concept: the bar, the mixing lab, the shelf, the formula, the rules of the game |
 | `docs/PROJECT-PLAN.md` | Milestones to take the prototype to the finished showcase |
 | `prototype/` | A **runnable** proof of the whole stack — see below |
 
 ## Running the prototype
 
-Requires Python ≥ 3.11 and `genro-asgi >= 0.28` (which brings genro-builders,
-genro-routes, genro-bag, genro-storage):
+Requires Python ≥ 3.11:
 
 ```bash
-pip install genro-asgi
+pip install genro-asgi websockets     # websockets: uvicorn's ws protocol lib
 cd prototype
-python -m genro_asgi serve config.py
-# or: genro-asgi serve config.py
+python serve.py
 ```
 
-Then open <http://127.0.0.1:8075/>. The database (`cocktail.db`) is created and
-seeded on first boot. `python prototype/smoke.py` runs the end-to-end checks
-without a network. What it looks like (`docs/screenshots/`):
+Then open <http://127.0.0.1:8075/>. The database (`cocktail.db`) is created
+and seeded with 20 bottles and 10 classics on first boot.
+`python smoke.py` runs 30 end-to-end checks (HTTP + websocket) without a
+network. HTMX is vendored (`assets/htmx.min.js`) so the demo works offline.
 
-![Recipe detail — BOM, cost rollup, produce](docs/screenshots/recipe.png)
+**Social login**: set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (and
+`COCKTAIL_EXTERNAL_URL` when public) to arm "Sign in with Google" — the stock
+login page builds itself from the configured providers. Anonymous play works
+without it: your mixes belong to your session.
 
-What the prototype demonstrates, each one an idiom the real project will build on:
+What it looks like (`docs/screenshots/`):
 
-1. **HTML pages and fragments built with genro-builders** (`ui/htmx.py`,
-   `ui/pages.py`) — typed element tree, automatic escaping, `hx_*` attribute
-   ergonomics via a 12-line renderer subclass.
-2. **HTMX round-trips** — search-as-you-type over ingredients, inline recipe
-   line editing, fragment swaps with `HX-Trigger` headers.
-3. **SQLite through the core's `databases` seam** (`db.py`, `config.py`) — a
-   thread-safe `db_class` adapter, declared in the config recipe, reached from
-   handlers.
-4. **Multi-level BOM with recursive cost rollup** — recipes can contain other
-   recipes (a syrup base inside a bitter), cost is computed by explosion.
-5. **Batch production** — stock check, BOM explosion, stock decrement, batch log.
-6. **The genro-asgi idioms that are not obvious** — the `_request` seam, the
-   form-decoding workaround, `Redirect` for POST/Redirect/GET, a static-asset
-   route with a traversal guard.
+![The mixing lab — sliders, live formula, websocket autosave](docs/screenshots/mixlab.png)
+
+What the prototype demonstrates, each one an idiom the real project builds on:
+
+1. **The bar** — classics with taste-tag chips (HTMX filters), emoji, live
+   ABV/volume/cost per card; fork-a-classic; invent-from-scratch.
+2. **The mixing lab** — a slider per ingredient drives the server-side
+   formula (volume, ABV%, pour cost, standard drinks) over a **websocket**,
+   with **autosave on every move** when the mix is yours; classics compute
+   but never change.
+3. **The shelf** — every bottle with its ABV and €/ml, searchable, extensible.
+4. **The genro-asgi idioms** — `_request` seam, form-decoding workaround,
+   POST guards, static assets with traversal guard, domain-error translation,
+   OIDC config, and the `on_websocket` server subclass (see FEASIBILITY).
 
 ## Lifting into the new repo
 
-The `prototype/` directory is self-contained (no imports from this repo's
-source tree — only from installed packages). To start `genro-cocktail`:
-
-1. Create `genropy/genro-cocktail`, copy `prototype/` as the package root and
-   `docs/` as the design record.
-2. Follow `docs/PROJECT-PLAN.md` — milestone 0 is exactly "make this prototype
-   the repo skeleton" (pyproject, package layout, tests).
-3. The parent policies of `meta-genro-modules` apply (English only, no
-   co-author lines, Pre-Alpha status to start).
+The `prototype/` directory is self-contained (imports only installed
+packages). To start `genro-cocktail`: create `genropy/genro-cocktail`, copy
+`prototype/` as the package root and `docs/` as the design record, then
+follow `docs/PROJECT-PLAN.md` (M0 is exactly this lift). The parent policies
+of `meta-genro-modules` apply (English only, no co-author lines, Pre-Alpha
+status to start).

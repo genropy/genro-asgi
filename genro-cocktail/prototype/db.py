@@ -1,4 +1,4 @@
-"""SQLite through genro-asgi's ``databases`` seam.
+"""SQLite through genro-asgi's ``databases`` seam — the cocktail bar edition.
 
 The core defines a contract, not a database layer: the config names a
 ``db_class`` built once at boot and shared by every request and every thread
@@ -11,7 +11,12 @@ pool worker. Two rules follow, both encoded here:
 
 ``CocktailDb`` is both the adapter and the repository: domain queries live on
 it as methods, reachable from handlers through the transparent
-``AsgiDbHandlerBase`` proxy (``self.db.list_ingredients(...)``).
+``AsgiDbHandlerBase`` proxy (``self.db.list_cocktails(...)``).
+
+Domain in one breath: **ingredients** carry an ABV and a cost per ml;
+**cocktails** are lists of (ingredient, ml). The classics are read-only
+teachers — fork one and the copy is yours to remix. Everything interesting
+(volume, alcohol, cost, standard drinks) is derived by ``stats_for``.
 """
 
 from __future__ import annotations
@@ -23,51 +28,32 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS ingredient (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
-    unit TEXT NOT NULL,
-    cost_per_unit REAL NOT NULL DEFAULT 0,
-    stock_qty REAL NOT NULL DEFAULT 0,
-    reorder_level REAL NOT NULL DEFAULT 0,
-    category TEXT NOT NULL DEFAULT '',
-    notes TEXT NOT NULL DEFAULT ''
+    emoji TEXT NOT NULL DEFAULT '🧴',
+    abv REAL NOT NULL DEFAULT 0,            -- % alcohol by volume, 0-100
+    cost_per_ml REAL NOT NULL DEFAULT 0,    -- €/ml
+    category TEXT NOT NULL DEFAULT ''
 );
-CREATE TABLE IF NOT EXISTS recipe (
+CREATE TABLE IF NOT EXISTS cocktail (
     id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    kind TEXT NOT NULL DEFAULT 'finished',
-    yield_qty REAL NOT NULL,
-    yield_unit TEXT NOT NULL,
-    stock_qty REAL NOT NULL DEFAULT 0,
-    instructions TEXT NOT NULL DEFAULT ''
+    name TEXT NOT NULL,
+    emoji TEXT NOT NULL DEFAULT '🍸',
+    owner TEXT NOT NULL DEFAULT '',          -- '' for the classics
+    is_classic INTEGER NOT NULL DEFAULT 0,
+    tags TEXT NOT NULL DEFAULT '',           -- comma-separated: bitter,sour,...
+    story TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE TABLE IF NOT EXISTS bom_line (
+CREATE TABLE IF NOT EXISTS cocktail_line (
     id INTEGER PRIMARY KEY,
-    recipe_id INTEGER NOT NULL REFERENCES recipe(id),
-    component_kind TEXT NOT NULL CHECK (component_kind IN ('ingredient', 'recipe')),
-    component_id INTEGER NOT NULL,
-    qty REAL NOT NULL,
-    unit TEXT NOT NULL,
-    position INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS batch (
-    id INTEGER PRIMARY KEY,
-    recipe_id INTEGER NOT NULL REFERENCES recipe(id),
-    multiplier REAL NOT NULL,
-    produced_qty REAL NOT NULL,
-    cost_snapshot REAL NOT NULL,
-    produced_at TEXT NOT NULL DEFAULT (datetime('now')),
-    notes TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS batch_consumption (
-    id INTEGER PRIMARY KEY,
-    batch_id INTEGER NOT NULL REFERENCES batch(id),
-    component_kind TEXT NOT NULL,
-    component_id INTEGER NOT NULL,
-    qty_used REAL NOT NULL,
-    unit_cost_snapshot REAL NOT NULL
+    cocktail_id INTEGER NOT NULL REFERENCES cocktail(id),
+    ingredient_id INTEGER NOT NULL REFERENCES ingredient(id),
+    qty_ml REAL NOT NULL,
+    UNIQUE (cocktail_id, ingredient_id)
 );
 """
 
-MAX_BOM_DEPTH = 20
+ETHANOL_DENSITY = 0.789        # g/ml
+STANDARD_DRINK_GRAMS = 10.0    # WHO standard drink
 
 
 class CocktailDb:
@@ -121,325 +107,276 @@ class CocktailDb:
             )
         return self.query("SELECT * FROM ingredient ORDER BY name")
 
-    def add_ingredient(self, name, unit, cost_per_unit, stock_qty, reorder_level, category) -> int:
+    def add_ingredient(self, name, emoji, abv, cost_per_ml, category) -> int:
+        if not 0 <= abv <= 100:
+            raise ValueError("ABV must be between 0 and 100")
         cur = self.connection.execute(
-            "INSERT INTO ingredient (name, unit, cost_per_unit, stock_qty, reorder_level, category)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (name, unit, cost_per_unit, stock_qty, reorder_level, category),
+            "INSERT INTO ingredient (name, emoji, abv, cost_per_ml, category) VALUES (?, ?, ?, ?, ?)",
+            (name, emoji or "🧴", abv, cost_per_ml, category),
         )
         self.connection.commit()
         return cur.lastrowid
 
-    # -- recipes and costing ----------------------------------------------
+    # -- the mixing formula -------------------------------------------------
 
-    def list_recipes(self) -> list[dict]:
-        recipes = self.query("SELECT * FROM recipe ORDER BY kind, name")
-        for recipe in recipes:
-            recipe["batch_cost"] = self.batch_cost(recipe["id"])
-            recipe["unit_cost"] = recipe["batch_cost"] / recipe["yield_qty"]
-        return recipes
+    def stats_for(self, qtys: dict[int, float]) -> dict:
+        """The data formula behind the sliders.
 
-    def unit_cost(self, kind: str, component_id: int, _depth: int = 0) -> float:
-        if _depth > MAX_BOM_DEPTH:
-            raise ValueError("BOM deeper than MAX_BOM_DEPTH — cycle suspected")
-        if kind == "ingredient":
-            row = self.one("SELECT cost_per_unit FROM ingredient WHERE id=?", (component_id,))
-            if row is None:
-                raise ValueError(f"unknown ingredient {component_id}")
-            return row["cost_per_unit"]
-        recipe = self.one("SELECT yield_qty FROM recipe WHERE id=?", (component_id,))
-        if recipe is None:
-            raise ValueError(f"unknown recipe {component_id}")
-        return self.batch_cost(component_id, _depth=_depth + 1) / recipe["yield_qty"]
-
-    def batch_cost(self, recipe_id: int, _depth: int = 0) -> float:
-        lines = self.query("SELECT * FROM bom_line WHERE recipe_id=?", (recipe_id,))
-        return sum(
-            line["qty"] * self.unit_cost(line["component_kind"], line["component_id"], _depth)
-            for line in lines
-        )
-
-    def cost_tree(self, recipe_id: int, _depth: int = 0, _scale: float = 1.0) -> list[dict]:
-        """Recursive explosion with per-node subtotals, for the cost panel.
-
-        ``_scale`` carries the consumed fraction down the tree: a sub-recipe's
-        children are shown at the share this parent actually uses (200 ml of a
-        1300 ml batch scales its sugar to 200/1300 of the batch quantity), so
-        every level's children sum to their parent's line total.
+        ``qtys`` maps ingredient_id → ml. Works for anything — a saved
+        cocktail, a classic being played with, a draft that only exists in
+        the browser — because it computes from the payload, never from a row.
         """
-        if _depth > MAX_BOM_DEPTH:
-            return []
-        nodes = []
-        for line in self.lines_of(recipe_id):
-            cost = self.unit_cost(line["component_kind"], line["component_id"])
-            qty = line["qty"] * _scale
-            node = {
-                "name": line["component_name"],
-                "kind": line["component_kind"],
-                "qty": qty,
-                "unit": line["unit"],
-                "unit_cost": cost,
-                "total": qty * cost,
-                "children": [],
-            }
-            if line["component_kind"] == "recipe":
-                sub = self.one("SELECT yield_qty FROM recipe WHERE id=?", (line["component_id"],))
-                node["children"] = self.cost_tree(
-                    line["component_id"], _depth + 1, _scale=qty / sub["yield_qty"]
-                )
-            nodes.append(node)
-        return nodes
-
-    def lines_of(self, recipe_id: int) -> list[dict]:
-        return self.query(
-            """
-            SELECT bom_line.*,
-                   CASE bom_line.component_kind
-                        WHEN 'ingredient' THEN (SELECT name FROM ingredient WHERE id = bom_line.component_id)
-                        ELSE (SELECT name FROM recipe WHERE id = bom_line.component_id)
-                   END AS component_name
-            FROM bom_line WHERE recipe_id=? ORDER BY position, id
-            """,
-            (recipe_id,),
+        if not qtys:
+            return {"volume": 0.0, "abv": 0.0, "cost": 0.0, "alcohol_g": 0.0, "drinks": 0.0}
+        rows = self.query(
+            f"SELECT id, abv, cost_per_ml FROM ingredient"
+            f" WHERE id IN ({','.join('?' * len(qtys))})",
+            tuple(qtys),
         )
-
-    def recipe_detail(self, recipe_id: int) -> dict:
-        recipe = self.one("SELECT * FROM recipe WHERE id=?", (recipe_id,))
-        if recipe is None:
-            raise FileNotFoundError(f"no recipe {recipe_id}")  # → 404 via ERROR_MAP
-        lines = self.lines_of(recipe_id)
-        for line in lines:
-            line["unit_cost"] = self.unit_cost(line["component_kind"], line["component_id"])
-            line["total"] = line["qty"] * line["unit_cost"]
-        batch_cost = sum(line["total"] for line in lines)
+        known = {row["id"]: row for row in rows}
+        unknown = set(qtys) - set(known)
+        if unknown:
+            raise ValueError(f"unknown ingredients: {sorted(unknown)}")
+        volume = sum(max(0.0, ml) for ml in qtys.values())
+        pure_alcohol = sum(max(0.0, ml) * known[iid]["abv"] / 100.0 for iid, ml in qtys.items())
+        cost = sum(max(0.0, ml) * known[iid]["cost_per_ml"] for iid, ml in qtys.items())
+        alcohol_g = pure_alcohol * ETHANOL_DENSITY
         return {
-            "recipe": recipe,
+            "volume": round(volume, 1),
+            "abv": round(100.0 * pure_alcohol / volume, 1) if volume else 0.0,
+            "cost": round(cost, 2),
+            "alcohol_g": round(alcohol_g, 1),
+            "drinks": round(alcohol_g / STANDARD_DRINK_GRAMS, 1),
+        }
+
+    # -- cocktails ---------------------------------------------------------
+
+    def list_cocktails(self, owner: str = "", tag: str = "", q: str = "") -> list[dict]:
+        """The bar: every classic plus the caller's own creations."""
+        sql = "SELECT * FROM cocktail WHERE (is_classic = 1 OR owner = ?)"
+        params: list = [owner]
+        if tag:
+            sql += " AND (',' || tags || ',') LIKE ?"
+            params.append(f"%,{tag},%")
+        if q:
+            sql += " AND name LIKE ?"
+            params.append(f"%{q}%")
+        sql += " ORDER BY is_classic DESC, name"
+        cocktails = self.query(sql, tuple(params))
+        for cocktail in cocktails:
+            cocktail.update(self.stats_for(self.qtys_of(cocktail["id"])))
+            cocktail["tag_list"] = [t for t in cocktail["tags"].split(",") if t]
+        return cocktails
+
+    def qtys_of(self, cocktail_id: int) -> dict[int, float]:
+        return {
+            row["ingredient_id"]: row["qty_ml"]
+            for row in self.query(
+                "SELECT ingredient_id, qty_ml FROM cocktail_line WHERE cocktail_id=?",
+                (cocktail_id,),
+            )
+        }
+
+    def cocktail_detail(self, cocktail_id: int) -> dict:
+        cocktail = self.one("SELECT * FROM cocktail WHERE id=?", (cocktail_id,))
+        if cocktail is None:
+            raise FileNotFoundError(f"no cocktail {cocktail_id}")
+        lines = self.query(
+            """
+            SELECT cocktail_line.*, ingredient.name, ingredient.emoji,
+                   ingredient.abv, ingredient.cost_per_ml
+            FROM cocktail_line JOIN ingredient ON ingredient.id = cocktail_line.ingredient_id
+            WHERE cocktail_line.cocktail_id=? ORDER BY ingredient.abv DESC, ingredient.name
+            """,
+            (cocktail_id,),
+        )
+        cocktail["tag_list"] = [t for t in cocktail["tags"].split(",") if t]
+        return {
+            "cocktail": cocktail,
             "lines": lines,
-            "batch_cost": batch_cost,
-            "unit_cost": batch_cost / recipe["yield_qty"] if recipe["yield_qty"] else 0.0,
-            "cost_tree": self.cost_tree(recipe_id),
-            "pick_ingredients": self.query("SELECT id, name, unit FROM ingredient ORDER BY name"),
-            "pick_recipes": self.query(
-                "SELECT id, name, yield_unit AS unit FROM recipe WHERE id != ? ORDER BY name",
-                (recipe_id,),
+            "stats": self.stats_for({line["ingredient_id"]: line["qty_ml"] for line in lines}),
+            "shelf": self.query(
+                """
+                SELECT * FROM ingredient
+                WHERE id NOT IN (SELECT ingredient_id FROM cocktail_line WHERE cocktail_id=?)
+                ORDER BY name
+                """,
+                (cocktail_id,),
             ),
         }
 
-    # -- BOM editing --------------------------------------------------------
-
-    def _subtree_contains(self, recipe_id: int, target_id: int, _depth: int = 0) -> bool:
-        if _depth > MAX_BOM_DEPTH:
-            return True
-        for line in self.query(
-            "SELECT component_id FROM bom_line WHERE recipe_id=? AND component_kind='recipe'",
-            (recipe_id,),
-        ):
-            child = line["component_id"]
-            if child == target_id or self._subtree_contains(child, target_id, _depth + 1):
-                return True
-        return False
-
-    def add_line(self, recipe_id: int, kind: str, component_id: int, qty: float) -> int:
-        if qty <= 0:
-            raise ValueError("quantity must be positive")
-        if kind == "ingredient":
-            component = self.one("SELECT unit FROM ingredient WHERE id=?", (component_id,))
-        elif kind == "recipe":
-            if component_id == recipe_id or self._subtree_contains(component_id, recipe_id):
-                raise ValueError("that would make the recipe contain itself")
-            component = self.one("SELECT yield_unit AS unit FROM recipe WHERE id=?", (component_id,))
-        else:
-            raise ValueError(f"unknown component kind {kind!r}")
-        if component is None:
-            raise ValueError(f"unknown {kind} {component_id}")
-        position = self.one(
-            "SELECT COALESCE(MAX(position), 0) + 1 AS p FROM bom_line WHERE recipe_id=?",
-            (recipe_id,),
-        )["p"]
+    def create_cocktail(self, owner: str, name: str, emoji: str = "🍸") -> int:
+        if not owner:
+            raise ValueError("no owner — is the session cookie missing?")
+        if not name.strip():
+            raise ValueError("give it a name")
         cur = self.connection.execute(
-            "INSERT INTO bom_line (recipe_id, component_kind, component_id, qty, unit, position)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (recipe_id, kind, component_id, qty, component["unit"], position),
+            "INSERT INTO cocktail (name, emoji, owner) VALUES (?, ?, ?)",
+            (name.strip(), emoji or "🍸", owner),
         )
         self.connection.commit()
         return cur.lastrowid
 
-    def delete_line(self, line_id: int) -> None:
-        self.connection.execute("DELETE FROM bom_line WHERE id=?", (line_id,))
-        self.connection.commit()
-
-    # -- production -----------------------------------------------------------
-
-    def producibility(self, recipe_id: int, multiplier: float) -> dict:
-        requirements = []
-        for line in self.lines_of(recipe_id):
-            table = "ingredient" if line["component_kind"] == "ingredient" else "recipe"
-            stock = self.one(f"SELECT stock_qty FROM {table} WHERE id=?", (line["component_id"],))
-            required = line["qty"] * multiplier
-            requirements.append(
-                {
-                    "name": line["component_name"],
-                    "kind": line["component_kind"],
-                    "component_id": line["component_id"],
-                    "required": required,
-                    "unit": line["unit"],
-                    "stock": stock["stock_qty"],
-                    "unit_cost": line.get("unit_cost")
-                    or self.unit_cost(line["component_kind"], line["component_id"]),
-                    "missing": max(0.0, required - stock["stock_qty"]),
-                }
-            )
-        return {
-            "requirements": requirements,
-            "ok": bool(requirements) and all(r["missing"] == 0 for r in requirements),
-        }
-
-    def produce_batch(self, recipe_id: int, multiplier: float, notes: str = "") -> dict:
-        if multiplier <= 0:
-            raise ValueError("multiplier must be positive")
-        recipe = self.one("SELECT * FROM recipe WHERE id=?", (recipe_id,))
-        if recipe is None:
-            raise FileNotFoundError(f"no recipe {recipe_id}")
-        check = self.producibility(recipe_id, multiplier)
-        if not check["ok"]:
-            check.update(recipe=recipe, produced_qty=0.0)
-            return check
-        produced_qty = recipe["yield_qty"] * multiplier
-        cost = self.batch_cost(recipe_id) * multiplier
+    def fork_cocktail(self, cocktail_id: int, owner: str) -> int:
+        """Copy a cocktail (typically a classic) onto the caller's shelf."""
+        if not owner:
+            raise ValueError("no owner — is the session cookie missing?")
+        source = self.one("SELECT * FROM cocktail WHERE id=?", (cocktail_id,))
+        if source is None:
+            raise FileNotFoundError(f"no cocktail {cocktail_id}")
         conn = self.connection
         try:
             cur = conn.execute(
-                "INSERT INTO batch (recipe_id, multiplier, produced_qty, cost_snapshot, notes)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (recipe_id, multiplier, produced_qty, cost, notes),
+                "INSERT INTO cocktail (name, emoji, owner, tags, story) VALUES (?, ?, ?, ?, ?)",
+                (f"{source['name']} remix", source["emoji"], owner, source["tags"], ""),
             )
-            batch_id = cur.lastrowid
-            for req in check["requirements"]:
-                table = "ingredient" if req["kind"] == "ingredient" else "recipe"
-                conn.execute(
-                    f"UPDATE {table} SET stock_qty = stock_qty - ? WHERE id=?",
-                    (req["required"], req["component_id"]),
-                )
-                conn.execute(
-                    "INSERT INTO batch_consumption"
-                    " (batch_id, component_kind, component_id, qty_used, unit_cost_snapshot)"
-                    " VALUES (?, ?, ?, ?, ?)",
-                    (batch_id, req["kind"], req["component_id"], req["required"], req["unit_cost"]),
-                )
+            new_id = cur.lastrowid
             conn.execute(
-                "UPDATE recipe SET stock_qty = stock_qty + ? WHERE id=?",
-                (produced_qty, recipe_id),
+                """
+                INSERT INTO cocktail_line (cocktail_id, ingredient_id, qty_ml)
+                SELECT ?, ingredient_id, qty_ml FROM cocktail_line WHERE cocktail_id=?
+                """,
+                (new_id, cocktail_id),
             )
             conn.commit()
         except Exception:
             conn.rollback()
             raise
-        check.update(
-            recipe=self.one("SELECT * FROM recipe WHERE id=?", (recipe_id,)),
-            batch_id=batch_id,
-            produced_qty=produced_qty,
-            cost=cost,
-        )
-        return check
+        return new_id
 
-    def list_batches(self, limit: int = 50) -> list[dict]:
-        return self.query(
-            """
-            SELECT batch.*, recipe.name AS recipe_name, recipe.yield_unit AS unit
-            FROM batch JOIN recipe ON recipe.id = batch.recipe_id
-            ORDER BY batch.id DESC LIMIT ?
-            """,
-            (limit,),
-        )
+    def owns(self, cocktail_id: int, owner: str) -> bool:
+        row = self.one("SELECT owner, is_classic FROM cocktail WHERE id=?", (cocktail_id,))
+        return bool(row) and not row["is_classic"] and row["owner"] == owner and bool(owner)
 
-    # -- dashboard ---------------------------------------------------------------
-
-    def dashboard_data(self) -> dict:
-        totals = self.one(
-            """
-            SELECT (SELECT COUNT(*) FROM ingredient) AS ingredients,
-                   (SELECT COUNT(*) FROM recipe) AS recipes,
-                   (SELECT COUNT(*) FROM batch) AS batches,
-                   (SELECT COALESCE(SUM(stock_qty * cost_per_unit), 0) FROM ingredient) AS stock_value
-            """
+    def update_meta(self, cocktail_id: int, owner: str, name: str, tags: str, emoji: str) -> None:
+        if not self.owns(cocktail_id, owner):
+            raise ValueError("not yours to rename — fork it first")
+        if not name.strip():
+            raise ValueError("give it a name")
+        clean_tags = ",".join(sorted({t.strip().lower() for t in tags.split(",") if t.strip()}))
+        self.connection.execute(
+            "UPDATE cocktail SET name=?, tags=?, emoji=? WHERE id=?",
+            (name.strip(), clean_tags, emoji or "🍸", cocktail_id),
         )
-        low_stock = self.query(
-            "SELECT * FROM ingredient WHERE stock_qty <= reorder_level ORDER BY stock_qty / MAX(reorder_level, 0.0001)"
-        )
-        return {"totals": totals, "low_stock": low_stock, "recent_batches": self.list_batches(8)}
+        self.connection.commit()
 
-    # -- seed data -----------------------------------------------------------------
+    def delete_cocktail(self, cocktail_id: int, owner: str) -> None:
+        if not self.owns(cocktail_id, owner):
+            raise ValueError("not yours to pour down the drain")
+        conn = self.connection
+        conn.execute("DELETE FROM cocktail_line WHERE cocktail_id=?", (cocktail_id,))
+        conn.execute("DELETE FROM cocktail WHERE id=?", (cocktail_id,))
+        conn.commit()
+
+    def set_qtys(self, cocktail_id: int, owner: str, qtys: dict[int, float]) -> bool:
+        """The autosave seam: persist slider positions, but only on YOUR mix.
+
+        Returns True when saved, False when the cocktail is a classic or
+        someone else's (the stats still compute — playing is free).
+        """
+        if not self.owns(cocktail_id, owner):
+            return False
+        conn = self.connection
+        try:
+            for ingredient_id, qty in qtys.items():
+                if qty <= 0:
+                    conn.execute(
+                        "DELETE FROM cocktail_line WHERE cocktail_id=? AND ingredient_id=?",
+                        (cocktail_id, ingredient_id),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO cocktail_line (cocktail_id, ingredient_id, qty_ml)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT (cocktail_id, ingredient_id) DO UPDATE SET qty_ml=excluded.qty_ml
+                        """,
+                        (cocktail_id, ingredient_id, qty),
+                    )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return True
+
+    def all_tags(self) -> list[str]:
+        tags: set[str] = set()
+        for row in self.query("SELECT tags FROM cocktail WHERE tags != ''"):
+            tags.update(t for t in row["tags"].split(",") if t)
+        return sorted(tags)
+
+    # -- seed: the shelf and the classics ------------------------------------
 
     @staticmethod
     def _seed(conn: sqlite3.Connection) -> None:
         ingredients = [
-            # name, unit, cost_per_unit, stock, reorder, category
-            ("White cane sugar", "g", 0.0018, 5000, 1000, "sweetener"),
-            ("Demerara sugar", "g", 0.0032, 2000, 500, "sweetener"),
-            ("Distilled water", "ml", 0.0005, 20000, 5000, "base"),
-            ("Neutral alcohol 96°", "ml", 0.0120, 3000, 1000, "alcohol"),
-            ("Gentian root", "g", 0.0550, 200, 50, "botanical"),
-            ("Cinchona bark", "g", 0.0480, 150, 40, "botanical"),
-            ("Bitter orange peel", "g", 0.0380, 300, 80, "botanical"),
-            ("Almonds", "g", 0.0140, 1500, 400, "nut"),
-            ("Orange blossom water", "ml", 0.0200, 100, 150, "aroma"),
-            ("Citric acid", "g", 0.0090, 500, 100, "acid"),
-            ("Fresh lime", "pcs", 0.5000, 24, 12, "fresh"),
-            ("Bottle 700 ml", "pcs", 0.8500, 40, 12, "packaging"),
-            ("Bottle 250 ml", "pcs", 0.4500, 60, 20, "packaging"),
-            ("Label", "pcs", 0.1200, 200, 50, "packaging"),
+            # name, emoji, abv %, €/ml, category
+            ("Gin", "🌲", 40.0, 0.022, "spirit"),
+            ("Vodka", "❄️", 40.0, 0.018, "spirit"),
+            ("White rum", "🏝️", 38.0, 0.018, "spirit"),
+            ("Tequila", "🌵", 40.0, 0.025, "spirit"),
+            ("Bourbon", "🛢️", 45.0, 0.028, "spirit"),
+            ("Campari", "🔴", 25.0, 0.020, "bitter"),
+            ("Aperol", "🟠", 11.0, 0.015, "bitter"),
+            ("Sweet vermouth", "🍷", 16.0, 0.012, "fortified"),
+            ("Dry vermouth", "🥂", 18.0, 0.012, "fortified"),
+            ("Triple sec", "🍊", 30.0, 0.016, "liqueur"),
+            ("Coffee liqueur", "☕", 20.0, 0.020, "liqueur"),
+            ("Prosecco", "🍾", 11.0, 0.008, "wine"),
+            ("Lime juice", "🟢", 0.0, 0.008, "juice"),
+            ("Lemon juice", "🍋", 0.0, 0.007, "juice"),
+            ("Simple syrup", "🍯", 0.0, 0.003, "sweet"),
+            ("Angostura bitters", "🌰", 44.7, 0.150, "bitter"),
+            ("Espresso", "☕", 0.0, 0.010, "coffee"),
+            ("Soda water", "💧", 0.0, 0.002, "mixer"),
+            ("Tonic water", "✨", 0.0, 0.003, "mixer"),
+            ("Mint cordial", "🌿", 0.0, 0.012, "sweet"),
         ]
         conn.executemany(
-            "INSERT INTO ingredient (name, unit, cost_per_unit, stock_qty, reorder_level, category)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO ingredient (name, emoji, abv, cost_per_ml, category) VALUES (?, ?, ?, ?, ?)",
             ingredients,
         )
-        recipes = [
-            # name, kind, yield_qty, yield_unit, stock
-            ("Rich syrup 2:1", "intermediate", 1300, "ml", 1500),
-            ("Orgeat syrup 250 ml", "finished", 4, "pcs", 6),
-            ("Bitter Rosso 700 ml", "finished", 2, "pcs", 3),
-            ("Citrus cordial 250 ml", "finished", 3, "pcs", 0),
-        ]
-        conn.executemany(
-            "INSERT INTO recipe (name, kind, yield_qty, yield_unit, stock_qty) VALUES (?, ?, ?, ?, ?)",
-            recipes,
-        )
         ing = {row[0]: idx + 1 for idx, row in enumerate(ingredients)}
-        rec = {row[0]: idx + 1 for idx, row in enumerate(recipes)}
-        lines = [
-            # recipe, kind, component id, qty, unit
-            (rec["Rich syrup 2:1"], "ingredient", ing["White cane sugar"], 1000, "g"),
-            (rec["Rich syrup 2:1"], "ingredient", ing["Distilled water"], 500, "ml"),
-            (rec["Orgeat syrup 250 ml"], "ingredient", ing["Almonds"], 300, "g"),
-            (rec["Orgeat syrup 250 ml"], "ingredient", ing["White cane sugar"], 450, "g"),
-            (rec["Orgeat syrup 250 ml"], "ingredient", ing["Distilled water"], 400, "ml"),
-            (rec["Orgeat syrup 250 ml"], "ingredient", ing["Orange blossom water"], 10, "ml"),
-            (rec["Orgeat syrup 250 ml"], "ingredient", ing["Bottle 250 ml"], 4, "pcs"),
-            (rec["Orgeat syrup 250 ml"], "ingredient", ing["Label"], 4, "pcs"),
-            (rec["Bitter Rosso 700 ml"], "ingredient", ing["Neutral alcohol 96°"], 400, "ml"),
-            (rec["Bitter Rosso 700 ml"], "ingredient", ing["Distilled water"], 250, "ml"),
-            (rec["Bitter Rosso 700 ml"], "ingredient", ing["Gentian root"], 25, "g"),
-            (rec["Bitter Rosso 700 ml"], "ingredient", ing["Cinchona bark"], 15, "g"),
-            (rec["Bitter Rosso 700 ml"], "ingredient", ing["Bitter orange peel"], 30, "g"),
-            (rec["Bitter Rosso 700 ml"], "recipe", rec["Rich syrup 2:1"], 200, "ml"),
-            (rec["Bitter Rosso 700 ml"], "ingredient", ing["Citric acid"], 5, "g"),
-            (rec["Bitter Rosso 700 ml"], "ingredient", ing["Bottle 700 ml"], 2, "pcs"),
-            (rec["Bitter Rosso 700 ml"], "ingredient", ing["Label"], 2, "pcs"),
-            (rec["Citrus cordial 250 ml"], "ingredient", ing["Fresh lime"], 6, "pcs"),
-            (rec["Citrus cordial 250 ml"], "ingredient", ing["White cane sugar"], 300, "g"),
-            (rec["Citrus cordial 250 ml"], "ingredient", ing["Distilled water"], 350, "ml"),
-            (rec["Citrus cordial 250 ml"], "ingredient", ing["Citric acid"], 12, "g"),
-            (rec["Citrus cordial 250 ml"], "ingredient", ing["Bottle 250 ml"], 3, "pcs"),
-            (rec["Citrus cordial 250 ml"], "ingredient", ing["Label"], 3, "pcs"),
+        classics = [
+            # name, emoji, tags, story, [(ingredient, ml), ...]
+            ("Negroni", "🥃", "bitter,strong",
+             "Count Negroni wanted his Americano stronger. Florence, 1919.",
+             [("Gin", 30), ("Campari", 30), ("Sweet vermouth", 30)]),
+            ("Americano", "🥂", "bitter,fresh",
+             "The gentle ancestor: Milano-Torino with a splash of soda.",
+             [("Campari", 30), ("Sweet vermouth", 30), ("Soda water", 60)]),
+            ("Daiquiri", "🍸", "sour,fresh",
+             "Rum, lime, sugar. The proof that three is a crowd done right.",
+             [("White rum", 60), ("Lime juice", 25), ("Simple syrup", 15)]),
+            ("Margarita", "🍹", "sour,fresh",
+             "Tequila's passport to the world, salt rim optional.",
+             [("Tequila", 50), ("Triple sec", 20), ("Lime juice", 25)]),
+            ("Old Fashioned", "🧊", "strong,sweet",
+             "The cocktail that refuses to be improved. Since ~1880.",
+             [("Bourbon", 60), ("Simple syrup", 10), ("Angostura bitters", 3)]),
+            ("Mojito", "🌿", "fresh,sweet",
+             "Havana's answer to summer.",
+             [("White rum", 50), ("Lime juice", 25), ("Mint cordial", 15), ("Soda water", 60)]),
+            ("Whiskey Sour", "🍋", "sour",
+             "The sour template: spirit, citrus, sweet. Balance is everything.",
+             [("Bourbon", 60), ("Lemon juice", 30), ("Simple syrup", 20)]),
+            ("Spritz", "🌅", "bitter,fresh,fruity",
+             "Venice at 6 pm, in a glass.",
+             [("Prosecco", 90), ("Aperol", 60), ("Soda water", 30)]),
+            ("Gin & Tonic", "✨", "dry,fresh",
+             "A highball and a history of malaria prevention.",
+             [("Gin", 50), ("Tonic water", 150)]),
+            ("Espresso Martini", "☕", "sweet,strong",
+             "Wake me up and mess me up, 1983.",
+             [("Vodka", 50), ("Coffee liqueur", 20), ("Espresso", 30), ("Simple syrup", 5)]),
         ]
-        conn.executemany(
-            "INSERT INTO bom_line (recipe_id, component_kind, component_id, qty, unit, position)"
-            " VALUES (?, ?, ?, ?, ?, 0)",
-            lines,
-        )
-        conn.execute(
-            "INSERT INTO batch (recipe_id, multiplier, produced_qty, cost_snapshot, notes)"
-            " VALUES (?, 1.0, 1300, 2.05, 'seed batch')",
-            (rec["Rich syrup 2:1"],),
-        )
+        for name, emoji, tags, story, lines in classics:
+            cur = conn.execute(
+                "INSERT INTO cocktail (name, emoji, owner, is_classic, tags, story)"
+                " VALUES (?, ?, '', 1, ?, ?)",
+                (name, emoji, tags, story),
+            )
+            conn.executemany(
+                "INSERT INTO cocktail_line (cocktail_id, ingredient_id, qty_ml) VALUES (?, ?, ?)",
+                [(cur.lastrowid, ing[iname], ml) for iname, ml in lines],
+            )

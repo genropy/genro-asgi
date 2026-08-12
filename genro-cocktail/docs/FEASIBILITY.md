@@ -121,17 +121,72 @@ perfect for a single-process showcase; the adapter surface (`query/execute/
 transaction`) is small enough that a later PostgreSQL adapter is a drop-in
 replacement behind the same config entry.
 
-## 5. What we deliberately do NOT use (yet)
+## 5. WebSockets: not in the core, easy on a subclass (verified)
+
+The core ships `on_websocket` as an empty hook (D7/Q1: consume the connect,
+close 1000) — but uvicorn delivers the full ASGI websocket message stream to
+it, so a **server subclass** is the whole story:
+
+```python
+class CocktailServer(AsgiServer):
+    async def on_websocket(self, scope, receive, send):
+        await receive()                                # websocket.connect
+        await send({"type": "websocket.accept"})
+        while (msg := await receive())["type"] != "websocket.disconnect":
+            reply = handle(json.loads(msg["text"]))
+            await send({"type": "websocket.send", "text": json.dumps(reply)})
+```
+
+This is exactly the D16 extension gesture ("the class says WHO you are"), and
+it forces one deviation: the server class is chosen at boot, never in config,
+so the app ships its own launcher (`python serve.py`) instead of the generic
+`genro-asgi serve config.py`. Facts learned doing it:
+
+- **uvicorn needs a protocol library** — `pip install websockets` (or
+  `wsproto`); the core's dependency set does not include one.
+- **The middleware chain is http-only** — no session, no auth on the
+  handshake. Read the session cookie from the scope by hand
+  (`genro_asgi.middleware.base.cookie_value`) and look it up in
+  `server.session_store`.
+- Verified end to end in a real browser (Playwright): slider → ws frame →
+  sqlite write → stats reply → DOM update, with reconnect/backoff and
+  bad-frame resilience covered by the smoke suite.
+
+## 6. Social login (OAuth/OIDC): Google now, Apple with a caveat
+
+genro-asgi's OIDC is authorization-code + PKCE S256, one `provider(code=…)`
+per identity source, routes auto-mounted at
+`/_server/auth/oidc:<code>/{start,callback}`, and the stock login page
+builds itself from the registered methods — **zero custom login UI needed**.
+Requirements: `server(external_url=…)` (the callback base), and the
+provider's `client_id`/`client_secret` via `EnvResolver`.
+
+- **Google**: plain OIDC (`issuer="https://accounts.google.com"`), works with
+  the shipped `OidcMethod` as-is. Register
+  `<external_url>/_server/auth/oidc:google/callback` in the Google console.
+- **Apple**: OIDC too, but its `client_secret` must be a **short-lived
+  ES256-signed JWT** (max 6 months) minted from your Apple Developer key —
+  not a static string. The config seam accepts a resolver, so a
+  `BagResolver` that mints/caches the JWT slots in cleanly; needs a paid
+  Apple Developer account. Parked as a later milestone.
+- **GitHub is NOT OIDC** (plain OAuth2, no `id_token`) — it would need a
+  custom `AuthMethod`, so it's not a quick win here.
+
+The session behaviour matters for the toy: login **attaches** the identity
+to the running session (D24, id unchanged), so what an anonymous visitor
+mixed stays on screen after signing in. (Migrating anonymous creations to
+the new identity at login is an easy later feature: one UPDATE on `owner`.)
+
+## 7. What we deliberately do NOT use (yet)
 
 - **`spa/` orchestration** — phase-2, in flux, not public API. The cocktail
   app is a plain mounted application on the public server.
-- **WebSockets** — empty hook in the core. Live updates, when we want them,
-  ride SSE (supported today at the ASGI level) + the HTMX SSE extension.
 - **MCP face** — not needed for the UI, but it is a one-line base-class swap
-  (`McpOpenApiApplication`) and would make the cocktail BOM queryable by an AI
-  agent. Flagged as a wow-feature for a later milestone (PROJECT-PLAN M4).
+  (`McpOpenApiApplication`) and would make the bar queryable by an AI agent
+  ("mix me something bitter under €2"). Flagged as a wow-feature
+  (PROJECT-PLAN M4).
 
-## 6. Risk table
+## 8. Risk table
 
 | Risk | Severity | Mitigation |
 |---|---|---|
@@ -140,9 +195,10 @@ replacement behind the same config entry.
 | No db layer beyond the seam | medium | own adapter (§4); scope = sqlite |
 | XSS via hand-built strings | medium | genro-builders everywhere; never f-string HTML |
 | Session store is memory-only | low | acceptable for showcase; file/db store later |
+| uvicorn ws lib is an extra dep | low | `pip install websockets`, documented |
 | TYTX typing surprises (`"123"` → int) | low | annotate handler params |
 
-## 7. Conclusion
+## 9. Conclusion
 
 The stack is ready for exactly this class of application: a mono-process,
 server-rendered, form-driven product with islands of interactivity. HTMX +

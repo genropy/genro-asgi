@@ -1,140 +1,101 @@
-# genro-cocktail — domain model
+# genro-cocktail — the concept
 
-**Scope**: bill-of-materials (BOM) management for a mixology production lab:
-syrups, bitters, premixes, infusions, finished bottled products.
+**One sentence**: a playful bar where the classics teach you how cocktails
+work, and sliders let you bend them into something of your own.
 
-The model is deliberately small — six tables — but structurally honest: it has
-the one property that makes a BOM domain interesting (recursive composition)
-and the one workflow that makes it useful (batch production against stock).
+Not a management tool. It does few things, and each one should raise a smile:
+you look at the bar, you poke at a recipe, you fork it, you name it. The
+depth is hidden in the numbers that follow every gesture — alcohol, cost,
+volume — computed live, saved silently.
 
 ---
 
-## 1. Entities
+## 1. The three nouns
 
-### 1.1 `ingredient` — raw material
-
-Something bought, not produced: sugar, citric acid, gentian root, 96° alcohol,
-distilled water, orange peel, glass bottles, labels.
+### 1.1 `ingredient` — a bottle on the shelf
 
 | Field | Type | Notes |
 |---|---|---|
 | `id` | int PK | |
-| `name` | text, unique | "Demerara sugar" |
-| `unit` | text | canonical stock unit: `g`, `ml`, `pcs` |
-| `cost_per_unit` | numeric | purchase cost per canonical unit |
-| `stock_qty` | numeric | current stock in canonical unit |
-| `reorder_level` | numeric | below this → low-stock warning |
-| `category` | text | `sweetener`, `botanical`, `alcohol`, `acid`, `packaging`, … |
-| `notes` | text | supplier, origin |
+| `name` | text, unique | "Campari" |
+| `emoji` | text | its face everywhere in the UI 🔴 |
+| `abv` | real | % alcohol by volume, 0–100 (validated) |
+| `cost_per_ml` | real | €/ml |
+| `category` | text | `spirit`, `bitter`, `juice`, `mixer`, … |
 
-### 1.2 `recipe` — a produced item (the BOM header)
+The shelf is public and shared: anyone can browse it and put new bottles on
+it. It is the "database of elements" — every derived number in the app comes
+from these two columns, `abv` and `cost_per_ml`.
 
-Anything the lab makes. A recipe may be a **finished product** (Bitter Rosso
-700ml) or an **intermediate** (rich syrup base) used inside other recipes.
-
-| Field | Type | Notes |
-|---|---|---|
-| `id` | int PK | |
-| `name` | text, unique | "Orgeat syrup" |
-| `kind` | text | `finished` \| `intermediate` |
-| `yield_qty` | numeric | what one batch produces… |
-| `yield_unit` | text | …in this unit (`ml`, `pcs`) |
-| `stock_qty` | numeric | stock of the produced item itself |
-| `instructions` | text | method, free text |
-
-### 1.3 `bom_line` — one row of a recipe's bill
+### 1.2 `cocktail` — a recipe
 
 | Field | Type | Notes |
 |---|---|---|
 | `id` | int PK | |
-| `recipe_id` | FK → recipe | the parent |
-| `component_kind` | text | `ingredient` \| `recipe` |
-| `component_id` | int | FK into the table named by `component_kind` |
-| `qty` | numeric | per **one batch** of the parent (i.e. per `yield_qty`) |
-| `unit` | text | must equal the component's canonical unit (v1 rule) |
-| `position` | int | display order |
+| `name` | text | |
+| `emoji` | text | the glass 🍸 |
+| `owner` | text | `''` for classics; `user:<identity>` or `anon:<session>` |
+| `is_classic` | bool | classics are read-only, forever |
+| `tags` | text | comma-separated taste words: `bitter,sour,dry,sweet,fruity,fresh,strong` |
+| `story` | text | one playful line of history (classics only) |
 
-### 1.4 `batch` — a production run
+### 1.3 `cocktail_line` — what's in the glass
 
-| Field | Type | Notes |
+`(cocktail_id, ingredient_id, qty_ml)` — unique per pair. Quantities are
+**ml, driven by sliders**, not typed.
+
+## 2. The rules of the game
+
+1. **Classics never change.** They are the lesson: play with their sliders
+   all you want (the numbers answer), but nothing is written. The UI says it
+   with a fork: *"a classic never changes — fork it to keep your version"*.
+2. **Fork makes it yours.** A copy named "<name> remix" lands on your bar,
+   fully editable: rename it, retag it, change its glass, pour it away.
+3. **Ownership is lazy.** Signed in (OAuth/OIDC): your creations follow your
+   identity. Anonymous: they belong to your session (a week of TTL). The rule
+   is one function, `mix_owner`, shared by HTTP and websocket.
+4. **Every slider move is saved** — if the mix is yours. No save button
+   exists anywhere in the mixing lab.
+
+## 3. The formula (what the sliders drive)
+
+For a mix `{ingredient → ml}`:
+
+```
+volume     = Σ ml
+pure_alcohol = Σ ml × abv/100
+abv%       = 100 × pure_alcohol / volume
+cost       = Σ ml × cost_per_ml
+alcohol_g  = pure_alcohol × 0.789          (ethanol density)
+drinks     = alcohol_g / 10                (WHO standard drink)
+```
+
+Computed server-side in one place (`CocktailDb.stats_for`) from the payload,
+never from stored rows — so a classic being played with and a draft being
+edited go through the same formula. The ABV meter fills toward 40% vol with
+a green→amber→red gradient; "standard drinks" is the playful conscience
+(*"Drink water too. 💧"*).
+
+## 4. The screens (all three of them)
+
+| Screen | What it does | The fun |
 |---|---|---|
-| `id` | int PK | |
-| `recipe_id` | FK → recipe | |
-| `multiplier` | numeric | 1.0 = one standard batch |
-| `produced_qty` | numeric | `yield_qty × multiplier`, snapshotted |
-| `cost_snapshot` | numeric | rolled-up cost at production time |
-| `produced_at` | timestamp | |
-| `notes` | text | lot code, operator |
+| **The bar** (`/`) | classics + your creations as cards; tag chips filter; a name box mixes a new one | every card wears its emoji, its taste tags, its strength and its pour cost |
+| **The mixing lab** (`/cocktail/<id>`) | sliders per ingredient; live stats; add/remove bottles; rename/retag; fork; pour away | the numbers dance while you drag; "saved ✓" appears without you asking |
+| **The shelf** (`/ingredients`) | every bottle with ABV and €/ml; search; add a bottle | the emoji picker is the only bureaucracy |
 
-`batch_consumption` (child of batch): `component_kind`, `component_id`,
-`qty_used`, `unit_cost_snapshot` — the audit trail of what a run consumed.
+## 5. How the pieces move (the two wires)
 
-## 2. Invariants
+- **HTMX** carries the discrete gestures: filter chips, fork, add/remove
+  ingredient, rename, delete — fragment swaps and `HX-Redirect`.
+- **The websocket** (`/ws`) carries the continuous gesture: slider positions
+  stream up, `{stats, saved}` streams back. Autosave is a side effect of
+  playing, debounced at 200 ms, resilient to bad frames and reconnecting
+  with backoff.
 
-1. **No cycles**: a recipe may not contain itself, directly or transitively.
-   Enforced at line insertion by walking the component subtree (depth cap 20).
-2. **Unit coherence (v1)**: a BOM line's `unit` equals the component's
-   canonical unit. Unit conversion (kg↔g, l↔ml) is a later refinement, kept
-   out of v1 to keep arithmetic honest.
-3. **Quantities are per one batch** of the parent recipe; scaling is done by
-   the batch `multiplier`, never by editing lines.
-4. **Deleting is guarded**: an ingredient/recipe referenced by a BOM line or a
-   batch cannot be hard-deleted (v1: refuse; later: archive flag).
-5. **Costs are snapshotted on production**: ingredient prices change; a
-   batch records the cost that was true when it ran.
+## 6. Explicitly out (until the game asks for them)
 
-## 3. Derived values
-
-### 3.1 Cost rollup (recursive)
-
-```
-unit_cost(ingredient) = cost_per_unit
-batch_cost(recipe)    = Σ over bom_lines:
-                          qty × unit_cost(component)
-unit_cost(recipe)     = batch_cost(recipe) / yield_qty
-```
-
-Intermediates make this genuinely recursive: the cost of *Bitter Rosso*
-includes the per-ml cost of *rich syrup base*, itself rolled up from sugar and
-water. Displayed on the recipe page as a cost tree with per-line subtotals and
-percentage weight.
-
-### 3.2 Producibility
-
-For a requested batch (recipe × multiplier), the **one-level explosion**
-lists each line's required qty vs available stock → *can produce* /
-*missing list*. (v1 consumes intermediates from their stock rather than
-recursively producing them — matching real lab practice: you make the base
-first, then the bitter.)
-
-### 3.3 Producing a batch (the one transaction)
-
-```
-check: every line's required qty ≤ component stock  (else refuse, listing shortfalls)
-in one transaction:
-  decrement each component's stock by required qty
-  write batch + batch_consumption rows (with cost snapshots)
-  increment the recipe's stock_qty by produced_qty
-```
-
-## 4. UI surface (v1 showcase)
-
-| View | Content | HTMX behaviour |
-|---|---|---|
-| **Dashboard** | stock health, low-stock list, recent batches, headline numbers | fragments refreshed on `HX-Trigger` events |
-| **Ingredients** | searchable table, inline create/edit | search-as-you-type (`hx-get` on keyup), row edit-in-place |
-| **Recipe list** | cards by kind with cost + stock | filter chips |
-| **Recipe detail** | BOM editor: lines with component picker, qty; cost rollup tree; producibility panel | add/remove/edit lines by fragment swap; cost panel re-renders on every change |
-| **Produce** | multiplier input → live requirement/stock check → confirm | `hx-post`, disabled-until-valid, result banner |
-| **Batch log** | history with cost snapshots | paged fragments |
-
-Aesthetic direction for the showcase: dark "speakeasy" palette (charcoal,
-amber/copper accents, cream text), generous type, the product photography of
-a good cocktail menu. One hand-written CSS file; no CSS framework.
-
-## 5. Explicitly out of v1
-
-Multi-warehouse stock, purchase orders and supplier management, unit
-conversion, lot tracking / expiry (FEFO), user roles beyond a single login,
-recipe versioning, PDF export, barcode. Each is a clean extension of the
-model above; none is needed to make the showcase convincing.
+Sharing/publishing your creations to other users, ratings, comments, photos,
+glass-size presets, unit conversion (oz), inventory/stock (that was v1's
+world), multi-language. Apple sign-in is designed but parked (see
+FEASIBILITY §6: its client_secret is a rotating signed JWT, not a string).

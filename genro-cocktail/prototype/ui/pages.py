@@ -1,28 +1,23 @@
-"""Every page and HTMX fragment of the prototype, as builder recipes.
+"""Every page and HTMX fragment of the bar, as builder recipes.
 
 Views are plain functions: data in, HTML string out. All markup goes through
 genro-builders (text and attributes are escaped by the dialect), never through
-f-strings.
+f-strings. ``ctx`` is the little bit of who-is-looking every page needs:
+``{"user": identity-or-None, "session_id": str}``.
 """
 
 from .htmx import render_fragment, render_page
 
 NAV = [
-    ("Dashboard", "/", "dashboard"),
-    ("Ingredients", "/ingredients", "ingredients"),
-    ("Recipes", "/recipes", "recipes"),
-    ("Batches", "/batches", "batches"),
+    ("The bar", "/", "bar"),
+    ("The shelf", "/ingredients", "shelf"),
 ]
 
-HTMX_SRC = "https://unpkg.com/htmx.org@2.0.4"
+HTMX_SRC = "/static/htmx.min.js"
 
 
 def money(value: float) -> str:
     return f"€ {value:,.2f}"
-
-
-def unit_money(value: float) -> str:
-    return f"€ {value:,.4f}"
 
 
 def qty(value: float) -> str:
@@ -34,7 +29,7 @@ def qty(value: float) -> str:
 # --------------------------------------------------------------------------
 
 
-def page(title: str, active: str, build_main) -> str:
+def page(title: str, active: str, ctx: dict, build_main, script: str = "") -> str:
     def build(root):
         html = root.html(lang="en")
         head = html.head()
@@ -45,334 +40,279 @@ def page(title: str, active: str, build_main) -> str:
         head.script(src=HTMX_SRC)
         body = html.body()
         nav = body.nav(class_="topnav")
-        nav.a("Genro Cocktail", href="/", class_="brand")
+        nav.a("🍸 Genro Cocktail", href="/", class_="brand")
         links = nav.div(class_="navlinks")
         for label, href, key in NAV:
             attrs = {"href": href}
             if key == active:
                 attrs["class_"] = "active"
             links.a(label, **attrs)
+        who = nav.div(class_="who")
+        if ctx.get("user"):
+            who.span(f"🙋 {ctx['user']}", class_="muted")
+            logout = who.form(
+                hx_post=f"/_server/logout?session_id={ctx.get('session_id', '')}",
+                hx_swap="none",
+                **{"hx-on::after-request": "location.reload()"},
+            )
+            logout.button("sign out", html_type="submit", class_="btn btn-ghost")
+        else:
+            who.a("Sign in", href="/_server/login_page?next=/", class_="signin")
         main = body.main(class_="container")
         build_main(main)
+        if script:
+            body.script(src=script)
     return render_page(build)
 
 
-def _stat(parent, label: str, value: str):
+def _stat(parent, label: str, value: str, value_id: str = None):
     box = parent.div(class_="stat")
-    box.div(value, class_="stat-value")
+    attrs = {"class_": "stat-value"}
+    if value_id:
+        attrs["id"] = value_id
+    box.div(value, **attrs)
     box.div(label, class_="stat-label")
 
 
-def _low_badge(cell, ingredient):
-    cell.span(qty(ingredient["stock_qty"]) + f" {ingredient['unit']}")
-    if ingredient["stock_qty"] <= ingredient["reorder_level"]:
-        cell.span("low", class_="badge badge-warn")
+def _tag_chips(parent, cocktail):
+    chips = parent.div(class_="chips")
+    for tag in cocktail["tag_list"]:
+        chips.span(tag, class_="chip")
 
 
 # --------------------------------------------------------------------------
-# dashboard
+# the bar (gallery)
 # --------------------------------------------------------------------------
 
 
-def dashboard(data: dict) -> str:
-    totals = data["totals"]
-
-    def build(main):
-        main.h1("Production dashboard")
-        stats = main.div(class_="stats")
-        _stat(stats, "ingredients", str(totals["ingredients"]))
-        _stat(stats, "recipes", str(totals["recipes"]))
-        _stat(stats, "batches produced", str(totals["batches"]))
-        _stat(stats, "raw stock value", money(totals["stock_value"]))
-
-        grid = main.div(class_="grid2")
-
-        left = grid.section(class_="panel")
-        left.h2("Low stock")
-        if data["low_stock"]:
-            table = left.table(class_="data")
-            head = table.thead().tr()
-            for header in ("Ingredient", "Stock", "Reorder at"):
-                head.th(header)
-            tbody = table.tbody()
-            for ingredient in data["low_stock"]:
-                row = tbody.tr()
-                row.td(ingredient["name"])
-                _low_badge(row.td(), ingredient)
-                row.td(qty(ingredient["reorder_level"]) + f" {ingredient['unit']}")
+def _bar_grid(parent, cocktails):
+    grid = parent.div(id="bar-grid", class_="cards")
+    for cocktail in cocktails:
+        card = grid.a(class_="card", href=f"/cocktail/{cocktail['id']}")
+        top = card.div(class_="card-top")
+        top.span(cocktail["emoji"], class_="glass")
+        if cocktail["is_classic"]:
+            top.span("classic", class_="badge badge-classic")
         else:
-            left.p("Everything above reorder level.", class_="muted")
-
-        right = grid.section(class_="panel")
-        right.h2("Recent batches")
-        if data["recent_batches"]:
-            table = right.table(class_="data")
-            head = table.thead().tr()
-            for header in ("When", "Recipe", "Qty", "Cost"):
-                head.th(header)
-            tbody = table.tbody()
-            for batch in data["recent_batches"]:
-                row = tbody.tr()
-                row.td(batch["produced_at"])
-                row.td(batch["recipe_name"])
-                row.td(qty(batch["produced_qty"]) + f" {batch['unit']}")
-                row.td(money(batch["cost_snapshot"]))
-        else:
-            right.p("No production yet.", class_="muted")
-
-    return page("Dashboard", "dashboard", build)
+            top.span("yours", class_="badge badge-yours")
+        card.h3(cocktail["name"])
+        _tag_chips(card, cocktail)
+        meta = card.div(class_="card-meta")
+        meta.span(f"{cocktail['abv']}% vol", class_="abv")
+        meta.span(f"· {qty(cocktail['volume'])} ml · {money(cocktail['cost'])}")
+    if not cocktails:
+        grid.p("Nothing here — mix something!", class_="muted")
 
 
-# --------------------------------------------------------------------------
-# ingredients
-# --------------------------------------------------------------------------
+def bar_grid_fragment(cocktails) -> str:
+    return render_fragment(lambda root: _bar_grid(root, cocktails))
 
 
-def _ingredients_table(parent, ingredients, q: str):
-    wrapper = parent.div(id="ing-table")
-    table = wrapper.table(class_="data")
-    head = table.thead().tr()
-    for header in ("Name", "Category", "Unit", "Cost / unit", "Stock", "Reorder at"):
-        head.th(header)
-    tbody = table.tbody()
-    for ingredient in ingredients:
-        row = tbody.tr()
-        row.td(ingredient["name"])
-        row.td(ingredient["category"], class_="muted")
-        row.td(ingredient["unit"])
-        row.td(unit_money(ingredient["cost_per_unit"]))
-        _low_badge(row.td(), ingredient)
-        row.td(qty(ingredient["reorder_level"]))
-    if not ingredients:
-        empty = tbody.tr()
-        empty.td(f"Nothing matches “{q}”." if q else "No ingredients yet.",
-                 colspan="6", class_="muted")
-
-
-def ingredients_table_fragment(ingredients, q: str = "") -> str:
-    return render_fragment(lambda root: _ingredients_table(root, ingredients, q))
-
-
-def ingredients_page(ingredients) -> str:
+def bar_page(cocktails, tags, active_tag: str, ctx: dict) -> str:
     def build(main):
-        main.h1("Ingredients")
+        hero = main.div(class_="hero")
+        hero.h1("Every classic is a lesson.")
+        hero.p("Poke at the recipes below — sliders, not rules. "
+               "When one starts to feel like yours, fork it and give it a name.",
+               class_="muted")
 
-        bar = main.div(class_="toolbar")
-        bar.input(
-            name="q", html_type="search", placeholder="Search name or category…",
-            class_="search",
-            hx_get="/ingredients_table", hx_target="#ing-table", hx_swap="outerHTML",
-            hx_trigger="input changed delay:300ms, keyup[key=='Enter']",
-        )
+        toolbar = main.div(class_="toolbar")
+        chips = toolbar.div(class_="chips chips-filter")
+        all_attrs = {
+            "class_": "chip chip-btn" + ("" if active_tag else " chip-on"),
+            "hx_get": "/bar_grid", "hx_target": "#bar-grid", "hx_swap": "outerHTML",
+        }
+        chips.button("all", **all_attrs)
+        for tag in tags:
+            attrs = {
+                "class_": "chip chip-btn" + (" chip-on" if tag == active_tag else ""),
+                "hx_get": f"/bar_grid?tag={tag}", "hx_target": "#bar-grid",
+                "hx_swap": "outerHTML",
+            }
+            chips.button(tag, **attrs)
 
-        form = main.form(
-            class_="panel inline-form",
-            hx_post="/ingredient_add", hx_target="#ing-table", hx_swap="outerHTML",
-            **{"hx-on::after-request": "if(event.detail.successful) this.reset()"},
-        )
-        form.h2("New ingredient")
-        row = form.div(class_="form-row")
-        row.input(name="name", placeholder="Name", required=True)
-        row.input(name="category", placeholder="Category")
-        select = row.select(name="unit")
-        for unit in ("g", "ml", "pcs"):
-            select.option(unit, value=unit)
-        row.input(name="cost_per_unit", html_type="number", step="0.0001", min="0",
-                  placeholder="Cost per unit €", required=True)
-        row.input(name="stock_qty", html_type="number", step="any", min="0",
-                  placeholder="Initial stock")
-        row.input(name="reorder_level", html_type="number", step="any", min="0",
-                  placeholder="Reorder level")
-        row.button("Add", html_type="submit", class_="btn")
+        form = toolbar.form(class_="newdrink", hx_post="/new_cocktail", hx_swap="none")
+        form.input(name="name", placeholder="Name your invention…", required=True)
+        form.button("🍸 Mix a new one", html_type="submit", class_="btn btn-primary")
 
-        _ingredients_table(main, ingredients, "")
+        _bar_grid(main, cocktails)
 
-    return page("Ingredients", "ingredients", build)
+    return page("The bar", "bar", ctx, build)
 
 
 # --------------------------------------------------------------------------
-# recipes
+# the mixing lab (editor)
 # --------------------------------------------------------------------------
 
 
-def recipes_page(recipes) -> str:
-    def build(main):
-        main.h1("Recipes")
-        cards = main.div(class_="cards")
-        for recipe in recipes:
-            card = cards.a(class_="card", href=f"/recipe/{recipe['id']}")
-            top = card.div(class_="card-top")
-            top.h3(recipe["name"])
-            top.span(recipe["kind"], class_=f"badge badge-{recipe['kind']}")
-            meta = card.div(class_="card-meta")
-            meta.div(f"batch yield: {qty(recipe['yield_qty'])} {recipe['yield_unit']}")
-            meta.div(f"batch cost: {money(recipe['batch_cost'])}")
-            meta.div(f"unit cost: {unit_money(recipe['unit_cost'])} / {recipe['yield_unit']}")
-            meta.div(f"in stock: {qty(recipe['stock_qty'])} {recipe['yield_unit']}")
-    return page("Recipes", "recipes", build)
+def _abv_meter(parent, abv: float):
+    meter = parent.div(class_="meter")
+    fill_pct = min(100.0, abv * 100.0 / 40.0)  # 40% vol = full bar
+    meter.div(class_="meter-fill", id="abv-fill", style=f"width: {fill_pct}%")
 
 
-def _cost_tree(parent, nodes):
-    ul = parent.ul(class_="cost-tree")
-    for node in nodes:
-        li = ul.li()
-        line = li.div(class_="cost-line")
-        line.span(node["name"], class_="cost-name")
-        line.span(f"{qty(node['qty'])} {node['unit']} × {unit_money(node['unit_cost'])}",
-                  class_="muted")
-        line.span(money(node["total"]), class_="cost-total")
-        if node["children"]:
-            _cost_tree(li, node["children"])
+def _stats_panel(parent, stats: dict):
+    panel = parent.div(id="mix-stats", class_="panel stats-panel")
+    row = panel.div(class_="stats")
+    _stat(row, "in the glass", f"{qty(stats['volume'])} ml", value_id="stat-volume")
+    _stat(row, "strength", f"{stats['abv']}% vol", value_id="stat-abv")
+    _stat(row, "pour cost", money(stats["cost"]), value_id="stat-cost")
+    _stat(row, "standard drinks", f"{stats['drinks']}", value_id="stat-drinks")
+    _abv_meter(panel, stats["abv"])
+    footer = panel.div(class_="stats-footer")
+    footer.span("", id="save-state", class_="save-state muted")
+    footer.span("Drink water too. 💧", class_="muted tiny")
 
 
-def _recipe_stats(parent, detail: dict):
-    recipe = detail["recipe"]
-    stats = parent.div(
-        id="recipe-stats", class_="stats",
-        hx_get=f"/recipe_stats?recipe_id={recipe['id']}",
-        hx_trigger="batchProduced from:body", hx_swap="outerHTML",
+def _mixer(parent, detail: dict, owned: bool):
+    cocktail = detail["cocktail"]
+    mixer = parent.section(
+        id="mixer", class_="panel",
+        data_cocktail_id=str(cocktail["id"]),
+        data_editable="1" if owned else "0",
     )
-    _stat(stats, "batch yield", f"{qty(recipe['yield_qty'])} {recipe['yield_unit']}")
-    _stat(stats, "batch cost", money(detail["batch_cost"]))
-    _stat(stats, "unit cost", f"{unit_money(detail['unit_cost'])} / {recipe['yield_unit']}")
-    _stat(stats, "in stock", f"{qty(recipe['stock_qty'])} {recipe['yield_unit']}")
-
-
-def recipe_stats_fragment(detail: dict) -> str:
-    return render_fragment(lambda root: _recipe_stats(root, detail))
-
-
-def _bom_panel(parent, detail: dict):
-    recipe = detail["recipe"]
-    panel = parent.section(id="bom", class_="panel")
-    panel.h2("Bill of materials")
-
-    if detail["lines"]:
-        table = panel.table(class_="data")
-        head = table.thead().tr()
-        for header in ("Component", "Qty / batch", "Unit cost", "Line total", ""):
-            head.th(header)
-        tbody = table.tbody()
-        for line in detail["lines"]:
-            row = tbody.tr()
-            cell = row.td()
-            cell.span(line["component_name"])
-            if line["component_kind"] == "recipe":
-                cell.span("sub-recipe", class_="badge badge-intermediate")
-            row.td(f"{qty(line['qty'])} {line['unit']}")
-            row.td(unit_money(line["unit_cost"]))
-            row.td(money(line["total"]))
-            row.td().button(
-                "remove", class_="btn btn-ghost",
-                hx_post="/line_delete", hx_target="#bom", hx_swap="outerHTML",
-                hx_vals=f'{{"line_id": {line["id"]}, "recipe_id": {recipe["id"]}}}',
-                hx_confirm=f"Remove {line['component_name']} from the bill?",
+    mixer.h2("The mix")
+    if not detail["lines"]:
+        mixer.p("An empty glass. Add your first ingredient below. 🧊", class_="muted")
+    for line in detail["lines"]:
+        row = mixer.div(class_="slider-row")
+        label = row.div(class_="slider-label")
+        label.span(f"{line['emoji']} {line['name']}")
+        label.span(f"{line['abv']}% vol · {money(line['cost_per_ml'])}/ml",
+                   class_="muted tiny")
+        controls = row.div(class_="slider-controls")
+        controls.input(
+            html_type="range", min="0", max="200", step="5",
+            value=qty(line["qty_ml"]),
+            class_="dose", data_ingredient=str(line["ingredient_id"]),
+        )
+        controls.span(f"{qty(line['qty_ml'])} ml", class_="dose-label",
+                      id=f"dose-{line['ingredient_id']}")
+        if owned:
+            controls.button(
+                "✕", class_="btn btn-ghost",
+                hx_post="/line_remove", hx_target="#mixer", hx_swap="outerHTML",
+                hx_vals=f'{{"cocktail_id": {cocktail["id"]}, "ingredient_id": {line["ingredient_id"]}}}',
             )
-    else:
-        panel.p("No components yet — add the first line below.", class_="muted")
 
-    form = panel.form(class_="inline-form",
-                      hx_post="/line_add", hx_target="#bom", hx_swap="outerHTML")
-    form.input(html_type="hidden", name="recipe_id", value=str(recipe["id"]))
-    row = form.div(class_="form-row")
-    select = row.select(name="component")
-    group = select.optgroup(html_label="Ingredients")
-    for item in detail["pick_ingredients"]:
-        group.option(f"{item['name']} ({item['unit']})", value=f"ingredient:{item['id']}")
-    group = select.optgroup(html_label="Recipes (intermediates)")
-    for item in detail["pick_recipes"]:
-        group.option(f"{item['name']} ({item['unit']})", value=f"recipe:{item['id']}")
-    row.input(name="qty", html_type="number", step="any", min="0",
-              placeholder="Qty per batch", required=True)
-    row.button("Add line", html_type="submit", class_="btn")
-
-    if detail["cost_tree"]:
-        panel.h2("Cost rollup")
-        _cost_tree(panel, detail["cost_tree"])
+    if owned and detail["shelf"]:
+        form = mixer.form(class_="form-row",
+                          hx_post="/line_add", hx_target="#mixer", hx_swap="outerHTML")
+        form.input(html_type="hidden", name="cocktail_id", value=str(cocktail["id"]))
+        select = form.select(name="ingredient_id")
+        for item in detail["shelf"]:
+            select.option(f"{item['emoji']} {item['name']} ({item['abv']}% vol)",
+                          value=str(item["id"]))
+        form.button("Add to the glass", html_type="submit", class_="btn")
 
 
-def bom_fragment(detail: dict) -> str:
-    return render_fragment(lambda root: _bom_panel(root, detail))
+def mixer_fragment(detail: dict, owned: bool) -> str:
+    return render_fragment(lambda root: _mixer(root, detail, owned))
 
 
-def recipe_page(detail: dict) -> str:
-    recipe = detail["recipe"]
+def cocktail_page(detail: dict, owned: bool, ctx: dict) -> str:
+    cocktail = detail["cocktail"]
 
     def build(main):
         crumbs = main.div(class_="crumbs")
-        crumbs.a("Recipes", href="/recipes")
-        crumbs.span(" / ")
-        crumbs.span(recipe["name"])
-        header = main.div(class_="page-head")
-        header.h1(recipe["name"])
-        header.span(recipe["kind"], class_=f"badge badge-{recipe['kind']}")
-        _recipe_stats(main, detail)
+        crumbs.a("The bar", href="/")
+        crumbs.span(f" / {cocktail['name']}")
 
-        _bom_panel(main, detail)
+        head = main.div(class_="page-head")
+        head.span(cocktail["emoji"], class_="glass glass-big")
+        head.h1(cocktail["name"])
+        if cocktail["is_classic"]:
+            head.span("classic", class_="badge badge-classic")
+        elif owned:
+            head.span("yours", class_="badge badge-yours")
 
-        produce = main.section(class_="panel")
-        produce.h2("Produce a batch")
-        form = produce.form(class_="inline-form",
-                            hx_post="/produce", hx_target="#produce-result", hx_swap="innerHTML")
-        form.input(html_type="hidden", name="recipe_id", value=str(recipe["id"]))
-        row = form.div(class_="form-row")
-        row.input(name="multiplier", html_type="number", step="any", min="0.1",
-                  value="1", required=True)
-        row.span(f"× {qty(recipe['yield_qty'])} {recipe['yield_unit']}", class_="muted")
-        row.button("Produce", html_type="submit", class_="btn btn-primary")
-        produce.div(id="produce-result")
+        if cocktail["story"]:
+            main.p(cocktail["story"], class_="story muted")
+        _tag_chips(main, cocktail)
 
-    return page(recipe["name"], "recipes", build)
-
-
-def produce_result_fragment(result: dict) -> str:
-    def build(root):
-        if result["ok"]:
-            recipe = result["recipe"]
-            banner = root.div(class_="banner banner-ok")
-            banner.strong(f"Batch #{result['batch_id']} produced. ")
-            banner.span(
-                f"+{qty(result['produced_qty'])} {recipe['yield_unit']} at "
-                f"{money(result['cost'])} — stock is now "
-                f"{qty(recipe['stock_qty'])} {recipe['yield_unit']}."
+        if not owned:
+            bench = main.div(class_="panel fork-panel")
+            bench.p("Play with the sliders all you want — a classic never changes. "
+                    "Fork it to keep your version.", class_="muted")
+            fork = bench.form(hx_post="/fork", hx_swap="none")
+            fork.input(html_type="hidden", name="cocktail_id", value=str(cocktail["id"]))
+            fork.button(f"🍴 Fork {cocktail['name']}", html_type="submit",
+                        class_="btn btn-primary")
+        else:
+            meta = main.form(class_="form-row meta-form",
+                             hx_post="/update_meta", hx_swap="none")
+            meta.input(html_type="hidden", name="cocktail_id", value=str(cocktail["id"]))
+            meta.input(name="emoji", value=cocktail["emoji"], class_="emoji-input",
+                       maxlength="4")
+            meta.input(name="name", value=cocktail["name"], required=True)
+            meta.input(name="tags", value=cocktail["tags"],
+                       placeholder="tags: bitter, sour, sweet…")
+            meta.button("Save details", html_type="submit", class_="btn")
+            meta.button(
+                "🚰 Pour it away", html_type="button", class_="btn btn-ghost",
+                hx_post="/delete_cocktail", hx_swap="none",
+                hx_vals=f'{{"cocktail_id": {cocktail["id"]}}}',
+                hx_confirm=f"Pour {cocktail['name']} down the drain, forever?",
             )
-        else:
-            banner = root.div(class_="banner banner-warn")
-            banner.strong("Not enough stock. ")
-            missing = [r for r in result["requirements"] if r["missing"] > 0]
-            items = root.ul(class_="missing")
-            for req in missing:
-                items.li(
-                    f"{req['name']}: need {qty(req['required'])} {req['unit']}, "
-                    f"have {qty(req['stock'])} — short {qty(req['missing'])}"
-                )
-    return render_fragment(build)
+
+        _stats_panel(main, detail["stats"])
+        _mixer(main, detail, owned)
+
+    return page(cocktail["name"], "bar", ctx, build, script="/static/mixlab.js")
 
 
 # --------------------------------------------------------------------------
-# batches
+# the shelf (ingredients)
 # --------------------------------------------------------------------------
 
 
-def batches_page(batches) -> str:
+def _shelf_grid(parent, ingredients, q: str):
+    grid = parent.div(id="shelf-grid", class_="cards")
+    for item in ingredients:
+        card = grid.div(class_="card")
+        top = card.div(class_="card-top")
+        top.span(item["emoji"], class_="glass")
+        top.span(item["category"], class_="chip")
+        card.h3(item["name"])
+        meta = card.div(class_="card-meta")
+        meta.span(f"{item['abv']}% vol", class_="abv")
+        meta.span(f"· {money(item['cost_per_ml'])}/ml")
+    if not ingredients:
+        grid.p(f"Nothing matches “{q}”." if q else "The shelf is empty.", class_="muted")
+
+
+def shelf_grid_fragment(ingredients, q: str = "") -> str:
+    return render_fragment(lambda root: _shelf_grid(root, ingredients, q))
+
+
+def ingredients_page(ingredients, ctx: dict) -> str:
     def build(main):
-        main.h1("Batch log")
-        panel = main.section(class_="panel")
-        if batches:
-            table = panel.table(class_="data")
-            head = table.thead().tr()
-            for header in ("#", "When", "Recipe", "Multiplier", "Produced", "Cost", "Notes"):
-                head.th(header)
-            tbody = table.tbody()
-            for batch in batches:
-                row = tbody.tr()
-                row.td(str(batch["id"]))
-                row.td(batch["produced_at"])
-                row.td(batch["recipe_name"])
-                row.td(f"×{qty(batch['multiplier'])}")
-                row.td(qty(batch["produced_qty"]) + f" {batch['unit']}")
-                row.td(money(batch["cost_snapshot"]))
-                row.td(batch["notes"], class_="muted")
-        else:
-            panel.p("No batches yet.", class_="muted")
-    return page("Batches", "batches", build)
+        main.h1("The shelf")
+        main.p("What the bar is made of: every bottle with its strength and its price.",
+               class_="muted")
+
+        toolbar = main.div(class_="toolbar")
+        toolbar.input(
+            name="q", html_type="search", placeholder="Search the shelf…", class_="search",
+            hx_get="/shelf_grid", hx_target="#shelf-grid", hx_swap="outerHTML",
+            hx_trigger="input changed delay:300ms",
+        )
+
+        form = main.form(class_="panel inline-form",
+                         hx_post="/ingredient_add", hx_target="#shelf-grid",
+                         hx_swap="outerHTML",
+                         **{"hx-on::after-request": "if(event.detail.successful) this.reset()"})
+        form.h2("New bottle")
+        row = form.div(class_="form-row")
+        row.input(name="emoji", placeholder="🧴", class_="emoji-input", maxlength="4")
+        row.input(name="name", placeholder="Name", required=True)
+        row.input(name="category", placeholder="Category")
+        row.input(name="abv", html_type="number", step="0.1", min="0", max="100",
+                  placeholder="% vol", required=True)
+        row.input(name="cost_per_ml", html_type="number", step="0.001", min="0",
+                  placeholder="€/ml", required=True)
+        row.button("Put it on the shelf", html_type="submit", class_="btn")
+
+        _shelf_grid(main, ingredients, "")
+
+    return page("The shelf", "shelf", ctx, build)
