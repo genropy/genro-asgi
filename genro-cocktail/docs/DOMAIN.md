@@ -56,6 +56,12 @@ from these two columns, `abv` and `cost_per_ml`.
    is one function, `mix_owner`, shared by HTTP and websocket.
 4. **Every slider move is saved** — if the mix is yours. No save button
    exists anywhere in the mixing lab.
+5. **Sharing is a biglietto.** "Condividi" turns your remix into a link
+   (Web Share API on mobile, copy-link on desktop). Whoever opens it sees a
+   read-only printed recipe card — name, doses with dotted leaders, ABV, your
+   one-line note — and a single red action: **"Falla tua"**, which forks the
+   recipe into their own bar. Share tokens are unguessable; the card exposes
+   nothing but the recipe itself.
 
 ## 3. The formula (what the sliders drive)
 
@@ -95,7 +101,7 @@ a green→amber→red gradient; "standard drinks" is the playful conscience
 
 ## 6. Explicitly out (until the game asks for them)
 
-Sharing/publishing your creations to other users, ratings, comments, photos,
+Public galleries/ratings/comments (the biglietto share-link is IN scope), photos,
 glass-size presets, unit conversion (oz), inventory/stock (that was v1's
 world), multi-language. Apple sign-in is designed but parked (see
 FEASIBILITY §6: its client_secret is a rotating signed JWT, not a string).
