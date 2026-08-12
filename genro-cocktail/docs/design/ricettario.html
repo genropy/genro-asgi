@@ -1,0 +1,526 @@
+<title>Ricettario</title>
+<style>
+  /* ---------- deck chrome (quiet, dual-theme) ---------- */
+  :root {
+    --ground: #f3f0ea; --card: #fbf9f5; --ink: #2b2620;
+    --ink-soft: #6f665a; --line: #ddd6ca; --accent: #8a5a24;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #1c1915; --card: #262119; --ink: #eee7da;
+      --ink-soft: #a2988a; --line: #3a342b; --accent: #d0a468;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #1c1915; --card: #262119; --ink: #eee7da;
+    --ink-soft: #a2988a; --line: #3a342b; --accent: #d0a468;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ground); color: var(--ink);
+    font: 16px/1.6 Seravek, "Gill Sans Nova", Ubuntu, Calibri, "DejaVu Sans", sans-serif; }
+  .wrap { max-width: 74rem; margin: 0 auto; padding: 3rem 2rem 6rem; }
+  .kicker { text-transform: uppercase; letter-spacing: 0.22em; font-size: 0.72rem; color: var(--ink-soft); }
+  h1 { font-size: 2.2rem; font-weight: 600; margin: 0.3rem 0 0.6rem; }
+  .lede { max-width: 48rem; color: var(--ink-soft); margin: 0 0 0.6rem; }
+  h2.sec { font-size: 1.25rem; font-weight: 600; margin: 3.2rem 0 0.4rem; }
+  .note { color: var(--ink-soft); font-size: 0.9rem; max-width: 48rem; margin: 0 0 1rem; }
+  .review-log { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 1rem 1.3rem; margin: 1.4rem 0; }
+  .review-log h3 { margin: 0 0 0.5rem; font-size: 0.95rem; }
+  .review-log ul { margin: 0; padding-left: 1.1rem; color: var(--ink-soft); font-size: 0.9rem; }
+  .frame { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--card); }
+  .frame-bar { display: flex; gap: 0.35rem; padding: 0.55rem 0.8rem; border-bottom: 1px solid var(--line); }
+  .frame-bar i { width: 9px; height: 9px; border-radius: 50%; background: var(--line); }
+  .frame-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--ink-soft); margin-left: auto; align-self: center; }
+  .screens { display: grid; grid-template-columns: repeat(auto-fit, minmax(21rem, 1fr)); gap: 1.4rem; }
+  .phones { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+    gap: 1.6rem; justify-items: center; }
+  .phone { width: 296px; border: 11px solid #1c1a17; border-radius: 36px; overflow: hidden;
+    box-shadow: 0 18px 40px rgba(20, 16, 10, 0.25); }
+  .phone-cap { text-align: center; font-size: 0.72rem; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--ink-soft); margin-top: 0.7rem; }
+
+  /* =================== RICETTARIO TOKENS =================== */
+  /* paper #f7f2e7 · ink #26221c · red #a63329 · sage(text) #5d6852 · muted #6e6252
+     notturno: paper #201c16 · ink #e8e0d0 · red #c9584a · sage #8a9678 */
+
+  .paper {
+    position: relative; background: #f7f2e7; color: #26221c;
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, P052, Georgia, serif;
+    font-feature-settings: "onum" 1, "pnum" 1;
+  }
+  /* the paper is physical: fractal grain + page vignette, zero images */
+  .paper::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="140" height="140"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch"/><feColorMatrix type="matrix" values="0 0 0 0 0.14 0 0 0 0 0.12 0 0 0 0 0.09 0 0 0 0.055 0"/></filter><rect width="140" height="140" filter="url(%23n)"/></svg>');
+    mix-blend-mode: multiply;
+    box-shadow: inset 0 0 60px rgba(60, 45, 20, 0.09);
+  }
+  .paper > * { position: relative; z-index: 1; }
+  .paper .num { color: #a63329; text-shadow: 0.5px 0.5px 0 rgba(166, 51, 41, 0.25); }
+  .paper .stat-strip b, .paper .hero-stat b { font-feature-settings: "tnum" 1, "lnum" 1; }
+
+  .paper.notte { background: #201c16; color: #e8e0d0; }
+  .paper.notte::after { mix-blend-mode: screen; opacity: 0.5;
+    box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.5); }
+
+  /* labels: letterspaced uppercase, never synthesized small caps */
+  .lab { text-transform: uppercase; letter-spacing: 0.09em; font-size: 0.82em; }
+
+  /* the rubber stamp — replaces every emoji in the UI layer */
+  .stamp {
+    display: inline-block; transform: rotate(-4deg); color: #a63329;
+    border: 1.5px solid #a63329; border-radius: 3px; position: relative;
+    padding: 0.1em 0.55em; text-transform: uppercase; letter-spacing: 0.18em;
+    font-size: 0.66em; font-weight: 700; opacity: 0.88;
+    text-shadow: 0.5px 0.5px 0 rgba(166, 51, 41, 0.3);
+  }
+  .stamp::after { content: ""; position: absolute; inset: 1.5px;
+    border: 1px solid #a63329; border-radius: 2px; opacity: 0.7; }
+  .notte .stamp { color: #c9584a; border-color: #c9584a; }
+  .notte .stamp::after { border-color: #c9584a; }
+  .stamp.sage { color: #5d6852; border-color: #5d6852; text-shadow: none; }
+  .stamp.sage::after { border-color: #5d6852; }
+
+  /* the ledger: account-book red margin, hanging numbers, honest leaders */
+  .ledger { border-left: 3px double #a63329; padding-left: 1em; margin-left: 2.2em; }
+  .lentry { position: relative; padding: 0.7em 0; border-top: 1px solid rgba(38, 34, 28, 0.1); }
+  .lentry:first-child { border-top: none; }
+  .lentry .n { position: absolute; left: -3.1em; top: 0.85em; font-size: 0.72em; width: 2.4em; text-align: right; }
+  .lentry h5 { margin: 0; font-size: 1.1em; font-weight: 700; display: flex; align-items: baseline; gap: 0.5em; }
+  .lentry h5 .leader { flex: 1; border-bottom: 1px dotted rgba(38, 34, 28, 0.5); transform: translateY(-0.22em); min-width: 1.5em; }
+  .lentry h5 .price { font-weight: 400; color: #a63329; font-size: 0.88em; }
+  .lentry .d { color: #6e6252; font-style: italic; font-size: 0.88em; margin: 0.15em 0; }
+  .lentry .r { display: flex; gap: 0.4em; align-items: center; flex-wrap: wrap; }
+  .lentry .meta { margin-left: auto; color: #6e6252; font-size: 0.82em; }
+  /* a fork is marginalia, not typesetting */
+  .lentry.mine h5 .name { font-style: italic; font-weight: 400; }
+  .lentry.mine h5 .leader { border-bottom-color: rgba(110, 98, 82, 0.45); border-bottom-style: dashed; }
+  .notte .lentry { border-top-color: rgba(232, 224, 208, 0.12); }
+  .notte .lentry h5 .leader { border-bottom-color: rgba(232, 224, 208, 0.45); }
+  .notte .lentry .d, .notte .lentry .meta { color: #a89a86; }
+  .notte .lentry h5 .price { color: #c9584a; }
+
+  .chip { border: 1px solid #5d6852; color: #5d6852; border-radius: 2px;
+    padding: 0.05em 0.6em; font-size: 0.74em; }
+  .chip.on { background: #5d6852; color: #f7f2e7; }
+  .notte .chip { border-color: #8a9678; color: #8a9678; }
+  .chiprow { display: flex; gap: 0.4em; overflow-x: auto; scrollbar-width: none;
+    mask-image: linear-gradient(90deg, #000 88%, transparent);
+    -webkit-mask-image: linear-gradient(90deg, #000 88%, transparent); }
+  .chiprow::-webkit-scrollbar { display: none; }
+
+  /* the slider: an ink dot travelling a printed rule; red only while your hand is on it */
+  input[type="range"].dose { -webkit-appearance: none; appearance: none; width: 100%;
+    height: 40px; background: transparent; margin: 0; cursor: pointer; }
+  input[type="range"].dose::-webkit-slider-runnable-track { height: 2px; background: #26221c; }
+  input[type="range"].dose::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+    width: 18px; height: 18px; border-radius: 50%; background: #26221c;
+    border: 2.5px solid #f7f2e7; box-shadow: 0 0 0 1.25px #26221c; margin-top: -8px; }
+  input[type="range"].dose:active::-webkit-slider-thumb { background: #a63329; box-shadow: 0 0 0 1.25px #a63329; }
+  input[type="range"].dose::-moz-range-track { height: 2px; background: #26221c; }
+  input[type="range"].dose::-moz-range-progress { height: 2px; background: #26221c; }
+  input[type="range"].dose:active::-moz-range-progress { background: #a63329; }
+  input[type="range"].dose::-moz-range-thumb { width: 15px; height: 15px; border-radius: 50%;
+    background: #26221c; border: 2.5px solid #f7f2e7; box-shadow: 0 0 0 1.25px #26221c; }
+  .notte input[type="range"].dose::-webkit-slider-runnable-track { background: #e8e0d0; }
+  .notte input[type="range"].dose::-webkit-slider-thumb { background: #e8e0d0; border-color: #201c16; box-shadow: 0 0 0 1.25px #e8e0d0; }
+
+  /* dose row: label line carries icon · name · tappable value */
+  .srow { padding: 0.15em 0; border-top: 1px solid rgba(38, 34, 28, 0.12); }
+  .srow .lbl { display: flex; align-items: center; gap: 0.5em; }
+  .srow .lbl svg { width: 19px; height: 19px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.6; }
+  .srow .lbl .ml { margin-left: auto; color: #a63329; font-feature-settings: "tnum" 1, "lnum" 1;
+    border: 1px solid rgba(166, 51, 41, 0.35); border-radius: 3px; padding: 0.1em 0.5em; }
+  .notte .srow { border-top-color: rgba(232, 224, 208, 0.12); }
+  .notte .srow .lbl .ml { color: #c9584a; border-color: rgba(201, 88, 74, 0.4); }
+
+  /* stat hierarchy: gradazione is the hero, the rest is one ruled line */
+  .hero-stat { display: flex; align-items: baseline; gap: 0.55em; }
+  .hero-stat b { font-size: 2.5em; font-weight: 400; color: #a63329; line-height: 1;
+    text-shadow: 0.5px 0.5px 0 rgba(166, 51, 41, 0.25); }
+  .hero-stat span { color: #6e6252; font-style: italic; }
+  .substat { border-top: 1px solid #26221c; border-bottom: 1px solid rgba(38, 34, 28, 0.25);
+    padding: 0.3em 0; margin-top: 0.5em; display: flex; gap: 1.4em; color: #6e6252; font-size: 0.9em; }
+  .substat b { color: #26221c; font-weight: 400; font-feature-settings: "tnum" 1, "lnum" 1; }
+  .notte .hero-stat b { color: #c9584a; }
+  .notte .substat { border-top-color: #e8e0d0; border-bottom-color: rgba(232, 224, 208, 0.25); color: #a89a86; }
+  .notte .substat b { color: #e8e0d0; }
+  .meterline { height: 3px; background: rgba(38, 34, 28, 0.12); margin-top: 0.55em; }
+  .meterline i { display: block; height: 100%; width: 62%; background: #a63329; }
+  .notte .meterline { background: rgba(232, 224, 208, 0.15); }
+  .notte .meterline i { background: #c9584a; }
+
+  /* =================== phone scaffolding =================== */
+  .ph { height: 600px; font-size: 13px; display: flex; flex-direction: column; }
+  .ph .status { display: flex; justify-content: space-between; padding: 0.55em 1.4em 0.15em;
+    font-size: 0.8em; color: #6e6252; font-feature-settings: "tnum" 1, "lnum" 1; }
+  .notte .status { color: #a89a86; }
+  .ph .masthead { text-align: center; padding: 0.4em 1.2em 0.6em; border-bottom: 2px solid currentColor; }
+  .ph .masthead b { letter-spacing: 0.12em; font-size: 1.15em; font-weight: 700; text-transform: uppercase; }
+  .ph .masthead i { display: block; color: #a63329; font-size: 0.9em; }
+  .notte .masthead i { color: #c9584a; }
+  .ph .scroll { flex: 1; overflow: hidden; padding: 0.8em 1.1em 0.4em; }
+  .ph .crumbrow { display: flex; justify-content: space-between; align-items: center;
+    padding: 0.55em 1.1em; border-bottom: 2px solid currentColor; }
+  .ph .crumbrow .back { font-style: italic; color: #6e6252; padding: 0.4em 0.6em 0.4em 0; }
+  .notte .crumbrow .back { color: #a89a86; }
+  .ph h4.title { margin: 0.35em 0 0.2em; font-size: 1.3em; font-weight: 700;
+    display: flex; align-items: baseline; gap: 0.4em; }
+  .ph h4.title .pencil { color: #6e6252; font-size: 0.7em; font-style: italic; font-weight: 400; }
+
+  /* live readout strip: docked where the thumb is, above the CTA */
+  .ph .stat-strip { display: flex; align-items: baseline; gap: 0.7em;
+    border-top: 1px solid currentColor; padding: 0.5em 1.1em;
+    font-feature-settings: "tnum" 1, "lnum" 1; }
+  .ph .stat-strip b { color: #a63329; font-size: 1.15em; font-weight: 700; }
+  .ph .stat-strip .rest { color: #6e6252; }
+  .ph .stat-strip .stamp { margin-left: auto; }
+  .notte .stat-strip b { color: #c9584a; }
+  .notte .stat-strip .rest { color: #a89a86; }
+
+  /* undo snackbar: appears just above the strip, thumb + eye zone */
+  .ph .snack { margin: 0 1.1em 0.5em; border: 1px solid #26221c; background: #fbf7ee;
+    padding: 0.55em 0.8em; display: flex; align-items: baseline; gap: 0.6em;
+    box-shadow: 2px 2px 0 rgba(38, 34, 28, 0.15); font-size: 0.92em; }
+  .ph .snack i { font-style: italic; color: #6e6252; }
+  .ph .snack b { margin-left: auto; color: #a63329; letter-spacing: 0.1em; font-size: 0.85em; }
+
+  /* footer: CTA + rubrica index tabs, safe-area padded */
+  .ph .foot { padding: 0.7em 1.1em 0; }
+  .ph .cta { display: block; text-align: center; background: #26221c; color: #f7f2e7;
+    padding: 0.85em; border-radius: 3px; letter-spacing: 0.1em; text-transform: uppercase;
+    font-size: 0.92em; }
+  .ph .cta.red { background: #a63329; }
+  .notte .cta { background: #e8e0d0; color: #201c16; }
+  .ph .rubrica { display: flex; gap: 3px; padding: 0.6em 1.1em calc(0.6em + 8px); }
+  .ph .rubrica span { flex: 1; text-align: center; padding: 0.55em 0;
+    border: 1px solid rgba(38, 34, 28, 0.4); border-bottom: none;
+    border-radius: 5px 5px 0 0; background: #efe8d8; color: #6e6252;
+    text-transform: uppercase; letter-spacing: 0.09em; font-size: 0.72em; }
+  .ph .rubrica span.on { background: #26221c; color: #f7f2e7; border-color: #26221c; }
+  .notte .rubrica span { background: #2a251d; color: #a89a86; border-color: rgba(232, 224, 208, 0.3); }
+  .notte .rubrica span.on { background: #e8e0d0; color: #201c16; border-color: #e8e0d0; }
+  .ph .search { width: 100%; font: inherit; color: inherit; background: #fbf7ee;
+    border: 1px solid #26221c; border-radius: 2px; padding: 0.7em 0.8em; }
+  .ph .addrow { border: 1px dashed rgba(38, 34, 28, 0.45); border-radius: 3px;
+    text-align: center; padding: 0.7em; color: #6e6252; font-style: italic; margin-top: 0.5em; }
+  .notte .addrow { border-color: rgba(232, 224, 208, 0.4); color: #a89a86; }
+  .ph .shelfrow { display: flex; align-items: center; gap: 0.6em;
+    border-top: 1px solid rgba(38, 34, 28, 0.15); padding: 0.7em 0; }
+  .ph .shelfrow svg { width: 21px; height: 21px; stroke: currentColor; fill: none; stroke-width: 1.6; flex: none; }
+  .ph .shelfrow .nm2 b { display: block; font-weight: 700; }
+  .ph .shelfrow .nm2 i { color: #6e6252; font-size: 0.85em; }
+  .ph .shelfrow .vals { margin-left: auto; text-align: right; font-size: 0.85em;
+    color: #6e6252; font-feature-settings: "tnum" 1, "lnum" 1; }
+  .ph .shelfrow .vals b { display: block; color: #a63329; font-weight: 400; }
+
+  /* icon sheet */
+  .iconsheet { display: flex; gap: 1.2rem; flex-wrap: wrap; align-items: flex-end; }
+  .iconsheet figure { margin: 0; text-align: center; }
+  .iconsheet figcaption { font-size: 0.72rem; color: var(--ink-soft); margin-top: 0.4rem; }
+  .iconsheet .pad { background: #f7f2e7; border-radius: 8px; padding: 0.8rem; display: flex; gap: 0.9rem; }
+  .iconsheet svg { stroke: #26221c; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* desktop mock body */
+  .desk { padding: 1.4em 1.8em 1.8em; font-size: 14px; }
+  .desk .m-nav { display: flex; gap: 1.4em; align-items: baseline; padding: 0 0 0.7em;
+    border-bottom: 2px solid currentColor; margin-bottom: 1em; }
+  .desk .m-brand { font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; font-size: 1.1em; }
+  .desk .m-nav a { color: #6e6252; text-decoration: none; font-style: italic; }
+  .desk .m-nav a.on { color: #a63329; }
+  .desk .m-nav .who { margin-left: auto; font-style: italic; color: #6e6252; font-size: 0.9em; }
+  .desk h3 { margin: 0 0 0.2em; font-size: 1.5em; font-weight: 700; }
+  .desk h3 .num { font-size: 0.65em; vertical-align: super; margin-right: 0.3em; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <!-- 24-grid cut: stroke ≥1.6, no opacity detail lines, honest semantics -->
+    <symbol id="r-coupe" viewBox="0 0 24 24"><!-- a real coupe: shallow bowl -->
+      <path d="M4 6h16M4 6c0 4.5 3.5 7 8 7s8-2.5 8-7M12 13v6M8 21h8"/>
+    </symbol>
+    <symbol id="r-sprig" viewBox="0 0 24 24"><!-- bitter herb / botanical -->
+      <path d="M12 21c0-7 0-11 2-16M12.5 13c-3 0-5-1.5-5.5-4 3 0 5 1.5 5.5 4zM13.5 8c2.5-.5 4-2 4.5-4.5-2.5.5-4 2-4.5 4.5z"/>
+    </symbol>
+    <symbol id="r-lemon" viewBox="0 0 24 24"><!-- cut citrus half, in profile -->
+      <path d="M3 13a9 6.5 0 0018 0zM3 13h18M12 13v6M7 13c0 2.5 2 5 5 6M17 13c0 2.5-2 5-5 6"/>
+    </symbol>
+    <symbol id="r-vermouth" viewBox="0 0 24 24"><!-- fortified: labelled bottle -->
+      <path d="M10 3h4v5c2.5 1 4 3.2 4 6v6a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 016 20v-6c0-2.8 1.5-5 4-6zM6.5 14.5h11M6.5 18h11"/>
+    </symbol>
+    <symbol id="r-bottle" viewBox="0 0 24 24"><!-- spirit bottle -->
+      <path d="M10.5 3h3v5c2.3 1 3.5 3 3.5 5.5V20a1.5 1.5 0 01-1.5 1.5h-7A1.5 1.5 0 017 20v-6.5C7 11 8.2 9 10.5 8z"/>
+    </symbol>
+    <symbol id="r-shaker" viewBox="0 0 24 24">
+      <path d="M9 3h6l1 4H8zM8 9h8l-1.2 12H9.2zM8 9l.3 3h7.4l.3-3"/>
+    </symbol>
+    <symbol id="r-highball" viewBox="0 0 24 24">
+      <path d="M7 3h10l-1 18H8zM7.6 9h8.8"/>
+    </symbol>
+    <symbol id="r-drop" viewBox="0 0 24 24"><!-- water / soda -->
+      <path d="M12 3c4 5.5 6 8.8 6 11.5a6 6 0 11-12 0C6 11.8 8 8.5 12 3zM9.5 15a2.6 2.6 0 002 2.5"/>
+    </symbol>
+  </defs>
+</svg>
+
+<div class="wrap">
+  <p class="kicker">Genro Cocktail · direzione scelta · rivista dopo peer review</p>
+  <h1>Ricettario</h1>
+  <p class="lede">Direction C after two independent expert reviews (an art director on
+  trend alignment, a mobile UX specialist on accessibility and touch). Every [must] is
+  applied here; the ledger metaphor is now built, not described.</p>
+
+  <div class="review-log">
+    <h3>What changed after review</h3>
+    <ul>
+      <li><b>The paper is physical</b> — fractal-noise grain + page vignette (pure SVG filter, no images), letterpress misregistration on every red figure.</li>
+      <li><b>Leaders fixed</b> — dots now run name → price, price right-aligned. The account book gets its vertical red double rule with hanging N. numbers.</li>
+      <li><b>Sliders designed</b> — an ink dot travelling a printed rule, red only while your hand is on it; 40px touch band, 5&nbsp;ml snap, dose value is a tappable stepper.</li>
+      <li><b>Icons redrawn on a 24 grid</b> — a real coupe, a botanical sprig for bitters, a cut lemon, a labelled vermouth bottle; no more ghost strokes at small sizes; honest semantics.</li>
+      <li><b>Type honesty</b> — oldstyle figures in prose, tabular lining figures in live stats, letterspaced caps instead of synthesized small caps. Sage darkened to <code>#5d6852</code> (AA).</li>
+      <li><b>Stats where the thumb is</b> — gradazione is the hero; a live readout strip is docked above the bottom action, visible during every drag; undo snackbar for pours.</li>
+      <li><b>Navigation exists</b> — rubrica index tabs (bar · banco · dispensa) in the book-footer; safe-area padding; chips scroll with an edge fade.</li>
+      <li><b>Notturno</b> — the dark theme as a feature: the candlelight ledger, for an app used in bars at night.</li>
+      <li><b>Voice unified</b> — Italian surface everywhere; every emoji and dingbat replaced by the rubber stamp component or the icon set.</li>
+      <li><b>Forks are marginalia</b> — your remixes render as handwritten annotations: italic title, dashed pencil leader, the TUO stamp.</li>
+    </ul>
+  </div>
+
+  <h2 class="sec">The icon set — 24-grid cut</h2>
+  <p class="note">Stroke 1.6 at 24px (reads at 19–21px in rows), no opacity detail lines,
+  semantics assigned honestly: sprig = bitter/botanical, labelled bottle = fortified,
+  plain bottle = spirit, lemon = citrus, drop = soda/water.</p>
+  <div class="iconsheet">
+    <figure><div class="pad">
+      <svg width="34" height="34"><use href="#r-coupe"/></svg>
+      <svg width="34" height="34"><use href="#r-sprig"/></svg>
+      <svg width="34" height="34"><use href="#r-lemon"/></svg>
+      <svg width="34" height="34"><use href="#r-vermouth"/></svg>
+      <svg width="34" height="34"><use href="#r-bottle"/></svg>
+      <svg width="34" height="34"><use href="#r-shaker"/></svg>
+      <svg width="34" height="34"><use href="#r-highball"/></svg>
+      <svg width="34" height="34"><use href="#r-drop"/></svg>
+    </div><figcaption>coupe · sprig (bitter) · citrus · vermouth · spirit · shaker · highball · soda — at 34px</figcaption></figure>
+    <figure><div class="pad">
+      <svg width="20" height="20"><use href="#r-coupe"/></svg>
+      <svg width="20" height="20"><use href="#r-sprig"/></svg>
+      <svg width="20" height="20"><use href="#r-lemon"/></svg>
+      <svg width="20" height="20"><use href="#r-vermouth"/></svg>
+      <svg width="20" height="20"><use href="#r-bottle"/></svg>
+      <svg width="20" height="20"><use href="#r-shaker"/></svg>
+      <svg width="20" height="20"><use href="#r-highball"/></svg>
+      <svg width="20" height="20"><use href="#r-drop"/></svg>
+    </div><figcaption>the row-size test — 20px</figcaption></figure>
+    <figure><div class="pad" style="background:#201c16"><span style="align-self:center">
+      <svg width="34" height="34" style="stroke:#e8e0d0"><use href="#r-coupe"/></svg>
+      <svg width="34" height="34" style="stroke:#e8e0d0"><use href="#r-sprig"/></svg>
+      <svg width="34" height="34" style="stroke:#c9584a"><use href="#r-lemon"/></svg></span>
+    </div><figcaption>notturno ink</figcaption></figure>
+  </div>
+
+  <h2 class="sec">Il banco — desktop</h2>
+  <div class="screens">
+    <div class="frame"><div class="frame-bar"><i></i><i></i><i></i><span class="frame-label">il bar</span></div>
+      <div class="paper desk">
+        <nav class="m-nav"><span class="m-brand">Genro Cocktail</span>
+          <a class="on" href="#a">il bar</a><a href="#a">la dispensa</a>
+          <span class="who">il quaderno di Francesco</span></nav>
+        <h3>I classici</h3>
+        <p style="margin:0 0 0.8em;color:#6e6252;font-style:italic">Ogni classico è una lezione. Muovi i cursori quanto vuoi — per tenere la tua versione, falla tua.</p>
+        <div class="chiprow" style="margin-bottom:0.9em"><span class="chip on">tutti</span><span class="chip">bitter</span><span class="chip">sour</span><span class="chip">fresh</span><span class="chip">strong</span><span class="chip">dolce</span></div>
+        <div class="ledger">
+          <div class="lentry">
+            <span class="n num">N.1</span>
+            <h5><span class="name">Negroni</span><span class="leader"></span><b class="price num">€ 1,62</b></h5>
+            <div class="d">gin, bitter, vermouth rosso — Firenze, 1919</div>
+            <div class="r"><span class="chip">bitter</span><span class="chip">strong</span><span class="meta">27% vol · 90 ml</span></div>
+          </div>
+          <div class="lentry">
+            <span class="n num">N.3</span>
+            <h5><span class="name">Daiquiri</span><span class="leader"></span><b class="price num">€ 1,32</b></h5>
+            <div class="d">rum bianco, lime, zucchero — l'essenziale, fatto bene</div>
+            <div class="r"><span class="chip">sour</span><span class="chip">fresh</span><span class="meta">22,8% vol · 100 ml</span></div>
+          </div>
+          <div class="lentry mine">
+            <span class="n num">N.11</span>
+            <h5><span class="name">Negroni d'estate</span><span class="leader"></span><b class="price num">€ 1,58</b></h5>
+            <div class="d">annotato ieri sera, dal N.1</div>
+            <div class="r"><span class="stamp">tuo</span><span class="meta">24,1% vol · 105 ml</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="frame"><div class="frame-bar"><i></i><i></i><i></i><span class="frame-label">il banco</span></div>
+      <div class="paper desk">
+        <h3><span class="num">N.11</span>Negroni d'estate <span class="stamp" style="margin-left:0.5em">salvato</span></h3>
+        <div class="hero-stat"><b class="num">24,1%</b><span>di gradazione</span></div>
+        <div class="meterline"><i style="width:58%"></i></div>
+        <div class="substat"><span>costo al bicchiere <b>€ 1,58</b></span><span>volume <b>105 ml</b></span><span>unità alcoliche <b>1,7</b></span></div>
+        <div style="margin-top:1em">
+          <div class="srow">
+            <div class="lbl"><svg><use href="#r-bottle"/></svg>Gin <span class="ml num">30 ml</span></div>
+            <input type="range" class="dose" value="30" max="100" step="5">
+          </div>
+          <div class="srow">
+            <div class="lbl"><svg><use href="#r-sprig"/></svg>Bitter <span class="ml num">25 ml</span></div>
+            <input type="range" class="dose" value="25" max="100" step="5">
+          </div>
+          <div class="srow">
+            <div class="lbl"><svg><use href="#r-vermouth"/></svg>Vermouth rosso <span class="ml num">30 ml</span></div>
+            <input type="range" class="dose" value="30" max="100" step="5">
+          </div>
+          <div class="srow">
+            <div class="lbl"><svg><use href="#r-drop"/></svg>Soda <span class="ml num">20 ml</span></div>
+            <input type="range" class="dose" value="20" max="100" step="5">
+          </div>
+        </div>
+        <div class="addrow">＋ dalla dispensa</div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">Portrait — rivisto</h2>
+  <p class="note">Real-app scale is 16px base (the frames render a 13px mock scale);
+  form fields ≥16px so iOS never zoom-jumps; footer padding uses
+  <code>max(12px, env(safe-area-inset-bottom))</code>.</p>
+  <div class="phones">
+    <div>
+      <div class="phone"><div class="ph paper">
+        <div class="status"><span>21:41</span><span>—</span></div>
+        <div class="masthead"><b>Genro Cocktail</b><i>il bar</i></div>
+        <div class="scroll">
+          <div class="chiprow" style="margin-bottom:0.7em"><span class="chip on">tutti</span><span class="chip">bitter</span><span class="chip">sour</span><span class="chip">fresh</span><span class="chip">strong</span><span class="chip">dolce</span></div>
+          <div class="ledger" style="margin-left:2em">
+            <div class="lentry">
+              <span class="n num">N.1</span>
+              <h5><span class="name">Negroni</span><span class="leader"></span><b class="price num">€ 1,62</b></h5>
+              <div class="d">gin, bitter, vermouth rosso</div>
+              <div class="r"><span class="chip">bitter</span><span class="meta">27% vol · 90 ml</span></div>
+            </div>
+            <div class="lentry">
+              <span class="n num">N.3</span>
+              <h5><span class="name">Daiquiri</span><span class="leader"></span><b class="price num">€ 1,32</b></h5>
+              <div class="d">rum bianco, lime, zucchero</div>
+              <div class="r"><span class="chip">sour</span><span class="meta">22,8% vol</span></div>
+            </div>
+            <div class="lentry">
+              <span class="n num">N.8</span>
+              <h5><span class="name">Spritz</span><span class="leader"></span><b class="price num">€ 1,68</b></h5>
+              <div class="d">Venezia alle sei di sera</div>
+              <div class="r"><span class="chip">fresh</span><span class="meta">9,2% vol</span></div>
+            </div>
+            <div class="lentry mine">
+              <span class="n num">N.11</span>
+              <h5><span class="name">Negroni d'estate</span><span class="leader"></span><b class="price num">€ 1,58</b></h5>
+              <div class="d">annotato ieri sera</div>
+              <div class="r"><span class="stamp">tuo</span><span class="meta">24,1% vol</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="foot"><span class="cta">＋ Mescola qualcosa di tuo</span></div>
+        <div class="rubrica"><span class="on">bar</span><span>banco</span><span>dispensa</span></div>
+      </div></div>
+      <p class="phone-cap">il bar</p>
+    </div>
+    <div>
+      <div class="phone"><div class="ph paper">
+        <div class="status"><span>21:41</span><span>—</span></div>
+        <div class="crumbrow"><span class="back">← il bar</span><span class="stamp sage">il tuo n.11</span></div>
+        <div class="scroll">
+          <h4 class="title"><span class="num" style="font-size:0.65em;vertical-align:super">N.11</span>Negroni d'estate <span class="pencil">rinomina</span></h4>
+          <div class="hero-stat"><b class="num" style="font-size:2.1em">24,1%</b><span>di gradazione</span></div>
+          <div class="meterline"><i style="width:58%"></i></div>
+          <div style="margin-top:0.7em">
+            <div class="srow">
+              <div class="lbl"><svg><use href="#r-bottle"/></svg>Gin <span class="ml num">30 ml</span></div>
+              <input type="range" class="dose" value="30" max="100" step="5">
+            </div>
+            <div class="srow">
+              <div class="lbl"><svg><use href="#r-sprig"/></svg>Bitter <span class="ml num">25 ml</span></div>
+              <input type="range" class="dose" value="25" max="100" step="5">
+            </div>
+            <div class="srow">
+              <div class="lbl"><svg><use href="#r-vermouth"/></svg>Vermouth rosso <span class="ml num">30 ml</span></div>
+              <input type="range" class="dose" value="30" max="100" step="5">
+            </div>
+          </div>
+          <div class="addrow">＋ dalla dispensa</div>
+        </div>
+        <div class="snack"><span>Versata annotata</span><i>90 ml</i><b>ANNULLA</b></div>
+        <div class="stat-strip"><b class="num">24,1%</b><span class="rest">€ 1,58 · 1,7 unità</span><span class="stamp">salvato</span></div>
+        <div class="foot"><span class="cta red">Versa una dose · 105 ml</span></div>
+        <div class="rubrica"><span>bar</span><span class="on">banco</span><span>dispensa</span></div>
+      </div></div>
+      <p class="phone-cap">il banco — strip live + annulla</p>
+    </div>
+    <div>
+      <div class="phone"><div class="ph paper">
+        <div class="status"><span>21:41</span><span>—</span></div>
+        <div class="masthead"><b>Genro Cocktail</b><i>la dispensa</i></div>
+        <div class="scroll">
+          <input class="search" placeholder="cerca sullo scaffale…">
+          <div style="height:0.6em"></div>
+          <div class="shelfrow"><svg><use href="#r-bottle"/></svg>
+            <span class="nm2"><b>Gin</b><i>distillato</i></span>
+            <span class="vals"><b class="num">40% vol</b>€ 0,022 / ml</span></div>
+          <div class="shelfrow"><svg><use href="#r-sprig"/></svg>
+            <span class="nm2"><b>Bitter</b><i>amaro</i></span>
+            <span class="vals"><b class="num">25% vol</b>€ 0,020 / ml</span></div>
+          <div class="shelfrow"><svg><use href="#r-vermouth"/></svg>
+            <span class="nm2"><b>Vermouth rosso</b><i>fortificato</i></span>
+            <span class="vals"><b class="num">16% vol</b>€ 0,012 / ml</span></div>
+          <div class="shelfrow"><svg><use href="#r-lemon"/></svg>
+            <span class="nm2"><b>Succo di lime</b><i>agrume</i></span>
+            <span class="vals"><b class="num">0% vol</b>€ 0,008 / ml</span></div>
+          <div class="shelfrow"><svg><use href="#r-drop"/></svg>
+            <span class="nm2"><b>Soda</b><i>allunga</i></span>
+            <span class="vals"><b class="num">0% vol</b>€ 0,002 / ml</span></div>
+        </div>
+        <div class="foot"><span class="cta">＋ Nuova bottiglia</span></div>
+        <div class="rubrica"><span>bar</span><span>banco</span><span class="on">dispensa</span></div>
+      </div></div>
+      <p class="phone-cap">la dispensa</p>
+    </div>
+    <div>
+      <div class="phone"><div class="ph paper notte">
+        <div class="status"><span>23:58</span><span>—</span></div>
+        <div class="crumbrow"><span class="back">← il bar</span><span class="stamp">il tuo n.11</span></div>
+        <div class="scroll">
+          <h4 class="title"><span class="num" style="font-size:0.65em;vertical-align:super;color:#c9584a">N.11</span>Negroni d'estate</h4>
+          <div class="hero-stat"><b class="num" style="font-size:2.1em">24,1%</b><span style="color:#a89a86">di gradazione</span></div>
+          <div class="meterline"><i style="width:58%"></i></div>
+          <div style="margin-top:0.7em">
+            <div class="srow">
+              <div class="lbl"><svg><use href="#r-bottle"/></svg>Gin <span class="ml num">30 ml</span></div>
+              <input type="range" class="dose" value="30" max="100" step="5">
+            </div>
+            <div class="srow">
+              <div class="lbl"><svg><use href="#r-sprig"/></svg>Bitter <span class="ml num">25 ml</span></div>
+              <input type="range" class="dose" value="25" max="100" step="5">
+            </div>
+            <div class="srow">
+              <div class="lbl"><svg><use href="#r-vermouth"/></svg>Vermouth rosso <span class="ml num">30 ml</span></div>
+              <input type="range" class="dose" value="30" max="100" step="5">
+            </div>
+          </div>
+          <div class="addrow">＋ dalla dispensa</div>
+        </div>
+        <div class="stat-strip"><b class="num">24,1%</b><span class="rest">€ 1,58 · 1,7 unità</span><span class="stamp">salvato</span></div>
+        <div class="foot"><span class="cta">Versa una dose · 105 ml</span></div>
+        <div class="rubrica"><span>bar</span><span class="on">banco</span><span>dispensa</span></div>
+      </div></div>
+      <p class="phone-cap">notturno — il registro a lume di candela</p>
+    </div>
+  </div>
+
+  <h2 class="sec">Motion (unchanged in spirit, tightened in spec)</h2>
+  <p class="note">Swaps land like a page settling: 150ms fade, no slide (stable-id settling).
+  The stamp inks in once on <code>.htmx-added</code> (250ms, opacity + scale 1.03→1) and dries.
+  Numbers tick with a 200ms "wet ink" blur-sharpen on websocket updates. Ledger entries
+  print-in on scroll (<code>animation-timeline: view()</code>, 150ms, 2px rise).
+  Everything respects <code>prefers-reduced-motion</code>. Red means: your hand is on it,
+  or the ledger has spoken (prices, verdicts, the stamp).</p>
+</div>
