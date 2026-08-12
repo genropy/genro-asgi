@@ -24,12 +24,16 @@ from __future__ import annotations
 
 import math
 import time
+from collections.abc import Sequence
 from typing import Any
 
 import pytest
 
 from genro_asgi.spa.commander import UserStickyCommander
 from genro_asgi.spa.evaluator import COMPONENT_NAMES, SMOOTHING_ROWS, OccupancyEvaluator
+
+#: Bytes per megabyte — the floor series is written in raw bytes.
+_MB = 1024 * 1024
 
 
 def make_commander(tmp_path: Any, **kwargs: Any) -> UserStickyCommander:
@@ -378,3 +382,142 @@ def test_evaluator_is_owned_by_the_commander(tmp_path: Any) -> None:
 def test_memory_limit_defaults_to_absent(tmp_path: Any) -> None:
     assert make_commander(tmp_path).memory_limit_mb is None
     assert make_commander(tmp_path, memory_limit_mb=256).memory_limit_mb == 256
+
+
+# ----------------------------------------------------------------------
+# The live-memory floor: the gauge the recycling policy reads (issue #8)
+# ----------------------------------------------------------------------
+
+
+def test_window_floor_is_the_lowest_live_memory_of_the_window(tmp_path: Any) -> None:
+    commander = make_commander(tmp_path, memory_limit_mb=256)
+    commander.record_occupancy("w1", report(rss=90 * 1024 * 1024, reusable=10 * 1024 * 1024))
+    commander.record_occupancy("w1", report(rss=100 * 1024 * 1024, reusable=40 * 1024 * 1024))
+    commander.record_occupancy("w1", report(rss=95 * 1024 * 1024, reusable=5 * 1024 * 1024))
+    # the middle row holds the least LIVE memory (60MB) despite the highest rss
+    assert commander.evaluator.window_floor("w1") == 60 * 1024 * 1024
+
+
+def test_window_floor_skips_the_rows_that_carry_no_rss(tmp_path: Any) -> None:
+    commander = make_commander(tmp_path)
+    commander.record_occupancy("w1", report(cpu=0.5))
+    commander.record_occupancy("w1", report(rss=70 * 1024 * 1024))
+    commander.record_occupancy("w1", report(cpu=0.1))
+    # no reusable gauge degrades to the plain rss, and only the one row counts
+    assert commander.evaluator.window_floor("w1") == 70 * 1024 * 1024
+
+
+def test_window_floor_is_none_without_a_single_rss(tmp_path: Any) -> None:
+    commander = make_commander(tmp_path)
+    commander.record_occupancy("w1", report(cpu=0.5, busy=1, total=4))
+    assert commander.evaluator.window_floor("w1") is None
+
+
+def test_window_floor_of_a_silent_or_unknown_worker_is_none(tmp_path: Any) -> None:
+    commander = make_commander(tmp_path)
+    assert commander.evaluator.window_floor("w1") is None
+    assert commander.evaluator.window_floor("nobody") is None
+
+
+def test_window_floor_needs_no_memory_limit(tmp_path: Any) -> None:
+    """The floor is a reading, not a judgment: it never consults the limit."""
+    commander = make_commander(tmp_path)
+    assert commander.memory_limit_mb is None
+    commander.record_occupancy("w1", report(rss=500 * 1024 * 1024, reusable=1024))
+    floor = commander.evaluator.window_floor("w1")
+    assert floor == 500 * 1024 * 1024 - 1024
+
+
+# ----------------------------------------------------------------------
+# The floor fit: velocity in bytes/hour and the time left to the limit
+# ----------------------------------------------------------------------
+
+
+def seed_floors(commander: UserStickyCommander, worker: str, floors: Sequence[float]) -> None:
+    """Write a synthetic floor series, one sample per hour, ending now."""
+    now = time.time()
+    series = commander.worker_roster[worker]["floors"]
+    series.clear()
+    for index, floor in enumerate(floors):
+        series.append({"ts": now - (len(floors) - 1 - index) * 3600.0, "floor": floor})
+
+
+def test_floor_velocity_reads_the_slope_of_a_rising_series(tmp_path: Any) -> None:
+    commander = make_commander(tmp_path)
+    seed_floors(commander, "w1", [(100 + 10 * step) * _MB for step in range(8)])
+    velocity = commander.evaluator.worker_floor_velocity("w1")
+    assert velocity == pytest.approx(10 * _MB)
+
+
+def test_floor_velocity_is_not_swayed_by_one_outlier(tmp_path: Any) -> None:
+    """Theil-Sen is a median of pairwise slopes: one absurd sample cannot move it."""
+    floors = [(100 + 10 * step) * _MB for step in range(8)]
+    floors[4] = 900 * _MB
+    commander = make_commander(tmp_path)
+    seed_floors(commander, "w1", floors)
+    assert commander.evaluator.worker_floor_velocity("w1") == pytest.approx(10 * _MB)
+
+
+def test_floor_velocity_is_none_under_six_samples(tmp_path: Any) -> None:
+    commander = make_commander(tmp_path)
+    seed_floors(commander, "w1", [(100 + 10 * step) * _MB for step in range(5)])
+    assert commander.evaluator.worker_floor_velocity("w1") is None
+    assert commander.evaluator.worker_floor_velocity("nobody") is None
+
+
+def test_time_to_limit_counts_the_hours_left(tmp_path: Any) -> None:
+    commander = make_commander(tmp_path, memory_limit_mb=1024)
+    seed_floors(commander, "w1", [(100 + 10 * step) * _MB for step in range(8)])
+    # last floor 170MB, 854MB left at 10MB/hour
+    assert commander.evaluator.worker_time_to_limit("w1") == pytest.approx(85.4)
+
+
+def test_time_to_limit_is_none_on_a_flat_or_falling_floor(tmp_path: Any) -> None:
+    """No leak, no recycling: an infinite T is expressed as None."""
+    commander = make_commander(tmp_path, memory_limit_mb=1024)
+    seed_floors(commander, "w1", [200 * _MB] * 8)
+    assert commander.evaluator.worker_time_to_limit("w1") is None
+    seed_floors(commander, "w1", [(200 - 5 * step) * _MB for step in range(8)])
+    assert commander.evaluator.worker_time_to_limit("w1") is None
+
+
+def test_time_to_limit_shortens_when_the_leak_accelerates(tmp_path: Any) -> None:
+    """The recent half wins over the whole-series fit when it is steeper."""
+    calm = [(100 + 2 * step) * _MB for step in range(8)]
+    steep = [(calm[-1] / _MB + 20 * (step + 1)) * _MB for step in range(8)]
+    commander = make_commander(tmp_path, memory_limit_mb=2048)
+    seed_floors(commander, "w1", calm + steep)
+    accelerated = commander.evaluator.worker_time_to_limit("w1")
+    whole_series = commander.evaluator.floor_slope(
+        list(commander.worker_roster["w1"]["floors"])
+    )
+    assert whole_series is not None
+    last_floor = commander.worker_roster["w1"]["floors"][-1]["floor"]
+    assert accelerated is not None
+    assert accelerated < (2048 * _MB - last_floor) / whole_series
+    assert commander.evaluator.worker_floor_velocity("w1") == pytest.approx(20 * _MB)
+
+
+def test_time_to_limit_is_none_without_a_memory_limit(tmp_path: Any) -> None:
+    commander = make_commander(tmp_path)
+    seed_floors(commander, "w1", [(100 + 10 * step) * _MB for step in range(8)])
+    assert commander.memory_limit_mb is None
+    assert commander.evaluator.worker_time_to_limit("w1") is None
+
+
+def test_time_to_limit_of_a_floor_past_the_limit_is_zero(tmp_path: Any) -> None:
+    """Overdue, not healthy: a negative horizon clamps to 0.0."""
+    commander = make_commander(tmp_path, memory_limit_mb=128)
+    seed_floors(commander, "w1", [(100 + 10 * step) * _MB for step in range(8)])
+    assert commander.evaluator.worker_time_to_limit("w1") == 0.0
+
+
+def test_floor_velocity_is_none_when_no_pair_is_separated_in_time(tmp_path: Any) -> None:
+    """Nothing to fit: every sample landed on the same timestamp."""
+    commander = make_commander(tmp_path, memory_limit_mb=1024)
+    now = time.time()
+    series = commander.worker_roster["w1"]["floors"]
+    for step in range(8):
+        series.append({"ts": now, "floor": (100 + step) * _MB})
+    assert commander.evaluator.worker_floor_velocity("w1") is None
+    assert commander.evaluator.worker_time_to_limit("w1") is None

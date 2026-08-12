@@ -31,10 +31,12 @@ page really reads — the pull delivery of its first CALL there.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import signal
 import threading
 import time
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -46,7 +48,13 @@ from genro_tytx import from_tytx, to_tytx
 
 from genro_asgi.channel.hub import ChannelCallError
 from genro_asgi.channel.local import LocalChannel
-from genro_asgi.spa.commander import UserStickyCommander
+from genro_asgi.exceptions import HTTPException
+from genro_asgi.spa.commander import (
+    RECYCLE_RETRY_SECONDS,
+    TOMBSTONE_SECONDS,
+    UserStickyCommander,
+)
+from genro_asgi.spa.worker import CONNECTION_MAX_AGE
 from genro_asgi.spa.worker import UserStickyWorker
 
 SPAWN_TIMEOUT = 15.0
@@ -141,9 +149,10 @@ class LocalPool:
         for _ in range(count):
             await self.add_worker()
 
-    async def add_worker(self) -> str:
-        name = self.commander.next_worker_name()
-        self.commander.worker_roster[name] = self.commander.new_roster_row(os.getpid(), None)
+    async def add_worker(self, name: str | None = None) -> str:
+        if name is None:
+            name = self.commander.next_worker_name()
+            self.commander.worker_roster[name] = self.commander.new_roster_row(os.getpid(), None)
         worker = self.worker_class(name)
         channel = LocalChannel(name)
         worker.attach_channel(channel)
@@ -372,8 +381,10 @@ def test_a_login_re_keys_the_sticky_map_and_raises_the_flag(
         ],
     )
     # The announcing worker pushed the user out, so it holds neither key: alice
-    # is in the map under the flag and on no row until the placement lands.
-    assert commander.user_worker_map == {"alice": None}
+    # carries the placing flag, and enters the map only with place_login's
+    # decision — the fold itself names no destination.
+    assert "alice" in commander.placing
+    assert commander.user_worker_map == {}
     assert commander.users_on("W:w-1") == set()
 
 
@@ -433,9 +444,31 @@ def test_a_user_whose_placement_is_in_flight_is_not_routed(
     commander: UserStickyCommander,
 ) -> None:
     enroll(commander, "W:w-1")
-    commander.user_worker_map["alice"] = None
+    commander.placing.add("alice")
     with pytest.raises(RuntimeError, match="in flight"):
         commander.worker_for("alice")
+
+
+async def test_an_arriving_login_is_visible_from_the_decision(
+    commander: UserStickyCommander,
+) -> None:
+    """The founding contract, restored: map and half-row name the destination
+    from the DECISION, while the install still travels — so no emptiness
+    verdict can miss an arriving user, no late claim overrides the placement,
+    and no sweep steals the arrival from its own placement coroutine."""
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    commander.placing.add("alice")
+    commander.assign_user("alice", "W:w-1")  # the decision; the install is on the wire
+    assert "alice" in commander.users_on("W:w-1")
+    assert commander.user_worker_map["alice"] == "W:w-1"
+    # A claim landing inside the flight never re-points the user.
+    commander.register_user("alice", "W:w-2")
+    assert commander.user_worker_map["alice"] == "W:w-1"
+    # The sweep of the dying destination leaves the arrival alone: the slice is
+    # in the placement coroutine's hands, and its failure path owns the outcome.
+    assert commander.sweep_worker("W:w-1") == []
+    assert commander.user_worker_map["alice"] == "W:w-1"
 
 
 async def test_a_waiter_that_wakes_into_a_re_raised_flag_parks_again(
@@ -443,19 +476,21 @@ async def test_a_waiter_that_wakes_into_a_re_raised_flag_parks_again(
 ) -> None:
     enroll(commander, "W:w-1")
     enroll(commander, "W:w-2")
-    commander.user_worker_map["alice"] = None
+    commander.placing.add("alice")
     parked = asyncio.create_task(commander.resolve_worker("alice"))
     await asyncio.sleep(0)
-    # await_placement's inner while re-checks the map on every wakeup: the first
+    # await_placement's inner while re-checks the flag on every wakeup: the first
     # placement lands and a second login re-raises the flag before the waiter
     # reads it, so await_placement parks again on its own.
     commander.assign_user("alice", "W:w-1")
+    commander.placing.discard("alice")
     commander.release_placement()
-    commander.user_worker_map["alice"] = None
+    commander.placing.add("alice")
     await asyncio.sleep(0)
     assert not parked.done()
     # It resolves to the worker the last placement chose.
     commander.assign_user("alice", "W:w-2")
+    commander.placing.discard("alice")
     commander.release_placement()
     assert await parked == "W:w-2"
 
@@ -465,13 +500,14 @@ async def test_a_waiter_that_wakes_into_a_move_parks_on_it(
 ) -> None:
     enroll(commander, "W:w-1")
     enroll(commander, "W:w-2")
-    commander.user_worker_map["alice"] = None
+    commander.placing.add("alice")
     parked = asyncio.create_task(commander.resolve_worker("alice"))
     await asyncio.sleep(0)
     # The placement lands and a move of the same user starts before the waiter is
     # scheduled: two holds read once each, in order, would let it through here
     # with the map still naming the source.
     commander.assign_user("alice", "W:w-1")
+    commander.placing.discard("alice")
     commander.moving["alice"] = asyncio.Event()
     commander.release_placement()
     await asyncio.sleep(0)
@@ -555,7 +591,10 @@ async def test_a_call_issued_while_the_flag_is_up_waits_for_the_room(pool: Any) 
         )
     )
     await probe.arrived.wait()
-    assert commander.user_worker_map["alice"] is None
+    # Mid-install: the map already names the destination (visible from the
+    # decision), while the placing flag is what keeps alice's calls parked.
+    assert commander.user_worker_map["alice"] == target
+    assert "alice" in commander.placing
     parked = asyncio.create_task(commander.forward_call("alice", "/op/drop_user"))
     await asyncio.sleep(0)
     assert not parked.done()
@@ -1969,6 +2008,676 @@ async def test_a_move_that_fails_ends_the_pass_and_retires_nobody() -> None:
         assert commander.users_on(cool) == set()
     finally:
         await running.stop()
+
+
+# ----------------------------------------------------------------------
+# The recycling: a leaking worker succeeded by a fresh one
+# ----------------------------------------------------------------------
+
+
+class FakeMember:
+    """The ``ChannelMember`` surface the callbacks read: just the name."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.pid = 0
+
+
+class RecyclingPool(LocalPool):
+    """A ``LocalPool`` whose spawn attaches an in-process worker instead of forking.
+
+    The recycling needs a successor that really registers, so the fake spawn does
+    what a child does — a nascent row now, the REGISTER a beat later — with the
+    attach deferred to a task, exactly like the fork's own asynchrony.
+    """
+
+    def __init__(self, stillborn: bool = False, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.stillborn = stillborn
+        self.spawned: list[str] = []
+        self.attaching: list[asyncio.Task[Any]] = []
+
+    async def start(self, count: int) -> None:
+        await super().start(count)
+        self.commander.spawn_worker = self.spawn  # type: ignore[method-assign]
+
+    def spawn(self) -> str:
+        name = self.commander.next_worker_name()
+        self.commander.worker_roster[name] = self.commander.new_roster_row(os.getpid(), None)
+        self.spawned.append(name)
+        if not self.stillborn:
+            self.attaching.append(asyncio.create_task(self.add_worker(name)))
+        return name
+
+
+async def a_user_on_the_pool(running: LocalPool, user: str = "alice") -> str:
+    """Log one user in over the wire and answer where it landed."""
+    await running.commander.forward_call("sess-1", "/op/new_connection")
+    await running.commander.forward_call(
+        "sess-1", "/op/change_connection_user", {"user": user}
+    )
+    return str(running.commander.user_worker_map[user])
+
+
+async def test_the_recycled_worker_hands_its_users_to_its_replacement() -> None:
+    running = RecyclingPool()
+    await running.start(1)
+    commander = running.commander
+    commander.target = 1
+    source = await a_user_on_the_pool(running)
+    try:
+        assert await commander.recycle_worker(source) is True
+        replacement = running.spawned[0]
+        # The user travelled, the successor is the whole pool, and the source is
+        # on its way out with the target untouched by either move.
+        assert commander.user_worker_map["alice"] == replacement
+        assert running.workers[replacement].user_items.get("alice") is not None
+        assert commander.active_workers == [replacement]
+        assert commander.worker_roster[source]["status"] == "draining"
+        assert commander.target == 1
+    finally:
+        await running.stop()
+
+
+async def test_a_replacement_that_never_registers_declares_the_pool_sick() -> None:
+    running = RecyclingPool(stillborn=True)
+    await running.start(1)
+    commander = running.commander
+    commander.READY_TIMEOUT = 0.1
+    source = await a_user_on_the_pool(running)
+    try:
+        # The sick worker is flagged only after its successor registers: a
+        # replacement that never comes leaves it UNTOUCHED, by construction,
+        # and the failure is the pool's health condition, not the manoeuvre's.
+        assert await commander.recycle_worker(source) is False
+        assert commander.worker_roster[source]["status"] == "active"
+        assert commander.user_worker_map["alice"] == source
+        assert commander.regeneration_failed_at is not None
+        # New entries get the signal the infrastructure watches...
+        with pytest.raises(HTTPException) as refused:
+            commander.worker_for("guest-2")
+        assert refused.value.status == 503
+        # ...the residents keep being served, and the candidate stays silent.
+        assert commander.worker_for("alice") == source
+        assert commander.recycle_candidate() is None
+    finally:
+        await running.stop()
+
+
+async def test_a_straggler_keeps_the_worker_evacuating_never_active_again() -> None:
+    running = RecyclingPool()
+    await running.start(1)
+    commander = running.commander
+    commander.target = 1
+    source = await a_user_on_the_pool(running)
+    # One call that never closes: alice cannot move NOW — but past the flag
+    # there is no way back: the worker stays evacuating with its straggler
+    # aboard, serving it, never retired and never active again.
+    commander.open_request(source, "alice", "/op/page_ping")
+    try:
+        assert await commander.recycle_worker(source) is True
+        assert commander.worker_roster[source]["status"] == "evacuating"
+        assert commander.user_worker_map["alice"] == source
+        assert commander.worker_for("alice") == source
+    finally:
+        await running.stop()
+
+
+def test_an_evacuating_worker_is_out_of_every_picker(commander: UserStickyCommander) -> None:
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    commander.worker_roster["W:w-1"]["status"] = "evacuating"
+    assert commander.active_workers == ["W:w-2"]
+    assert commander.reception == "W:w-2"
+    assert commander.decide_worker() == "W:w-2"
+    assert commander.pick_compaction_target("W:w-2") is None
+
+
+def test_a_user_still_resident_on_an_evacuating_worker_is_still_served_there(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    commander.assign_user("alice", "W:w-1")
+    commander.worker_roster["W:w-1"]["status"] = "evacuating"
+    # The map is what routing reads, and only the move rewrites it.
+    assert commander.worker_for("alice") == "W:w-1"
+    assert commander.worker_for("guest") == "W:w-2"
+
+
+async def test_a_worker_dying_mid_evacuation_died_a_crash(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    commander.assign_user("alice", "W:w-1")
+    commander.worker_roster["W:w-1"]["status"] = "evacuating"
+    await commander.channel_lost(FakeMember("W:w-1"))
+    # The evacuation had not finished: this is a death like any other, and what
+    # was still on the worker is gone with it.
+    assert commander.worker_roster["W:w-1"]["death"] == "crash"
+    assert "alice" not in commander.user_worker_map
+
+
+async def test_the_drain_takes_the_idle_users_first(commander: UserStickyCommander) -> None:
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    for user in ("alice", "bob", "carol", "dave"):
+        commander.assign_user(user, "W:w-1")
+    commander.open_request("W:w-1", "alice", "/op/page_ping")
+    commander.open_request("W:w-1", "carol", "/op/page_ping")
+    taken: list[str] = []
+
+    async def record(user: str, target: str) -> bool:
+        taken.append(user)
+        commander.assign_user(user, target)
+        return True
+
+    commander.move_user = record  # type: ignore[method-assign]
+    assert await commander.drain_worker("W:w-1") is True
+    # The two with nothing pending go first, alphabetically inside each tier.
+    assert taken == ["bob", "dave", "alice", "carol"]
+
+
+def test_reconcile_spawns_nothing_while_an_evacuation_is_under_way(
+    commander: UserStickyCommander,
+) -> None:
+    spawned: list[str] = []
+
+    def fake_spawn() -> str:
+        return enroll(commander, f"W:new-{len(spawned)}", status="nascent")
+
+    commander.spawn_worker = fake_spawn  # type: ignore[method-assign]
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    commander.target = 2
+    spawned.append(commander.spawn_worker())  # the replacement, beyond the target
+    commander.worker_roster["W:w-1"]["status"] = "evacuating"
+    commander.reconcile()
+    # The pass spawned its own replacement: the shortfall math must not add one.
+    assert len(spawned) == 1
+    assert len(commander.living_workers) == 2
+
+
+# ----------------------------------------------------------------------
+# The recycling trigger: the third force in the beat
+# ----------------------------------------------------------------------
+
+MB = 1024 * 1024
+
+
+def leaking_commander(tmp_path: Any, **kwargs: Any) -> UserStickyCommander:
+    """A commander with a memory limit — without one nothing ever recycles."""
+    return UserStickyCommander(
+        workers=0, path=str(tmp_path / "hub.sock"), memory_limit_mb=1024, **kwargs
+    )
+
+
+def leak(commander: UserStickyCommander, name: str, hours: float | None) -> None:
+    """Seed the worker's floor series so its time to limit reads ``hours``.
+
+    Eight floors an hour apart on a straight line: the recent half carries the
+    same slope as the whole, so the acceleration corrective changes nothing and
+    the reading is the arithmetic below. ``hours=None`` seeds a FLAT series —
+    a floor going nowhere, which reads as infinite time.
+    """
+    velocity = 10 * MB
+    series = commander.worker_roster[name]["floors"]
+    series.clear()
+    limit = commander.memory_limit_mb or 0
+    last = limit * MB - (hours or 0) * velocity
+    for step in range(8):
+        floor = last if hours is None else last - (7 - step) * velocity
+        series.append({"ts": 3600.0 * step, "floor": floor})
+
+
+def test_the_candidate_is_the_worker_closest_to_its_limit(tmp_path: Any) -> None:
+    commander = leaking_commander(tmp_path)
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    enroll(commander, "W:w-3")
+    leak(commander, "W:w-1", 8.0)
+    leak(commander, "W:w-2", 3.0)
+    leak(commander, "W:w-3", None)  # flat: not heading anywhere
+    assert commander.evaluator.worker_time_to_limit("W:w-3") is None
+    assert commander.recycle_candidate() == "W:w-2"
+
+
+def test_a_worker_beyond_the_horizon_is_nobody_s_candidate(tmp_path: Any) -> None:
+    commander = leaking_commander(tmp_path)
+    enroll(commander, "W:w-1")
+    leak(commander, "W:w-1", 13.0)
+    assert commander.recycle_candidate() is None
+    wider = leaking_commander(tmp_path, recycle_horizon_hours=24.0)
+    enroll(wider, "W:w-1")
+    leak(wider, "W:w-1", 13.0)
+    assert wider.recycle_candidate() == "W:w-1"
+
+
+def test_a_pool_with_no_memory_limit_never_has_a_candidate(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    commander.worker_roster["W:w-1"]["floors"].extend(
+        {"ts": 3600.0 * step, "floor": step * MB} for step in range(8)
+    )
+    assert commander.recycle_candidate() is None
+
+
+async def test_excess_outranks_a_leak_in_the_beat(tmp_path: Any) -> None:
+    commander = leaking_commander(tmp_path)
+    enroll(commander, "W:w-1")
+    load(commander, "W:w-1", 0.9)
+    leak(commander, "W:w-1", 1.0)  # dying of both: the latency comes first
+    commander.pool_beat()
+    assert (commander.rebalancing, commander.recycling, commander.compacting) == (
+        True,
+        False,
+        False,
+    )
+    await asyncio.sleep(0)
+
+
+async def test_a_leak_outranks_the_compaction_in_the_beat(tmp_path: Any) -> None:
+    commander = leaking_commander(tmp_path)
+    enroll(commander, "W:w-1")
+    load(commander, "W:w-1", 0.4)  # nothing to shed: a leakless beat would compact
+    leak(commander, "W:w-1", 3.0)
+    recycled: list[str] = []
+
+    async def fake_recycle(name: str) -> bool:
+        recycled.append(name)
+        return True
+
+    commander.recycle_worker = fake_recycle  # type: ignore[method-assign]
+    commander.pool_beat()
+    assert (commander.rebalancing, commander.recycling, commander.compacting) == (
+        False,
+        True,
+        False,
+    )
+    await asyncio.sleep(0)
+    # One worker per pass, and the flag comes down with it.
+    assert recycled == ["W:w-1"]
+    assert commander.recycling is False
+
+
+async def test_a_pool_with_no_leak_is_still_offered_to_the_compaction(
+    tmp_path: Any,
+) -> None:
+    commander = leaking_commander(tmp_path)
+    enroll(commander, "W:w-1")
+    load(commander, "W:w-1", 0.4)
+    leak(commander, "W:w-1", None)
+    commander.pool_beat()
+    assert (commander.rebalancing, commander.recycling, commander.compacting) == (
+        False,
+        False,
+        True,
+    )
+    await asyncio.sleep(0)
+
+
+async def test_a_recycling_in_flight_holds_the_whole_beat_off(tmp_path: Any) -> None:
+    commander = leaking_commander(tmp_path)
+    enroll(commander, "W:w-1")
+    load(commander, "W:w-1", 0.9)  # excess is there: a free beat would shed
+    commander.recycling = True
+    commander.pool_beat()
+    assert (commander.rebalancing, commander.compacting) == (False, False)
+
+
+async def test_a_pass_that_finds_no_candidate_left_recycles_nothing(
+    tmp_path: Any,
+) -> None:
+    commander = leaking_commander(tmp_path)
+    enroll(commander, "W:w-1")
+    commander.recycling = True
+    await commander.recycle_pass()
+    assert commander.recycling is False
+
+
+async def test_the_in_process_worker_is_never_recycled(tmp_path: Any) -> None:
+    """The single role's worker IS the commander's process: no successor sheds
+    its leak, no retire has a process to end — the candidate skips it and a
+    direct recycle refuses it."""
+    commander = leaking_commander(tmp_path)
+    local = enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    commander.worker = SimpleNamespace(name=local)  # type: ignore[assignment]
+    leak(commander, "W:w-1", 2.0)  # the worst leak of the pool, and still skipped
+    leak(commander, "W:w-2", 5.0)
+    assert commander.recycle_candidate() == "W:w-2"
+    with pytest.raises(ValueError, match="in-process"):
+        await commander.recycle_worker(local)
+
+
+async def test_a_stop_mid_recycling_still_retires_the_evacuating_worker(
+    commander: UserStickyCommander,
+) -> None:
+    """``stop()`` walks every non-dead row: an ``evacuating`` worker is outside
+    ``living_workers`` but its process is alive and must still be told to exit;
+    the tombstones alone have nothing left to end."""
+    enroll(commander, "W:w-1", status="evacuating")
+    enroll(commander, "W:w-2")
+    enroll(commander, "W:w-3", status="dead")
+    await commander.stop()
+    statuses = {name: entry["status"] for name, entry in commander.worker_roster.items()}
+    assert statuses == {"W:w-1": "draining", "W:w-2": "draining", "W:w-3": "dead"}
+
+
+async def test_a_source_dying_mid_evacuation_stays_a_buriable_tombstone(
+    tmp_path: Any,
+) -> None:
+    """``channel_lost`` lands inside the moves: neither the step nor the retire
+    tail may touch a row it stamped ``dead`` — the tombstone stays buriable."""
+    commander = leaking_commander(tmp_path)
+
+    def fake_spawn() -> str:
+        return enroll(commander, f"W:new-{len(commander.worker_roster)}")
+
+    commander.spawn_worker = fake_spawn  # type: ignore[method-assign]
+
+    async def die_mid_move(user: str, target: str) -> bool:
+        await commander.channel_lost(FakeMember("W:src-1"))
+        return False
+
+    enroll(commander, "W:src-1")
+    commander.assign_user("alice", "W:src-1")
+    commander.move_user = die_mid_move  # type: ignore[method-assign]
+    assert await commander.recycle_worker("W:src-1") is True
+    row = commander.worker_roster["W:src-1"]
+    assert (row["status"], row["death"]) == ("dead", "crash")
+
+    # And the success tail never retires a corpse: a row swept empty by its
+    # own death keeps its obituary.
+    async def deliver_then_die(user: str, target: str) -> bool:
+        commander.assign_user(user, target)
+        await commander.channel_lost(FakeMember("W:src-2"))
+        return True
+
+    enroll(commander, "W:src-2")
+    commander.assign_user("bob", "W:src-2")
+    commander.move_user = deliver_then_die  # type: ignore[method-assign]
+    assert await commander.recycle_worker("W:src-2") is True
+    row = commander.worker_roster["W:src-2"]
+    assert (row["status"], row["death"]) == ("dead", "crash")
+    commander.bury_workers(time.monotonic() + TOMBSTONE_SECONDS + 10)
+    assert "W:src-1" not in commander.worker_roster
+    assert "W:src-2" not in commander.worker_roster
+
+
+async def test_the_evacuating_flag_is_up_while_the_users_move(tmp_path: Any) -> None:
+    """The status is not scaffolding: every move of the evacuation finds its
+    source flagged — pinned here so removing the flag fails a test."""
+    commander = leaking_commander(tmp_path)
+    seen: list[str] = []
+
+    def fake_spawn() -> str:
+        return enroll(commander, "W:new-1")
+
+    async def record_status(user: str, target: str) -> bool:
+        seen.append(commander.worker_roster["W:w-1"]["status"])
+        commander.assign_user(user, target)
+        return True
+
+    enroll(commander, "W:w-1")
+    commander.assign_user("alice", "W:w-1")
+    commander.spawn_worker = fake_spawn  # type: ignore[method-assign]
+    commander.move_user = record_status  # type: ignore[method-assign]
+    assert await commander.recycle_worker("W:w-1") is True
+    assert seen == ["evacuating"]
+    # Emptied by its own first pass, the source retired itself.
+    assert commander.worker_roster["W:w-1"]["status"] == "draining"
+
+
+async def test_the_wait_aborts_at_once_on_a_replacement_already_dead(
+    commander: UserStickyCommander,
+) -> None:
+    """A replacement stamped dead will never register: the wait must raise now,
+    not stare at the tombstone for the whole READY_TIMEOUT (30s)."""
+    enroll(commander, "W:corpse", status="dead")
+    started = time.monotonic()
+    with pytest.raises(TimeoutError, match="died before registering"):
+        await commander.wait_worker_ready("W:corpse")
+    assert time.monotonic() - started < 1.0
+
+
+async def test_an_open_evacuation_silences_the_candidate(tmp_path: Any) -> None:
+    """One succession at a time: while a worker is evacuating, no new
+    recycling opens, however sick another worker reads."""
+    commander = leaking_commander(tmp_path)
+    enroll(commander, "W:w-1")
+    leak(commander, "W:w-1", 2.0)
+    assert commander.recycle_candidate() == "W:w-1"
+    enroll(commander, "W:evac", status="evacuating")
+    assert commander.recycle_candidate() is None
+
+
+async def test_a_sick_pool_pauses_between_regeneration_probes(tmp_path: Any) -> None:
+    """While the pool cannot regenerate, the candidate stays silent — probing
+    a broken world every beat would fork one stillborn per beat."""
+    commander = leaking_commander(tmp_path)
+    enroll(commander, "W:w-1")
+    leak(commander, "W:w-1", 2.0)
+    commander.regeneration_failed_at = time.monotonic()
+    assert commander.recycle_candidate() is None
+    # The pause expires: the recycling may probe the world again.
+    commander.regeneration_failed_at = time.monotonic() - RECYCLE_RETRY_SECONDS - 1
+    assert commander.recycle_candidate() == "W:w-1"
+
+
+async def test_the_users_own_calls_carry_a_lingering_evacuation_to_its_end(
+    tmp_path: Any,
+) -> None:
+    """A straggler mid-call holds nothing up; the instant his last call closes
+    he is carried over — no clock ever needs to find him idle — and the next
+    beat buries the emptied worker."""
+    commander = leaking_commander(tmp_path)
+    enroll(commander, "W:w-1", status="evacuating")
+    enroll(commander, "W:w-2")
+    commander.worker_roster["W:w-1"]["evacuating_since"] = time.monotonic()
+    commander.assign_user("alice", "W:w-1")
+    request = commander.open_request("W:w-1", "alice", "/op/page_ping")
+    moved: list[str] = []
+
+    async def record(user: str, target: str) -> bool:
+        moved.append(user)
+        commander.assign_user(user, target)
+        return True
+
+    commander.move_user = record  # type: ignore[method-assign]
+    commander.pool_beat()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    # Mid-call: nothing moved, and the beat's other forces stayed free.
+    assert moved == []
+    assert commander.worker_roster["W:w-1"]["status"] == "evacuating"
+    # His call closes: the move launches THERE, on the spot.
+    commander.close_request("W:w-1", "alice", request)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert moved == ["alice"]
+    # The next beat closes the books on the emptied worker.
+    commander.pool_beat()
+    assert commander.worker_roster["W:w-1"]["status"] == "draining"
+
+
+async def test_a_failed_carry_drops_the_session_loudly(tmp_path: Any) -> None:
+    """The one genuinely anomalous situation: a user that cannot be carried
+    gets an error, never a silent limbo — the surface forgets him, so his next
+    call fails loudly and his next login seats him fresh on a healthy worker."""
+    commander = leaking_commander(tmp_path)
+    enroll(commander, "W:w-1", status="evacuating")
+    enroll(commander, "W:w-2")
+    commander.assign_user("alice", "W:w-1")
+    request = commander.open_request("W:w-1", "alice", "/op/page_ping")
+
+    async def refuse(user: str, target: str) -> bool:
+        return False
+
+    commander.move_user = refuse  # type: ignore[method-assign]
+    commander.close_request("W:w-1", "alice", request)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert "alice" not in commander.user_worker_map
+    assert "alice" not in commander.users_on("W:w-1")
+
+
+def test_an_unmapped_identity_leaves_no_standing_note(
+    commander: UserStickyCommander,
+) -> None:
+    """Anonymous bookkeeping is ephemeral — the legacy dispatcher's own rule:
+    a guest's row lives exactly as long as its calls, so no orphan note can
+    ever accumulate or hold an evacuation hostage."""
+    enroll(commander, "W:w-1")
+    request = commander.open_request("W:w-1", "sess-guest", "/op/page_ping")
+    assert "sess-guest" in commander.users_on("W:w-1")
+    commander.close_request("W:w-1", "sess-guest", request)
+    assert "sess-guest" not in commander.users_on("W:w-1")
+
+
+async def test_a_delivery_toward_a_retired_worker_fails_loudly(
+    commander: UserStickyCommander,
+) -> None:
+    """The accepted rare race (probability-weighted rule): a delivery decided
+    an instant before its target stopped serving must END IN AN ERROR — never
+    a slice landed on a worker under SIGTERM with the client told success."""
+    enroll(commander, "W:w-1", status="draining")
+    with pytest.raises(RuntimeError, match="not serving"):
+        await commander.hand_user_to("W:w-1", "alice", "blob")
+
+
+async def test_a_stillborn_already_buried_keeps_its_obituary(tmp_path: Any) -> None:
+    """The reconcile can stamp the replacement dead before the wait notices:
+    closing the manoeuvre must not flip that tombstone into a draining no
+    gravedigger ever collects."""
+    commander = leaking_commander(tmp_path)
+    enroll(commander, "W:w-1")
+
+    def fake_spawn() -> str:
+        return enroll(commander, "W:repl", status="dead")
+
+    commander.spawn_worker = fake_spawn  # type: ignore[method-assign]
+    assert await commander.recycle_worker("W:w-1") is False
+    assert commander.worker_roster["W:repl"]["status"] == "dead"
+    assert commander.worker_roster["W:w-1"]["status"] == "active"
+    assert commander.regeneration_failed_at is not None
+
+
+async def test_a_vanished_user_is_nobody_s_move(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    assert await commander.move_user("ghost", "W:w-1") is False
+
+
+def test_the_503_covers_one_window_and_lapses(tmp_path: Any) -> None:
+    """The 503 is the answer of the moment, not a quarantine: Mario turned
+    away comes back five minutes later and finds the door open."""
+    commander = leaking_commander(tmp_path)
+    enroll(commander, "W:w-1")
+    commander.regeneration_failed_at = time.monotonic()
+    with pytest.raises(HTTPException) as refused:
+        commander.worker_for("guest")
+    assert refused.value.status == 503
+    commander.regeneration_failed_at = time.monotonic() - RECYCLE_RETRY_SECONDS - 1
+    assert commander.worker_for("guest") == "W:w-1"
+
+
+def test_a_claim_in_the_flag_only_window_is_ignored(
+    commander: UserStickyCommander,
+) -> None:
+    """Between the fold raising the flag and place_login's decision the user
+    is flagged but unmapped: a foreign claim landing in that window must not
+    seat him — the placement in flight owns the decision."""
+    enroll(commander, "W:w-1")
+    commander.placing.add("alice")
+    commander.register_user("alice", "W:w-1")
+    assert "alice" not in commander.user_worker_map
+
+
+async def test_a_resident_join_never_drops_a_flag_it_does_not_own(
+    commander: UserStickyCommander,
+) -> None:
+    """A second login chained onto a placement in flight takes the resident
+    branch: its own finally must not release the calls parked on the FIRST
+    install, which is still on the wire."""
+    enroll(commander, "W:w-1")
+    commander.placing.add("alice")
+    commander.assign_user("alice", "W:w-1")
+
+    async def deliver(worker: str, user: str, encoded: str) -> Any:
+        return {"register_item_id": user}
+
+    commander.hand_user_to = deliver  # type: ignore[method-assign]
+    await commander.place_login("alice", "second-blob")
+    assert "alice" in commander.placing
+
+
+def test_a_stalled_evacuation_is_reported(
+    commander: UserStickyCommander, caplog: Any
+) -> None:
+    """The one human-visible output of a non-converging evacuation must
+    actually fire: stalled past the pool's own clocks means a warning."""
+    enroll(commander, "W:w-1", status="evacuating")
+    commander.assign_user("alice", "W:w-1")
+    commander.open_request("W:w-1", "alice", "/op/page_ping")
+    row = commander.worker_roster["W:w-1"]
+    row["evacuating_since"] = time.monotonic() - CONNECTION_MAX_AGE - 10
+    with caplog.at_level(logging.WARNING):
+        commander.advance_evacuations()
+    assert any("stalled" in record.getMessage() for record in caplog.records)
+
+
+async def test_a_move_waits_out_a_landing_before_reading_the_source(
+    commander: UserStickyCommander,
+) -> None:
+    """A landing user is visible (map written at the decision) but not yet
+    movable: the move parks on the flag instead of evicting a slice that has
+    not arrived."""
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    commander.placing.add("alice")
+    commander.assign_user("alice", "W:w-1")
+    move = asyncio.create_task(commander.move_user("alice", "W:w-2"))
+    await asyncio.sleep(0)
+    assert "alice" not in commander.moving
+    move.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await move
+
+
+async def test_the_compaction_narrows_the_target_it_folds(
+    commander: UserStickyCommander,
+) -> None:
+    """One decrement per fold: folding a worker away WITHOUT lowering the
+    target would leave the reconcile respawning it forever."""
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    enroll(commander, "W:w-3")
+    commander.target = 3
+    commander.compacting = True
+    await commander.compact_pass()
+    # One fold happened (the margin stops the second): target followed it.
+    assert commander.target == 2
+    assert len(commander.living_workers) == 2
+
+
+async def test_a_registered_worker_clears_the_regeneration_condition(
+    commander: UserStickyCommander,
+) -> None:
+    """Any successful REGISTER is the proof the pool regenerates again: the
+    condition clears and the new entries are admitted once more."""
+
+    async def no_replica(worker: str) -> None:
+        return None
+
+    commander.bootstrap_replica = no_replica  # type: ignore[method-assign]
+    commander.regeneration_failed_at = time.monotonic()
+    enroll(commander, "W:w-1", status="nascent")
+    await commander.member_joined(FakeMember("W:w-1"))
+    assert commander.regeneration_failed_at is None
 
 
 # ----------------------------------------------------------------------

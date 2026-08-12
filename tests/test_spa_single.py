@@ -254,11 +254,12 @@ async def test_the_login_is_released_only_once_the_room_is_ready(
         single.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
     )
     await until(lambda: "held" in seen)
-    # Mid-sequence: the source spent its copy, the map carries the flag, and the
-    # login caller is still parked on the install.
+    # Mid-sequence: the source spent its copy, the map already names the
+    # destination (written at the decision), and the login caller is still
+    # parked on the install.
     assert seen["identity"] == "alice"
     assert seen["held"] is None
-    assert seen["flag"] is None
+    assert seen["flag"] == single.worker.name
     assert not login.done()
     gate.set()
     entry = await login

@@ -24,6 +24,7 @@ failure leg against a roster row whose worker answers nothing.
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 import pytest
@@ -223,6 +224,34 @@ def test_metrics_view_ignores_a_worker_that_is_not_active(
     commander.record_occupancy("W:w-1", report(busy=2, total=4))
     commander.worker_roster["W:w-1"]["status"] = "gone"
     assert commander.metrics_view() == {}
+
+
+def test_metrics_view_carries_the_last_floor_and_rounded_time_to_limit(
+    commander: UserStickyCommander,
+) -> None:
+    commander.memory_limit_mb = 200
+    commander.record_occupancy("W:w-1", report(busy=1, total=4))
+    now = time.time()
+    commander.worker_roster["W:w-1"]["floors"].extend(
+        [
+            {"ts": now - index * 3600, "floor": (99.96 - index) * 1024 * 1024}
+            for index in range(6, -1, -1)
+        ]
+    )
+    view = commander.metrics_view()["W:w-1"]
+    assert view["floor"] == pytest.approx(99.96 * 1024 * 1024)
+    # The raw T is 100.04 hours: only an actual one-decimal rounding gives 100.0,
+    # so dropping the round (or widening it) fails here.
+    assert view["time_to_limit"] == 100.0
+
+
+def test_metrics_view_gives_none_floor_and_time_to_limit_with_no_series(
+    commander: UserStickyCommander,
+) -> None:
+    commander.record_occupancy("W:w-1", report(busy=1, total=4))
+    view = commander.metrics_view()["W:w-1"]
+    assert view["floor"] is None
+    assert view["time_to_limit"] is None
 
 
 # ----------------------------------------------------------------------

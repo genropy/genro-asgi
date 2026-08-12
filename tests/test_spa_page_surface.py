@@ -260,7 +260,7 @@ def test_a_placement_in_flight_leaves_the_pages_unplaced(
             event("new_page", 3, user="alice", page_id="p1", session_id="s1"),
         ],
     )
-    commander.assign_user("alice", None)
+    commander.placing.add("alice")
     assert commander.page_worker("p1") is None
     assert "p1" in commander.page_connection
 

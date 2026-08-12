@@ -35,6 +35,7 @@ from genro_asgi.channel.hub import ChannelCallError
 from genro_asgi.spa.commander import (
     CONSUMPTION_BUCKET_SECONDS,
     CONSUMPTION_BUCKETS,
+    FLOOR_SERIES_DEPTH,
     LOGIN_OP,
     METRICS_WINDOW,
     TOMBSTONE_SECONDS,
@@ -871,3 +872,66 @@ def test_sweeping_a_worker_forgets_the_consumption_of_its_users(
     commander.count_user_consumption("bob", 0.4, now=1000.0)
     commander.sweep_worker("W:w-1")
     assert set(commander.user_consumption) == {"bob"}
+
+
+# ----------------------------------------------------------------------
+# The long floor series: one sample per closed window (issue #8)
+# ----------------------------------------------------------------------
+
+
+def memory_report(rss: int) -> dict[str, Any]:
+    """A raw reading carrying only the live-memory gauges."""
+    return {"rss": rss, "reusable": 0}
+
+
+def test_a_floor_is_sampled_once_per_full_window(commander: UserStickyCommander) -> None:
+    for _ in range(METRICS_WINDOW - 1):
+        commander.record_occupancy("W:w-1", memory_report(100))
+    assert list(commander.worker_floors("W:w-1")) == []
+    commander.record_occupancy("W:w-1", memory_report(80))
+    series = list(commander.worker_floors("W:w-1"))
+    assert len(series) == 1
+    assert series[0]["floor"] == 80
+    assert series[0]["ts"] > 0
+    # the counter restarted: the next window has to fill up again
+    for _ in range(METRICS_WINDOW - 1):
+        commander.record_occupancy("W:w-1", memory_report(200))
+    assert len(commander.worker_floors("W:w-1")) == 1
+    commander.record_occupancy("W:w-1", memory_report(300))
+    assert len(commander.worker_floors("W:w-1")) == 2
+
+
+def test_a_window_with_no_rss_closes_without_a_floor(commander: UserStickyCommander) -> None:
+    for _ in range(METRICS_WINDOW):
+        commander.record_occupancy("W:w-1", {"users": 1})
+    assert list(commander.worker_floors("W:w-1")) == []
+    assert commander.worker_roster["W:w-1"]["floor_readings"] == 0
+
+
+def test_the_floor_series_is_capped_at_its_configured_depth(tmp_path: Any) -> None:
+    running = UserStickyCommander(
+        workers=0, path=str(tmp_path / "hub.sock"), floor_series_depth=3
+    )
+    running.worker_roster["W:w-1"] = running.new_roster_row(0, None)
+    for cycle in range(5):
+        for _ in range(METRICS_WINDOW):
+            running.record_occupancy("W:w-1", memory_report(cycle + 1))
+    floors = [row["floor"] for row in running.worker_floors("W:w-1")]
+    assert floors == [3, 4, 5]
+
+
+def test_worker_floors_reads_none_for_an_unknown_worker(
+    commander: UserStickyCommander,
+) -> None:
+    assert commander.worker_floors("W:nobody") is None
+    assert list(commander.worker_floors("W:w-1")) == []
+
+
+def test_a_default_commander_samples_floors_at_the_module_depth(
+    commander: UserStickyCommander,
+) -> None:
+    assert commander.floor_series_depth == FLOOR_SERIES_DEPTH
+    assert commander.worker_roster["W:w-1"]["floors"].maxlen == FLOOR_SERIES_DEPTH
+    for _ in range(METRICS_WINDOW):
+        commander.record_occupancy("W:w-1", memory_report(4096))
+    assert [row["floor"] for row in commander.worker_floors("W:w-1")] == [4096]

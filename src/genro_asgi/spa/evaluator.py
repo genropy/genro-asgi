@@ -57,6 +57,14 @@ Two readings are taken off those ratios:
 
 A worker with no rows (just born) reads 0.0 on both — it admits.
 
+Beside the judgment there is one pure GAUGE: ``window_floor`` reads the lowest
+live memory of the whole window in raw bytes — no target, no clamp. It is what
+the commander samples into a worker's long floor series, the evidence the
+recycling policy reads a leak off (issue #8). Off that series two more readings
+are fitted: ``worker_floor_velocity``, how fast the floor climbs in bytes/hour,
+and ``worker_time_to_limit``, the hours left before it meets the memory limit —
+None on both meaning "no leak measurable, this worker lives forever".
+
 Owned by the commander (semantic parent: ``self.commander``). The window depth
 and the report shape are the commander's; this object never mutates them.
 """
@@ -64,6 +72,7 @@ and the report shape are the commander's; this object never mutates them.
 from __future__ import annotations
 
 import math
+import statistics
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -73,6 +82,13 @@ __all__ = ["COMPONENT_NAMES", "SMOOTHING_ROWS", "OccupancyEvaluator"]
 
 #: Bytes per configured megabyte of the memory limit.
 _MB = 1024 * 1024
+
+#: Seconds per hour — the floor velocity is expressed per hour.
+_HOUR = 3600.0
+
+#: Fewest floor samples a slope may be fitted on: under it the series is too
+#: short to tell a leak from the noise of a few windows.
+_FLOOR_FIT_MINIMUM = 6
 
 #: How many of the most recent window rows each component is averaged over
 #: before the max is taken (~30s at the default 5s probe interval).
@@ -218,6 +234,89 @@ class OccupancyEvaluator:
         rps = req_delta / elapsed if elapsed > 0 else None
         latency_ms = (sec_delta / req_delta) * 1000.0 if req_delta > 0 else None
         return {"rps": rps, "latency_ms": latency_ms}
+
+    def window_floor(self, worker_id: str) -> float | None:
+        """The lowest live memory in the whole window, in RAW BYTES (issue #8).
+
+        ``min(rss - reusable)`` over every row carrying an ``rss`` — the floor a
+        window of allocation peaks and trims settles on, the gauge a leak shows
+        up in. Rows with no ``rss`` are skipped; a missing or None ``reusable``
+        counts as 0, the same degrade as ``row_components``. None when no row of
+        the window carries an ``rss`` at all. No limit, no clamp: the floor is a
+        reading, not a judgment.
+        """
+        window = self.commander.worker_window(worker_id)
+        if not window:
+            return None
+        lives = [
+            row["report"]["rss"] - (row["report"].get("reusable") or 0)
+            for row in window
+            if (row.get("report") or {}).get("rss") is not None
+        ]
+        return float(min(lives)) if lives else None
+
+    def floor_slope(self, samples: list[dict[str, Any]]) -> float | None:
+        """Theil–Sen slope of ``{ts, floor}`` samples, in BYTES PER HOUR.
+
+        The median of every pairwise slope: a robust fit, so a single window
+        that trimmed deeply (or peaked) cannot sway the reading the way a least
+        squares line would. Sample timestamps are seconds; the result is per
+        hour. None when no pair is separated in time (nothing to fit).
+        """
+        slopes = [
+            (later["floor"] - earlier["floor"]) / (later["ts"] - earlier["ts"]) * _HOUR
+            for index, earlier in enumerate(samples)
+            for later in samples[index + 1 :]
+            if later["ts"] > earlier["ts"]
+        ]
+        if not slopes:
+            return None
+        return float(statistics.median(slopes))
+
+    def worker_floor_velocity(self, worker_id: str) -> float | None:
+        """How fast this worker's live-memory floor climbs, in BYTES PER HOUR.
+
+        The Theil–Sen slope of the whole floor series, corrected for
+        ACCELERATION: the same fit over the most recent half is taken too (when
+        that half itself holds enough samples) and the LARGER of the two wins —
+        a leak that just sped up shortens the time to the limit rather than
+        being averaged away by a calm past. Negative when the floor is falling.
+        None when the series holds fewer than six samples, or the worker is
+        unknown.
+        """
+        series = self.commander.worker_floors(worker_id)
+        if not series or len(series) < _FLOOR_FIT_MINIMUM:
+            return None
+        samples = list(series)
+        velocity = self.floor_slope(samples)
+        if velocity is None:
+            return None
+        recent = samples[len(samples) // 2 :]
+        if len(recent) >= _FLOOR_FIT_MINIMUM:
+            accelerated = self.floor_slope(recent)
+            if accelerated is not None:
+                velocity = max(velocity, accelerated)
+        return velocity
+
+    def worker_time_to_limit(self, worker_id: str) -> float | None:
+        """HOURS before this worker's floor meets the memory limit (issue #8).
+
+        ``(memory_limit_mb * 1MB - last_floor) / velocity`` on the velocity
+        above — the evidence the recycling policy triggers on. None means
+        INFINITE, "never recycle this worker": no configured
+        ``memory_limit_mb``, fewer than six floor samples, or a velocity of
+        zero or less (a flat or falling floor is not a leak). A floor already
+        past the limit while still climbing reads 0.0 — overdue, not healthy.
+        """
+        limit = self.commander.memory_limit_mb
+        if not limit:
+            return None
+        velocity = self.worker_floor_velocity(worker_id)
+        if velocity is None or velocity <= 0:
+            return None
+        series = self.commander.worker_floors(worker_id)
+        last_floor = list(series or [])[-1]["floor"]
+        return max(0.0, (limit * _MB - last_floor) / velocity)
 
     def recent_rows(self, worker_id: str) -> list[dict[str, Any]]:
         """The last ``SMOOTHING_ROWS`` rows of the worker's window (fewer if younger)."""
