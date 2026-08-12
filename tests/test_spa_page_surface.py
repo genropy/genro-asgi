@@ -149,7 +149,7 @@ def test_an_unknown_page_resolves_to_none(commander: UserStickyCommander) -> Non
 def test_the_broadcast_filter_matches_on_the_fields_the_walk_derives(
     commander: UserStickyCommander,
 ) -> None:
-    commander.fold_events(
+    commander.place_logins(
         "W:w-1",
         [
             event("new_user", 1, user="alice"),
@@ -168,7 +168,7 @@ def test_a_new_page_naming_an_unknown_connection_self_heals_it(
     commander: UserStickyCommander,
 ) -> None:
     """The event's ``user`` owns its ``session_id``: the middle link is rebuilt."""
-    commander.fold_events(
+    commander.place_logins(
         "W:w-1",
         [
             event("new_user", 1, user="alice"),
@@ -184,7 +184,7 @@ def test_a_new_page_naming_an_unknown_connection_self_heals_it(
 def test_a_late_claim_never_re_places_a_page(
     commander: UserStickyCommander, caplog: Any
 ) -> None:
-    commander.fold_events(
+    commander.place_logins(
         "W:w-1",
         [
             event("new_user", 1, user="alice"),
@@ -193,7 +193,7 @@ def test_a_late_claim_never_re_places_a_page(
         ],
     )
     with caplog.at_level("WARNING"):
-        commander.fold_events(
+        commander.place_logins(
             "W:w-2", [event("new_page", 1, user="alice", page_id="p1", session_id="s1")]
         )
     assert commander.page_worker("p1") == "W:w-1"
@@ -201,26 +201,26 @@ def test_a_late_claim_never_re_places_a_page(
 
 
 def test_a_foreign_drop_leaves_the_holder_alone(commander: UserStickyCommander) -> None:
-    commander.fold_events(
+    commander.place_logins(
         "W:w-1",
         [
             event("new_user", 1, user="alice"),
             event("new_page", 2, user="alice", page_id="p1", session_id="s1"),
         ],
     )
-    commander.fold_events("W:w-2", [event("drop_page", 1, user="alice", page_id="p1")])
+    commander.place_logins("W:w-2", [event("drop_page", 1, user="alice", page_id="p1")])
     assert commander.page_worker("p1") == "W:w-1"
 
 
 def test_dropping_an_unknown_page_is_a_no_op(commander: UserStickyCommander) -> None:
-    commander.fold_events("W:w-1", [event("drop_page", 1, user="alice", page_id="ghost")])
+    commander.place_logins("W:w-1", [event("drop_page", 1, user="alice", page_id="ghost")])
     assert commander.page_connection == {}
 
 
 def test_pages_follow_their_user_when_it_is_re_pointed(
     commander: UserStickyCommander,
 ) -> None:
-    commander.fold_events(
+    commander.place_logins(
         "W:w-1",
         [
             event("new_user", 1, user="alice"),
@@ -229,7 +229,7 @@ def test_pages_follow_their_user_when_it_is_re_pointed(
             event("new_page", 4, user="alice", page_id="p2", session_id="s1"),
         ],
     )
-    commander.fold_events(
+    commander.place_logins(
         "W:w-2",
         [
             event("new_user", 1, user="bob"),
@@ -249,10 +249,12 @@ def test_pages_follow_their_user_when_it_is_re_pointed(
     assert commander.page_connection == before
 
 
-def test_a_placement_in_flight_leaves_the_pages_unplaced(
+def test_a_page_whose_user_left_the_surface_resolves_to_none(
     commander: UserStickyCommander,
 ) -> None:
-    commander.fold_events(
+    """The chain answers ``None`` at any missing hop, one hop at a time: a row
+    the sweep left behind has an edge but no owner to climb to."""
+    commander.place_logins(
         "W:w-1",
         [
             event("new_user", 1, user="alice"),
@@ -260,13 +262,13 @@ def test_a_placement_in_flight_leaves_the_pages_unplaced(
             event("new_page", 3, user="alice", page_id="p1", session_id="s1"),
         ],
     )
-    commander.placing.add("alice")
+    del commander.connection_user["s1"]
     assert commander.page_worker("p1") is None
     assert "p1" in commander.page_connection
 
 
 def test_sweeping_a_dead_worker_forgets_its_pages(commander: UserStickyCommander) -> None:
-    commander.fold_events(
+    commander.place_logins(
         "W:w-1",
         [
             event("new_user", 1, user="alice"),
@@ -274,7 +276,7 @@ def test_sweeping_a_dead_worker_forgets_its_pages(commander: UserStickyCommander
             event("new_page", 3, user="alice", page_id="p1", session_id="s1"),
         ],
     )
-    commander.fold_events(
+    commander.place_logins(
         "W:w-2",
         [
             event("new_user", 1, user="bob"),
@@ -293,7 +295,7 @@ def test_sweeping_a_dead_worker_forgets_its_pages(commander: UserStickyCommander
 
 def two_connections(commander: UserStickyCommander, worker: str = "W:w-1") -> None:
     """Alice on ``worker`` with two connections, one page each."""
-    commander.fold_events(
+    commander.place_logins(
         worker,
         [
             event("new_user", 1, user="alice"),
@@ -319,7 +321,7 @@ def test_dropping_one_connection_leaves_the_user_and_its_sibling_alone(
 ) -> None:
     two_connections(commander)
 
-    commander.fold_events(
+    commander.place_logins(
         "W:w-1",
         [
             event("drop_page", 6, user="alice", page_id="p2"),
@@ -349,7 +351,7 @@ def test_removing_a_two_connection_user_clears_the_whole_chain(
 def test_a_login_leaves_the_page_subscriptions_where_they_are(
     commander: UserStickyCommander,
 ) -> None:
-    commander.fold_events(
+    commander.place_logins(
         "W:w-1",
         [
             event("new_user", 1, user="s1"),
@@ -359,19 +361,18 @@ def test_a_login_leaves_the_page_subscriptions_where_they_are(
     )
     commander.page_subscriptions.subscribe("p1", "glbl.user")
 
-    commander.fold_events(
-        "W:w-1",
-        [event(LOGIN_OP, 4, user="alice", previous_user="s1", session_id="s1", encoded="")],
+    commander.fold_event(
+        "W:w-1", event(LOGIN_OP, 4, user="alice", previous_user="s1", session_id="s1")
     )
 
     assert commander.page_subscriptions.pages_for("glbl.user") == {"p1"}
     assert commander.connection_user[commander.page_connection["p1"]] == "alice"
 
 
-def test_the_login_of_a_second_connection_never_flags_a_resident_user(
+def test_the_login_of_a_second_connection_leaves_the_resident_where_it_is(
     commander: UserStickyCommander,
 ) -> None:
-    commander.fold_events(
+    commander.place_logins(
         "W:w-1",
         [
             event("new_user", 1, user="alice"),
@@ -379,7 +380,7 @@ def test_the_login_of_a_second_connection_never_flags_a_resident_user(
             event("new_page", 3, user="alice", page_id="p1", session_id="s1"),
         ],
     )
-    commander.fold_events(
+    commander.place_logins(
         "W:w-2",
         [
             event("new_user", 1, user="s2"),
@@ -388,12 +389,12 @@ def test_the_login_of_a_second_connection_never_flags_a_resident_user(
         ],
     )
 
-    commander.fold_events(
-        "W:w-2",
-        [event(LOGIN_OP, 4, user="alice", previous_user="s2", session_id="s2", encoded="")],
+    # The fold alone: the rehome the settle then orders lives on the move side.
+    commander.fold_event(
+        "W:w-2", event(LOGIN_OP, 4, user="alice", previous_user="s2", session_id="s2")
     )
 
-    # S2: alice is at home, not in flight, and her first connection never moved.
+    # S2: alice is at home and her first connection never moved.
     assert commander.user_worker_map == {"alice": "W:w-1"}
     assert sorted(commander.user_connections["alice"]) == ["s1", "s2"]
     assert commander.page_connection == {"p1": "s1", "p2": "s2"}
@@ -424,6 +425,6 @@ def test_dropping_a_page_clears_the_edge_on_both_sides(
 
     assert commander.page_connection == {"p1": "s1", "p2": "s2"}
 
-    commander.fold_events("W:w-1", [event("drop_page", 6, user="alice", page_id="p1")])
+    commander.place_logins("W:w-1", [event("drop_page", 6, user="alice", page_id="p1")])
     assert commander.page_connection == {"p2": "s2"}
     assert commander.pages_of_connection("s1") == []

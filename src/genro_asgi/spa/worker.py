@@ -74,19 +74,16 @@ each drop on the outbox. It is DISARMED unless ``sweep_interval`` is given:
 until the browser rail carries a presence signal, a quiet page and a dead one
 look alike from here.
 
-**The login pushes the user out.** ``change_connection_user`` re-labels the
-CONNECTION onto the logged-in user — a mutation, never a re-key: keys, live
-stores and collectors survive it, with ONE declared exception: the anonymous
-user entry claiming its first real identity is transferred whole onto the new
-key, store included — and then, under the very same lock, packages
-the user's whole slice, DROPS it from ``user_items`` and offers the login event
-with that ``encoded`` riding on it: the worker spends its copy and forgets
-(legacy ``evict_user``). Nothing is left here for a second step to collect: the
-commander installs the package on the worker it decides the user belongs to,
-this one included. ONE login does not push: the one onto a user this worker
-already hosts. There the registry's join is everything — the connection is
-linked to the resident entry and the event carries no ``encoded`` — so a
-resident's pages never leave the worker they are being served on.
+**The login never pushes** (ratified 2026-08-12). ``change_connection_user``
+re-labels the CONNECTION onto the logged-in user — a mutation, never a re-key:
+keys, live stores and collectors survive it, with ONE declared exception: the
+anonymous user entry claiming its first real identity is transferred whole onto
+the new key, store included. A user this worker already hosts is joined: the
+connection links to the resident entry. Either way the slice STAYS here and
+only the event travels, so the request that carried the login keeps finding
+its pages on this worker to the end. Where the user belongs is the commander's
+question, answered at the fold: a user that belongs elsewhere leaves later,
+through the ordinary commanded move.
 
 **The commander can also ORDER the departure.** ``evict_user`` packages the same
 slice on demand and answers with it: no event, because the surface itself asked
@@ -1926,7 +1923,7 @@ class UserStickyWorker(RoutingClass):
 
     @route()
     def change_connection_user(self, identity: str, user: str, **fields: Any) -> dict[str, Any]:
-        """Re-label the connection ``identity`` onto the logged-in ``user``, then push it out.
+        """Re-label the connection ``identity`` onto the logged-in ``user``, in place.
 
         The login transition: the sticky key of the CONNECTION stops being the
         anonymous one (its own session id) and becomes the root avatar identity.
@@ -1934,56 +1931,31 @@ class UserStickyWorker(RoutingClass):
         the live connection row; on a first login the anonymous user entry is
         transferred whole onto the new key (store included, the registry's
         declared divergence), otherwise the old user leaves only once its
-        ``connections`` set is empty.
+        ``connections`` set is empty. When this worker already hosts the target
+        user the registry's join is the whole login: the connection is linked
+        to the resident entry and its pages' ``user_view`` is re-attached to
+        the resident store.
 
-        **A resident login links, it never ships.** When this worker ALREADY
-        hosts the target user the registry's join is the whole login: the
-        connection is linked to the resident entry, its pages' ``user_view`` is
-        re-attached to the resident store, the orphaned guest dies — and nothing
-        travels. No package, no drop, and the login event goes up WITHOUT the
-        ``encoded`` key, which is how the commander reads "this user is at home,
-        there is no room to make". The resident's other connections and their
-        pages are never taken off the register, so no traffic addressed to them
-        can fall into an eviction window: there is none.
-
-        Otherwise the re-labelled slice LEAVES this worker in the same locked
-        mutation: it is packaged onto the event and dropped here, so the
-        commander has both keys and the baggage in one message and installs the
-        user wherever it decides. That is the road of a user BORN here by this
-        very login too — the commander must stay free to place it anywhere. The
-        returned entry is the snapshot the caller logged in with.
-
-        The pages are evicted BEFORE the Bags are pickled, and that order is
-        load-bearing: their ``user_view`` collectors are attached to the user's
-        store, so detaching them is what leaves the Bag with nothing watching it
-        when it is serialized. The baggage is a sealed Python-to-Python parcel
-        nobody reads en route — the vehicle is pickle, base64 inside the JSON
-        envelope — and pickling IS the snapshot: the blob needs no copy of its
-        own.
+        **The login never ships** (ratified 2026-08-12): whatever the commander
+        later decides, the slice stays HERE — the request that carried the
+        login keeps finding its pages on this worker to the end. The event
+        announces the re-label on the REPLY; the commander maps the user where
+        it was born and, when it belongs elsewhere, orders the ordinary
+        commanded move (``evict_user`` → ``add_user``) as a task of its own.
+        The returned entry is the snapshot the caller logged in with.
         """
         with self.dispatch_lock:
             connection = self.connection_items.get(identity)
             if connection is None:
                 raise KeyError(f"change_connection_user: unknown connection {identity!r}")
             previous_user = connection["user"]
-            resident = user in self.user_items
             self.registry.change_connection_user(identity, user, **fields)
             entry = self.user_items.get(user)
-            if resident:
-                self.offer_event(
-                    "change_connection_user",
-                    user=user,
-                    previous_user=previous_user,
-                    session_id=identity,
-                )
-                return self.wire_entry(entry)
-            encoded = self.encode_user(user)
             self.offer_event(
                 "change_connection_user",
                 user=user,
                 previous_user=previous_user,
                 session_id=identity,
-                encoded=encoded,
             )
             return self.wire_entry(entry)
 
@@ -2226,13 +2198,13 @@ class UserStickyWorker(RoutingClass):
     def encode_user(self, user: str) -> str:
         """Seal the whole slice of ``user`` into its encoded wire form and spend it here.
 
-        The one road out of a worker, whatever orders the departure: the login
-        push and the commanded eviction build the SAME parcel — the user entry
-        without its live fields, the store itself, every connection row, every
-        page drained on the way out — and both leave nothing behind, because a
-        slice that is on the wire must be nowhere else. The order is the one
-        ``evict_pages`` describes: the pages come off BEFORE the Bags are
-        pickled, so no collector of this worker is watching what travels.
+        The one road out of a worker, and the commanded eviction is its only
+        caller: the parcel is the user entry without its live fields, the store
+        itself, every connection row, every page drained on the way out — and
+        it leaves nothing behind, because a slice that is on the wire must be
+        nowhere else. The order is the one ``evict_pages`` describes: the pages
+        come off BEFORE the Bags are pickled, so no collector of this worker is
+        watching what travels.
         """
         entry = self.user_items.get(user)
         connections = self.pack_connections(user)
@@ -2252,11 +2224,11 @@ class UserStickyWorker(RoutingClass):
         """Hand the slice of ``identity`` up to the commander and forget it here.
 
         The commanded move, transcribed from the legacy ``/evict_user``: the
-        commander orders the departure — a rebalance, a shutdown dump — and the
-        worker answers with the parcel. OPERATIONAL, so it shapes NO event: the
-        surface is the one that asked, and it learns the outcome from this very
-        reply. That is the whole difference from the login push, which nobody
-        asked for and which therefore must announce itself.
+        commander orders the departure — a move, a rebalance, a shutdown dump —
+        and the worker answers with the parcel. OPERATIONAL, so it shapes NO
+        event: the surface is the one that asked, and it learns the outcome
+        from this very reply. Since the login stopped shipping (ratified
+        2026-08-12) this is the ONLY way a slice leaves a living worker.
         """
         with self.dispatch_lock:
             if self.user_items.get(identity) is None:
@@ -2309,8 +2281,8 @@ class UserStickyWorker(RoutingClass):
         """Install a moved user's slice from its encoded wire form — the rebirth.
 
         Operational, like every install primitive: the commander orders it, so
-        it needs no event back — the source already spent its copy on the login
-        event. The item arrives whole, so its identity and every field it
+        it needs no event back — the source already spent its copy answering
+        the evict. The item arrives whole, so its identity and every field it
         carried survive the move; ``identity`` is the routing key the CALL was
         addressed with and must match the carried user.
 
@@ -2332,6 +2304,7 @@ class UserStickyWorker(RoutingClass):
             raise ValueError(f"add_user: slice of {user!r} addressed to {identity!r}")
         with self.dispatch_lock:
             entry = self.user_items.get(user)
+            joined = entry is not None
             if entry is None:
                 carried = {k: v for k, v in blob["user_entry"].items() if k != "register_item_id"}
                 entry = self.registry.new_user(user, store=blob["user_store"], **carried)
@@ -2339,4 +2312,7 @@ class UserStickyWorker(RoutingClass):
                 self.install_connection(user, connection_id, packed)
             for page_id, packed in blob["pages"].items():
                 self.install_page(user, page_id, packed)
-            return self.wire_entry(entry)
+            # ``joined`` is the caller's anomaly signal: a commanded move never
+            # expects a resident at its destination, and a join there means the
+            # parcel's own entry and store yielded to whoever got in first.
+            return {**self.wire_entry(entry), "joined": joined}

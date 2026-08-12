@@ -20,14 +20,14 @@ same REGISTER, same CALL/REPLY carrying the causal envelope of that call, same
 occupancy probe, same fold — so these tests are the protocol's own collaudo: what they exercise is
 byte-for-byte what a spawned child would exercise (design §3.5a).
 
-The login belongs here too, and it is no shortcut: one road even when the only
-worker is the one the user just left — evicted onto the event, installed back
-from the package, released only once the room is ready (R1/R3).
+The login belongs here too, and here it is at its plainest: the sole worker is
+both where the user is born and where it belongs, so the re-label in place is
+the whole of it — no eviction, no install, nothing detached behind the reply.
 
 The 2b surface holds here too, with the same wiring a spawned child has: the
 live stores and their view collectors, the pull delivery on the REPLY, the
 addressed write and its filtered broadcast, the dbevents species, the global
-store with its lock — and a login move carrying every pending across.
+store with its lock.
 """
 
 from __future__ import annotations
@@ -177,7 +177,6 @@ async def test_every_reply_carries_only_the_events_of_its_own_call(
         ("/op/new_connection", ["new_user", "new_connection"]),
         ("/op/new_connection", ["new_user", "new_connection"]),
         ("/op/change_connection_user", ["change_connection_user"]),
-        ("/op/add_user", []),
         ("/op/occupancy", []),
     ]
     assert [event["user"] for _, events in seen for event in events] == [
@@ -199,33 +198,11 @@ async def test_the_occupancy_probe_is_answered_over_the_queue_wire(
 
 
 # ----------------------------------------------------------------------
-# The login: one road even when the destination is the worker it left
+# The login: a mutation in place, with the sole worker as its own home
 # ----------------------------------------------------------------------
 
 
-def gate_the_install(commander: UserStickyCommander, gate: asyncio.Event) -> dict[str, Any]:
-    """Hold every install CALL on ``gate`` and record what the worker held then.
-
-    The install is the middle of the ratified sequence, so parking there is the
-    only way to observe the window in which the user exists nowhere but in the
-    package riding the event.
-    """
-    seen: dict[str, Any] = {}
-    original = commander.hub.call
-
-    async def gated(name: str, path: str, data: Any = None, timeout: float | None = None) -> Any:
-        if path.endswith("add_user"):
-            seen["identity"] = data["identity"]
-            seen["held"] = commander.worker.user_items.get(data["identity"])
-            seen["flag"] = commander.user_worker_map.get(data["identity"], "missing")
-            await gate.wait()
-        return await original(name, path, data, timeout=timeout)
-
-    commander.hub.call = gated
-    return seen
-
-
-async def test_a_login_evicts_the_slice_and_installs_it_back(
+async def test_a_login_re_keys_the_slice_where_it_stands(
     single: UserStickyCommander,
 ) -> None:
     await single.forward_call("sess-1", "/op/new_connection")
@@ -235,7 +212,8 @@ async def test_a_login_evicts_the_slice_and_installs_it_back(
     )
     installed = single.worker.user_items.get("alice")
     assert entry["register_item_id"] == "alice"
-    # The guest entry left with its last connection; the real user is its own.
+    # The anonymous entry was transferred onto the new key, store included: the
+    # old key answers nobody and nothing ever left this worker.
     assert single.worker.user_items.get("sess-1") is None
     assert installed is not before
     assert installed["register_item_id"] == "alice"
@@ -244,68 +222,30 @@ async def test_a_login_evicts_the_slice_and_installs_it_back(
     assert single.users_on(single.worker.name) == {"alice"}
 
 
-async def test_the_login_is_released_only_once_the_room_is_ready(
-    single: UserStickyCommander,
-) -> None:
+async def test_the_login_issues_no_handover_at_all(single: UserStickyCommander) -> None:
+    """The login is ONE call: no evict behind it, no install, nothing detached.
+
+    The sole worker is where the user was born and where it belongs, so the
+    settle decides nothing to do — and the slice was never off the worker for
+    a single instant of the exchange.
+    """
     await single.forward_call("sess-1", "/op/new_connection")
-    gate = asyncio.Event()
-    seen = gate_the_install(single, gate)
-    login = asyncio.create_task(
-        single.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
-    )
-    await until(lambda: "held" in seen)
-    # Mid-sequence: the source spent its copy, the map already names the
-    # destination (written at the decision), and the login caller is still
-    # parked on the install.
-    assert seen["identity"] == "alice"
-    assert seen["held"] is None
-    assert seen["flag"] == single.worker.name
-    assert not login.done()
-    gate.set()
-    entry = await login
-    assert entry["register_item_id"] == "alice"
-    assert single.worker.user_items.get("alice") is not None
-
-
-async def test_a_call_parked_on_the_flag_lands_after_the_placement(
-    single: UserStickyCommander,
-) -> None:
-    await single.forward_call("sess-1", "/op/new_connection")
-    gate = asyncio.Event()
-    seen = gate_the_install(single, gate)
-    login = asyncio.create_task(
-        single.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
-    )
-    await until(lambda: "held" in seen)
-    parked = asyncio.create_task(single.forward_call("alice", "/op/drop_user"))
-    await asyncio.sleep(0.05)
-    assert not parked.done()
-    gate.set()
-    await login
-    dropped = await parked
-    assert dropped["register_item_id"] == "alice"
-    assert single.user_worker_map == {}
-
-
-async def test_an_install_that_fails_leaves_the_user_nowhere(
-    single: UserStickyCommander,
-) -> None:
-    await single.forward_call("sess-1", "/op/new_connection")
+    paths: list[str] = []
     original = single.hub.call
 
-    async def failing(name: str, path: str, data: Any = None, timeout: float | None = None) -> Any:
-        if path.endswith("add_user"):
-            raise RuntimeError("no room")
+    async def spying(name: str, path: str, data: Any = None, timeout: float | None = None) -> Any:
+        paths.append(path)
         return await original(name, path, data, timeout=timeout)
 
-    single.hub.call = failing
-    with pytest.raises(RuntimeError, match="no room"):
-        await single.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
-    assert single.user_worker_map == {}
-    assert single.worker.user_items.get("alice") is None
-    # Nobody holds the user, so the next call for it is a guest arriving.
-    single.hub.call = original
-    assert single.worker_for("alice") == single.reception
+    single.hub.call = spying
+    entry = await single.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
+    assert entry["register_item_id"] == "alice"
+    assert single.worker.user_items.get("alice") is not None
+    assert single.user_worker_map == {"alice": single.worker.name}
+    # A detached settlement would only start on the next ticks: give it several.
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert paths == ["/op/change_connection_user"]
 
 
 async def test_the_user_stays_reachable_after_the_login(single: UserStickyCommander) -> None:

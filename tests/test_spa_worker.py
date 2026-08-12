@@ -246,14 +246,14 @@ def test_lifecycle_ops_mutate_the_register_and_shape_increasing_seqs() -> None:
 
         entry = worker.change_connection_user("sess-1", user="alice", tenant="acme")
         # The login's own fields describe the real user, so they are on the entry
-        # it creates — and then it is pushed out: the login event takes the
-        # baggage and this worker keeps neither key.
+        # it creates — and the entry STAYS here: the anonymous item is transferred
+        # onto the new key, and the event announces the re-label carrying nothing.
         assert entry["tenant"] == "acme"
         assert entry["register_item_id"] == "alice"
         assert "sess-1" not in worker.user_items
-        assert "alice" not in worker.user_items
+        assert "alice" in worker.user_items
+        assert "encoded" not in events[-1]
 
-        worker.add_user("alice", events[-1]["encoded"])
         worker.drop_user("alice")
         assert "alice" not in worker.user_items
 
@@ -343,7 +343,9 @@ def test_operational_ops_shape_no_event() -> None:
     with call_sink(worker) as events:
         worker.new_connection("sess-1")
         worker.change_connection_user("sess-1", user="alice")
-        encoded = events[-1]["encoded"]
+        # The commanded eviction is the one road out and the install the road
+        # back in: neither shapes an event, so the login is the last op heard.
+        encoded = worker.evict_user("alice")["encoded"]
         worker.add_user("alice", encoded)
         assert [e["op"] for e in events] == [
             "new_user",
@@ -354,11 +356,12 @@ def test_operational_ops_shape_no_event() -> None:
 
 
 # ----------------------------------------------------------------------
-# The install primitives — the push round-trip preserves the entry
+# The install primitives — the move round-trip preserves the entry
 # ----------------------------------------------------------------------
 
 
-def test_the_login_push_round_trip_preserves_the_user_entry() -> None:
+def test_the_login_entry_survives_the_move_round_trip() -> None:
+    """The login builds the entry HERE; only a commanded move carries it away."""
     source = UserStickyWorker("W:w1")
     target = UserStickyWorker("W:w2")
     with call_sink(source) as events:
@@ -366,16 +369,21 @@ def test_the_login_push_round_trip_preserves_the_user_entry() -> None:
         entry = source.change_connection_user(
             "sess-1", user="alice", tenant="acme", tags=["admin"]
         )
-        # The source spends and forgets: the slice lives on in the package alone.
-        assert "alice" not in source.user_items
-        encoded = events[-1]["encoded"]
+        # The login never ships: the re-labelled slice is still here and the
+        # event that announced it carries no parcel at all.
+        assert "alice" in source.user_items
+        assert "encoded" not in events[-1]
+        encoded = source.evict_user("alice")["encoded"]
+    assert "alice" not in source.user_items
 
     installed = target.add_user("alice", encoded)
     assert installed["tenant"] == "acme"
     assert installed["tags"] == ["admin"]
     assert installed["register_item_id"] == "alice"
-    # An op answers with the wire view: the live store stays on the worker.
-    assert target.wire_entry(target.user_items.get("alice")) == installed
+    # An op answers with the wire view — plus the caller's anomaly signal: an
+    # install on an empty room never joined anybody.
+    assert installed["joined"] is False
+    assert {**target.wire_entry(target.user_items.get("alice")), "joined": False} == installed
     # The package is a deepcopy: the source's own entry never reached it.
     assert installed is not entry
 
@@ -412,10 +420,10 @@ def test_evicting_a_user_nobody_holds_is_an_error() -> None:
 def test_add_user_refuses_a_package_addressed_to_another_identity() -> None:
     source = UserStickyWorker("W:w1")
     target = UserStickyWorker("W:w2")
-    with call_sink(source) as events:
+    with call_sink(source):
         source.new_connection("sess-1")
         source.change_connection_user("sess-1", user="alice")
-        encoded = events[-1]["encoded"]
+        encoded = source.evict_user("alice")["encoded"]
     with pytest.raises(ValueError, match="addressed to"):
         target.add_user("bob", encoded)
 

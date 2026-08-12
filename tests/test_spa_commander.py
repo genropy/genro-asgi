@@ -111,14 +111,14 @@ async def until(predicate: Any, timeout: float = SPAWN_TIMEOUT) -> None:
 def test_new_user_maps_the_user_to_the_announcing_worker(
     commander: UserStickyCommander,
 ) -> None:
-    commander.fold_events("W:w-1", [event("new_user", 1, user="alice")])
+    commander.place_logins("W:w-1", [event("new_user", 1, user="alice")])
     assert commander.user_worker_map == {"alice": "W:w-1"}
     assert commander.users_on("W:w-1") == {"alice"}
     assert commander.worker_roster["W:w-1"]["group"] == "default"
 
 
 def test_drop_user_unmaps_it(commander: UserStickyCommander) -> None:
-    commander.fold_events(
+    commander.place_logins(
         "W:w-1", [event("new_user", 1, user="alice"), event("drop_user", 2, user="alice")]
     )
     assert commander.user_worker_map == {}
@@ -127,8 +127,8 @@ def test_drop_user_unmaps_it(commander: UserStickyCommander) -> None:
 
 def test_a_seq_already_seen_is_folded_again(commander: UserStickyCommander) -> None:
     """No dedup: the envelope is causal, so every event it carries is applied."""
-    commander.fold_events("W:w-1", [event("new_user", 1, user="alice")])
-    commander.fold_events("W:w-1", [event("drop_user", 1, user="alice")])
+    commander.place_logins("W:w-1", [event("new_user", 1, user="alice")])
+    commander.place_logins("W:w-1", [event("drop_user", 1, user="alice")])
     assert commander.user_worker_map == {}
 
 
@@ -136,7 +136,7 @@ def test_events_are_folded_in_the_order_they_were_delivered(
     commander: UserStickyCommander,
 ) -> None:
     """The seq is a diagnostic stamp, not an ordering gate: the list order rules."""
-    commander.fold_events(
+    commander.place_logins(
         "W:w-1", [event("drop_user", 2, user="alice"), event("new_user", 1, user="alice")]
     )
     assert commander.user_worker_map == {"alice": "W:w-1"}
@@ -145,21 +145,21 @@ def test_events_are_folded_in_the_order_they_were_delivered(
 def test_a_late_event_never_re_points_an_assigned_user(
     commander: UserStickyCommander,
 ) -> None:
-    commander.fold_events("W:w-1", [event("new_user", 1, user="alice")])
-    commander.fold_events("W:w-2", [event("new_user", 1, user="alice")])
+    commander.place_logins("W:w-1", [event("new_user", 1, user="alice")])
+    commander.place_logins("W:w-2", [event("new_user", 1, user="alice")])
     assert commander.user_worker_map == {"alice": "W:w-1"}
 
 
 def test_a_foreign_drop_leaves_the_owner_alone(commander: UserStickyCommander) -> None:
-    commander.fold_events("W:w-1", [event("new_user", 1, user="alice")])
-    commander.fold_events("W:w-2", [event("drop_user", 1, user="alice")])
+    commander.place_logins("W:w-1", [event("new_user", 1, user="alice")])
+    commander.place_logins("W:w-2", [event("drop_user", 1, user="alice")])
     assert commander.user_worker_map == {"alice": "W:w-1"}
 
 
 def test_assign_user_is_the_explicit_decision_above_the_owner_check(
     commander: UserStickyCommander,
 ) -> None:
-    commander.fold_events("W:w-1", [event("new_user", 1, user="alice")])
+    commander.place_logins("W:w-1", [event("new_user", 1, user="alice")])
     commander.assign_user("alice", "W:w-2")
     assert commander.user_worker_map == {"alice": "W:w-2"}
 
@@ -168,22 +168,22 @@ def test_a_reserved_lifecycle_op_has_no_surface_consumer_yet(
     commander: UserStickyCommander, caplog: Any
 ) -> None:
     with caplog.at_level("WARNING"):
-        commander.fold_events("W:w-1", [event("drop_pages", 1, user="alice")])
+        commander.place_logins("W:w-1", [event("drop_pages", 1, user="alice")])
     assert commander.user_worker_map == {}
     assert caplog.records == []
 
 
 def test_an_unknown_op_is_a_warning(commander: UserStickyCommander, caplog: Any) -> None:
     with caplog.at_level("WARNING"):
-        commander.fold_events("W:w-1", [event("teleport_user", 1, user="alice")])
+        commander.place_logins("W:w-1", [event("teleport_user", 1, user="alice")])
     assert "teleport_user" in caplog.text
 
 
 def test_sweeping_a_worker_forgets_its_users_but_keeps_the_row(
     commander: UserStickyCommander,
 ) -> None:
-    commander.fold_events("W:w-1", [event("new_user", 1, user="alice")])
-    commander.fold_events("W:w-2", [event("new_user", 1, user="bob")])
+    commander.place_logins("W:w-1", [event("new_user", 1, user="alice")])
+    commander.place_logins("W:w-2", [event("new_user", 1, user="bob")])
     assert commander.sweep_worker("W:w-1") == ["alice"]
     assert commander.user_worker_map == {"bob": "W:w-2"}
     assert commander.users_on("W:w-1") == set()
@@ -271,14 +271,14 @@ async def test_a_deliberate_retire_sweeps_the_users_it_held(
     commander: UserStickyCommander,
 ) -> None:
     """A retired worker holds nothing either: its users must leave the surface."""
-    commander.fold_events("W:w-1", [event("new_user", 1, user="alice")])
+    commander.place_logins("W:w-1", [event("new_user", 1, user="alice")])
     commander.worker_roster["W:w-1"]["status"] = "draining"
     await commander.channel_lost(FakeMember("W:w-1"))
     assert commander.user_worker_map == {}
     assert commander.users_on("W:w-1") == set()
     # Alice is a guest again, and another worker may legitimately claim her.
     assert commander.worker_for("alice") == "W:w-2"
-    commander.fold_events("W:w-2", [event("new_user", 1, user="alice")])
+    commander.place_logins("W:w-2", [event("new_user", 1, user="alice")])
     assert commander.user_worker_map == {"alice": "W:w-2"}
 
 
@@ -314,7 +314,7 @@ def assert_tree_aligned(commander: UserStickyCommander) -> None:
 
 def populate_tree(commander: UserStickyCommander) -> None:
     """Alice with two connections on ``W:w-1``, bob with one on ``W:w-2``."""
-    commander.fold_events(
+    commander.place_logins(
         "W:w-1",
         [
             event("new_user", 1, user="alice"),
@@ -325,7 +325,7 @@ def populate_tree(commander: UserStickyCommander) -> None:
             event("new_page", 6, user="alice", page_id="p3", session_id="s2"),
         ],
     )
-    commander.fold_events(
+    commander.place_logins(
         "W:w-2",
         [
             event("new_user", 1, user="bob"),
@@ -358,9 +358,10 @@ def test_removing_a_user_never_touches_a_sibling_user(commander: UserStickyComma
 def test_a_login_moves_the_edge_and_orphans_nothing(commander: UserStickyCommander) -> None:
     populate_tree(commander)
 
-    commander.fold_events(
-        "W:w-2",
-        [event(LOGIN_OP, 4, user="alice", previous_user="bob", session_id="s9", encoded="")],
+    # The fold alone: what the announcing worker's login does to the tree. Where
+    # alice then belongs is ``settle_login``'s business, asserted on the move side.
+    commander.fold_event(
+        "W:w-2", event(LOGIN_OP, 4, user="alice", previous_user="bob", session_id="s9")
     )
 
     assert_tree_aligned(commander)
@@ -374,7 +375,7 @@ def test_a_login_moves_the_edge_and_orphans_nothing(commander: UserStickyCommand
 def test_dropping_a_connection_leaves_its_sibling_intact(commander: UserStickyCommander) -> None:
     populate_tree(commander)
 
-    commander.fold_events(
+    commander.place_logins(
         "W:w-1",
         [
             event("drop_page", 7, user="alice", page_id="p2"),
@@ -406,7 +407,7 @@ def test_discard_page_edge_on_a_missing_set_raises(commander: UserStickyCommande
 def test_a_malformed_event_is_an_explicit_error(commander: UserStickyCommander) -> None:
     """The worker shapes every event whole: a missing entity key raises at the fold."""
     with pytest.raises(KeyError):
-        commander.fold_events("W:w-1", [event("new_page", 1, user="alice")])
+        commander.place_logins("W:w-1", [event("new_page", 1, user="alice")])
 
 
 # ----------------------------------------------------------------------
@@ -699,7 +700,7 @@ def test_forgetting_a_user_drops_its_consumption(commander: UserStickyCommander)
 async def test_a_forward_clocks_the_worker_and_the_user_it_belongs_to(
     commander: UserStickyCommander,
 ) -> None:
-    commander.fold_events("W:w-1", [event("new_user", 1, user="alice")])
+    commander.place_logins("W:w-1", [event("new_user", 1, user="alice")])
     answer(commander, {"result": 7})
     assert await commander.forward_call("alice", "/op") == 7
     counters = commander.forward_counters["W:w-1"]
@@ -721,7 +722,7 @@ async def test_a_forward_of_an_unheld_identity_clocks_the_worker_only(
 async def test_a_failed_forward_is_counted_as_an_error_and_re_raised(
     commander: UserStickyCommander,
 ) -> None:
-    commander.fold_events("W:w-1", [event("new_user", 1, user="alice")])
+    commander.place_logins("W:w-1", [event("new_user", 1, user="alice")])
     explode(commander)
     with pytest.raises(ChannelCallError):
         await commander.forward_call("alice", "/op")
@@ -736,7 +737,7 @@ async def test_the_login_fold_cannot_resurrect_the_guest_consumption(
     """Clock and attribution run BEFORE the fold (the legacy order): the guest
     the REPLY logs in is counted while the surface still holds it, then
     forgotten with it — never re-created after its own removal."""
-    commander.fold_events("W:w-1", [event("new_user", 1, user="s-1")])
+    commander.place_logins("W:w-1", [event("new_user", 1, user="s-1")])
     answer(
         commander,
         {
@@ -754,7 +755,7 @@ async def test_a_removal_mid_flight_cannot_resurrect_the_consumption(
     """The membership is read at count time: an identity a concurrent fold
     removed while the forward was in flight is not billed back into existence
     (the orphan would be unreachable by forget_users forever)."""
-    commander.fold_events("W:w-1", [event("new_user", 1, user="alice")])
+    commander.place_logins("W:w-1", [event("new_user", 1, user="alice")])
 
     async def call(worker: str, path: str, data: Any, timeout: Any = None) -> dict[str, Any]:
         commander.remove_user("alice")  # the concurrent fold lands mid-flight
@@ -768,24 +769,26 @@ async def test_a_removal_mid_flight_cannot_resurrect_the_consumption(
 async def test_the_fold_runs_off_the_forward_clock(
     commander: UserStickyCommander,
 ) -> None:
-    """During the REPLY fold the forward already stands in the ledger: the
-    placement round trip of another user is never billed to this one."""
-    commander.fold_events("W:w-1", [event("new_user", 1, user="s-1")])
-    ledger_during_fold: list[dict[str, Any]] = []
+    """The forward is clocked BEFORE the REPLY fold, so the settling of another
+    user's login runs with the ledger already written."""
+    commander.place_logins("W:w-1", [event("new_user", 1, user="s-1")])
+    ledger_during_settle: list[dict[str, Any]] = []
+    original = commander.settle_login
 
-    async def call(worker: str, path: str, data: Any, timeout: Any = None) -> dict[str, Any]:
-        if path == "/op":
-            login = event(
-                LOGIN_OP, 2, user="alice", previous_user="s-1", session_id="c-1", encoded="pkg"
-            )
-            return {"result": 7, "events": [login]}
-        # the placement leg of the fold: the forward must already be counted
-        ledger_during_fold.append(dict(commander.forward_counters["W:w-1"]))
-        return {"result": None}
+    def spying(worker: str, user: str, session_id: str, prior: str | None) -> None:
+        ledger_during_settle.append(dict(commander.forward_counters["W:w-1"]))
+        original(worker, user, session_id, prior)
 
-    commander.hub.call = call  # type: ignore[method-assign]
+    commander.settle_login = spying  # type: ignore[method-assign]
+    answer(
+        commander,
+        {
+            "result": 7,
+            "events": [event(LOGIN_OP, 2, user="alice", previous_user="s-1", session_id="c-1")],
+        },
+    )
     await commander.forward_call("s-1", "/op")
-    assert ledger_during_fold and ledger_during_fold[0]["requests"] == 1
+    assert ledger_during_settle and ledger_during_settle[0]["requests"] == 1
 
 
 def test_the_archived_row_carries_the_counters_snapshot(
@@ -857,7 +860,7 @@ def test_a_worker_dead_past_the_lapse_is_buried_with_its_counters(
 
 
 def test_removing_a_user_forgets_its_consumption(commander: UserStickyCommander) -> None:
-    commander.fold_events("W:w-1", [event("new_user", 1, user="alice")])
+    commander.place_logins("W:w-1", [event("new_user", 1, user="alice")])
     commander.count_user_consumption("alice", 0.4, now=1000.0)
     commander.remove_user("alice")
     assert commander.user_consumption == {}
@@ -866,8 +869,8 @@ def test_removing_a_user_forgets_its_consumption(commander: UserStickyCommander)
 def test_sweeping_a_worker_forgets_the_consumption_of_its_users(
     commander: UserStickyCommander,
 ) -> None:
-    commander.fold_events("W:w-1", [event("new_user", 1, user="alice")])
-    commander.fold_events("W:w-2", [event("new_user", 1, user="bob")])
+    commander.place_logins("W:w-1", [event("new_user", 1, user="alice")])
+    commander.place_logins("W:w-2", [event("new_user", 1, user="bob")])
     commander.count_user_consumption("alice", 0.4, now=1000.0)
     commander.count_user_consumption("bob", 0.4, now=1000.0)
     commander.sweep_worker("W:w-1")

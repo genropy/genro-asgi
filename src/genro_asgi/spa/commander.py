@@ -47,10 +47,9 @@ contents down there). There are exactly eight, in five groups:
   next sample (issue #8); ``caretaker`` is that worker's
   own probe task, ``None`` when it has none. A user's routing group is its
   worker's ``group``, read from the row.
-- ``user_worker_map`` — user identity → the name of the worker holding it, or
-  ``None`` while a placement for that user is in flight. It is the ONLY
-  structure that says WHERE a user is, and both it and the rows mutate through
-  the single pair ``assign_user`` / ``remove_user``.
+- ``user_worker_map`` — user identity → the name of the worker holding it. It
+  is the ONLY structure that says WHERE a user is, and both it and the rows
+  mutate through the single pair ``assign_user`` / ``remove_user``.
 - ``connection_user`` / ``user_connections`` — the middle level of the ownership
   TREE users → connections, held as the child→parent label plus the parent→child
   edge set.
@@ -78,7 +77,7 @@ chain.** A page's user is its connection's user, and a page's worker is its
 user's worker — so ``page_worker(page_id)`` climbs
 ``page_connection`` → ``connection_user`` → ``user_worker_map`` and answers
 ``None`` at any missing hop: a page the surface does not know, a user already
-swept, a placement still in flight. That is why a move needs nothing up here
+swept. That is why a move needs nothing up here
 beyond ``assign_user``: pages live where their user lives, with no per-page
 write to keep in step, so no duplicate exists that could diverge.
 
@@ -103,7 +102,7 @@ already served its own subscribers: every page held by the message's ``worker``
 is skipped here, and what is left is buffered per destination and flushed as ONE
 ``/dbevents_in`` EVENT per worker — a distinct pipe from the exchange's, because
 a deposit is not a change. A commit on a table nobody subscribed costs no send at
-all; a page whose placement is in flight simply misses it.
+all; a page the surface cannot resolve simply misses it.
 
 **The global store's MASTER lives here, and this is its only writer.** The
 ``store_set``/``store_del`` messages ascend and are applied to
@@ -138,13 +137,15 @@ counters. An expiry is a SIGKILL to the process group: the EOF that follows
 enters the ordinary sweep-and-relaunch path. A probe that raises is logged and
 the cadence goes on: the blast radius of a failure is the one worker.
 
-**One fold, one drain.** ``fold_events(worker, events)`` applies the events a
+**One fold, one drain.** ``place_logins(worker, events)`` applies the events a
 REPLY carried, in the order they were delivered — they are the lifecycle the
 answered CALL itself caused, so there is nothing to deduplicate and no
-watermark to keep. The drain runs in the commander, never in the transport:
-``unwrap_reply`` folds the ``events`` of the payload before reading its
-``result``/``error``. The owner check is the only guard, and it is the legacy
-rule: a late event never re-points a user already assigned elsewhere; only the
+watermark to keep — and SETTLES each login among them on the same tick. The
+drain runs in the commander, never in the transport: ``unwrap_reply`` folds
+the ``events`` of the payload before reading its ``result``/``error``, and the
+CALL-less rail (``fold_command``) folds one event at a time through the same
+``fold_event``. The owner check is the only guard, and it is the legacy rule:
+a late event never re-points a user already assigned elsewhere; only the
 explicit ``assign_user`` decision does that.
 
 **The task class runs after the release, on the same consumer.** A REPLY also
@@ -166,41 +167,27 @@ implementation behind it: it answers with the result AND, for a page-addressed
 CALL, the page's pull delivery under ``DELIVERY_KEYS``, carried through
 untouched — the commander is the transport of those changes, never their reader.
 
-**Placement happens at login, and the login waits for it.** The worker pushes:
-its ``change_connection_user`` event carries the user's whole slice as a
-``encoded`` and the source has already forgotten it — UNLESS that worker is
-already the user's home, and then it links the arriving connection to the
-resident entry and sends the login with NO ``encoded`` at all. That packageless
-event is the resident-link announcement: nothing travelled, nothing was flagged,
-and ``place_logins`` skips it. The skip leans on one invariant: a user a worker
-holds ALWAYS has a key in ``user_worker_map`` — ``add_user``'s caller
-assigns the map in the same breath, and the login that creates a user on a
-worker ships it out inside the same locked mutation — so the fold of a
-packageless login never finds an unplaced user to flag. Everything below is the
-road of a login that did push. The caller's own
-coroutine runs ``place_login``, and presence comes BEFORE occupancy: a user
-somebody already holds goes back to its own worker — sticky wins, no
-``decide_worker`` at all, and ``add_user`` there JOINS the arriving connection
-onto the resident half (that is the CROSS-worker join: the user's home is not
-the worker the connection was sitting on). Only a user nobody holds is a free
-choice; that one the fold flags in ``placing`` — "this user's placement is in
-flight" — and ``decide_worker`` picks the least-loaded active worker for it.
-THE MAP IS WRITTEN AT THE DECISION, not at the acceptance (the founding
-contract, restored 2026-08-12: the surface is pointed at the destination NOW,
-so no reader — a drain judging a worker empty, a candidate picker — can miss a
-user that is landing). The flag gates the SERVING: ``add_user`` plants the
-slice, the flag falls and only THEN is the login result released. The room is
-ready before the guest is told its number. A ``forward_call`` that finds the
-flag up parks on ``placement_done`` — the parked coroutines are the queue,
-there is no structure — and re-reads the flag on every wakeup, so one re-raised
-by a chained login simply parks it again. No clock bounds any of it: the
-install CALL waits, and the only terminator is the destination's death, which
-fails that CALL. An install that fails unmaps a user that was UNPLACED: the
-source spent its copy, so that user exists nowhere and the surface says so —
-but a resident keeps its placement, because the connection that failed to
-arrive was never its only one.
-Every login has a caller coroutine holding it — a login is caused by a CALL and
-comes back on that CALL's REPLY — so ``place_login`` is never detached.
+**The login decides, the move executes** (ratified 2026-08-12). The worker
+never ships at login: its ``change_connection_user`` event announces the
+re-label and the slice stays where it is — the request that carried the login
+keeps finding its pages there to the end. The fold, in the caller's own
+coroutine, settles each login BEFORE the caller is released, and the answer is
+the map: a user nobody holds is mapped to the worker that announced it — THE
+MAP IS WRITTEN AT THE DECISION (the founding contract), and the decision is
+"the user lives where it logged in". Then ``decide_worker`` (reception-first)
+says whether it BELONGS somewhere else, and a user that does is handed to the
+ordinary commanded move as a DETACHED task: the response never waits for the
+transfer — the move's own ``moving`` hold parks whatever arrives for that user
+during the handful of milliseconds the quiesce-evict-install takes (the
+quiesce is near-instant: the causing call just closed). A user already
+resident on the announcing worker was joined there and nothing else happens.
+A user resident on ANOTHER worker is not a move at all: a detached task
+materializes the arriving connection at the residence and discards the remnant
+at the announcing worker (operational evict, parcel dropped) — the resident
+wins, and what the guest did before logging in dies with the remnant, loudly,
+never silently (declared extension of the guest-carry boundary). A failed
+move task is the move machinery's own business: custody, salvage, at worst
+the user stays where it is and the ordinary rebalance retries later.
 
 **A total restart is a move whose destination is a file.** With ``dump_path``
 armed, ``stop`` walks ``user_worker_map`` and orders every user out with the
@@ -429,7 +416,7 @@ MOVE_QUIESCE_TIMEOUT = 10.0
 #: an emptied half-row — ``close_request`` is a plain dict pop — so the wait polls.
 MOVE_QUIESCE_POLL = 0.05
 
-#: The lifecycle op that is a login: the sticky key changes and a placement is due.
+#: The lifecycle op that is a login: the sticky key changes and a settle is due.
 LOGIN_OP = "change_connection_user"
 
 #: The spawn entry point of a worker child.
@@ -562,8 +549,8 @@ class UserStickyCommander:
             on_event=self.handle_event,
         )
         # The whole surface: one row per worker, one entry per user. The map is
-        # written at the placement DECISION; ``placing`` (below) is the flag
-        # "this user's install is still travelling".
+        # written at the DECISION — for a login, "the user lives where it
+        # logged in", stamped by the fold itself.
         self.worker_roster: dict[str, dict[str, Any]] = {}
         self.user_worker_map: dict[str, str] = {}
         # What the forwards cost, read two ways: cumulative per worker, and per
@@ -586,15 +573,9 @@ class UserStickyCommander:
         # so its captures are the whole of what the replicas ever see.
         self.global_master = CapturingGlobalStore()
         self.global_lock = GlobalStoreLock()
-        # Fired-and-rearmed at the end of every placement: the coroutines parked
-        # on it while a flag is up ARE the queue of waiters.
-        self.placement_done = asyncio.Event()
-        # The users whose placement is in flight. The flag gates the serving;
-        # the map — written at the DECISION — carries the destination, so every
-        # reader sees who is landing where while the install travels.
-        self.placing: set[str] = set()
         # The users a commander-initiated move is carrying right now, each with
-        # the barrier every forward of that user parks on until it lands.
+        # the barrier every forward of that user parks on until it lands. Since
+        # the login stopped shipping (2026-08-12) this is the ONLY hold there is.
         self.moving: dict[str, asyncio.Event] = {}
         # One handover at most is in flight toward a worker (users arrive
         # minutes apart): worker -> when its unanswered add_user CALL left.
@@ -1222,7 +1203,7 @@ class UserStickyCommander:
             await self.apply_store(worker, message)
             return
         if op in LIFECYCLE_OPS:
-            self.fold_events(worker, [message])
+            self.fold_event(worker, message)
             return
         self.logger.debug("No consumer for command %r from %s", op, worker)
 
@@ -1277,10 +1258,9 @@ class UserStickyCommander:
     def exchange_destinations(self, message: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
         """Every ``(worker, message)`` pair one ascending message resolves to.
 
-        An address the surface cannot resolve — an unknown page, a user whose
-        placement is in flight, a target already swept — is dropped with a debug
-        log: a change is a signal and there is no retry queue (the legacy rule,
-        verbatim). A ``connection_store`` target is a session id, resolved in
+        An address the surface cannot resolve — an unknown page, a target
+        already swept — is dropped with a debug log: a change is a signal and
+        there is no retry queue (the legacy rule, verbatim). A ``connection_store`` target is a session id, resolved in
         two hops along the ownership chain — ``connection_user`` then
         ``user_worker_map`` — since a connection lives where its user lives.
         """
@@ -1312,7 +1292,7 @@ class UserStickyCommander:
         ``'*'`` (or nothing) is every page. Anything else is ONE ``field:value``
         pair, compared against the three fields the walk up the chain derives —
         ``connection`` is the written edge, ``user`` its owner, ``worker`` that
-        user's placement: all three links of one chain, so the surface holds no
+        user's residence: all three links of one chain, so the surface holds no
         second independent field to conjoin. A field it does not carry matches
         nothing.
 
@@ -1397,9 +1377,9 @@ class UserStickyCommander:
 
         Origin exclusion (§2.4, verbatim): the worker that produced the commit
         already served its own pages, so every page it holds is skipped here —
-        the ``worker`` stamp on the message is what says which. A page whose
-        placement is in flight is skipped too: a dbevent is a signal and there is
-        no retry queue. Deposits sharing a destination worker are batched, so a
+        the ``worker`` stamp on the message is what says which. A page the
+        surface cannot resolve is skipped too: a dbevent is a signal and there
+        is no retry queue. Deposits sharing a destination worker are batched, so a
         commit reaching N pages of one worker costs ONE send.
         """
         origin = message.get("worker")
@@ -1516,15 +1496,15 @@ class UserStickyCommander:
         """The REPLY drain: fold the three sub-envelopes, then read the answer.
 
         Every ``hub.call`` of this commander goes through here. The SYNCHRONOUS
-        class runs first, and a login it folds is placed HERE, in the caller's
-        own coroutine — so a login result is released only once its user has a
-        room on the destination. The TASK class is then handed one task per
-        command: the caller waits on none of it. An error payload becomes the
-        exception the caller expects — its tasks are spawned all the same, since
-        the worker already drained what they carry and the op outcome gates
-        neither them nor the delivery.
+        class runs first, and a login it folds is SETTLED here, in the caller's
+        own coroutine: the map is stamped, and any transfer the decision calls
+        for leaves as a detached task before the caller is released. The TASK
+        class is then handed one task per command: the caller waits on none of
+        it. An error payload becomes the exception the caller expects — its
+        tasks are spawned all the same, since the worker already drained what
+        they carry and the op outcome gates neither them nor the delivery.
         """
-        await self.place_logins(worker, payload.get("events") or [])
+        self.place_logins(worker, payload.get("events") or [])
         for command in payload.get("tasks") or []:
             self.spawn_command(worker, command)
         if "error" in payload:
@@ -1565,21 +1545,6 @@ class UserStickyCommander:
     # The fold — one implementation, both drains
     # ------------------------------------------------------------------
 
-    def fold_events(self, worker: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Apply the worker's events in delivered order and return the logins.
-
-        No dedup and no ordering gate: the envelope is causal and delivered
-        once, so every event in it is fresh — the legacy removed its own seq
-        counters for the same reason (they rejected legitimate post-move
-        events). The owner check inside ``fold_event`` is the only guard.
-        """
-        logins = []
-        for event in events:
-            self.fold_event(worker, event)
-            if event.get("op") == LOGIN_OP:
-                logins.append(event)
-        return logins
-
     def fold_event(self, worker: str, event: dict[str, Any]) -> None:
         """Fold one shaped lifecycle event into the surface registries.
 
@@ -1596,7 +1561,7 @@ class UserStickyCommander:
         elif op == "drop_connection":
             self.drop_connection(event["session_id"])
         elif op == LOGIN_OP:
-            self.relabel_user(event["user"], event.get("previous_user"), event["session_id"])
+            self.relabel_user(event["user"], event.get("previous_user"), event["session_id"], worker)
         elif op == "new_page":
             self.register_page(event["page_id"], event["user"], worker, event["session_id"])
         elif op == "drop_page":
@@ -1610,13 +1575,8 @@ class UserStickyCommander:
         """Map a user to the worker that announced it — the owner check applies.
 
         An event arriving late from a worker that no longer holds the user never
-        re-points it: only the explicit ``assign_user`` decision does. A user
-        whose placement is in flight is already somebody's decision — a claim
-        landing inside that window never overrides it.
+        re-points it: only the explicit ``assign_user`` decision does.
         """
-        if user in self.placing:
-            self.logger.debug("fold: %s is being placed, ignoring %s's claim", user, worker)
-            return
         if user in self.user_worker_map and self.user_worker_map[user] != worker:
             self.logger.debug("fold: %s already assigned, ignoring %s's claim", user, worker)
             return
@@ -1651,7 +1611,7 @@ class UserStickyCommander:
         if not siblings:
             del self.user_connections[user]
 
-    def relabel_user(self, user: str, previous_user: str | None, session_id: str) -> None:
+    def relabel_user(self, user: str, previous_user: str | None, session_id: str, worker: str) -> None:
         """The login: the CONNECTION changes owner, and no page edge ever moves.
 
         One edge moves, and one only — the surface transcribes what the worker
@@ -1661,15 +1621,14 @@ class UserStickyCommander:
         guest leaves the surface once it has no connection left, and by then it
         owns no page either, BY CONSTRUCTION.
 
-        The worker announcing this has already pushed the slice out of its own
-        register, so for a user nobody has ever placed the fold raises the
-        ``placing`` flag; the destination is written into the map by
-        ``place_login`` alone, the moment it decides.
-
-        A user already placed somewhere is NOT flagged: it is not in flight, it
-        is at home. Its other connections are being served there this whole
-        time, and the arriving one will join them — blanking the map would park
-        every call to a user that never left.
+        The slice never moved (the login stopped shipping, 2026-08-12), so a
+        user nobody holds is mapped HERE, to the worker that announced it — the
+        map is written at the decision, and the decision is "the user lives
+        where it logged in". Whether it BELONGS somewhere else is
+        ``settle_login``'s question, asked right after the fold. A user already
+        placed somewhere keeps its map untouched: it is at home, and the
+        announcing worker is either that home (the join) or the holder of a
+        remnant ``settle_login`` is about to discard.
         """
         former_owner = self.connection_user.get(session_id)
         if former_owner is not None and former_owner != user:
@@ -1683,7 +1642,7 @@ class UserStickyCommander:
         ):
             self.remove_user(previous_user)
         if user not in self.user_worker_map:
-            self.placing.add(user)
+            self.assign_user(user, worker)
 
     def register_page(self, page_id: str, user: str, worker: str, connection: str) -> None:
         """Hang a page under its connection — the owner check applies.
@@ -1730,6 +1689,15 @@ class UserStickyCommander:
         """
         if self.page_worker(page_id) != worker:
             return
+        self.forget_page_row(page_id)
+
+    def forget_page_row(self, page_id: str) -> None:
+        """Take one page row off the surface: its edge, its subscriptions.
+
+        The unguarded half of ``drop_page``, for the caller that already OWNS
+        the judgement — the fold checks the announcing worker first, the login
+        rehome discards a remnant it snapshotted itself.
+        """
         connection = self.page_connection.pop(page_id)
         self.discard_page_edge(connection, page_id)
         self.page_subscriptions.drop_page(page_id)
@@ -1738,17 +1706,15 @@ class UserStickyCommander:
         """The worker holding a page, DERIVED: page → connection → user → worker.
 
         ``None`` at any missing hop, which is the whole of the old semantics — a
-        page the surface does not know, a connection or user already swept, a
-        placement still in flight — now holding by derivation instead of by a
-        written flag somebody has to keep in step. In flight the map already
-        names the destination, but the page is not THERE yet: for this reader
-        the answer stays None until the install is confirmed.
+        page the surface does not know, a connection or user already swept —
+        held by derivation instead of by a written flag somebody has to keep
+        in step.
         """
         connection = self.page_connection.get(page_id)
         if connection is None:
             return None
         user = self.connection_user.get(connection)
-        if user is None or user in self.placing:
+        if user is None:
             return None
         return self.user_worker_map.get(user)
 
@@ -1769,9 +1735,9 @@ class UserStickyCommander:
         it, so a re-pointing keeps the pending calls and the activity it already
         had. A user seen for the first time gets a fresh half-row.
 
-        A placement in flight calls this AT THE DECISION: the map and the
-        half-row say where the user is landing while the install travels, and
-        the ``placing`` flag — not a blank map — is what gates the serving.
+        Every decision calls this the moment it is taken: the login's fold
+        stamps the announcing worker here, and the move's switch stamps the
+        destination once the install answered.
 
         The user's connections and pages travel with it and NOTHING is written
         for them: they answer the new worker the moment this map entry changes,
@@ -1789,13 +1755,11 @@ class UserStickyCommander:
     def remove_user(self, user: str) -> None:
         """Drop a user from the surface: its half-row and its map entry, together.
 
-        The other mutator. A user still undecided (flagged, nothing in the map
-        yet) has no half-row anywhere, so only the flag goes. The demolition
-        follows the chain downward — every connection of the user, every page of
-        each connection, and the connection entries after them: a page without
-        its user exists nowhere, and neither does a connection.
+        The other mutator. The demolition follows the chain downward — every
+        connection of the user, every page of each connection, and the
+        connection entries after them: a page without its user exists nowhere,
+        and neither does a connection.
         """
-        self.placing.discard(user)
         worker = self.user_worker_map.pop(user, None)
         if worker is not None:
             del self.worker_roster[worker]["users"][user]
@@ -1809,13 +1773,12 @@ class UserStickyCommander:
     def sweep_worker(self, worker: str) -> list[str]:
         """Forget every user of a dead worker: what they pointed at is gone.
 
-        A user whose placement is in flight is NOT swept: its slice is in the
-        placement coroutine's hands, not on the dead worker, and that coroutine
-        owns the outcome — the failed install is what decides its fate.
+        This reaches a user mid-move too — the map names the source until the
+        switch — and the move machinery is built for exactly that window: a
+        user gone from the surface makes the move answer False, and a parcel
+        already in custody is salvaged onto a living worker regardless.
         """
-        doomed = sorted(
-            user for user in self.worker_roster[worker]["users"] if user not in self.placing
-        )
+        doomed = sorted(self.worker_roster[worker]["users"])
         for user in doomed:
             self.remove_user(user)
         return doomed
@@ -2048,8 +2011,8 @@ class UserStickyCommander:
         """Forward the call to the worker holding ``identity`` and return its result.
 
         ``identity`` is the sticky key the caller owns — the root avatar identity
-        once logged, the session id while anonymous. A user whose placement is in
-        flight is waited for first, so the pick lands on the worker the surface
+        once logged, the session id while anonymous. A user a move is carrying
+        is waited for first, so the pick lands on the worker the surface
         finally points at; the whole call is one entry under that user's
         ``pending``.
         """
@@ -2076,7 +2039,7 @@ class UserStickyCommander:
         Every forward is clocked into the worker's cumulative counters
         (``count_forward``) and, when the surface still holds the identity AT
         COUNT TIME, into that user's consumption — around the CALL alone,
-        BEFORE the REPLY fold (the legacy order): the fold's own work (placing
+        BEFORE the REPLY fold (the legacy order): the fold's own work (settling
         another user's login) stays off this clock and off this identity. The
         membership is read at the count, not before the call, so an identity a
         CONCURRENT fold removed while this forward was in flight is not billed
@@ -2109,31 +2072,24 @@ class UserStickyCommander:
     async def resolve_worker(self, identity: str) -> str:
         """The worker to route ``identity`` to, once nothing of it is in flight.
 
-        Two holds, both read BEFORE the pick: a move carrying this identity, and
-        a placement of it. Either one makes the map's answer provisional, and
-        they are read in ONE loop rather than one after the other: a coroutine
-        waking from the placement wait may find a move raised meanwhile, and a
-        move that lands may be followed by a login raising the flag. The loop
-        leaves only when neither is up — and with neither up at the start it
-        awaits nothing at all, exactly as before.
+        One hold, read BEFORE the pick: a move carrying this identity makes the
+        map's answer provisional. The loop re-reads on every wakeup — a move
+        that lands may be followed by another one raised for the same user —
+        and with nothing up at the start it awaits nothing at all.
         """
         while self.is_held(identity):
             await self.await_move(identity)
-            await self.await_placement(identity)
         return self.worker_for(identity)
 
     def is_held(self, identity: str) -> bool:
-        """Whether either hold — a move of this identity, or a placement — is up."""
-        return identity in self.moving or identity in self.placing
+        """Whether the one hold there is — a move of this identity — is up."""
+        return identity in self.moving
 
     def worker_for(self, identity: str) -> str:
         """The worker holding ``identity`` — the reception when nobody does.
 
         A miss is a guest (or a user whose worker died): it goes to the reception,
         which is also the moment to check whether the pool still has room for one.
-        A raised ``placing`` flag is not a miss: nobody may be routed while the
-        install is still travelling — the destination is in the map, but the
-        user's state is not there yet.
 
         A pool that cannot regenerate (a recycling's replacement failed to
         register) refuses the NEW entries with a 503 — the honest signal the
@@ -2148,8 +2104,6 @@ class UserStickyCommander:
         their slices until the drain carries them over, and sending them to the
         reception instead would serve them where their state is not.
         """
-        if identity in self.placing:
-            raise RuntimeError(f"placement of {identity} is in flight")
         if identity in self.user_worker_map:
             worker = self.user_worker_map[identity]
             if self.worker_roster[worker]["status"] in ("active", "evacuating"):
@@ -2164,17 +2118,18 @@ class UserStickyCommander:
         return reception
 
     def decide_worker(self) -> str:
-        """Where an UNPLACED just-logged user belongs: reception-first.
+        """Where a just-logged user BELONGS: reception-first.
 
-        Occupancy is the second step of the placement and it only ever sees the
-        users nobody holds — ``place_login`` answers the presence question
-        before asking this one. The reception KEEPS the login while it stays
-        under ``reception_threshold`` (and a sole worker keeps always); over the
-        threshold it PASSES to the least loaded of the others that still admit.
-        The admission gate never blocks a login: with every other worker over it
-        the last one takes the user anyway, under a warning, and growth is
-        ``check_capacity``'s business. That check runs AFTER the pick, so a login
-        never lands on the worker its own arrival spawned.
+        Asked by ``settle_login`` for a first login only — a resident's
+        presence answers before occupancy is ever consulted. The user already
+        LIVES where it logged in; this names where it belongs, and a different
+        answer becomes a detached move. The reception KEEPS the login while it
+        stays under ``reception_threshold`` (and a sole worker keeps always);
+        over the threshold it PASSES to the least loaded of the others that
+        still admit. The admission gate never blocks a login: with every other
+        worker over it the last one takes the user anyway, under a warning, and
+        growth is ``check_capacity``'s business. That check runs AFTER the
+        pick, so a login never lands on the worker its own arrival spawned.
         """
         candidates = self.active_workers
         if not candidates:
@@ -2311,93 +2266,146 @@ class UserStickyCommander:
         self.remove_user(user)
 
     # ------------------------------------------------------------------
-    # The placement: the login's room, made ready before the key is handed over
+    # The login settle: the fold stamps the map, a detached task moves what
+    # belongs elsewhere (ratified 2026-08-12 — the login never ships)
     # ------------------------------------------------------------------
 
-    async def place_logins(self, worker: str, events: list[dict[str, Any]]) -> None:
-        """Fold this REPLY's events, then hold the caller until each room is ready.
+    def place_logins(self, worker: str, events: list[dict[str, Any]]) -> None:
+        """Fold this REPLY's events and settle each login they carry.
 
-        The fold hands back the logins it applied and they are placed right
-        here, in the caller's own coroutine — the only placement path there is,
-        because a login exists only as the effect of a CALL. A login result is
-        released once its user has a room.
+        Applied in delivered order, no dedup and no ordering gate: the envelope
+        is causal and delivered once, so every event in it is fresh — the
+        legacy removed its own seq counters for the same reason (they rejected
+        legitimate post-move events). The owner check inside ``fold_event`` is
+        the only guard.
 
-        A login with NO ``encoded`` is the resident-link announcement: the
-        worker that sent it already hosts the user, so it linked the arriving
-        connection and shipped nothing. There is no room to make — the user is
-        in the one it never left, and the fold raised no flag for it — so the
-        event is complete here and never reaches ``place_login``.
+        A login is settled right here, on the caller's own tick, and the
+        settling is a DECISION, never a wait: the fold has already mapped a
+        first-login user to the worker that announced it, and what the decision
+        orders — a move toward the worker the user belongs on, the discard of a
+        remnant left behind by a login onto a user resident elsewhere — leaves
+        as a DETACHED task. The caller is released with the response; the
+        move's own ``moving`` hold parks whatever arrives for that user in the
+        meantime. ``prior`` — where the map pointed BEFORE the login folded —
+        is read on the same tick, because the fold itself is what changes it.
         """
-        for event in self.fold_events(worker, events):
-            if "encoded" not in event:
-                continue
-            await self.place_login(event["user"], event["encoded"])
+        for event in events:
+            is_login = event.get("op") == LOGIN_OP
+            prior = self.user_worker_map.get(event["user"]) if is_login else None
+            self.fold_event(worker, event)
+            if is_login:
+                self.settle_login(worker, event["user"], event["session_id"], prior)
 
-    async def place_login(self, user: str, encoded: str) -> None:
-        """Give a just-logged user its room: decide, install, map, drop the flag.
+    def settle_login(self, worker: str, user: str, session_id: str, prior: str | None) -> None:
+        """One login's decision, taken synchronously on the fold's own tick.
 
-        Presence comes BEFORE occupancy: a user already placed goes back to its
-        own worker, whatever the load says — the resident half of it is there,
-        and ``add_user`` joins the arriving connection onto it. Only a user
-        nobody holds is a free choice, and only then does ``decide_worker`` run.
+        Three shapes, told apart by ``prior``:
 
-        An unplaced user carries the ``placing`` flag (the fold raised it) and
-        its slice exists only inside ``encoded`` — the source spent its copy
-        pushing it. THE MAP IS WRITTEN AT THE DECISION, before the install
-        travels (the founding contract, restored): from that moment every
-        reader sees where the user is landing — a drain can no longer judge the
-        destination empty under an arriving login — while the flag keeps the
-        user's own calls parked. So there is nothing to roll back: an install
-        that fails — the destination dying is the only way it can — removes the
-        UNPLACED user entirely, map and half-row, and the surface says it exists
-        nowhere. A RESIDENT user is not removed by a failed install: the
-        connection that failed to arrive was never its only one, and taking the
-        placement away would evict everything that never moved.
+        - nobody held the user: the fold just mapped it to ``worker``, where it
+          logged in. ``decide_worker`` — the same reception-first policy as
+          ever — says whether it BELONGS elsewhere; if so, the ordinary
+          commanded move carries it, detached.
+        - the user was resident on this very worker: the worker's join was the
+          whole login and the fold moved the connection edge. Nothing to do.
+        - the user was resident on ANOTHER worker: not a move — the arriving
+          connection belongs at the residence, and what the guest accumulated
+          on ``worker`` dies with the remnant (the resident wins, the declared
+          boundary). The remnant's page rows are snapshotted HERE, on the
+          fold's tick, so the detached task never confuses them with pages
+          born at the residence afterwards.
 
-        A user being carried is waited for BEFORE the map is read — the same
-        hold the exchange path takes. Reading the residence during a move would
-        name the source, and the arriving connection would be installed on the
-        worker the slice has just left; past the barrier the map names the
-        destination and the join lands where the user actually lives.
+        One race is ACCEPTED (probability-weighted rule, 2026-08-12): a second
+        guest logging in as the SAME user inside the evict-to-switch window of
+        that user's login move re-keys onto the source and settles as "at
+        home" — a ghost slice the switch then strands there. The window is
+        milliseconds inside an already rare event; the outcome is loud — a
+        KeyError on the ghost's next call, a reload — and the expiry sweep
+        retires the leftovers. No machinery covers it.
+        """
+        if prior is None:
+            chosen = self.decide_worker()
+            if chosen != worker:
+                self.spawn_settlement(self.move_user(user, chosen), name=f"login-move:{user}")
+        elif prior != worker:
+            remnant_pages = self.pages_of_connection(session_id)
+            self.spawn_settlement(
+                self.rehome_login(worker, user, session_id, remnant_pages),
+                name=f"login-rehome:{user}",
+            )
+
+    def spawn_settlement(self, coro: Coroutine[Any, Any, Any], name: str) -> asyncio.Task[Any]:
+        """Run one login settlement on its own task, holding a strong ref.
+
+        Same discipline as the task-class commands: nobody awaits it, the set
+        keeps it alive, and ``log_task_error`` leaves a line if it dies.
+        """
+        task = asyncio.create_task(coro, name=name)
+        self._command_tasks.add(task)
+        task.add_done_callback(self._command_tasks.discard)
+        task.add_done_callback(self.log_task_error)
+        return task
+
+    async def rehome_login(
+        self, source: str, user: str, session_id: str, remnant_pages: list[str]
+    ) -> None:
+        """Settle a login onto a user resident elsewhere: discard, then join.
+
+        The remnant at ``source`` — the guest entry the login re-keyed, its
+        connection row, its pages — is discarded first: the map never named
+        ``source``, so nothing routes there, and a slice nobody points at
+        would otherwise linger invisibly. The parcel the evict answers with is
+        DROPPED: the resident wins, and what the guest did before logging in
+        dies with the remnant, loudly logged, never silently kept. The
+        surface page rows follow, from the snapshot taken on the fold's tick.
+        Then the arriving connection is materialized at the residence, so the
+        worker's registers and this surface tell the same story; its events
+        ride that CALL's REPLY and fold as any other.
+
+        A move of this user in flight is waited out first and the residence
+        re-read after it — the map is the authority at every step. A residence
+        that meanwhile became ``source`` itself means the slices already
+        joined there: nothing to discard. A user gone from the surface means
+        the sweeps got there first: only the remnant is cleaned.
         """
         await self.await_move(user)
-        resident = self.user_worker_map.get(user)
+        residence = self.user_worker_map.get(user)
+        if residence == source:
+            return
         try:
-            destination = resident if resident is not None else self.decide_worker()
-            if resident is None:
-                self.assign_user(user, destination)
-            await self.hand_user_to(destination, user, encoded)
+            await self.evict_for_move(user, source)
+            self.logger.info(
+                "Login of %s on %s: remnant discarded, the resident on %s wins",
+                user,
+                source,
+                residence,
+            )
         except Exception as exc:
-            if resident is None:
-                self.remove_user(user)
-            self.logger.warning("Placement of %s failed (%s: %s)", user, type(exc).__name__, exc)
-            raise
-        else:
-            self.logger.info("Placed %s on %s", user, destination)
-        finally:
-            # Only the coroutine that owns the flag drops it: a second login
-            # chained onto a placement in flight takes the resident branch and
-            # must not release the calls parked on the FIRST install.
-            if resident is None:
-                self.placing.discard(user)
-            self.release_placement()
-
-    def release_placement(self) -> None:
-        """Wake every coroutine parked on the flag, then re-arm for the next one."""
-        self.placement_done.set()
-        self.placement_done.clear()
-
-    async def await_placement(self, identity: str) -> None:
-        """Hold a call whose user is being placed until the flag drops.
-
-        The parked coroutines are the queue: a wakeup re-reads the flag, so one
-        that finds it up again (a second login chained onto the first) simply
-        parks once more. Nothing bounds the wait but the placement itself: the
-        destination either answers or dies, and its death fails the install
-        CALL.
-        """
-        while identity in self.placing:
-            await self.placement_done.wait()
+            self.logger.warning(
+                "Login of %s on %s: remnant eviction failed (%s: %s)",
+                user,
+                source,
+                type(exc).__name__,
+                exc,
+            )
+        # The rows go even when the evict failed: every way it can fail — the
+        # source died, the remnant already expired — means those pages are gone
+        # regardless. A row a drop_page folded away meanwhile is skipped.
+        for page_id in remnant_pages:
+            if page_id in self.page_connection:
+                self.forget_page_row(page_id)
+        # The map is the authority at every step: the evict was an await, so a
+        # move raised meanwhile is waited out and the residence is read AGAIN
+        # before the connection is materialized — the row must never land on a
+        # worker the user has just left.
+        await self.await_move(user)
+        residence = self.user_worker_map.get(user)
+        if residence is None or residence == source:
+            return
+        path = f"{OP_PATH_PREFIX}new_connection"
+        payload = await self.hub.call(
+            residence, path, {"identity": session_id, "kwargs": {"user": user}}
+        )
+        await self.unwrap_reply(residence, path, payload)
 
     # ------------------------------------------------------------------
     # The commander-initiated move: flag, quiesce, custody, switch
@@ -2409,9 +2417,9 @@ class UserStickyCommander:
         FLAG → QUIESCE → evict → install → SWITCH. The flag is a barrier under
         the user's key: every forward of it parks before the pick, so nobody is
         routed at a worker the slice is leaving. The map keeps pointing at the
-        SOURCE until the switch — the login's own hold is the ``placing``
-        flag, and this move never touches it: a user still landing is waited
-        for before the source is even read.
+        SOURCE until the switch. Since the login stopped shipping (2026-08-12)
+        this hold is the only one there is — the login's own settle rides this
+        very machinery when the user belongs elsewhere.
 
         The quiesce waits for the user's live calls to finish on the source, and
         no stale entry is ever swept: ``close_request`` runs in a ``finally``
@@ -2435,7 +2443,6 @@ class UserStickyCommander:
         failed, its worker died — is nobody's move any more: False, not an
         error, because the drains reach exactly this window by design.
         """
-        await self.await_placement(user)
         source = self.user_worker_map.get(user)
         if source is None:
             self.logger.warning("Move of %s skipped: it left the surface first", user)
@@ -2460,6 +2467,29 @@ class UserStickyCommander:
                 )
                 return False
             destination = await self.install_in_custody(user, target, encoded)
+            if user not in self.user_worker_map:
+                # The sweep took the user while the parcel was in custody: the
+                # source died and the surface rows are gone. Re-writing the map
+                # over a demolished surface would leave a half-resurrected user
+                # whose page deliveries silently vanish — so the slice is
+                # discarded where it landed, loudly, and the user is exactly as
+                # dead as if no move had been in flight.
+                self.logger.warning(
+                    "Move of %s: swept mid-move (its source died), slice discarded on %s",
+                    user,
+                    destination,
+                )
+                try:
+                    await self.evict_for_move(user, destination)
+                except Exception as exc:
+                    self.logger.warning(
+                        "Move of %s: discard on %s failed too (%s: %s)",
+                        user,
+                        destination,
+                        type(exc).__name__,
+                        exc,
+                    )
+                return False
             self.assign_user(user, destination)
             self.logger.info("Moved %s from %s to %s", user, source, destination)
             return destination == target
@@ -2496,8 +2526,8 @@ class UserStickyCommander:
     async def hand_user_to(self, worker: str, user: str, encoded: str) -> Any:
         """Deliver one user's encoded slice to ``worker`` and await its answer.
 
-        The single door of the ``add_user`` handover — the move's custody, the
-        login placement and the dump restore all pass through here — so
+        The single door of the ``add_user`` handover — the move's custody and
+        the dump restore both pass through here — so
         ``pending_users`` always knows which worker is sitting on a delivery
         and since when: that is what the caretaker's second eye reads. The
         entry falls with the answer, whatever the answer is.
@@ -2534,7 +2564,7 @@ class UserStickyCommander:
         while destination is not None:
             tried.add(destination)
             try:
-                await self.hand_user_to(destination, user, encoded)
+                answer = await self.hand_user_to(destination, user, encoded)
             except Exception as exc:
                 self.logger.warning(
                     "Install of %s on %s failed (%s: %s); looking for another room",
@@ -2545,6 +2575,17 @@ class UserStickyCommander:
                 )
                 destination = self.salvage_target(tried)
             else:
+                if isinstance(answer, dict) and answer.get("joined"):
+                    # The accepted race, made loud: a commanded move never
+                    # expects a resident at its destination — a join there
+                    # means a login re-keyed onto it first and the parcel's
+                    # own entry and store yielded to the earlier arrival.
+                    self.logger.warning(
+                        "Install of %s on %s JOINED a resident: the parcel's entry "
+                        "and store yielded to whoever got there first",
+                        user,
+                        destination,
+                    )
                 return destination
         raise RuntimeError(f"move of {user} lost its room: no worker left to install it on")
 
@@ -2564,7 +2605,7 @@ class UserStickyCommander:
         """Hold a call whose user is being carried until the move lands.
 
         One barrier per user, so a move of somebody else never parks this call;
-        the registry is re-read on every wakeup, exactly like the placement flag.
+        the registry is re-read on every wakeup.
         """
         while True:
             barrier = self.moving.get(identity)
