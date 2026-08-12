@@ -213,6 +213,71 @@
   .m-pop .m-save { color: #2ec4b6; font-weight: 800; }
   .m-pop .ic { stroke: #241f31; stroke-width: 2.4; }
 
+  /* =========== C mobile — phone frames =========== */
+  .phones { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+    gap: 1.6rem; margin-top: 1.4rem; justify-items: center; }
+  .phone {
+    width: 292px; border: 11px solid #1c1a17; border-radius: 36px; overflow: hidden;
+    background: #f7f2e7; box-shadow: 0 18px 40px rgba(20, 16, 10, 0.25);
+  }
+  .phone-cap { text-align: center; font-size: 0.72rem; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--ink-soft); margin-top: 0.7rem; }
+  .ph { height: 596px; font-size: 12px; display: flex; flex-direction: column;
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, P052, Georgia, serif;
+    color: #26221c; }
+  .ph .status { display: flex; justify-content: space-between; padding: 0.6em 1.4em 0.2em;
+    font-size: 0.85em; color: #6e6252; font-variant-numeric: tabular-nums; }
+  .ph .masthead { text-align: center; padding: 0.5em 1.2em 0.7em; border-bottom: 2px solid #26221c; }
+  .ph .masthead b { font-variant: small-caps; letter-spacing: 0.1em; font-size: 1.25em; font-weight: 700; }
+  .ph .masthead i { display: block; color: #a63329; font-size: 0.9em; }
+  .ph .scroll { flex: 1; overflow: hidden; padding: 0.8em 1.2em; }
+  .ph .chiprow { display: flex; gap: 0.4em; margin: 0.2em 0 0.8em; overflow: hidden; }
+  .ph .chip { border: 1px solid #6e7a5f; color: #6e7a5f; border-radius: 2px;
+    font-variant: small-caps; padding: 0 0.6em; font-size: 0.82em; white-space: nowrap; }
+  .ph .chip.on { background: #6e7a5f; color: #f7f2e7; }
+  .ph .entry { border-top: 1px solid #26221c33; padding: 0.65em 0; }
+  .ph .entry:first-of-type { border-top: none; }
+  .ph .entry h5 { margin: 0; font-size: 1.1em; font-weight: 700; display: flex; align-items: baseline; gap: 0.45em; }
+  .ph .entry h5 .n { color: #a63329; font-size: 0.7em; vertical-align: super; }
+  .ph .entry h5::after { content: ""; flex: 1; border-bottom: 1px dotted #26221c66; }
+  .ph .entry h5 b { font-weight: 400; color: #a63329; font-size: 0.85em; }
+  .ph .entry .d { color: #6e6252; font-style: italic; font-size: 0.88em; margin: 0.15em 0; }
+  .ph .entry .r { display: flex; gap: 0.4em; align-items: baseline; }
+  .ph .entry .r .meta { margin-left: auto; color: #6e6252; font-size: 0.82em; }
+  .ph .foot { border-top: 1px solid #26221c; padding: 0.8em 1.2em calc(0.8em + 6px); }
+  .ph .cta { display: block; text-align: center; background: #26221c; color: #f7f2e7;
+    padding: 0.65em; border-radius: 3px; font-variant: small-caps; letter-spacing: 0.08em; }
+  .ph .crumbrow { display: flex; justify-content: space-between; align-items: baseline;
+    padding: 0.5em 1.2em; border-bottom: 2px solid #26221c; }
+  .ph .crumbrow .back { font-style: italic; color: #6e6252; }
+  .ph .crumbrow .stamp { color: #6e7a5f; font-style: italic; font-size: 0.9em; }
+  .ph h4.title { margin: 0.4em 0 0.2em; font-size: 1.35em; font-weight: 700; }
+  .ph h4.title .n { color: #a63329; font-size: 0.65em; vertical-align: super; margin-right: 0.3em; }
+  .ph .stats3 { display: flex; gap: 0.5em; margin: 0.7em 0 0.4em; }
+  .ph .stats3 div { flex: 1; border: 1px solid #26221c; background: #fbf7ee; border-radius: 2px;
+    padding: 0.45em 0.5em; text-align: center; }
+  .ph .stats3 b { display: block; color: #a63329; font-size: 1.15em; font-variant-numeric: tabular-nums; }
+  .ph .stats3 span { font-size: 0.68em; color: #6e6252; }
+  .ph .meterr { height: 4px; background: #26221c1a; margin: 0.3em 0 0.9em; }
+  .ph .meterr i { display: block; height: 100%; width: 62%; background: #a63329; }
+  .ph .srow { padding: 0.45em 0; border-top: 1px solid #26221c22; }
+  .ph .srow .lbl { display: flex; align-items: center; gap: 0.5em; margin-bottom: 0.15em; }
+  .ph .srow .lbl svg { width: 17px; height: 17px; flex: none; stroke: #26221c; fill: none; }
+  .ph .srow .lbl .ml { margin-left: auto; color: #a63329; font-variant-numeric: tabular-nums; }
+  .ph .srow input[type="range"] { width: 100%; accent-color: #a63329; }
+  .ph select, .ph .search {
+    width: 100%; font: inherit; color: #26221c; background: #fbf7ee;
+    border: 1px solid #26221c; border-radius: 2px; padding: 0.5em 0.7em;
+  }
+  .ph .footnote { color: #6e7a5f; font-style: italic; font-size: 0.9em; margin-top: 0.6em; }
+  .ph .shelfrow { display: flex; align-items: center; gap: 0.6em; border-top: 1px solid #26221c33; padding: 0.55em 0; }
+  .ph .shelfrow svg { width: 20px; height: 20px; stroke: #26221c; fill: none; flex: none; }
+  .ph .shelfrow .nm2 b { display: block; font-weight: 700; }
+  .ph .shelfrow .nm2 i { color: #6e6252; font-size: 0.85em; }
+  .ph .shelfrow .vals { margin-left: auto; text-align: right; font-size: 0.85em;
+    color: #6e6252; font-variant-numeric: tabular-nums; }
+  .ph .shelfrow .vals b { display: block; color: #a63329; font-weight: 400; }
+
   .choose { margin-top: 4.5rem; background: var(--card); border: 1px solid var(--line);
     border-radius: 12px; padding: 1.6rem 1.8rem; }
   .choose h2 { margin-top: 0; }
@@ -270,6 +335,7 @@
     <a href="#neon">B · Neon Notturno</a>
     <a href="#print">C · Ricettario</a>
     <a href="#pop">D · Fluo Pop</a>
+    <a href="#print-mobile">C · portrait mobile</a>
   </nav>
 
   <!-- ============ A ============ -->
@@ -582,6 +648,109 @@
             <p class="m-save">saved! ✓</p>
           </div>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ C mobile ============ -->
+  <section class="direction" id="print-mobile">
+    <div class="dir-head"><span class="dir-letter">C</span><h2>Ricettario · portrait</h2></div>
+    <p class="dir-sub">The chosen direction at phone size. Mobile decisions: the bar becomes a
+    pure ledger list (dotted leaders love narrow columns), taste chips scroll in one row, the
+    primary action is anchored at the bottom like a book's footer, and in the lab each slider
+    takes the full width with its dose on the label line — thumb-friendly, one hand.</p>
+    <div class="phones">
+      <div>
+        <div class="phone"><div class="ph">
+          <div class="status"><span>9:41</span><span>◦◦◦ ▮</span></div>
+          <div class="masthead"><b>Genro Cocktail</b><i>il bar</i></div>
+          <div class="scroll">
+            <div class="chiprow"><span class="chip on">tutti</span><span class="chip">bitter</span><span class="chip">sour</span><span class="chip">fresh</span><span class="chip">strong</span></div>
+            <div class="entry">
+              <h5><span class="n">N.1</span>Negroni <b>€ 1,62</b></h5>
+              <div class="d">gin, bitter, vermouth rosso — Firenze, 1919</div>
+              <div class="r"><span class="chip">bitter</span><span class="chip">strong</span><span class="meta">27% vol · 90 ml</span></div>
+            </div>
+            <div class="entry">
+              <h5><span class="n">N.3</span>Daiquiri <b>€ 1,32</b></h5>
+              <div class="d">rum bianco, lime, zucchero</div>
+              <div class="r"><span class="chip">sour</span><span class="chip">fresh</span><span class="meta">22,8% vol · 100 ml</span></div>
+            </div>
+            <div class="entry">
+              <h5><span class="n">N.8</span>Spritz <b>€ 1,68</b></h5>
+              <div class="d">Venezia alle sei di sera, in un bicchiere</div>
+              <div class="r"><span class="chip">bitter</span><span class="chip">fresh</span><span class="meta">9,2% vol · 180 ml</span></div>
+            </div>
+            <div class="entry">
+              <h5><span class="n">N.11</span>Negroni remix <b>€ 1,62</b></h5>
+              <div class="d">il tuo — annotato ieri sera</div>
+              <div class="r"><span class="chip" style="border-color:#a63329;color:#a63329">tuo</span><span class="meta">27% vol · 90 ml</span></div>
+            </div>
+          </div>
+          <div class="foot"><span class="cta">＋ Mescola qualcosa di tuo</span></div>
+        </div></div>
+        <p class="phone-cap">il bar</p>
+      </div>
+      <div>
+        <div class="phone"><div class="ph">
+          <div class="status"><span>9:41</span><span>◦◦◦ ▮</span></div>
+          <div class="crumbrow"><span class="back">← il bar</span><span class="stamp">salvato ✎</span></div>
+          <div class="scroll">
+            <h4 class="title"><span class="n">N.11</span>Negroni remix</h4>
+            <div class="chiprow"><span class="chip">bitter</span><span class="chip">strong</span></div>
+            <div class="stats3">
+              <div><b>27,0%</b><span>gradazione</span></div>
+              <div><b>€ 1,62</b><span>costo pour</span></div>
+              <div><b>1,9</b><span>unità</span></div>
+            </div>
+            <div class="meterr"><i></i></div>
+            <div class="srow">
+              <div class="lbl"><svg><use href="#i-bottle"/></svg>Gin <span class="ml">30 ml</span></div>
+              <input type="range" value="30" max="100">
+            </div>
+            <div class="srow">
+              <div class="lbl"><svg style="stroke:#a63329"><use href="#i-cherry"/></svg>Campari <span class="ml">30 ml</span></div>
+              <input type="range" value="30" max="100">
+            </div>
+            <div class="srow">
+              <div class="lbl"><svg><use href="#i-citrus"/></svg>Vermouth rosso <span class="ml">30 ml</span></div>
+              <input type="range" value="30" max="100">
+            </div>
+            <div class="srow" style="border-top:1px solid #26221c22">
+              <select><option>🌰 Angostura (44,7% vol) — aggiungi…</option></select>
+            </div>
+            <p class="footnote">ogni mossa è annotata nel quaderno ✎</p>
+          </div>
+          <div class="foot"><span class="cta" style="background:#a63329">Versa una dose · 90 ml</span></div>
+        </div></div>
+        <p class="phone-cap">mixing lab</p>
+      </div>
+      <div>
+        <div class="phone"><div class="ph">
+          <div class="status"><span>9:41</span><span>◦◦◦ ▮</span></div>
+          <div class="masthead"><b>Genro Cocktail</b><i>la dispensa</i></div>
+          <div class="scroll">
+            <input class="search" placeholder="cerca sullo scaffale…">
+            <div style="height:0.7em"></div>
+            <div class="shelfrow"><svg><use href="#i-bottle"/></svg>
+              <span class="nm2"><b>Gin</b><i>spirit</i></span>
+              <span class="vals"><b>40% vol</b>€ 0,022 / ml</span></div>
+            <div class="shelfrow"><svg style="stroke:#a63329"><use href="#i-cherry"/></svg>
+              <span class="nm2"><b>Campari</b><i>bitter</i></span>
+              <span class="vals"><b>25% vol</b>€ 0,020 / ml</span></div>
+            <div class="shelfrow"><svg><use href="#i-coupe"/></svg>
+              <span class="nm2"><b>Vermouth rosso</b><i>fortified</i></span>
+              <span class="vals"><b>16% vol</b>€ 0,012 / ml</span></div>
+            <div class="shelfrow"><svg style="stroke:#a63329"><use href="#i-citrus"/></svg>
+              <span class="nm2"><b>Succo di lime</b><i>juice</i></span>
+              <span class="vals"><b>0% vol</b>€ 0,008 / ml</span></div>
+            <div class="shelfrow"><svg><use href="#i-highball"/></svg>
+              <span class="nm2"><b>Soda</b><i>mixer</i></span>
+              <span class="vals"><b>0% vol</b>€ 0,002 / ml</span></div>
+          </div>
+          <div class="foot"><span class="cta">＋ Nuova bottiglia</span></div>
+        </div></div>
+        <p class="phone-cap">la dispensa</p>
       </div>
     </div>
   </section>
