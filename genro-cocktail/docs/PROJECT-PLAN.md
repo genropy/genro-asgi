@@ -1,12 +1,17 @@
 # genro-cocktail — project plan
 
-From this seed kit to a polished playful showcase, in milestones sized for
-evenings. Each milestone ends runnable; each teaches one layer of the stack
-(that is a stated goal of the project: learning by building).
+The project has **three souls**, and every milestone serves at least one:
 
-The concept is DOMAIN.md: the bar of classics, the sliders, the fork, the
-websocket autosave. The prototype already walks the whole path; the
-milestones harden and decorate it.
+1. **A game** — few things, done with a smile (DOMAIN.md).
+2. **A showcase** — what the new Genropy stack can do, for Nexus and beyond.
+3. **A laboratory** — the first real consumer of the new pieces: a live,
+   instrumented app Giovanni can tune against and measure with. Where the
+   framework has provisional edges (the `spa/` pool above all), this project
+   supplies the evidence: real traffic, real state, real numbers.
+
+From this seed kit to that, in milestones sized for evenings. Each ends
+runnable; each teaches one layer of the stack. The game milestones (M*) and
+the laboratory track (L*) can interleave freely.
 
 ---
 
@@ -72,6 +77,54 @@ milestones harden and decorate it.
 - One-command demo (seeded db + server), README with screenshots, a
   10-minute demo script for the Nexus meeting: play a classic, fork it,
   slide it, sign in with Google, show it survived.
+
+---
+
+## The laboratory track — riding the user-sticky pool
+
+The `spa/` subsystem (FEASIBILITY §7) is genro-asgi's distinguishing
+strength and its least-consumed part: heavily tested from the inside,
+never yet driven by a real application. This track makes genro-cocktail
+that application — deliberately separate from the game milestones so an
+unstable experiment never blocks the showcase.
+
+### L1 — Single role, native seam (an evening, no infrastructure)
+
+- Mount a trimmed cocktail app behind `SpaApplication(workers=0,
+  local_worker=True)` — the whole pool machine, zero extra processes.
+- Write the `UserStickyWorker` subclass with a native (non-WSGI)
+  `serve_http` hosting our handlers, the way the e2e suite does it.
+- **Output for Giovanni**: the first ASGI-shaped consumer of the hosted-app
+  seam — concrete requirements for the post-WSGI `serve_http` form.
+
+### L2 — Real processes, real users, real numbers
+
+- `workers=2+`: sticky `sticky_cid` routing across true child processes;
+  each user's bar living in their worker's memory (sqlite becomes the cold
+  store, the register the hot one).
+- A small load harness (a python driver simulating N users mixing at
+  once) reading the commander's own observables: occupancy per component
+  (memory/cpu/executor), placement decisions, rebalance and user-move
+  events, recycle verdicts.
+- **Output for Giovanni**: tuning evidence for the 14 `PROVISIONAL`
+  constants (probe cadence, admission/reception thresholds, compaction
+  margin, recycle horizon) against a workload that is not synthetic.
+
+### L3 — The hard scenarios, on purpose
+
+- Kill a worker mid-mix: does the user's next gesture land on a fresh one,
+  does the dump/restore bring the register back, what does the browser see?
+- A leaking worker (inject growth): watch evidence-based recycling succeed
+  it; measure what the user notices (target: nothing).
+- Version-switch a group under load (the blue/green primitive) with people
+  mid-slider.
+- **Output for Giovanni**: reproducible failure drills + the measured user
+  impact of each — the material acceptance tests are made of.
+
+Each L milestone feeds the upstream list below; L1's seam findings are the
+biggest single item the framework can harvest from this project.
+
+---
 
 ## Upstream contributions this project should produce
 

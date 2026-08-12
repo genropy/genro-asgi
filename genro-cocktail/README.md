@@ -7,8 +7,11 @@
 
 The theoretical and practical foundations for **genro-cocktail**: a playful
 cocktail lab — the classics teach you how cocktails work, sliders let you
-bend them into something of your own — built as a showcase of the new
-Genropy stack:
+bend them into something of your own. The project has three souls: a **game**
+(few things, fun), a **showcase** (what the new Genropy stack can do), and a
+**laboratory** — the first real consumer application the framework's authors
+can tune against and measure with (see the laboratory track in
+`docs/PROJECT-PLAN.md`, aimed at the user-sticky worker pool). The stack:
 
 - **genro-asgi** — the ASGI server core (routing, sessions, OIDC social
   login, config), plus a **websocket motor on a server subclass**

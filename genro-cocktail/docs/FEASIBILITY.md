@@ -177,16 +177,54 @@ to the running session (D24, id unchanged), so what an anonymous visitor
 mixed stays on screen after signing in. (Migrating anonymous creations to
 the new identity at login is an easy later feature: one UPDATE on `owner`.)
 
-## 7. What we deliberately do NOT use (yet)
+## 7. The user-sticky pool (`spa/`): the strength, and when we ride it
 
-- **`spa/` orchestration** — phase-2, in flux, not public API. The cocktail
-  app is a plain mounted application on the public server.
+The distinguishing feature of genro-asgi — per Giovanni, and the code agrees —
+is the **user-dedicated process system**: `SpaApplication` (the mountable
+front) + `UserStickyCommander` (pool owner: spawn, supervise, probe,
+occupancy sensing, rebalance, user move, evidence-based recycling, register
+dump/restore) + `UserStickyWorker` (the execution unit, one channel, no HTTP
+port). Routing is sticky by user (the `sticky_cid` cookie): the same person
+always lands on the same worker process, whose in-memory state is theirs.
+The architecture's two primitives (D22): the USER as load-partition key,
+PAGE_ID as the unit of living state.
+
+What riding it would buy genro-cocktail: each user's bar living in a
+dedicated process (working state in memory, not re-read per gesture),
+isolation (one user's crash touches nobody), per-group rolling
+reload/canary — and the "single role" (`workers=0, local_worker=True`)
+gives the whole machine with zero extra processes for dev.
+
+Why v1 does NOT ride it (verified, 2026-08-12):
+
+1. **The hosted-site seam speaks WSGI, not ASGI.** The worker serves site
+   requests through `wsgi_app` (PEP 3333, whole-body, via `WsgiSeam`) — a
+   seam built to host the legacy Genropy site during the transition. Our
+   `RoutedApplication` is ASGI; hosting it today means a `UserStickyWorker`
+   subclass with a custom `serve_http` (the e2e test does exactly this) —
+   a fine experiment, not a foundation.
+2. **Not public API yet**: nothing re-exported top-level, zero docs pages,
+   14 `PROVISIONAL` tuning constants, naming still churning. The spec parks
+   it as the phase-2 orchestration package, split "when the contract
+   stabilizes".
+3. **WebSockets do not cross the pool — by design.** D21: "the WebSocket
+   stays up on the public server, invisible to the browser"; worker events
+   fold upward on the channel. Our `CocktailServer.on_websocket` on the
+   public server is already in the right place for that future.
+
+So the pool is a LATER milestone, not a blocker — and genro-cocktail is the
+natural **first real consumer**: see PROJECT-PLAN, "the laboratory track".
+
+## 8. What we deliberately do NOT use (yet)
+
+- **`spa/` orchestration** — see §7: a deliberate later milestone, the
+  laboratory track. v1 is a plain mounted application on the public server.
 - **MCP face** — not needed for the UI, but it is a one-line base-class swap
   (`McpOpenApiApplication`) and would make the bar queryable by an AI agent
   ("mix me something bitter under €2"). Flagged as a wow-feature
   (PROJECT-PLAN M4).
 
-## 8. Risk table
+## 9. Risk table
 
 | Risk | Severity | Mitigation |
 |---|---|---|
@@ -198,7 +236,7 @@ the new identity at login is an easy later feature: one UPDATE on `owner`.)
 | uvicorn ws lib is an extra dep | low | `pip install websockets`, documented |
 | TYTX typing surprises (`"123"` → int) | low | annotate handler params |
 
-## 9. Conclusion
+## 10. Conclusion
 
 The stack is ready for exactly this class of application: a mono-process,
 server-rendered, form-driven product with islands of interactivity. HTMX +
