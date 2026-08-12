@@ -28,10 +28,11 @@ from ``genro_asgi`` top-level.
 
 from .commander import UserStickyCommander
 from .register import Register
-from .register_registry import RegisterRegistry
+from .register_registry import GUEST_PREFIX, RegisterRegistry
 from .worker import UserStickyWorker
 
 __all__ = [
+    "GUEST_PREFIX",
     "Register",
     "RegisterRegistry",
     "UserStickyCommander",

@@ -180,10 +180,10 @@ async def test_every_reply_carries_only_the_events_of_its_own_call(
         ("/op/occupancy", []),
     ]
     assert [event["user"] for _, events in seen for event in events] == [
-        "sess-1",
-        "sess-1",
-        "sess-2",
-        "sess-2",
+        "guest_sess-1",
+        "guest_sess-1",
+        "guest_sess-2",
+        "guest_sess-2",
         "alice",
     ]
 

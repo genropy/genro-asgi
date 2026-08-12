@@ -250,7 +250,7 @@ from .global_store import (
     GlobalStoreLease,
 )
 from .register import Register
-from .register_registry import RegisterRegistry
+from .register_registry import GUEST_PREFIX, RegisterRegistry
 from .subscription_index import SubscriptionIndex
 
 __all__ = [
@@ -1918,13 +1918,14 @@ class UserStickyWorker(RoutingClass):
         """Create the connection row of ``identity`` and announce it.
 
         The reception: a connection arrives anonymous, so
-        ``Registry.new_connection`` gives it the naked session id as its user
+        ``Registry.new_connection`` names it ``GUEST_PREFIX`` + the session id
         and brings that guest user entry into being with it — the surface hears
         the cascade in the order it happened, the ``new_user`` it really is and
         then the connection.
         """
         with self.dispatch_lock:
-            unseen_user = fields.get("user", identity) not in self.user_items
+            user_name = fields.get("user") or GUEST_PREFIX + identity
+            unseen_user = user_name not in self.user_items
             entry = self.registry.new_connection(identity, **fields)
             if unseen_user:
                 self.offer_event("new_user", user=entry["user"])
@@ -2099,14 +2100,16 @@ class UserStickyWorker(RoutingClass):
     # ------------------------------------------------------------------
 
     def is_guest_connection(self, connection_id: str) -> bool:
-        """Whether a connection is still anonymous — the guest rule, transposed.
+        """Whether a connection is still anonymous — the guest rule, by name.
 
-        The daemon reads the ``guest_`` prefix of the user name
-        (siteregister.py:716-717); the naked sticky key of this world says the
-        same thing structurally: a connection is guest while its user IS its own
-        id, the value ``new_connection`` gives an anonymous reception.
+        The daemon's own convention (siteregister.py:716-717), restored: a
+        connection is guest while its user name carries the reserved
+        ``GUEST_PREFIX`` — whether ``new_connection`` minted it or the
+        consumer declared it (issue #14 retired the structural
+        user-IS-its-own-id rule, which a consumer naming its guests
+        ``guest_<id>`` silently fell out of).
         """
-        return self.connection_items.get(connection_id)["user"] == connection_id
+        return self.connection_items.get(connection_id)["user"].startswith(GUEST_PREFIX)
 
     def sweep_expired(self) -> dict[str, list[str]]:
         """Drop what has been idle too long, announcing every drop on the outbox.

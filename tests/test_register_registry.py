@@ -205,16 +205,16 @@ def test_new_page_builds_the_whole_chain_bottom_up() -> None:
 def test_new_connection_is_born_guest_with_its_own_user_entry() -> None:
     registry = RegisterRegistry()
     connection = registry.new_connection("s1")
-    assert connection["user"] == "s1"
-    assert "s1" in registry.user_items
-    assert registry.user_items.get("s1")["store"] is not None
+    assert connection["user"] == "guest_s1"
+    assert "guest_s1" in registry.user_items
+    assert registry.user_items.get("guest_s1")["store"] is not None
 
 
 def test_new_connection_is_born_with_its_own_live_store() -> None:
     registry = RegisterRegistry()
     connection = registry.new_connection("s1")
     assert connection["store"] is not None
-    assert connection["store"] is not registry.user_items.get("s1")["store"]
+    assert connection["store"] is not registry.user_items.get("guest_s1")["store"]
 
 
 def test_new_connection_honours_a_supplied_store() -> None:
@@ -372,7 +372,7 @@ def test_the_two_directions_agree_after_every_creation() -> None:
     registry.new_connection("s3")
     assert_tree(
         registry,
-        {"alice": {"s1": {"p1", "p2"}, "s2": {"p3"}}, "s3": {"s3": set()}},
+        {"alice": {"s1": {"p1", "p2"}, "s2": {"p3"}}, "guest_s3": {"s3": set()}},
     )
 
 
@@ -409,6 +409,15 @@ def test_the_login_moves_the_connection_between_the_two_users_sets() -> None:
     )
     registry.change_connection_user("sess-2", "alice")
     assert_tree(registry, {"alice": {"sess-1": {"p1"}, "sess-2": {"p2"}}})
+
+
+def test_a_login_target_carrying_the_guest_prefix_is_refused() -> None:
+    """The prefix is reserved: nobody logs in as a guest, and the row stays put."""
+    registry = RegisterRegistry()
+    registry.new_connection("s1")
+    with pytest.raises(ValueError, match="reserved"):
+        registry.change_connection_user("s1", "guest_mario")
+    assert registry.connection_items.get("s1")["user"] == "guest_s1"
 
 
 def test_page_user_walks_up_the_chain() -> None:

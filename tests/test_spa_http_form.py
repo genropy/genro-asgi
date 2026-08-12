@@ -305,5 +305,5 @@ async def test_an_op_call_with_an_http_shaped_kwarg_is_still_the_op() -> None:
     await worker.service_call(frame)
     reply = worker.channel.frames[0].data
     assert "error" not in reply
-    assert reply["result"]["user"] == "s1"
+    assert reply["result"]["user"] == "guest_s1"
     await worker.shutdown()

@@ -242,7 +242,7 @@ def test_lifecycle_ops_mutate_the_register_and_shape_increasing_seqs() -> None:
     worker = UserStickyWorker("W:w1")
     with call_sink(worker) as events:
         worker.new_connection("sess-1")
-        assert worker.connection_items.get("sess-1")["user"] == "sess-1"
+        assert worker.connection_items.get("sess-1")["user"] == "guest_sess-1"
 
         entry = worker.change_connection_user("sess-1", user="alice", tenant="acme")
         # The login's own fields describe the real user, so they are on the entry
@@ -250,7 +250,7 @@ def test_lifecycle_ops_mutate_the_register_and_shape_increasing_seqs() -> None:
         # onto the new key, and the event announces the re-label carrying nothing.
         assert entry["tenant"] == "acme"
         assert entry["register_item_id"] == "alice"
-        assert "sess-1" not in worker.user_items
+        assert "guest_sess-1" not in worker.user_items
         assert "alice" in worker.user_items
         assert "encoded" not in events[-1]
 
@@ -264,7 +264,7 @@ def test_lifecycle_ops_mutate_the_register_and_shape_increasing_seqs() -> None:
             ("drop_user", 4),
         ]
         assert {e["worker"] for e in events} == {"W:w1"}
-        assert events[2]["previous_user"] == "sess-1"
+        assert events[2]["previous_user"] == "guest_sess-1"
         assert events[2]["user"] == "alice"
         assert events[2]["session_id"] == "sess-1"
     assert worker.last_seq == 4
@@ -862,7 +862,7 @@ def test_a_resident_login_links_the_connection_and_ships_nothing() -> None:
             "change_connection_user",
         ]
         assert events[-1]["session_id"] == "sess-2"
-        assert events[-1]["previous_user"] == "sess-2"
+        assert events[-1]["previous_user"] == "guest_sess-2"
         assert "encoded" not in events[-1]
     # Nothing was evicted: the resident entry, its first connection and its page
     # are the same live objects they were before the second one logged in.
@@ -870,7 +870,7 @@ def test_a_resident_login_links_the_connection_and_ships_nothing() -> None:
     assert worker.page_items.get("p1")["store"] is page_store
     assert worker.connection_items.get("sess-1")["pages"] == {"p1"}
     # The orphaned guest died with its last connection.
-    assert "sess-2" not in worker.user_items
+    assert "guest_sess-2" not in worker.user_items
 
 
 def test_a_self_login_leaves_the_user_whole() -> None:
@@ -1096,13 +1096,14 @@ def aged_worker(**kwargs: Any) -> UserStickyWorker:
     """A worker holding a logged-in page and a guest one, both born stamped.
 
     ``mario`` is a real user (its connection is named apart from it), while the
-    guest connection carries its own id as user — the naked sticky key of an
-    anonymous reception, which is what the guest rule reads.
+    guest connection's user carries the reserved ``guest_`` prefix — the name
+    the consumer declares for an anonymous reception, which is what the guest
+    rule reads.
     """
     worker = UserStickyWorker("W:w1", **kwargs)
     with call_sink(worker):
         worker.new_page("mario", "p1", session_id="s1")
-        worker.new_page("g1", "pg", session_id="g1")
+        worker.new_page("guest_g1", "pg", session_id="g1")
     return worker
 
 

@@ -700,8 +700,9 @@ async def seed_live_guest(pool: Any, source: str, page_id: str = "p1") -> dict[s
     REPLY of the CALL that takes them.
     """
     await pool.commander.forward_call("sess-1", "/op/new_connection")
+    # The anonymous page declares its guest-named user, as the legacy bridge does.
     await pool.commander.forward_call(
-        "sess-1", "/op/new_page", {"page_id": page_id, "session_id": "sess-1"}
+        "guest_sess-1", "/op/new_page", {"page_id": page_id, "session_id": "sess-1"}
     )
     worker = pool.workers[source]
     worker.registry.subscribe_store_path(page_id, "prefs")
@@ -711,7 +712,7 @@ async def seed_live_guest(pool: Any, source: str, page_id: str = "p1") -> dict[s
     )
     page = worker.page_items.get(page_id)
     page["store"]["counter"] = 1
-    worker.user_items.get("sess-1")["store"]["prefs.theme"] = "dark"
+    worker.user_items.get("guest_sess-1")["store"]["prefs.theme"] = "dark"
     deposit = worker.dbevent_deposit("orders", [["ins", "42"]], None, "commit")
     worker.fan_out_local(deposit)
     return {

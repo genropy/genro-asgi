@@ -263,14 +263,18 @@ async def test_population_gathers_the_registers_of_the_live_worker(
     single: UserStickyCommander,
 ) -> None:
     await single.forward_call("sess-1", "/op/new_connection")
-    await single.forward_call("sess-1", "/op/new_page", {"page_id": "p1", "session_id": "sess-1"})
+    # An anonymous page names its user with the reserved guest prefix — the
+    # consumer declares it, exactly as the legacy bridge does.
+    await single.forward_call(
+        "guest_sess-1", "/op/new_page", {"page_id": "p1", "session_id": "sess-1"}
+    )
     people = await single.population()
     assert len(people["workers"]) == 1
     row = people["workers"][0]
     assert row["id"] == single.worker.name
     assert row["group"] == single.group
     assert "error" not in row
-    assert [user["register_item_id"] for user in row["users"]] == ["sess-1"]
+    assert [user["register_item_id"] for user in row["users"]] == ["guest_sess-1"]
     assert [page["register_item_id"] for page in row["pages"]] == ["p1"]
     assert len(row["connections"]) == 1
 
@@ -280,8 +284,8 @@ async def test_population_fuses_only_the_cumulative_consumption(
 ) -> None:
     """The bucket ring is the rebalance's private window: it never crosses."""
     await single.forward_call("sess-1", "/op/new_connection")
-    single.count_user_consumption("sess-1", 0.25)
-    single.count_user_consumption("sess-1", 0.75)
+    single.count_user_consumption("guest_sess-1", 0.25)
+    single.count_user_consumption("guest_sess-1", 0.75)
     user_row = (await single.population())["workers"][0]["users"][0]
     assert user_row["consumption"] == {"requests": 2, "seconds": pytest.approx(1.0)}
     assert "buckets" not in user_row["consumption"]

@@ -41,9 +41,9 @@ the parent key each child already holds — a page row's ``connection_id``, a
 connection row's ``user``. Every lifecycle mutator writes both directions in
 the same gesture, so the two can never disagree. A page row stores NO ``user``
 label: the owner is DERIVED by walking up (``page_user``), and what is
-derived cannot diverge. The connection row is born GUEST — its ``user`` is the
-session id itself, naked, the anonymous sticky key — and the login is a label
-mutation on that live row, never a re-key.
+derived cannot diverge. The connection row is born GUEST — its ``user`` is
+``GUEST_PREFIX`` + the session id, the name itself carrying the guest rule —
+and the login is a label mutation on that live row, never a re-key.
 
 **The extension seam.** ``new_register(name, index_attrs=())`` creates, hosts
 and *returns* the register: the caller keeps the reference — the same graft
@@ -115,7 +115,14 @@ from genro_bag.datachange import DataChangeCollector
 from ..session.session import Session
 from .register import Register
 
-__all__ = ["RegisterRegistry"]
+__all__ = ["GUEST_PREFIX", "RegisterRegistry"]
+
+#: The reserved prefix that names an anonymous user — the daemon's own
+#: convention (siteregister.py:716-717), restored so the NAME carries the
+#: guest rule and a consumer minting its own ``guest_<id>`` needs no
+#: translation layer. ``change_connection_user`` refuses a target carrying it:
+#: nobody can log in as a guest.
+GUEST_PREFIX = "guest_"
 
 
 class RegisterRegistry:
@@ -214,10 +221,12 @@ class RegisterRegistry:
     ) -> dict[str, Any]:
         """Create the connection row of ``connection_id``, born guest by default.
 
-        ``user is None`` means the anonymous reception: the row takes the
-        session id itself as its user — the ratified naked sticky key — and the
-        guest user entry is brought into being with it, a user entry like any
-        other, with its own live store.
+        ``user is None`` means the anonymous reception: the row takes
+        ``GUEST_PREFIX`` + the session id as its user — the daemon's own
+        naming, so the name itself says guest — and the guest user entry is
+        brought into being with it, a user entry like any other, with its own
+        live store. A consumer that mints its own ``guest_<id>`` passes it
+        explicitly and falls under the same rule with no translation.
 
         The row is born with a live ``store`` Bag unless the caller supplies one
         — a moved connection arrives with its own, already hydrated — like every
@@ -231,7 +240,7 @@ class RegisterRegistry:
         Raises ``ValueError`` if the connection already has a row.
         """
         if user is None:
-            user = connection_id
+            user = GUEST_PREFIX + connection_id
         if "store" not in fields:
             fields["store"] = self.new_store()
         fields.setdefault("last_refresh_ts", time.time())
@@ -340,8 +349,9 @@ class RegisterRegistry:
 
         **The guest item follows its first real identity.** This is a
         declared divergence from the daemon, which built the new user fresh
-        and let the guest die with its data. When the connection is still anonymous (its
-        user key IS its own id, the born-guest rule) and the target user has no
+        and let the guest die with its data. When the connection is still
+        anonymous (its user name carries ``GUEST_PREFIX``, the born-guest rule)
+        and the target user has no
         entry yet, the entry is TRANSFERRED: only the key changes, the values —
         the live store above all — are conserved. The store being the same Bag
         object, every attached ``user_view`` keeps capturing with nothing to
@@ -363,14 +373,24 @@ class RegisterRegistry:
         set came out empty: this was its last connection, and its store dies
         with it.
 
+        ``GUEST_PREFIX`` is RESERVED: a login target carrying it raises
+        ``ValueError`` — nobody can log in as a guest. The ban lives here and
+        not at ``new_connection``, which legitimately receives an explicit
+        ``guest_<id>`` from a consumer declaring its own anonymous connection.
+
         Returns the mutated connection row; raises ``KeyError`` if
         ``connection_id`` is not registered.
         """
+        if user.startswith(GUEST_PREFIX):
+            raise ValueError(
+                f"change_connection_user: {user!r} — "
+                f"{GUEST_PREFIX!r} is reserved, nobody logs in as a guest"
+            )
         connection = self.connection_items.get(connection_id)
         if connection is None:
             raise KeyError(f"change_connection_user: unknown connection {connection_id!r}")
         previous_user = connection["user"]
-        if user not in self.user_items and previous_user == connection_id:
+        if user not in self.user_items and previous_user.startswith(GUEST_PREFIX):
             entry = self.user_items.drop(previous_user)
             del entry["register_item_id"]
             self.user_items.create(user, **{**entry, **fields})

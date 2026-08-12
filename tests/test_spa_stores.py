@@ -359,9 +359,9 @@ def test_the_login_relabels_the_connection_and_its_pages_with_the_keys_intact() 
 
 def test_the_login_keeps_the_user_view_on_the_carried_store() -> None:
     registry = RegisterRegistry()
-    registry.new_page("p1", user="sess-1", session_id="sess-1")
+    registry.new_page("p1", user="guest_sess-1", session_id="sess-1")
     registry.subscribe_store_path("p1", "prefs")
-    guest_store = registry.user_items.get("sess-1")["store"]
+    guest_store = registry.user_items.get("guest_sess-1")["store"]
 
     registry.change_connection_user("sess-1", "alice")
 
@@ -404,8 +404,8 @@ def test_the_login_re_attaches_the_user_view_without_draining_it() -> None:
 
 def test_the_guest_item_follows_its_first_real_identity() -> None:
     registry = RegisterRegistry()
-    registry.new_page("p1", user="sess-1", session_id="sess-1")
-    guest = registry.user_items.get("sess-1")
+    registry.new_page("p1", user="guest_sess-1", session_id="sess-1")
+    guest = registry.user_items.get("guest_sess-1")
     guest_store, guest_connections = guest["store"], guest["connections"]
     guest_store["draft"] = "half typed"
 
@@ -413,7 +413,7 @@ def test_the_guest_item_follows_its_first_real_identity() -> None:
 
     entry = registry.user_items.get("alice")
     # Only the key changed: the same live objects arrived under the new one.
-    assert registry.user_items.get("sess-1") is None
+    assert registry.user_items.get("guest_sess-1") is None
     assert entry["store"] is guest_store
     assert entry["connections"] is guest_connections
     assert entry["connections"] == {"sess-1"}
@@ -423,7 +423,7 @@ def test_the_guest_item_follows_its_first_real_identity() -> None:
 
 def test_the_carried_store_keeps_capturing_with_no_re_attach() -> None:
     registry = RegisterRegistry()
-    registry.new_page("p1", user="sess-1", session_id="sess-1")
+    registry.new_page("p1", user="guest_sess-1", session_id="sess-1")
     registry.subscribe_store_path("p1", "prefs")
     view = registry.page_items.get("p1")["user_view"]
 
@@ -440,8 +440,8 @@ def test_a_login_onto_a_resident_user_leaves_the_guest_store_behind() -> None:
     registry.new_page("p0", user="alice", session_id="s0")
     resident_store = registry.user_items.get("alice")["store"]
     resident_store["prefs.theme"] = "dark"
-    registry.new_page("p1", user="sess-1", session_id="sess-1")
-    registry.user_items.get("sess-1")["store"]["draft"] = "half typed"
+    registry.new_page("p1", user="guest_sess-1", session_id="sess-1")
+    registry.user_items.get("guest_sess-1")["store"]["draft"] = "half typed"
 
     registry.change_connection_user("sess-1", "alice")
 
@@ -451,7 +451,7 @@ def test_a_login_onto_a_resident_user_leaves_the_guest_store_behind() -> None:
     assert entry["store"] is resident_store
     assert entry["store"]["prefs.theme"] == "dark"
     assert entry["store"]["draft"] is None
-    assert registry.user_items.get("sess-1") is None
+    assert registry.user_items.get("guest_sess-1") is None
     assert entry["connections"] == {"s0", "sess-1"}
 
 
