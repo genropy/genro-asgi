@@ -1,0 +1,599 @@
+<title>Quattro Bar</title>
+<style>
+  /* ---------- deck chrome tokens ---------- */
+  :root {
+    --ground: #f3f0ea;
+    --card: #fbf9f5;
+    --ink: #2b2620;
+    --ink-soft: #6f665a;
+    --line: #ddd6ca;
+    --accent: #8a5a24;
+  }
+  :root:not([data-theme="light"]) { }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #1c1915;
+      --card: #262119;
+      --ink: #eee7da;
+      --ink-soft: #a2988a;
+      --line: #3a342b;
+      --accent: #d0a468;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #1c1915;
+    --card: #262119;
+    --ink: #eee7da;
+    --ink-soft: #a2988a;
+    --line: #3a342b;
+    --accent: #d0a468;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font: 16px/1.6 Seravek, "Gill Sans Nova", Ubuntu, Calibri, "DejaVu Sans", source-sans-pro, sans-serif;
+  }
+  .wrap { max-width: 72rem; margin: 0 auto; padding: 3rem 2rem 6rem; }
+
+  .kicker {
+    text-transform: uppercase; letter-spacing: 0.22em; font-size: 0.72rem;
+    color: var(--ink-soft);
+  }
+  h1 { font-size: 2.2rem; font-weight: 600; margin: 0.3rem 0 0.6rem; text-wrap: balance; }
+  .lede { max-width: 46rem; color: var(--ink-soft); margin: 0; }
+
+  .index { display: flex; gap: 0.6rem; margin: 1.6rem 0 0; flex-wrap: wrap; }
+  .index a {
+    text-decoration: none; color: var(--ink); border: 1px solid var(--line);
+    background: var(--card); padding: 0.35rem 0.9rem; border-radius: 999px;
+    font-size: 0.85rem;
+  }
+  .index a:hover, .index a:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
+
+  section.direction { margin-top: 4.5rem; }
+  .dir-head { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+  .dir-letter {
+    font-size: 2.6rem; line-height: 1; color: var(--accent);
+    font-family: Didot, "Bodoni MT", "URW Palladio L", P052, Georgia, serif;
+  }
+  .dir-head h2 { font-size: 1.6rem; font-weight: 600; margin: 0; }
+  .dir-sub { color: var(--ink-soft); max-width: 46rem; margin: 0.5rem 0 0; }
+  .feels { font-size: 0.85rem; color: var(--ink-soft); margin-top: 0.3rem; }
+  .feels b { color: var(--ink); font-weight: 600; }
+
+  .spec {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    gap: 1rem; margin: 1.4rem 0;
+  }
+  .spec-card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 1rem 1.1rem;
+  }
+  .spec-card h4 {
+    margin: 0 0 0.6rem; font-size: 0.72rem; text-transform: uppercase;
+    letter-spacing: 0.18em; color: var(--ink-soft); font-weight: 600;
+  }
+  .swatches { display: flex; gap: 0.5rem; }
+  .swatch { flex: 1; }
+  .swatch i { display: block; height: 2.6rem; border-radius: 6px; border: 1px solid rgba(0,0,0,0.15); }
+  .swatch span { display: block; font-size: 0.65rem; color: var(--ink-soft); margin-top: 0.25rem; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .icon-strip { display: flex; gap: 0.9rem; align-items: center; border-radius: 8px; padding: 0.9rem; }
+  .icon-strip svg { width: 42px; height: 42px; }
+  .motion { font-size: 0.9rem; color: var(--ink-soft); margin: 0; }
+  .motion code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.8em; color: var(--ink); }
+
+  .screens { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); gap: 1.4rem; margin-top: 1.4rem; }
+  .frame { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--card); }
+  .frame-bar { display: flex; gap: 0.35rem; padding: 0.55rem 0.8rem; border-bottom: 1px solid var(--line); }
+  .frame-bar i { width: 9px; height: 9px; border-radius: 50%; background: var(--line); }
+  .frame-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-soft); margin-left: auto; align-self: center; }
+  .screen { min-height: 21rem; }
+
+  /* shared mockup scaffolding */
+  .screen { font-size: 13px; }
+  .screen .m-nav { display: flex; gap: 1.1em; align-items: baseline; padding: 0.9em 1.2em; }
+  .screen .m-brand { font-size: 1.15em; }
+  .screen .m-body { padding: 1em 1.2em 1.4em; }
+  .screen .m-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8em; }
+  .screen .m-chiprow { display: flex; gap: 0.4em; margin: 0.8em 0; flex-wrap: wrap; }
+  .screen .m-stats { display: flex; gap: 0.7em; margin: 0.9em 0; }
+  .screen .m-stat { flex: 1; padding: 0.6em 0.8em; }
+  .screen .m-stat b { display: block; font-size: 1.35em; }
+  .screen .m-stat span { font-size: 0.78em; opacity: 0.75; }
+  .screen .m-slider { display: flex; align-items: center; gap: 0.8em; padding: 0.55em 0; }
+  .screen .m-slider .nm { width: 9.5em; display: flex; align-items: center; gap: 0.45em; }
+  .screen .m-slider .nm svg { width: 20px; height: 20px; flex: none; }
+  .screen .m-slider input[type="range"] { flex: 1; }
+  .screen .m-slider .ml { width: 3.6em; text-align: right; font-variant-numeric: tabular-nums; }
+  .screen .m-save { font-size: 0.82em; margin-top: 0.7em; }
+  .screen h3 { margin: 0; font-weight: 600; }
+  .screen .m-card h4 { margin: 0.35em 0 0.3em; font-weight: 600; font-size: 1.05em; }
+  .screen .m-card .cm { font-size: 0.8em; opacity: 0.8; }
+  .screen .m-card svg { width: 30px; height: 30px; }
+  .screen .m-tag { font-size: 0.72em; padding: 0.1em 0.7em; border-radius: 999px; }
+
+  /* =========== A. DECO D'ORO =========== */
+  .m-deco { background: #191612; color: #f2e9d8; font-family: Didot, "Bodoni MT", "URW Palladio L", P052, Georgia, serif; }
+  .m-deco .m-nav { border-bottom: 1px solid #3d352a; }
+  .m-deco .m-brand { color: #d4af6a; letter-spacing: 0.22em; text-transform: uppercase; font-size: 0.95em; }
+  .m-deco .m-nav a { color: #9c8f79; text-decoration: none; font-size: 0.82em; letter-spacing: 0.14em; text-transform: uppercase; }
+  .m-deco .m-nav a.on { color: #f2e9d8; border-bottom: 1px solid #d4af6a; }
+  .m-deco .deco-rule { display: flex; align-items: center; gap: 0.6em; color: #d4af6a; margin: 0.9em 0; }
+  .m-deco .deco-rule::before, .m-deco .deco-rule::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, transparent, #d4af6a55); }
+  .m-deco .deco-rule::after { background: linear-gradient(90deg, #d4af6a55, transparent); }
+  .m-deco h3 { font-size: 1.5em; font-weight: 400; letter-spacing: 0.04em; }
+  .m-deco .m-card {
+    border: 1px solid #d4af6a44; padding: 0.9em; position: relative; background: #1f1b15;
+    box-shadow: inset 0 0 0 3px #191612, inset 0 0 0 4px #d4af6a22;
+  }
+  .m-deco .m-card .glass-ic { color: #d4af6a; }
+  .m-deco .m-tag { border: 1px solid #d4af6a55; color: #d4af6a; letter-spacing: 0.12em; text-transform: uppercase; font-size: 0.62em; }
+  .m-deco .m-card .cm { color: #9c8f79; }
+  .m-deco .abv { color: #d4af6a; }
+  .m-deco .m-stat { border: 1px solid #3d352a; background: #1f1b15; }
+  .m-deco .m-stat b { color: #d4af6a; font-weight: 400; }
+  .m-deco .meter { height: 5px; background: #2a2419; margin: 0.4em 0 0; }
+  .m-deco .meter i { display: block; height: 100%; width: 62%; background: linear-gradient(90deg, #7a5c2e, #d4af6a); }
+  .m-deco input[type="range"] { accent-color: #d4af6a; }
+  .m-deco .m-save { color: #d4af6a; letter-spacing: 0.14em; text-transform: uppercase; font-size: 0.68em; }
+  .m-deco .ic { stroke: #d4af6a; }
+
+  /* =========== B. NEON NOTTURNO =========== */
+  .m-neon { background: linear-gradient(160deg, #0a0e1c, #101426 60%, #131033); color: #e8ecff; font-family: Avenir, Montserrat, Corbel, "URW Gothic", source-sans-pro, sans-serif; }
+  .m-neon .m-brand { color: #37e6e6; text-shadow: 0 0 12px #37e6e688; font-weight: 700; letter-spacing: 0.06em; }
+  .m-neon .m-nav a { color: #7d86ad; text-decoration: none; font-size: 0.85em; }
+  .m-neon .m-nav a.on { color: #ff4d9d; text-shadow: 0 0 10px #ff4d9d77; }
+  .m-neon h3 { font-weight: 700; font-size: 1.35em; }
+  .m-neon .m-card {
+    background: #ffffff0a; border: 1px solid #ffffff1c; border-radius: 14px; padding: 0.9em;
+    backdrop-filter: blur(6px);
+  }
+  .m-neon .m-card .glass-ic { color: #ff4d9d; filter: drop-shadow(0 0 6px #ff4d9d88); }
+  .m-neon .m-tag { background: #ffffff10; color: #37e6e6; border: 1px solid #37e6e644; }
+  .m-neon .m-card .cm { color: #7d86ad; }
+  .m-neon .abv { color: #ff4d9d; }
+  .m-neon .m-stat { background: #ffffff08; border: 1px solid #ffffff14; border-radius: 12px; }
+  .m-neon .m-stat b { color: #37e6e6; text-shadow: 0 0 10px #37e6e655; font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 600; }
+  .m-neon .meter { height: 7px; border-radius: 999px; background: #ffffff10; margin: 0.4em 0 0; }
+  .m-neon .meter i { display: block; height: 100%; width: 62%; border-radius: 999px;
+    background: linear-gradient(90deg, #37e6e6, #ff4d9d); box-shadow: 0 0 12px #ff4d9d88; }
+  .m-neon input[type="range"] { accent-color: #ff4d9d; }
+  .m-neon .m-save { color: #37e6e6; text-shadow: 0 0 8px #37e6e655; }
+  .m-neon .ic { stroke: #37e6e6; filter: drop-shadow(0 0 4px #37e6e666); }
+
+  /* =========== C. RICETTARIO =========== */
+  .m-print { background: #f7f2e7; color: #26221c; font-family: "Iowan Old Style", "Palatino Linotype", Palatino, P052, Georgia, serif; }
+  .m-print .m-nav { border-bottom: 2px solid #26221c; }
+  .m-print .m-brand { font-weight: 700; font-variant: small-caps; letter-spacing: 0.08em; font-size: 1.2em; }
+  .m-print .m-nav a { color: #6e6252; text-decoration: none; font-style: italic; font-size: 0.9em; }
+  .m-print .m-nav a.on { color: #a63329; }
+  .m-print h3 { font-weight: 700; font-size: 1.45em; }
+  .m-print .num { color: #a63329; font-size: 0.75em; vertical-align: super; margin-right: 0.3em; }
+  .m-print .m-card { border-top: 1px solid #26221c33; padding: 0.7em 0.2em; }
+  .m-print .m-cards { grid-template-columns: 1fr; gap: 0; }
+  .m-print .m-card h4 { display: flex; align-items: baseline; gap: 0.5em; }
+  .m-print .m-card h4::after { content: ""; flex: 1; border-bottom: 1px dotted #26221c66; }
+  .m-print .m-card h4 b { font-weight: 400; color: #a63329; font-size: 0.85em; }
+  .m-print .m-card .cm { color: #6e6252; font-style: italic; }
+  .m-print .m-tag { border: 1px solid #6e7a5f; color: #6e7a5f; border-radius: 2px; font-variant: small-caps; }
+  .m-print .m-stat { border: 1px solid #26221c; border-radius: 2px; background: #fbf7ee; }
+  .m-print .m-stat b { color: #a63329; font-weight: 700; }
+  .m-print .meter { height: 4px; background: #26221c1a; margin: 0.4em 0 0; }
+  .m-print .meter i { display: block; height: 100%; width: 62%; background: #a63329; }
+  .m-print input[type="range"] { accent-color: #a63329; }
+  .m-print .m-save { color: #6e7a5f; font-style: italic; }
+  .m-print .ic { stroke: #26221c; }
+  .m-print .glass-ic { color: #26221c; }
+
+  /* =========== D. FLUO POP =========== */
+  .m-pop { background: #fffaf2; color: #241f31; font-family: ui-rounded, "Hiragino Maru Gothic ProN", Quicksand, Comfortaa, Manjari, "Arial Rounded MT Bold", Calibri, sans-serif; }
+  .m-pop .m-brand { font-weight: 800; font-size: 1.25em; color: #7048e8; }
+  .m-pop .m-nav a { color: #241f31; text-decoration: none; font-weight: 700; font-size: 0.85em;
+    background: #ffd23f; padding: 0.15em 0.8em; border-radius: 999px; border: 2px solid #241f31; }
+  .m-pop .m-nav a.on { background: #ff5c5c; color: #fff; }
+  .m-pop h3 { font-weight: 800; font-size: 1.4em; }
+  .m-pop .m-card {
+    background: #fff; border: 2.5px solid #241f31; border-radius: 16px; padding: 0.9em;
+    box-shadow: 4px 4px 0 #241f31;
+  }
+  .m-pop .m-card .glass-ic { color: #ff5c5c; }
+  .m-pop .m-tag { background: #2ec4b6; color: #fff; font-weight: 700; border: 2px solid #241f31; }
+  .m-pop .m-tag.t2 { background: #7048e8; }
+  .m-pop .m-card .cm { color: #6b6579; font-weight: 600; }
+  .m-pop .abv { color: #ff5c5c; font-weight: 800; }
+  .m-pop .m-stat { background: #fff; border: 2.5px solid #241f31; border-radius: 14px; box-shadow: 3px 3px 0 #241f31; }
+  .m-pop .m-stat b { color: #7048e8; font-weight: 800; }
+  .m-pop .meter { height: 10px; border-radius: 999px; background: #241f3115; border: 2px solid #241f31; margin: 0.4em 0 0; }
+  .m-pop .meter i { display: block; height: 100%; width: 62%; border-radius: 999px;
+    background: repeating-linear-gradient(45deg, #ffd23f 0 8px, #ff5c5c 8px 16px); }
+  .m-pop input[type="range"] { accent-color: #7048e8; }
+  .m-pop .m-save { color: #2ec4b6; font-weight: 800; }
+  .m-pop .ic { stroke: #241f31; stroke-width: 2.4; }
+
+  .choose { margin-top: 4.5rem; background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 1.6rem 1.8rem; }
+  .choose h2 { margin-top: 0; }
+  .choose ul { margin: 0.4rem 0 0; padding-left: 1.2rem; color: var(--ink-soft); }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-coupe" viewBox="0 0 48 48">
+      <g fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10 12h28L24 26v12" /><path d="M15 40h18" /><path d="M17 16h8" opacity="0.5"/>
+      </g>
+    </symbol>
+    <symbol id="i-shaker" viewBox="0 0 48 48">
+      <g fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M19 6h10l2 7H17z" /><path d="M16 17h16l-2.5 24h-11z" /><path d="M17 22h14" opacity="0.5"/>
+      </g>
+    </symbol>
+    <symbol id="i-highball" viewBox="0 0 48 48">
+      <g fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M15 7h18l-2 34H17z" /><circle cx="23" cy="20" r="1.6"/><circle cx="27" cy="28" r="1.6"/><circle cx="22" cy="34" r="1.6"/>
+      </g>
+    </symbol>
+    <symbol id="i-citrus" viewBox="0 0 48 48">
+      <g fill="none" stroke-width="1.8" stroke-linecap="round">
+        <circle cx="24" cy="24" r="15"/><circle cx="24" cy="24" r="11" opacity="0.6"/>
+        <path d="M24 13v22M13 24h22M16.2 16.2l15.6 15.6M31.8 16.2L16.2 31.8" opacity="0.6"/>
+      </g>
+    </symbol>
+    <symbol id="i-cherry" viewBox="0 0 48 48">
+      <g fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M30 7c-8 3-10 10-10 17" /><path d="M30 7c3 4 8 5 12 4" opacity="0.6"/>
+        <circle cx="20" cy="32" r="8"/>
+      </g>
+    </symbol>
+    <symbol id="i-bottle" viewBox="0 0 48 48">
+      <g fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 6h6v9c4.5 2 7 6 7 11v13a3 3 0 01-3 3H17a3 3 0 01-3-3V26c0-5 2.5-9 7-11z" />
+        <path d="M17 28h14" opacity="0.5"/>
+      </g>
+    </symbol>
+  </defs>
+</svg>
+
+<div class="wrap">
+  <p class="kicker">Genro Cocktail · studio grafico · 2026-08</p>
+  <h1>Quattro Bar</h1>
+  <p class="lede">Same app, four bars you could walk into. Each direction shows its palette,
+  its icon voice (one hand-drawn SVG set, restyled per direction), the two key screens —
+  the bar and the mixing lab — and how HTMX motion should feel there. Pick one, or point
+  at pieces you like and we mix.</p>
+  <nav class="index">
+    <a href="#deco">A · Deco d'Oro</a>
+    <a href="#neon">B · Neon Notturno</a>
+    <a href="#print">C · Ricettario</a>
+    <a href="#pop">D · Fluo Pop</a>
+  </nav>
+
+  <!-- ============ A ============ -->
+  <section class="direction" id="deco">
+    <div class="dir-head"><span class="dir-letter">A</span><h2>Deco d'Oro</h2></div>
+    <p class="dir-sub">The speakeasy taken seriously: charcoal grounds, champagne-gold hairlines,
+    engraved icons, tall serif titling with wide tracking. Luxury through restraint — the
+    evolution of the current prototype, grown up.</p>
+    <p class="feels"><b>Feels like:</b> a 1925 hotel bar menu · brass on walnut · Gatsby without the kitsch</p>
+    <div class="spec">
+      <div class="spec-card"><h4>Palette</h4>
+        <div class="swatches">
+          <div class="swatch"><i style="background:#191612"></i><span>#191612</span></div>
+          <div class="swatch"><i style="background:#d4af6a"></i><span>#d4af6a</span></div>
+          <div class="swatch"><i style="background:#f2e9d8"></i><span>#f2e9d8</span></div>
+          <div class="swatch"><i style="background:#7d2a26"></i><span>#7d2a26</span></div>
+          <div class="swatch"><i style="background:#9c8f79"></i><span>#9c8f79</span></div>
+        </div>
+      </div>
+      <div class="spec-card"><h4>Icon voice</h4>
+        <div class="icon-strip" style="background:#191612">
+          <svg class="ic" style="stroke:#d4af6a;fill:none"><use href="#i-coupe"/></svg>
+          <svg class="ic" style="stroke:#d4af6a;fill:none"><use href="#i-shaker"/></svg>
+          <svg class="ic" style="stroke:#d4af6a;fill:none"><use href="#i-highball"/></svg>
+          <svg class="ic" style="stroke:#d4af6a;fill:none"><use href="#i-citrus"/></svg>
+          <svg class="ic" style="stroke:#d4af6a;fill:none"><use href="#i-cherry"/></svg>
+          <svg class="ic" style="stroke:#d4af6a;fill:none"><use href="#i-bottle"/></svg>
+        </div>
+      </div>
+      <div class="spec-card"><h4>Type &amp; motion</h4>
+        <p class="motion">Didot-class serif for titles (production: <b>Marcellus</b> or
+        <b>Cormorant</b>), spaced small caps for labels. HTMX: slow crossfade on swaps
+        (<code>transition:true</code>, 300ms), gold underline sweep on settled fragments —
+        nothing bounces, everything glides.</p>
+      </div>
+    </div>
+    <div class="screens">
+      <div class="frame"><div class="frame-bar"><i></i><i></i><i></i><span class="frame-label">il bar</span></div>
+        <div class="screen m-deco">
+          <nav class="m-nav"><span class="m-brand">Genro Cocktail</span><a class="on" href="#deco">Il Bar</a><a href="#deco">La Dispensa</a></nav>
+          <div class="m-body">
+            <h3>Every classic is a lesson</h3>
+            <div class="deco-rule">◆</div>
+            <div class="m-cards">
+              <div class="m-card">
+                <svg class="glass-ic ic" style="fill:none"><use href="#i-coupe"/></svg>
+                <h4>Negroni</h4>
+                <div class="m-chiprow"><span class="m-tag">bitter</span><span class="m-tag">strong</span></div>
+                <div class="cm"><span class="abv">27% vol</span> · 90 ml · € 1,62</div>
+              </div>
+              <div class="m-card">
+                <svg class="glass-ic ic" style="fill:none"><use href="#i-highball"/></svg>
+                <h4>Spritz</h4>
+                <div class="m-chiprow"><span class="m-tag">fresh</span><span class="m-tag">fruity</span></div>
+                <div class="cm"><span class="abv">9.2% vol</span> · 180 ml · € 1,68</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="frame"><div class="frame-bar"><i></i><i></i><i></i><span class="frame-label">mixing lab</span></div>
+        <div class="screen m-deco">
+          <div class="m-body">
+            <h3>Negroni <span style="font-size:0.55em;color:#9c8f79;letter-spacing:0.2em;">REMIX</span></h3>
+            <div class="m-stats">
+              <div class="m-stat"><b>27.0%</b><span>strength</span></div>
+              <div class="m-stat"><b>€ 1,62</b><span>pour cost</span></div>
+              <div class="m-stat"><b>1.9</b><span>drinks</span></div>
+            </div>
+            <div class="meter"><i></i></div>
+            <div style="margin-top:1em">
+              <div class="m-slider"><span class="nm"><svg class="ic" style="fill:none"><use href="#i-bottle"/></svg>Gin</span><input type="range" value="30" max="100"><span class="ml">30 ml</span></div>
+              <div class="m-slider"><span class="nm"><svg class="ic" style="fill:none"><use href="#i-cherry"/></svg>Campari</span><input type="range" value="30" max="100"><span class="ml">30 ml</span></div>
+              <div class="m-slider"><span class="nm"><svg class="ic" style="fill:none"><use href="#i-citrus"/></svg>Vermouth</span><input type="range" value="30" max="100"><span class="ml">30 ml</span></div>
+            </div>
+            <p class="m-save">— saved —</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ B ============ -->
+  <section class="direction" id="neon">
+    <div class="dir-head"><span class="dir-letter">B</span><h2>Neon Notturno</h2></div>
+    <p class="dir-sub">The bar at 1 a.m.: ink-blue night, glass cards floating on blur, cyan
+    and pink light bleeding off every number. Numbers are the show — monospaced, glowing,
+    always moving. The most "app" of the four.</p>
+    <p class="feels"><b>Feels like:</b> a hi-fi amplifier at night · Tokyo bar signage · synthwave without the retro joke</p>
+    <div class="spec">
+      <div class="spec-card"><h4>Palette</h4>
+        <div class="swatches">
+          <div class="swatch"><i style="background:#0a0e1c"></i><span>#0a0e1c</span></div>
+          <div class="swatch"><i style="background:#37e6e6"></i><span>#37e6e6</span></div>
+          <div class="swatch"><i style="background:#ff4d9d"></i><span>#ff4d9d</span></div>
+          <div class="swatch"><i style="background:#7d86ad"></i><span>#7d86ad</span></div>
+          <div class="swatch"><i style="background:#e8ecff"></i><span>#e8ecff</span></div>
+        </div>
+      </div>
+      <div class="spec-card"><h4>Icon voice</h4>
+        <div class="icon-strip" style="background:#0a0e1c">
+          <svg class="ic" style="stroke:#37e6e6;fill:none;filter:drop-shadow(0 0 4px #37e6e688)"><use href="#i-coupe"/></svg>
+          <svg class="ic" style="stroke:#ff4d9d;fill:none;filter:drop-shadow(0 0 4px #ff4d9d88)"><use href="#i-shaker"/></svg>
+          <svg class="ic" style="stroke:#37e6e6;fill:none;filter:drop-shadow(0 0 4px #37e6e688)"><use href="#i-highball"/></svg>
+          <svg class="ic" style="stroke:#ff4d9d;fill:none;filter:drop-shadow(0 0 4px #ff4d9d88)"><use href="#i-citrus"/></svg>
+          <svg class="ic" style="stroke:#37e6e6;fill:none;filter:drop-shadow(0 0 4px #37e6e688)"><use href="#i-cherry"/></svg>
+          <svg class="ic" style="stroke:#ff4d9d;fill:none;filter:drop-shadow(0 0 4px #ff4d9d88)"><use href="#i-bottle"/></svg>
+        </div>
+      </div>
+      <div class="spec-card"><h4>Type &amp; motion</h4>
+        <p class="motion">Geometric sans for text, <b>monospace for every number</b> so
+        digits tick like instruments. HTMX: stat values pulse-glow on
+        <code>.htmx-settling</code>; the ABV meter is a light bar that trails; slider
+        thumbs glow on <code>:active</code>. The websocket makes this direction sing.</p>
+      </div>
+    </div>
+    <div class="screens">
+      <div class="frame"><div class="frame-bar"><i></i><i></i><i></i><span class="frame-label">il bar</span></div>
+        <div class="screen m-neon">
+          <nav class="m-nav"><span class="m-brand">genro·cocktail</span><a class="on" href="#neon">bar</a><a href="#neon">shelf</a></nav>
+          <div class="m-body">
+            <h3>Every classic is a lesson</h3>
+            <div class="m-chiprow"><span class="m-tag">bitter</span><span class="m-tag">sour</span><span class="m-tag">strong</span></div>
+            <div class="m-cards">
+              <div class="m-card">
+                <svg class="glass-ic" style="fill:none;stroke:#ff4d9d"><use href="#i-coupe"/></svg>
+                <h4>Negroni</h4>
+                <div class="cm"><span class="abv">27%</span> · 90 ml · € 1.62</div>
+              </div>
+              <div class="m-card">
+                <svg class="glass-ic" style="fill:none;stroke:#37e6e6"><use href="#i-shaker"/></svg>
+                <h4>Daiquiri</h4>
+                <div class="cm"><span class="abv">22.8%</span> · 100 ml · € 1.32</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="frame"><div class="frame-bar"><i></i><i></i><i></i><span class="frame-label">mixing lab</span></div>
+        <div class="screen m-neon">
+          <div class="m-body">
+            <h3>Negroni remix</h3>
+            <div class="m-stats">
+              <div class="m-stat"><b>27.0</b><span>% vol</span></div>
+              <div class="m-stat"><b>1.62</b><span>€ pour</span></div>
+              <div class="m-stat"><b>1.9</b><span>drinks</span></div>
+            </div>
+            <div class="meter"><i></i></div>
+            <div style="margin-top:1em">
+              <div class="m-slider"><span class="nm"><svg class="ic" style="fill:none"><use href="#i-bottle"/></svg>Gin</span><input type="range" value="30" max="100"><span class="ml">30 ml</span></div>
+              <div class="m-slider"><span class="nm"><svg class="ic" style="fill:none"><use href="#i-cherry"/></svg>Campari</span><input type="range" value="30" max="100"><span class="ml">30 ml</span></div>
+              <div class="m-slider"><span class="nm"><svg class="ic" style="fill:none"><use href="#i-citrus"/></svg>Vermouth</span><input type="range" value="30" max="100"><span class="ml">30 ml</span></div>
+            </div>
+            <p class="m-save">saved ✓</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ C ============ -->
+  <section class="direction" id="print">
+    <div class="dir-head"><span class="dir-letter">C</span><h2>Ricettario</h2></div>
+    <p class="dir-sub">A printed recipe book that happens to be alive: paper ground, ink
+    hairlines, dotted leaders from name to price, oldstyle numerals, botanical line icons.
+    Red is spent only on numbers and verdicts. Warmest and most "Italian" of the four.</p>
+    <p class="feels"><b>Feels like:</b> a 1950s liquorista's ledger · Campari ephemera · a well-set cookbook</p>
+    <div class="spec">
+      <div class="spec-card"><h4>Palette</h4>
+        <div class="swatches">
+          <div class="swatch"><i style="background:#f7f2e7"></i><span>#f7f2e7</span></div>
+          <div class="swatch"><i style="background:#26221c"></i><span>#26221c</span></div>
+          <div class="swatch"><i style="background:#a63329"></i><span>#a63329</span></div>
+          <div class="swatch"><i style="background:#6e7a5f"></i><span>#6e7a5f</span></div>
+          <div class="swatch"><i style="background:#6e6252"></i><span>#6e6252</span></div>
+        </div>
+      </div>
+      <div class="spec-card"><h4>Icon voice</h4>
+        <div class="icon-strip" style="background:#f7f2e7;border:1px solid #26221c22">
+          <svg class="ic" style="stroke:#26221c;fill:none"><use href="#i-coupe"/></svg>
+          <svg class="ic" style="stroke:#26221c;fill:none"><use href="#i-shaker"/></svg>
+          <svg class="ic" style="stroke:#26221c;fill:none"><use href="#i-highball"/></svg>
+          <svg class="ic" style="stroke:#a63329;fill:none"><use href="#i-citrus"/></svg>
+          <svg class="ic" style="stroke:#a63329;fill:none"><use href="#i-cherry"/></svg>
+          <svg class="ic" style="stroke:#26221c;fill:none"><use href="#i-bottle"/></svg>
+        </div>
+      </div>
+      <div class="spec-card"><h4>Type &amp; motion</h4>
+        <p class="motion">Old-style serif (production: <b>Fraunces</b> or <b>Lora</b>),
+        italics for asides, small caps for tags. HTMX: swaps land like a page settling —
+        quick fade, no slide; the "saved" state is a rubber stamp that inks in once
+        (<code>.htmx-added</code> keyframe) and dries.</p>
+      </div>
+    </div>
+    <div class="screens">
+      <div class="frame"><div class="frame-bar"><i></i><i></i><i></i><span class="frame-label">il bar</span></div>
+        <div class="screen m-print">
+          <nav class="m-nav"><span class="m-brand">Genro Cocktail</span><a class="on" href="#print">il bar</a><a href="#print">la dispensa</a></nav>
+          <div class="m-body">
+            <h3><span class="num">N.1</span>I classici</h3>
+            <div class="m-cards">
+              <div class="m-card">
+                <h4>Negroni <b>€ 1,62</b></h4>
+                <div class="cm">gin, bitter, vermouth rosso — Firenze, 1919</div>
+                <div class="m-chiprow"><span class="m-tag">bitter</span><span class="m-tag">strong</span><span style="margin-left:auto" class="cm">27% vol · 90 ml</span></div>
+              </div>
+              <div class="m-card">
+                <h4>Daiquiri <b>€ 1,32</b></h4>
+                <div class="cm">rum bianco, lime, zucchero — three is a crowd done right</div>
+                <div class="m-chiprow"><span class="m-tag">sour</span><span class="m-tag">fresh</span><span style="margin-left:auto" class="cm">22,8% vol · 100 ml</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="frame"><div class="frame-bar"><i></i><i></i><i></i><span class="frame-label">mixing lab</span></div>
+        <div class="screen m-print">
+          <div class="m-body">
+            <h3><span class="num">N.11</span>Negroni remix</h3>
+            <div class="m-stats">
+              <div class="m-stat"><b>27,0%</b><span>gradazione</span></div>
+              <div class="m-stat"><b>€ 1,62</b><span>costo pour</span></div>
+              <div class="m-stat"><b>1,9</b><span>unità alcoliche</span></div>
+            </div>
+            <div class="meter"><i></i></div>
+            <div style="margin-top:1em">
+              <div class="m-slider"><span class="nm"><svg class="ic" style="fill:none"><use href="#i-bottle"/></svg>Gin</span><input type="range" value="30" max="100"><span class="ml">30 ml</span></div>
+              <div class="m-slider"><span class="nm"><svg class="ic" style="fill:none"><use href="#i-cherry"/></svg>Campari</span><input type="range" value="30" max="100"><span class="ml">30 ml</span></div>
+              <div class="m-slider"><span class="nm"><svg class="ic" style="fill:none"><use href="#i-citrus"/></svg>Vermouth</span><input type="range" value="30" max="100"><span class="ml">30 ml</span></div>
+            </div>
+            <p class="m-save">annotato nel quaderno ✎</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ D ============ -->
+  <section class="direction" id="pop">
+    <div class="dir-head"><span class="dir-letter">D</span><h2>Fluo Pop</h2></div>
+    <p class="dir-sub">The toy, unapologetically: sticker cards with hard offset shadows,
+    fat outlines, candy palette, sliders that feel like a toy mixer. The direction that says
+    "play with me" before a single word is read. Boldest — and riskiest — of the four.</p>
+    <p class="feels"><b>Feels like:</b> a Memphis-design soda fountain · LEGO instructions · Duolingo's confidence</p>
+    <div class="spec">
+      <div class="spec-card"><h4>Palette</h4>
+        <div class="swatches">
+          <div class="swatch"><i style="background:#fffaf2"></i><span>#fffaf2</span></div>
+          <div class="swatch"><i style="background:#241f31"></i><span>#241f31</span></div>
+          <div class="swatch"><i style="background:#ffd23f"></i><span>#ffd23f</span></div>
+          <div class="swatch"><i style="background:#ff5c5c"></i><span>#ff5c5c</span></div>
+          <div class="swatch"><i style="background:#7048e8"></i><span>#7048e8</span></div>
+          <div class="swatch"><i style="background:#2ec4b6"></i><span>#2ec4b6</span></div>
+        </div>
+      </div>
+      <div class="spec-card"><h4>Icon voice</h4>
+        <div class="icon-strip" style="background:#fffaf2;border:2px solid #241f31;border-radius:12px">
+          <svg class="ic" style="stroke:#241f31;stroke-width:2.4;fill:none"><use href="#i-coupe"/></svg>
+          <svg class="ic" style="stroke:#ff5c5c;stroke-width:2.4;fill:none"><use href="#i-shaker"/></svg>
+          <svg class="ic" style="stroke:#7048e8;stroke-width:2.4;fill:none"><use href="#i-highball"/></svg>
+          <svg class="ic" style="stroke:#ffb63f;stroke-width:2.4;fill:none"><use href="#i-citrus"/></svg>
+          <svg class="ic" style="stroke:#ff5c5c;stroke-width:2.4;fill:none"><use href="#i-cherry"/></svg>
+          <svg class="ic" style="stroke:#2ec4b6;stroke-width:2.4;fill:none"><use href="#i-bottle"/></svg>
+        </div>
+      </div>
+      <div class="spec-card"><h4>Type &amp; motion</h4>
+        <p class="motion">Rounded sans, heavy weights (production: <b>Baloo 2</b> or
+        <b>Nunito</b> 800). HTMX: added fragments <b>bounce in</b> (scale 0.95→1 spring on
+        <code>.htmx-added</code>), cards lift on hover, "saved" pops a confetti tick.
+        Motion budget is bigger here — it IS the personality.</p>
+      </div>
+    </div>
+    <div class="screens">
+      <div class="frame"><div class="frame-bar"><i></i><i></i><i></i><span class="frame-label">il bar</span></div>
+        <div class="screen m-pop">
+          <nav class="m-nav"><span class="m-brand">🍸 Genro Cocktail</span><a class="on" href="#pop">Bar</a><a href="#pop">Shelf</a></nav>
+          <div class="m-body">
+            <h3>Every classic is a lesson!</h3>
+            <div class="m-chiprow"><span class="m-tag">bitter</span><span class="m-tag t2">strong</span></div>
+            <div class="m-cards">
+              <div class="m-card">
+                <svg class="glass-ic ic" style="fill:none"><use href="#i-coupe"/></svg>
+                <h4>Negroni</h4>
+                <div class="cm"><span class="abv">27% vol</span> · 90 ml · € 1.62</div>
+              </div>
+              <div class="m-card">
+                <svg class="glass-ic ic" style="fill:none;stroke:#2ec4b6"><use href="#i-highball"/></svg>
+                <h4>Mojito</h4>
+                <div class="cm"><span class="abv">12.7% vol</span> · 150 ml · € 1.40</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="frame"><div class="frame-bar"><i></i><i></i><i></i><span class="frame-label">mixing lab</span></div>
+        <div class="screen m-pop">
+          <div class="m-body">
+            <h3>Negroni remix 🌞</h3>
+            <div class="m-stats">
+              <div class="m-stat"><b>27.0%</b><span>strong-o-meter</span></div>
+              <div class="m-stat"><b>€ 1.62</b><span>pour cost</span></div>
+              <div class="m-stat"><b>1.9</b><span>drinks</span></div>
+            </div>
+            <div class="meter"><i></i></div>
+            <div style="margin-top:1em">
+              <div class="m-slider"><span class="nm"><svg class="ic" style="fill:none"><use href="#i-bottle"/></svg>Gin</span><input type="range" value="30" max="100"><span class="ml">30 ml</span></div>
+              <div class="m-slider"><span class="nm"><svg class="ic" style="fill:none;stroke:#ff5c5c"><use href="#i-cherry"/></svg>Campari</span><input type="range" value="30" max="100"><span class="ml">30 ml</span></div>
+              <div class="m-slider"><span class="nm"><svg class="ic" style="fill:none;stroke:#ffb63f"><use href="#i-citrus"/></svg>Vermouth</span><input type="range" value="30" max="100"><span class="ml">30 ml</span></div>
+            </div>
+            <p class="m-save">saved! ✓</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="choose">
+    <h2>How to choose</h2>
+    <ul>
+      <li><b>A · Deco d'Oro</b> — if the showcase must whisper "premium" to Nexus. Lowest risk, closest to what runs today.</li>
+      <li><b>B · Neon Notturno</b> — if the live numbers are the hero. Best stage for the websocket; most "product demo".</li>
+      <li><b>C · Ricettario</b> — if the story is craft and ingredients. Most distinctive in screenshots; ages best.</li>
+      <li><b>D · Fluo Pop</b> — if playful must win over elegant. Strongest first smile; needs discipline to not tip into toy-for-kids.</li>
+      <li>Mixes work: C's paper + A's gold, B's numbers inside A's room, D's motion on B's palette. Say what you like and I'll cut a fifth.</li>
+    </ul>
+  </div>
+</div>
