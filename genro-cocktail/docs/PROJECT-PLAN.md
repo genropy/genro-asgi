@@ -126,6 +126,22 @@ biggest single item the framework can harvest from this project.
 
 ---
 
+## M6 — Container & Kubernetes (the destination)
+
+- `Dockerfile` (python:3.12-slim, non-root, vendored assets, `python serve.py`),
+  `docker-compose.yml` for local parity, CI building the image and running
+  `smoke.py` inside it (it needs no network — built for this).
+- Bind address/port move to `EnvResolver` (`COCKTAIL_HOST`/`COCKTAIL_PORT`) —
+  the 12-factor story the config layer was built for.
+- K8s v1, honestly scoped: `Deployment(replicas=1)` + PVC for the sqlite file +
+  Service + Ingress with websocket upgrade + Secret for OAuth + probes.
+  One replica is by design (sqlite + in-memory sessions); the framework agrees —
+  no `--workers`, the orchestrator owns process topology.
+- v2 scaling path documented, not built: Postgres behind the same `databases`
+  seam + shared session store, or the spa/ pool (converges with the
+  laboratory track).
+- **Learning target**: the stack's deployment story end to end.
+
 ## Upstream contributions this project should produce
 
 1. **genro-tytx**: the form-body URL-decoding bug (FEASIBILITY §3.1) — file

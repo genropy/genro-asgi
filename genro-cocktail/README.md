@@ -3,6 +3,10 @@
 **Status**: seed kit, ready to be lifted into a new repository (`genropy/genro-cocktail`).
 **Produced**: 2026-08-12, on branch `claude/genro-cocktail-roadmap-ldcwgz` of `genro-asgi`.
 
+> **Picking up the work? Start from [`HANDOFF.md`](HANDOFF.md)** — intents
+> (including the didactic ones), current state, backlog, known traps, and the
+> Docker/Kubernetes destination.
+
 ## What this is
 
 The theoretical and practical foundations for **genro-cocktail**: a playful
