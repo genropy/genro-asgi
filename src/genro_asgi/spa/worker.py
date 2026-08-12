@@ -480,6 +480,9 @@ class UserStickyWorker(RoutingClass):
         channel: Any = None,
         max_threads: int | None = None,
         sweep_interval: float | None = None,
+        page_max_age: float = PAGE_MAX_AGE,
+        guest_max_age: float = GUEST_MAX_AGE,
+        connection_max_age: float = CONNECTION_MAX_AGE,
     ) -> None:
         """Args:
         name: the worker's channel name (already typed, e.g. ``W:w1``).
@@ -487,9 +490,16 @@ class UserStickyWorker(RoutingClass):
         max_threads: ``WorkPool`` size for the sync op handlers.
         sweep_interval: seconds between two expiry sweeps; ``None`` (the
             default) arms no sweep at all — see ``sweep_expired``.
+        page_max_age: idle seconds a page survives the sweep (the daemon's
+            default when not given).
+        guest_max_age: idle seconds an anonymous page or connection survives.
+        connection_max_age: idle seconds a logged connection survives.
         """
         self.name = name
         self.sweep_interval = sweep_interval
+        self.page_max_age = page_max_age
+        self.guest_max_age = guest_max_age
+        self.connection_max_age = connection_max_age
         self.registry = self.build_registry()
         self.outbox = Outbox(self)
         self.pool = WorkPool(self, max_threads)
@@ -2102,9 +2112,11 @@ class UserStickyWorker(RoutingClass):
         """Drop what has been idle too long, announcing every drop on the outbox.
 
         Transcribed from the daemon's ``expire_pages``/``expire_connection``
-        (siteregister.py:709-741): pages first, each against ``PAGE_MAX_AGE`` or
-        ``GUEST_MAX_AGE`` by the guest rule, then the connections that survived
-        them against ``CONNECTION_MAX_AGE`` (``GUEST_MAX_AGE`` for a guest).
+        (siteregister.py:709-741): pages first, each against ``page_max_age``
+        or ``guest_max_age`` by the guest rule, then the connections that
+        survived them against ``connection_max_age`` (``guest_max_age`` for a
+        guest) — the three ages are constructor kwargs, the daemon's own
+        defaults when not given.
         The connections are snapshot AFTER the pages, so what the page cascade
         already took away is not walked twice.
 
@@ -2122,9 +2134,9 @@ class UserStickyWorker(RoutingClass):
             for page_id in self.page_items.keys():
                 page = self.page_items.get(page_id)
                 max_age = (
-                    GUEST_MAX_AGE
+                    self.guest_max_age
                     if self.is_guest_connection(page["connection_id"])
-                    else PAGE_MAX_AGE
+                    else self.page_max_age
                 )
                 if now - page["last_refresh_ts"] > max_age:
                     self.demolish_page(page_id, self.offer_lifecycle)
@@ -2132,9 +2144,9 @@ class UserStickyWorker(RoutingClass):
             for connection_id in self.connection_items.keys():
                 connection = self.connection_items.get(connection_id)
                 max_age = (
-                    GUEST_MAX_AGE
+                    self.guest_max_age
                     if self.is_guest_connection(connection_id)
-                    else CONNECTION_MAX_AGE
+                    else self.connection_max_age
                 )
                 if now - connection["last_refresh_ts"] > max_age:
                     self.demolish_connection(connection_id, self.offer_lifecycle)

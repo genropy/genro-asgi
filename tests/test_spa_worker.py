@@ -1215,6 +1215,24 @@ def test_a_guest_connection_ages_at_the_guest_rate() -> None:
     assert "s1" in worker.connection_items
 
 
+def test_the_expiry_ages_are_constructor_kwargs() -> None:
+    """A consumer tunes the sweep per worker; the module values are the defaults.
+
+    An age far under the module default sweeps a page the default would have
+    kept — the sweep reads the instance, not the module.
+    """
+    worker = aged_worker(page_max_age=5, guest_max_age=3, connection_max_age=9)
+    age_page(worker, "p1", 6)
+    age_page(worker, "pg", 4)
+
+    assert worker.sweep_expired()["pages"] == ["p1", "pg"]
+
+    untouched = UserStickyWorker("W:w2")
+    assert untouched.page_max_age == PAGE_MAX_AGE
+    assert untouched.guest_max_age == GUEST_MAX_AGE
+    assert untouched.connection_max_age == CONNECTION_MAX_AGE
+
+
 async def test_the_sweep_is_disarmed_unless_an_interval_is_given() -> None:
     """No interval, no task: an unheard-of page must not be killed for its silence."""
     worker = aged_worker()
