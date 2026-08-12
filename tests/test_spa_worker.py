@@ -302,11 +302,16 @@ def test_the_drop_connection_op_demolishes_the_whole_cascade_in_order() -> None:
         worker.new_page("sess-1", "p2", session_id="sess-1")
         events.clear()
         dropped = worker.drop_connection("sess-1", "sess-1")
-        # The logout's handle: pages first, the connection, the user it was the
-        # last connection of — every announcement on this CALL's own sink.
-        assert [(e["op"], e.get("session_id"), e.get("page_id")) for e in events] == [
+        # The logout's handle: pages first (in the edge SET's own order — the
+        # contract orders the species, never the siblings), the connection,
+        # the user it was the last connection of — every announcement on this
+        # CALL's own sink.
+        shaped = [(e["op"], e.get("session_id"), e.get("page_id")) for e in events]
+        assert sorted(shaped[:2]) == [
             ("drop_page", None, "p1"),
             ("drop_page", None, "p2"),
+        ]
+        assert shaped[2:] == [
             ("drop_connection", "sess-1", None),
             ("drop_user", None, None),
         ]
