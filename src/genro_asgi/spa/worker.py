@@ -2040,7 +2040,7 @@ class UserStickyWorker(RoutingClass):
             announce("drop_user", user=user)
         return entry
 
-    def demolish_connection(self, connection_id: str, announce: Callable[..., Any]) -> None:
+    def demolish_connection(self, connection_id: str, announce: Callable[..., Any]) -> dict[str, Any]:
         """Take a whole connection off this worker, pages first, user last.
 
         The pages announce their own drop BEFORE the connection does: the
@@ -2048,7 +2048,8 @@ class UserStickyWorker(RoutingClass):
         the order it hears is the order the demolition happened in.
         ``Registry.drop_connection`` takes the user with the last connection of
         it, so that drop is announced too. Same ``announce`` contract as
-        ``demolish_page``, same ``dispatch_lock`` hold.
+        ``demolish_page``, same ``dispatch_lock`` hold, same return: the dropped
+        row, for the op that answers with its wire view.
         """
         connection = self.connection_items.get(connection_id)
         user = connection["user"]
@@ -2060,12 +2061,28 @@ class UserStickyWorker(RoutingClass):
         announce("drop_connection", user=user, session_id=connection_id)
         if user not in self.user_items:
             announce("drop_user", user=user)
+        return connection
 
     @route()
     def drop_page(self, identity: str, page_id: str) -> dict[str, Any]:
         """Drop a page row and announce it on the REPLY of this CALL."""
         with self.dispatch_lock:
             return self.wire_entry(self.demolish_page(page_id, self.offer_event))
+
+    @route()
+    def drop_connection(self, identity: str, session_id: str) -> dict[str, Any]:
+        """Drop a connection row with its whole cascade — the logout's handle.
+
+        The demolition is ``demolish_connection``'s, in its order — the pages
+        first, each announcing its own drop, then the connection, then the user
+        when this was its last one — and every announcement rides the REPLY of
+        this very CALL, exactly like ``drop_page``. The legacy logout maps here:
+        ``register.drop_connection(connection_id, cascade=True)``.
+        """
+        with self.dispatch_lock:
+            if session_id not in self.connection_items:
+                raise KeyError(f"drop_connection: unknown connection {session_id!r}")
+            return self.wire_entry(self.demolish_connection(session_id, self.offer_event))
 
     # ------------------------------------------------------------------
     # Expiry: the daemon's cleanup pass, transcribed — and left disarmed.

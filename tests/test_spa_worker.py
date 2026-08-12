@@ -295,6 +295,50 @@ def test_the_page_ops_announce_the_whole_chain_cascade_in_order() -> None:
     assert len(worker.connection_items) == 0
 
 
+def test_the_drop_connection_op_demolishes_the_whole_cascade_in_order() -> None:
+    worker = UserStickyWorker("W:w1")
+    with call_sink(worker) as events:
+        worker.new_page("sess-1", "p1", session_id="sess-1")
+        worker.new_page("sess-1", "p2", session_id="sess-1")
+        events.clear()
+        dropped = worker.drop_connection("sess-1", "sess-1")
+        # The logout's handle: pages first, the connection, the user it was the
+        # last connection of — every announcement on this CALL's own sink.
+        assert [(e["op"], e.get("session_id"), e.get("page_id")) for e in events] == [
+            ("drop_page", None, "p1"),
+            ("drop_page", None, "p2"),
+            ("drop_connection", "sess-1", None),
+            ("drop_user", None, None),
+        ]
+        assert dropped["register_item_id"] == "sess-1"
+    assert len(worker.connection_items) == 0
+    assert len(worker.page_items) == 0
+    assert len(worker.user_items) == 0
+
+
+def test_the_drop_connection_op_spares_the_user_with_a_sibling_connection() -> None:
+    worker = UserStickyWorker("W:w1")
+    with call_sink(worker) as events:
+        worker.new_page("alice", "p1", session_id="sess-1")
+        worker.new_page("alice", "p2", session_id="sess-2")
+        events.clear()
+        worker.drop_connection("alice", "sess-1")
+        assert [(e["op"], e.get("session_id"), e.get("page_id")) for e in events] == [
+            ("drop_page", None, "p1"),
+            ("drop_connection", "sess-1", None),
+        ]
+    assert "alice" in worker.user_items
+    assert "sess-2" in worker.connection_items
+    assert "p2" in worker.page_items
+
+
+def test_the_drop_connection_op_refuses_an_unknown_connection() -> None:
+    worker = UserStickyWorker("W:w1")
+    with call_sink(worker):
+        with pytest.raises(KeyError):
+            worker.drop_connection("alice", "sess-ghost")
+
+
 def test_a_second_connection_of_a_user_announces_only_its_own_birth() -> None:
     worker = UserStickyWorker("W:w1")
     with call_sink(worker) as events:
