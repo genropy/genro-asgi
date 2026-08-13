@@ -1,0 +1,3 @@
+✓ Phase 4 completed: Zone reading — the spa world vs the ebook
+
+`audit/zone_spa_world.md` covers all 25 `spa-world` ebook claims — 18 confirmed with anchors, 7 disagreement cards — plus 9 lens-2 cards; 168 `file:line` refs all resolve, every verdict slot empty. Two real holes: the monitor's one-call population never returns lifecycle state (`commander.py:1976-2006`), and after the evict there is no "the user stays where it was" — the guarantee is salvage-or-loud-error. B1's predicted count drift dissolved: the ebook column is coverage statements, so nine of ten modules match exactly and only commander.py moved +3. Suite 1569 passed / 2 skipped, ruff clean, no source touched; commit 879f8bc, tree clean.

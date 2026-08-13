@@ -180,7 +180,7 @@ English.
   > Files: .phased/active/17-design-audit/audit/zone_spa_world.md,
   > .phased/active/17-design-audit/plan.md, .phased/active/17-design-audit/notes.md
 
-- [ ] **Phase 5**: Consolidation — the two registers
+- [x] **Phase 5**: Consolidation — the two registers
   - Pattern reference: `temp/audit_essenzialita_2a_2026-08-01.md` §G "Sintesi — TUTTI I VERDETTI" (the ratifiable-list shape, but with verdicts EMPTY)
   - Files: `.phased/active/17-design-audit/audit/reconciliation_record.md`, `.phased/active/17-design-audit/audit/slimming_ledger.md` (both new); read-only: the three zone card files and `audit/00_authorities.md`
   - Decisions:
@@ -190,6 +190,43 @@ English.
     - Every zone card must land in exactly one register entry or be explicitly discarded in a final "Scartate" section with its reason. No silent drops.
   - Details: Read the three zone files and 00_authorities.md. Merge duplicate findings (the same guard seen from code side in Phase 2 and test side in Phase 3 becomes ONE ledger entry carrying both file:line sets). Order the ledger by leverage (biggest simplification first). Write both registers in Italian. End each register with a one-line count (N voci, M in attesa di verdetto) and the "Scartate" section.
   - Done: both register files exist; every fidelity point from 00_authorities.md has a reconciliation entry; grep of each zone-card identifier in the registers plus the Scartate section accounts for all cards; both files end with the count line.
+  > Done: both registers written, every verdict slot EMPTY.
+  > `audit/reconciliation_record.md` — 24 entries: R1..R6 the six fidelity points
+  > (F1..F6), R7..R16 the ten baptism names (N1..N10, semantics + candidates),
+  > R17..R23 the seven ebook disagreements (E4, E14, E21, E22, E26, B1, B7),
+  > R24 the H2 hygiene item, closed as SUPERSEDED (see below), plus a §5 that is
+  > one perimeter decision, not an entry.
+  > `audit/slimming_ledger.md` — 21 entries ordered by leverage: L1 the evacuation's
+  > three doors (~102 lines → ~35, and the decision that moves five other entries),
+  > L2 the unauthored acceleration correction, L3/L7 the twin loops and the
+  > duplicated retire, L4 one PROVISIONAL constant doing three jobs, L5 the three
+  > `trigger_*` twins, L6/L8..L13 the spa-world guards, L14..L20 the seven measured
+  > species-1 defenses (each carrying its strip result), L21 the two `wait_*` bodies.
+  > Card accounting verified programmatically: all 59 identifier-shaped cards from
+  > phases 2-4 resolve in a register or in Scartate (8 discarded, each with its
+  > motivation); 0 non-empty verdict slots; 254 `file:line` references all resolve
+  > against the current tree.
+  > Decided without asking (unattended): H2 is closed as SUPERSEDED rather than left
+  > open — phase 2 had deferred the second reading to `worker.py`, phase 4 read that
+  > file whole without finding the sentence, and a direct check in this phase confirms
+  > the only nearby "discarded" is another subject (the resident's blob at
+  > worker.py:2326-2328, the install-that-joins). The entry keeps option (b): the
+  > owner names a fifth text and it reopens.
+  > Also decided: a §5 was added to the reconciliation record recording that **11 of
+  > the 36 ebook claims were never brought to a card** — those tagged `recycling-code`
+  > and `tests` (E2, E15..E18, E23..E25, B6, B8, B9). The plan assigned them to phases
+  > 2 and 3, but those phases worked by fidelity points and strip experiments and cite
+  > no `E`/`B` identifier (verified with a search over both files). Recorded as a
+  > coverage gap with two options, not invented as findings — the run stops at the
+  > cards, and inventing eleven verdict-less claims would have been new audit work.
+  > Suite 1569 passed / 2 skipped, `ruff check .` clean, `git status --porcelain` only
+  > under `.phased/`. No source or test file touched.
+  > Verify: at walkthrough — the two registers ARE the agenda; L1 first (it moves L3,
+  > L7, L18, L4, R13, R16), R4 is the only entry whose verdict also decides which
+  > authority prevails (BRIEF Q4 vs NOTES), and §5 is one perimeter call.
+  > Files: .phased/active/17-design-audit/audit/reconciliation_record.md,
+  > .phased/active/17-design-audit/audit/slimming_ledger.md,
+  > .phased/active/17-design-audit/plan.md, .phased/active/17-design-audit/notes.md
 
 - [ ] **Phase 6**: Coherence review and auto-fix (final, mandatory)
   - Pattern reference: cross-check against Phases 1..5 (their `Files:` fields)

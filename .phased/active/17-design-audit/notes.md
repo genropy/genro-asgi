@@ -139,3 +139,49 @@ declares them an extension seam (register_registry.py:48-61) for a consumer that
 lives in another repo — and SI4 records `holds_target` as an examined keep. A
 zone audit that only proposes deletions teaches the next reader that everything
 thin is waste.
+
+## Phase 5 — consolidation: what an ordering pass can and cannot add
+
+**The registers add ordering, not findings — and the ordering is the deliverable.**
+Sixty-one cards spread over three zone files are unreadable as an agenda: the same
+guard appeared once from the code side (D-series) and once from the test side
+(T-D-series), and the dependency between C1's evacuation castle and five other
+cards was invisible while they sat in different files. The two registers say what
+the zone files could not: L1 must be decided first because its outcome moves L3,
+L7, L18, L4 and the two baptism entries R13/R16 — the report-of-stall decision
+either keeps a name and a roster field alive or kills both. Ordering by leverage
+also put the twenty-one entries in an order where the first four are worth ~200
+lines and the last seven are worth a condition each; a flat list of cards hides
+that ratio.
+
+**One entry differs in kind from all the others, and the register says so.** R4
+(the ledger-gated spawn) is the only entry whose verdict also decides *which
+authority prevails*: BRIEF Q4 admits "if the room is there, no new process at
+all", NOTES notes:11-13 requires the successor registered before the flag, and the
+code implements the NOTES. Every other fidelity entry asks "code or book?"; this
+one asks "brief or notes?" first. Marking that in the entry itself, rather than
+leaving the owner to notice mid-walkthrough, is the difference between an agenda
+and a list.
+
+**The "Scartate" section is where an audit earns trust.** Eight cards do not become
+entries — D8's six necessary guards, the tests-side record of the same, I4, SI2,
+SI4, TS1, TS2, and the `LocalPool.settled` item with no referent — and each carries
+its motivation in one row. Without that section a reader cannot distinguish a card
+that was examined and archived from a card that was forgotten, and the next run
+would re-discover all eight. The count line closes the loop: 29 cards in the
+ledger's entries + 8 discarded + 24 in the reconciliation record = every card
+accounted for, verified programmatically rather than by eye.
+
+**A consolidation phase can find a gap the zone phases could not: eleven ebook
+claims were never brought to a card.** Phase 1 inventoried 36 claims and tagged
+them by zone; phase 4 verified all 25 tagged `spa-world`; the 11 tagged
+`recycling-code`/`tests` were assigned to phases 2 and 3, which worked by fidelity
+points and strip experiments and never cite an `E`/`B` identifier. Only a phase
+reading all four files together sees it. The temptation was to verify them here —
+that would have been new audit work in a phase whose mandate is to order existing
+findings, and it would have produced eleven claims with no zone evidence behind
+them. Recorded as §5 of the reconciliation record: a coverage gap with two
+options, one perimeter decision for the owner. Two of the eleven (E24 "operativo",
+B6 "Consolidato") cannot be answered by measurement at all — they ask the owner to
+weigh a word against the four fidelity deltas R1..R4, which is walkthrough
+material by construction.
