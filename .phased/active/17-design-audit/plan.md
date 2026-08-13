@@ -19,7 +19,7 @@ material, matching the 2a audit precedents); plan, commits and notes stay in
 English.
 
 ## Work Plan
-- [ ] **Phase 1**: Authority extraction — the faithful checklist
+- [x] **Phase 1**: Authority extraction — the faithful checklist
   - Pattern reference: `temp/audit_fedelta_2a_2026-08-02.md` (verdict-table shape), issue #17 body (the enumerated points)
   - Files: `.phased/active/17-design-audit/audit/00_authorities.md` (new)
   - Decisions:
@@ -29,8 +29,24 @@ English.
     - Each extracted claim is tagged with the zone it applies to: `recycling-code` (commander.py/evaluator.py), `tests`, `spa-world` (worker + satellites).
   - Details: Read issue #17 (`gh issue view 17`), `temp/wf8_recycling_design_brief.md` (277 lines), the wf#8 notes.md (171 lines, via git show), and the two ebook HTML files (strip markup, read the prose — part 2 covers the spa world). Write `audit/00_authorities.md` with four sections: (1) **Fidelity points** — the six lens-1 points from the issue (planner task with decision_interval 300s vs the beat XOR third force; the PLAN model one-reading→redistribution→replacements-from-the-worst→compaction; designated_reception; ledger-gated spawn from capacity_headroom; floor_series_depth 48-vs-72 and minimum fit points 3-vs-6; the baptism list), each with the authority's verbatim words and anchor. Known fact from planning: `planner`, `decision_interval`, `designated_reception` have zero hits in `src/genro_asgi/` — record this. (2) **Baptism list** — the 10 names from the issue (`floor_slope` in evaluator.py; `wait_worker_ready`, `drain_order`, `advance_evacuations`, `evacuation_pass`, `evacuate_user`, `warn_stalled_evacuation`, `regeneration_failed_at`, roster fields `evacuating_since`/`evacuation_warned_at` in commander.py) with what each authority says, if anything. (3) **Method** — the burden-of-proof questions from the 2a essentiality audit (who postulated this? what breaks without it? is there a shorter road?) and the four species from issue lens 2. (4) **Ebook claims inventory** — every checkable claim the ebook makes about the spa world, tagged per zone. Also record the two known hygiene items (LocalPool.settled in tests/test_spa_move.py reading the abolished None convention; the exchange docstring at commander.py ~1279 claiming the commander discards in-flight datachanges).
   - Done: `audit/00_authorities.md` exists with the four sections; contains all six fidelity points and all 10 baptism names; `grep -c 'planner\|decision_interval\|designated_reception' .phased/active/17-design-audit/audit/00_authorities.md` returns ≥ 3.
+  > Done: `audit/00_authorities.md` written (six sections: fidelity points, baptism list,
+  > method, ebook claims inventory, known hygiene, scope disclaimer). Six fidelity points
+  > F1..F6, all 10 baptism names with a verified 2026-08-13 anchor each, 36 ebook claims
+  > (E1..E26 from presentation 2, B1..B10 from the block architecture) zone-tagged.
+  > The grep gate returns 10 (≥ 3). Absences confirmed by grep over `src/genro_asgi/`:
+  > `planner` 0, `decision_interval` 0, `designated_reception` 0, `condemned_workers` 0;
+  > `capacity_headroom` 2, `floor_series_depth` 5, `_FLOOR_FIT_MINIMUM = 6` at evaluator.py:91.
+  > Suite 1569 passed / 2 skipped, `ruff check .` clean, `git status --porcelain` only under
+  > `.phased/`. No source or test file touched.
+  > Decided without asking (unattended): both known hygiene items are recorded as
+  > claims-to-verify rather than as facts, because neither anchor resolved as the issue
+  > states them — no `LocalPool.settled` symbol exists (the live helper is `settled_at` at
+  > tests/test_spa_move.py:78) and the docstring at commander.py:1265-1273 speaks of
+  > unroutable addresses, not of an in-flight user's datachanges (that text is at
+  > commander.py:1783 and 180-190). Phases 2 and 3 resolve which text the issue meant.
+  > Files: .phased/active/17-design-audit/audit/00_authorities.md
 
-- [ ] **Phase 2**: Zone reading — recycling code vs authorities
+- [x] **Phase 2**: Zone reading — recycling code vs authorities
   - Pattern reference: `temp/audit_fedelta_2a_2026-08-02.md` (per-point verdict table with file:line), `temp/audit_essenzialita_2a_2026-08-01.md` (per-file essentiality verdicts)
   - Files: `.phased/active/17-design-audit/audit/zone_recycling_code.md` (new); read-only: `src/genro_asgi/spa/commander.py`, `src/genro_asgi/spa/evaluator.py`, `audit/00_authorities.md`
   - Decisions:
@@ -40,6 +56,39 @@ English.
     - The exchange docstring hygiene item (commander.py ~1279: says the commander discards an in-flight user's datachanges; it now ships them and the worker discards) is one card in this file.
   - Details: Read `audit/00_authorities.md` first, then commander.py (3183 lines) and evaluator.py (360 lines) in full. For every fidelity point: quote what the authority says (from 00_authorities.md), state what the code does with file:line, classify the delta (conforms / drifted / absent / superseded-candidate). For every baptism name: file:line of definition, its actual semantics in one sentence, 2–3 rename candidates or "keep" with reason (the owner baptises at walkthrough). For lens 2: one card per finding — the guard/indirection/castle, file:line, who can reach it (caller analysis), the concrete proposal (remove X / merge Y / rewrite Z in ~N lines). Write `audit/zone_recycling_code.md`: section per lens, one card per finding, every card with file:line.
   - Done: `audit/zone_recycling_code.md` exists; contains one card per fidelity point (≥ 6), one card per baptism name (10), the exchange-docstring hygiene card; every card carries at least one `file:line` reference; `git status --porcelain` shows changes only under `.phased/`.
+  > Done: `audit/zone_recycling_code.md` written — 33 cards, every verdict slot EMPTY:
+  > 6 fidelity (F1..F6), 10 baptism (N1..N10 with semantics + 2-3 candidates each),
+  > 8 species-1 (D1..D7 removal proposals + D8 recording 6 guards VERIFIED NECESSARY so
+  > phase 3 does not strip them), 5 species-3 (I1..I5), 3 species-4 castles (C1..C3),
+  > 1 hygiene (H2). 128 `file:line` references, all verified to resolve against the
+  > current tree by an inline python check.
+  > Lens-1 outcome: F1 absent (the planner task does not exist — pool_beat still rides
+  > the probe return at commander.py:969-970, which is the wf#5 f8 decision the brief
+  > superseded), F2 drifted (XOR per beat, no PLAN object, three flags not collapsed),
+  > F3 absent as a symbol and divergent as behaviour (the reception role does move, but
+  > onto the second-oldest active worker, not onto the fresh replacement), F4 divergent
+  > (the brief's ledger gate is unimplemented — capacity_headroom has one reader, the
+  > compaction; the code follows the NOTES counter-decision instead), F5 divergent on
+  > both values (72 vs 48, 6 vs 3) and conforming on shape, F6 conforming on the ten
+  > names but divergent on the finalize panel's three (RECYCLE_RETRY_SECONDS exists yet
+  > is absent from `__all__`; `abandon_recycle` and roster `recycle_failed_at` were never
+  > born under those names).
+  > Decided without asking (unattended): H2 is recorded as SUPERSEDED-candidate rather
+  > than as a finding, because the sentence the issue wants corrected does not exist in
+  > the tree — the docstring at commander.py:1266-1273 speaks of unresolvable addresses
+  > and matches its code, and the two texts about an in-flight user (commander.py:1783,
+  > 180-181) never claim the commander discards. The card hands phase 4 the one place
+  > left to look (worker.py, where "the worker discards" would be documented).
+  > Also decided: the three `trigger_*` twins and the accelerated floor fit are recorded
+  > as proposals with named authorities-of-origin (none, in both cases) rather than as
+  > defects — nothing dies by default in this run.
+  > Suite 1569 passed / 2 skipped, `ruff check .` clean, `git status --porcelain` only
+  > under `.phased/`. No source or test file touched.
+  > Verify: now — the plan's phase commits cannot land from this unattended session (the
+  > pre-commit hook denies them, the quirk the plan's Notes record): phase 1's and phase
+  > 2's commits must be landed from the mother session.
+  > Files: .phased/active/17-design-audit/audit/zone_recycling_code.md,
+  > .phased/active/17-design-audit/plan.md, .phased/active/17-design-audit/notes.md
 
 - [ ] **Phase 3**: Zone reading — the tests that cement
   - Pattern reference: `temp/audit_essenzialita_2a_2026-08-01.md` (verdict style); method is the issue's own: strip the code, see which tests fall

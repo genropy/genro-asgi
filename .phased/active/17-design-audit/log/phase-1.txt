@@ -1,0 +1,5 @@
+The commit is denied by the ask-mode pre-commit hook — the known unattended-session quirk the plan's Notes record. The work is staged and ready to land from the mother session.
+
+✓ Phase 1 completed: Authority extraction — the faithful checklist
+
+`audit/00_authorities.md` carries the six fidelity points with the authorities' verbatim words and anchors, all 10 baptism names with a verified code anchor each, the burden-of-proof method with the four species, and a 36-claim ebook inventory — Done gate checks all pass (grep returns 10, suite 1569 passed / 2 skipped, ruff clean, changes only under `.phased/`). Two departures worth your eye: neither known hygiene item resolved as issue #17 states it (no `LocalPool.settled` symbol exists; the commander.py:1265 docstring speaks of unroutable addresses, not in-flight datachanges), so both are recorded as claims to verify in Phases 2–3 rather than as facts. The phase commit is staged but blocked by the pre-commit hook — land it from the mother session with `git commit`.
