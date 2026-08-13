@@ -213,7 +213,9 @@ X−Y supera una soglia (assoluta o in rapporto all'impegnata): candidato a
 rotazione, il piano prende dal più sprecone quando c'è ampiezza; (3)
 **vuoto** — un processo rimasto senza utenti (tipicamente ore notturne) si
 spegne senza rimpiazzo, rispettando un minimo di parco (il portiere resta
-sempre) ed eventuale attesa di grazia. Il «tetto a orologeria» resta
+sempre) ed eventuale attesa di grazia; e la compattazione è anche attiva —
+**parte sempre dal processo più vuoto e cerca di togliergli gli ultimi
+utenti** (destinazione a best-fit come da R4), così da liberarlo e spegnerlo. Il «tetto a orologeria» resta
 rifiutato: la frequenza di rotazione attesa (~4-5 ore) è l'effetto dello
 spreco che si accumula, mai una scadenza di calendario. La serie dei
 pavimenti, la tendenza e il «mancano X» restano come **strumento di
