@@ -147,7 +147,9 @@ constatazione motivata che le tre differenze sono concetti distinti e i due
 metodi restano separati. Da decidere **dopo** L1, che può cambiare il numero di
 chiamanti.
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): assorbita dalla
+riscrittura.** La famiglia removal (R17 + L1) riscrive entrambi i cicli; la
+politica sugli occupati si decide sul corpo nuovo, alla run di fix.
 
 ## L4 ← C3 · `RECYCLE_RETRY_SECONDS`: una costante, tre lavori
 **Leva stimata**: ~12 righe con una costante contro il gruppo attuale, e un
@@ -248,7 +250,8 @@ già fatta.
 **Proposta**: spostare la guardia in `spawn_service` (una sola, per tutte le vie
 discendenti) e togliere i due `try/except`. Nessun comportamento cambia.
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): approvata come proposta**
+— una guardia sola in `spawn_service`, cadono i due gemelli.
 
 ## L7 ← I2 · Il ritiro-a-vuoto scritto in due posti
 **Leva stimata**: una riga di log e una condizione in meno, in un punto invece
@@ -273,7 +276,9 @@ punti; o il solo ritiro dal battito, accettando il ritardo.
 **Proposta**: `retire_if_empty(worker)` unico, **oppure** ritiro solo dal
 battito. Dipendente da L1 e L3.
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): assorbita dalla
+riscrittura** — nel corpo nuovo della famiglia removal il ritiro-a-vuoto ha
+un posto solo (la contabilità di battito di L1).
 
 ## L8 ← SD2 · La REPLY perduta senza rumore
 **Leva stimata**: −3 righe, e un silenzio che diventa un log.
@@ -299,7 +304,9 @@ di `worker.py:458-459` resta: è il caso «non connesso», diverso.
 **Proposta**: rimuovere il `try/except` di `worker.py:460-464` e lasciar salire
 l'errore fino alla guardia che già esiste.
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): approvata come proposta**
+— la REPLY perduta smette di mentire: l'errore risale alla guardia che già
+lo registra.
 
 ## L9 ← SI1 · `Outbox.ping_now`: nessun lettore in produzione
 **Leva stimata**: una proprietà e una riga di test.
@@ -320,7 +327,8 @@ something to drain».
 asserisce. È il caso più puro di indirezione senza significato del registro: un
 nome che non aggiunge niente e che nessun produttore consulta.
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): approvata come proposta**
+— cade la coppia.
 
 ## L10 ← SI3 · Il kwarg `channel` del costruttore del worker
 **Leva stimata**: un kwarg pubblico e due righe.
@@ -342,7 +350,8 @@ in-process (`commander.py:1060-1061`) — e `attach_channel`
 di estensione come i tre di `RegisterRegistry` (ma allora la docstring deve
 dirlo).
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): approvata come proposta**
+— il kwarg si rimuove (nessuna docstring lo dichiara seam).
 
 ## L11 ← SD1 · I tre idiomi diversi per lo stesso salto tacito
 **Leva stimata**: tre varianti → una; nessuna riga guadagnata, molta
@@ -373,7 +382,9 @@ idioma per i tre camminamenti (quello delle connessioni, l'unico esercitato).
 silenzioso o produce una riga di debug. La fase 3 ha dimostrato, su un caso
 gemello (L18), che il silenzio non prova niente.
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): approvata — un solo idioma
+(quello esercitato), salto silenzioso**: la tolleranza è il disegno
+dichiarato della fotografia senza lock, non una difesa.
 
 ## L12 ← SD3 · `grant_global_lock`: due mezze difese in una condizione
 **Leva stimata**: mezza condizione.
@@ -397,7 +408,8 @@ l'unico `set_result` è qui e la voce muore subito dopo.
 quel solo caso in errore rumoroso. Due mezze difese in una condizione sola sono
 ciò che rende impossibile dire quale delle due serve.
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): approvata come proposta**
+— resta `is None` (raggiungibile per costruzione), cade `or future.done()`.
 
 ## L13 ← SD5 · `cpu_fraction`: il confronto d'orologio e la metà impossibile
 **Leva stimata**: mezza condizione, più una decisione sul silenzio.
@@ -423,7 +435,9 @@ qui.
 gioco è una frazione di CPU che il valutatore legge: un `None` in più è già un
 caso previsto a monte.
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): approvata come proposta**
+— cade la metà impossibile; `now <= previous_ts` resta `None` silenzioso
+(caso già previsto a monte).
 
 ## L14 ← D3 + T-D3 · `recycle_worker`: la guardia sul worker inesistente
 **Leva stimata**: 3 righe → 1, stesso errore.
@@ -446,7 +460,7 @@ modulo (`commander.py:3176`, `2953`).
 
 **Proposta**: `self.worker_roster[name]`. **Nessun test da toccare.**
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): approvata come proposta.**
 
 ## L15 ← D2 + T-D2 · `recycle_worker`: la guardia sullo stato non-`active`
 **Leva stimata**: 2 righe. **La voce a costo zero del registro.**
@@ -466,7 +480,7 @@ nella stessa coroutine — e `recycle_candidate` itera su `active_workers`
 
 **Proposta**: rimozione secca delle due righe. **Nessun test da rimuovere.**
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): approvata come proposta.**
 
 ## L16 ← D5 + T-D5 · `worker_time_to_limit`: il default `or []`
 **Leva stimata**: 5 caratteri, e una falsa promessa in meno.
@@ -488,7 +502,7 @@ stesso gate.
 
 **Proposta**: togliere `or []`. **Nessun test da toccare.**
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): approvata come proposta.**
 
 ## L17 ← D6 + T-D6 · `install_in_custody`: il controllo di tipo sulla risposta
 **Leva stimata**: mezza condizione.
@@ -510,7 +524,7 @@ vero.
 sbagliata alzerebbe un `AttributeError` naturale, che è il rumore che la regola
 di casa chiede. **Nessun test da rimuovere.**
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): approvata come proposta.**
 
 ## L18 ← D4 + T-D4 · `warn_stalled_evacuation`: il timbro assente
 **Leva stimata**: mezza condizione — e la voce che ha insegnato il metodo.
@@ -570,7 +584,11 @@ contratto pubblico e togliere lo skip nel selettore → cade l'asserzione
 cadono le due righe `tests/test_spa_move.py:2466-2467`. **Le due opzioni costano
 ciascuna metà dello stesso test, mai entrambe.**
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): si tengono ENTRAMBI — non è
+duplicazione, sono due mestieri.** Lo skip del selettore è funzionale (il
+worker interno non va mai scelto), la `ValueError` è il contratto rumoroso su
+uso improprio (regola di casa). La voce esce dal registro come «guardata e
+tenuta»; il test resta intero.
 
 ## L20 ← D7 + T-D7 (+ TS3) · `worker_floor_velocity`: velocità nulla sulla serie intera
 **Leva stimata**: nessuna riga. **Questa voce non ha un'opzione «rimuovi».**
@@ -629,7 +647,10 @@ i 30s di `READY_TIMEOUT`), ed è la premessa di una delle guardie necessarie
 involucri, **oppure** lasciare i due corpi. Dipende da quanta infrastruttura
 generica il titolare vuole in questo modulo.
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): si lasciano i due corpi.**
+Otto righe duplicate costano meno di un'astrazione generica in un modulo che
+non ne ha; i nomi nuovi di R8 (`wait_pool_ready` / `wait_for_worker`) già li
+distinguono.
 
 ---
 
