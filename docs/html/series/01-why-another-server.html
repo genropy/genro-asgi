@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>genro-asgi · 1 — Why another ASGI server?</title>
+<link rel="stylesheet" href="_style.css">
+</head>
+<body>
+
+<div class="wrap">
+
+<header class="top">
+  <p class="kicker">A conversation about genro-asgi <span class="sep">·</span> Part one</p>
+  <h1>Why another ASGI server?</h1>
+  <p class="standfirst">Two people, one objection, and the assumption underneath almost every web framework.</p>
+  <p class="readtime">5 min · the first of six</p>
+</header>
+
+<hr class="rule">
+
+<div class="talk">
+
+<p class="q">Another ASGI server. Why?</p>
+
+<p class="a">Because most of them assume something that isn't true for the applications we build: that the server can forget everything between one request and the next.</p>
+
+<p class="q">That's not an assumption, that's just good design. Stateless scales, every process is disposable, you sleep at night.</p>
+
+<p class="a">For APIs, completely agreed. I'd use one of the existing ones. Where it stops working is the software somebody keeps open for eight hours. A filtered grid over six hundred thousand rows. A document being composed. A tree of selections built up over a morning.</p>
+
+<p class="q">That's still just a client with some data in it.</p>
+
+<p class="a">It's a working session, and the difference shows up in one question: where does that context live between one message and the next? The orthodox answer is nowhere in the process — write it to Redis, read it back every time. That's what keeps the processes interchangeable, and for most systems it's the right trade.</p>
+
+<p class="q">But not for you.</p>
+
+<p class="a">Not for this. And the reason isn't taste, it's arithmetic — which we'll get to properly in part three. The short version: over HTTP you pay for serialising a few times a minute and nobody notices. Over an open connection the page stops making requests and starts having a conversation. Suddenly you're paying that cost on every keystroke.</p>
+
+<p class="q">Alright. So what does genro-asgi actually do?</p>
+
+<p class="a">It starts one level lower than you'd expect. The routing engine lives in your application classes and knows nothing about HTTP. The server is a transport adapter that maps incoming requests onto entries in that tree.</p>
+
+<p class="q">Meaning what, concretely?</p>
+
+<p class="a">Meaning you write a method once, and the same method is a REST endpoint, a tool an AI agent can call over MCP, and a command line command. Not three adapters kept in sync — one tree, seen from three sides. The protocol is a view onto the behaviour, not the shape of the code.</p>
+
+<p class="q">And the state thing you keep hinting at?</p>
+
+<p class="a">That's the more distinctive half. Working state stays in the process that's serving the user. Which forces a consequence: if Maria's state is in process three, every message from Maria has to reach process three. The user becomes the unit you distribute load by.</p>
+
+<p class="q">Sticky sessions. My load balancer does that already.</p>
+
+<p class="a">It does the routing half. It can't do the other half, and that turns out to be the whole game. But that's part four, and it deserves the room.</p>
+
+<div class="aside">
+  <span class="label">What this is, in one line</span>
+  <p>A complete single-process async server — routing, auth, sessions, tasks, storage, OpenAPI, MCP — plus an orchestration layer for applications whose working state has to outlive the processes serving it.</p>
+  <p>Apache 2.0. The core is 1,567 tests at 96% coverage, and every part of this series ends with a roadmap of what is running and what is still landing.</p>
+</div>
+
+<p class="q">Who is this for? Be honest.</p>
+
+<p class="a">Management software, internal tools, anything with a long-lived screen that accumulates real context. If you're building a stateless JSON API, the existing options are excellent and you should use them. This is for the case they handle badly.</p>
+
+<p class="q">And if I'm not sure which one I'm building?</p>
+
+<p class="a">Then the useful question is the one about the open connection. If your page will hold a conversation with the server rather than send the occasional request, the arithmetic changes, and it changes before you notice it changing.</p>
+
+</div>
+
+<p class="hook">Wait — you said the routing engine knows nothing about HTTP. So how does a method become an endpoint at all?</p>
+
+<a class="next" href="02-one-tree-three-protocols.html">
+  <span class="lbl">Next in the series</span>
+  <span class="ttl">One tree, three protocols</span>
+  <span class="dek">How the same decorated method ends up serving REST, an AI agent, and a terminal — without three adapters to keep in sync.</span>
+</a>
+
+<nav class="toc">
+  <h2>The series</h2>
+  <ol>
+    <li class="here">Why another ASGI server?</li>
+    <li><a href="02-one-tree-three-protocols.html">One tree, three protocols</a></li>
+    <li class="todo">The arithmetic of state</li>
+    <li class="todo">What a load balancer can't do</li>
+    <li class="todo">Shipping a button to three people</li>
+    <li class="todo">Brains ours, muscle theirs</li>
+  </ol>
+</nav>
+
+<footer>
+  <p>genro-asgi · Apache License 2.0 · Softwell S.r.l.</p>
+</footer>
+
+</div>
+</body>
+</html>

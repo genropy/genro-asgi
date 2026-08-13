@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>genro-asgi · 3 — Più macchine e Kubernetes</title>
+<style>
+:root {
+  --ground: #f2f5f2; --surface: #ffffff; --sunk: #e8ede9;
+  --line: #d4dcd6; --line-soft: #e3e9e4;
+  --ink: #141e18; --ink-soft: #495a4f; --ink-faint: #6c7d72;
+  --accent: #2d6a4a; --accent-soft: #e2eee7;
+  --code-bg: #f6f9f7;
+  --warn: #8d5330; --warn-soft: #f7ebe2;
+  --soon: #8a6118; --soon-soft: #f6ecd8;
+  --shadow: 0 1px 2px rgba(20,30,24,.05), 0 10px 28px -20px rgba(20,30,24,.35);
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0d1310; --surface: #141c17; --sunk: #101713;
+    --line: #26332b; --line-soft: #1c2620;
+    --ink: #e4ece7; --ink-soft: #a8b8ae; --ink-faint: #7d8d84;
+    --accent: #6ec49a; --accent-soft: #123326; --code-bg: #0f1713;
+    --warn: #dda07c; --warn-soft: #2b1f18;
+    --soon: #d3a355; --soon-soft: #2b2317;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 32px -22px rgba(0,0,0,.85);
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #0d1310; --surface: #141c17; --sunk: #101713;
+  --line: #26332b; --line-soft: #1c2620;
+  --ink: #e4ece7; --ink-soft: #a8b8ae; --ink-faint: #7d8d84;
+  --accent: #6ec49a; --accent-soft: #123326; --code-bg: #0f1713;
+  --warn: #dda07c; --warn-soft: #2b1f18;
+  --soon: #d3a355; --soon-soft: #2b2317;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 32px -22px rgba(0,0,0,.85);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--serif); font-size: 17.5px; line-height: 1.65; }
+.wrap { max-width: 1140px; margin: 0 auto; padding: 0 24px 100px; }
+.prose { max-width: 68ch; }
+header.top { background: var(--surface); border-bottom: 1px solid var(--line); padding: 60px 0 42px; }
+.eyebrow { font-family: var(--sans); font-size: 12px; font-weight: 600; letter-spacing: .15em; text-transform: uppercase; color: var(--accent); margin: 0 0 16px; }
+.eyebrow .of { color: var(--ink-faint); }
+h1 { font-size: clamp(34px, 5.4vw, 56px); line-height: 1.06; font-weight: 600; letter-spacing: -.018em; margin: 0 0 20px; text-wrap: balance; max-width: 19ch; }
+.lede { font-size: 21px; color: var(--ink-soft); margin: 0; max-width: 62ch; }
+nav.toc { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--ground) 93%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); margin-bottom: 56px; }
+nav.toc .inner { max-width: 1140px; margin: 0 auto; padding: 9px 24px; display: flex; gap: 3px; flex-wrap: wrap; font-family: var(--sans); font-size: 12.5px; }
+nav.toc a { color: var(--ink-soft); text-decoration: none; padding: 5px 9px; border-radius: 4px; }
+nav.toc a:hover { background: var(--sunk); color: var(--ink); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+section { margin: 0 0 78px; scroll-margin-top: 64px; }
+h2 { font-size: clamp(26px, 3.4vw, 36px); font-weight: 600; letter-spacing: -.015em; margin: 0 0 14px; text-wrap: balance; }
+h2 .kicker { display: block; font-family: var(--sans); font-size: 12px; font-weight: 650; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); margin-bottom: 9px; }
+h3 { font-size: 20px; font-weight: 600; margin: 40px 0 10px; letter-spacing: -.008em; }
+h4 { font-family: var(--sans); font-size: 15px; font-weight: 650; margin: 26px 0 6px; }
+p { margin: 0 0 18px; }
+a { color: var(--accent); text-underline-offset: 2px; }
+strong { font-weight: 650; }
+code { font-family: var(--mono); font-size: .86em; }
+p code, li code, td code { background: var(--sunk); padding: 1px 5px; border-radius: 3px; }
+pre { font-family: var(--mono); font-size: 13.5px; line-height: 1.62; background: var(--code-bg); border: 1px solid var(--line-soft); border-radius: 6px; padding: 18px 20px; overflow-x: auto; margin: 22px 0; max-width: 76ch; color: var(--ink-soft); }
+pre b { color: var(--ink); font-weight: 650; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; margin: 30px 0; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 20px 22px; box-shadow: var(--shadow); }
+.card h4 { margin-top: 0; }
+.card p { font-size: 15.5px; color: var(--ink-soft); margin-bottom: 0; line-height: 1.55; }
+ul.tight { margin: 0 0 20px; padding-left: 24px; }
+ul.tight li { margin-bottom: 10px; }
+.tag { display: inline-block; font-family: var(--sans); font-size: 10.5px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; padding: 2px 8px; border-radius: 3px; white-space: nowrap; }
+.tag.ok { color: var(--accent); background: var(--accent-soft); }
+.tag.wip { color: var(--soon); background: var(--soon-soft); }
+.roadmap-note { font-family: var(--sans); font-size: 13.5px; color: var(--ink-faint); max-width: 70ch; margin-top: 22px; }
+.note { background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; padding: 18px 22px; margin: 28px 0; max-width: 72ch; }
+.note.warn { border-left-color: var(--warn); }
+.note p:last-child { margin-bottom: 0; }
+.note .label { font-family: var(--sans); font-size: 11.5px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 7px; }
+.note.warn .label { color: var(--warn); }
+.tablewrap { overflow-x: auto; margin: 26px 0; }
+table { width: 100%; border-collapse: collapse; font-family: var(--sans); font-size: 14.5px; }
+th { text-align: left; font-size: 11px; font-weight: 650; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-faint); padding: 10px 14px 8px 0; border-bottom: 1px solid var(--line); }
+td { padding: 11px 14px 11px 0; border-bottom: 1px solid var(--line-soft); vertical-align: top; color: var(--ink-soft); }
+td:first-child { color: var(--ink); font-weight: 550; }
+tr:last-child td { border-bottom: 0; }
+.diagram { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 26px 22px; margin: 30px 0; overflow-x: auto; box-shadow: var(--shadow); }
+.diagram svg { display: block; min-width: 600px; width: 100%; height: auto; }
+.caption { font-family: var(--sans); font-size: 13px; color: var(--ink-faint); margin: -14px 0 30px; max-width: 70ch; }
+.pull { font-size: 23px; line-height: 1.42; color: var(--ink); border-left: 3px solid var(--accent); padding: 6px 0 6px 26px; margin: 36px 0; max-width: 58ch; text-wrap: balance; }
+.back { background: var(--accent-soft); border-radius: 6px; padding: 24px 26px; margin: 40px 0 0; }
+.back .label { font-family: var(--sans); font-size: 11.5px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 8px; }
+.back p { margin-bottom: 0; max-width: 64ch; }
+footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px; font-family: var(--sans); font-size: 13px; color: var(--ink-faint); }
+@media (max-width: 620px) { body { font-size: 16.5px; } pre { font-size: 12px; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <p class="eyebrow">genro-asgi <span class="of">· documento 3 di 3</span></p>
+    <h1>Più macchine: cervello nostro, braccia loro</h1>
+    <p class="lede">Come il piano cresce oltre una macchina senza cedere a nessuno la decisione su dove vive una persona — e come si usa Kubernetes prendendone i muscoli e non il giudizio.</p>
+  </div>
+</header>
+
+<nav class="toc">
+  <div class="inner">
+    <a href="#problema">Il problema</a>
+    <a href="#principio">Il principio</a>
+    <a href="#gerarchie">Due gerarchie</a>
+    <a href="#canali">Canali tipizzati</a>
+    <a href="#mappe">Mappa grossa, mappa fine</a>
+    <a href="#chi">Chi decide</a>
+    <a href="#stagionale">Il caso stagionale</a>
+    <a href="#kube">Kubernetes</a>
+    <a href="#costi">Il costo accettato</a>
+    <a href="#guasti">Quando qualcosa muore</a>
+    <a href="#pannello">Il pannello</a>
+    <a href="#metriche">Metriche</a>
+    <a href="#roadmap">Roadmap</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<section id="problema">
+  <div class="prose">
+    <h2><span class="kicker">Il punto di partenza</span>Una macchina finisce</h2>
+    <p>Il secondo documento arriva a una conclusione che poi diventa un vincolo: se lo stato di lavoro di una persona vive nella memoria di un processo, allora dove quella persona viene servita è una decisione applicativa, non infrastrutturale. Nessun bilanciatore può prenderla, perché nessun bilanciatore sa cosa sia una persona.</p>
+    <p>Va benissimo su una macchina. Ma le macchine finiscono: la memoria si esaurisce, i core si esauriscono, e prima o poi il parco deve diventare più di uno. E qui la domanda si fa scomoda: <strong>come si cresce su più macchine, se la decisione su dove vive un utente non può essere delegata?</strong></p>
+    <p>La risposta breve è che non si delega la decisione — si delega l'<em>esecuzione</em>. La distinzione è tutto il contenuto di questo documento.</p>
+  </div>
+
+  <div class="note">
+    <span class="label">Come leggere questo documento</span>
+    <p>Descrive l'architettura distribuita nella sua forma compiuta. La <a href="#roadmap">roadmap in appendice</a> dichiara cosa è già operativo e cosa è in corso di implementazione: è l'unica parte che cambia mentre il lavoro procede. Presuppone il secondo documento — lo stato vivo, l'utente come chiave, i gruppi come versioni.</p>
+  </div>
+</section>
+
+<section id="principio">
+  <h2><span class="kicker">La regola</span>Cervello nostro, braccia sue</h2>
+  <div class="prose">
+    <p>C'è una frase che riassume la posizione rispetto a qualunque piattaforma di orchestrazione, Kubernetes compreso: <strong>il cervello è nostro, le braccia sono sue</strong>.</p>
+    <p>Le braccia sono quello che una piattaforma fa meglio di noi e che non abbiamo interesse a riscrivere: procurare una macchina, far nascere un processo dentro un confine di risorse, riavviarlo se cade, distribuirlo su nodi diversi, sostituire un nodo morto. È lavoro ingrato, e loro lo fanno bene.</p>
+    <p>Il cervello è quello che nessuna piattaforma può fare al posto nostro, perché richiede di sapere cosa sia un utente e cosa possieda: <em>quante</em> unità servono, <em>quando</em> servono, <em>chi</em> ci va dentro e <em>quando</em> qualcuno deve essere spostato.</p>
+    <p class="pull">La piattaforma non vede mai un utente. Vede solo processi da far nascere, quando glielo ordiniamo.</p>
+    <p>Questa non è diffidenza verso Kubernetes: è la constatazione che il suo modello — unità intercambiabili, traffico distribuito su chi è disponibile — è esattamente il modello che il nostro caso d'uso non può adottare. Prenderne le parti giuste è un guadagno; prenderne anche il giudizio significherebbe rompere lo sticky.</p>
+  </div>
+</section>
+
+<section id="gerarchie">
+  <h2><span class="kicker">La struttura</span>Due gerarchie che si incrociano</h2>
+  <div class="prose">
+    <p>Distribuire introduce una seconda dimensione. Fino a una macchina esisteva solo la <em>versione</em>: quale codice esegue un processo. Con più macchine si aggiunge la <em>capacità</em>: quale ferro lo ospita. Le due dimensioni sono ortogonali — una versione gira su più macchine, una macchina ospita più versioni — e si incrociano esattamente sul processo di lavoro.</p>
+    <p>Da qui la scelta di avere due gerarchie distinte invece di una sola che tenta di fare entrambi i mestieri:</p>
+    <ul class="tight">
+      <li><strong>La gerarchia logica, per versione.</strong> Il vertice conosce i gruppi; ogni gruppo ha un <em>capogruppo</em> che governa i processi della propria versione, dovunque essi si trovino fisicamente.</li>
+      <li><strong>La gerarchia fisica, per capacità.</strong> Il vertice conosce i domini; ogni dominio — una macchina, una fetta di cluster — ha un <em>sub-commander</em> che governa la nascita, la sorveglianza e le risorse dei processi che ospita, di qualunque versione siano.</li>
+    </ul>
+    <p>La conseguenza è che <strong>ogni processo di lavoro ha due genitori con due mestieri diversi</strong>: il capogruppo, che sa quali utenti gli appartengono e decide il suo destino; e il titolare del dominio fisico, che lo fa nascere, lo sorveglia e ne misura le risorse. Nessuno dei due invade il mestiere dell'altro.</p>
+  </div>
+
+  <div class="diagram">
+    <svg viewBox="0 0 880 320" role="img" aria-label="Le due gerarchie: per versione e per capacità">
+      <g font-family="system-ui, sans-serif">
+        <rect x="300" y="14" width="280" height="46" rx="5" fill="var(--accent-soft)" stroke="var(--accent)"/>
+        <text x="440" y="34" text-anchor="middle" font-size="12.5" font-weight="650" fill="var(--ink)">Il vertice</text>
+        <text x="440" y="50" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">utenti · gruppi · budget · arbitraggio</text>
+
+        <text x="140" y="88" font-size="10.5" font-weight="650" letter-spacing=".08em" fill="var(--ink-faint)">PER VERSIONE</text>
+        <text x="640" y="88" font-size="10.5" font-weight="650" letter-spacing=".08em" fill="var(--ink-faint)">PER CAPACITÀ</text>
+
+        <g fill="none" stroke="currentColor" stroke-width="1.4" color="var(--ink-faint)">
+          <path d="M380,60 L380,72 L140,72 L140,100"/>
+          <path d="M500,60 L500,72 L700,72 L700,100"/>
+        </g>
+
+        <rect x="40" y="100" width="200" height="42" rx="5" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="140" y="119" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--ink)">capogruppo · stabile</text>
+        <text x="140" y="134" text-anchor="middle" font-size="10" fill="var(--ink-soft)">decide nascite e spostamenti</text>
+
+        <rect x="40" y="152" width="200" height="42" rx="5" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="140" y="171" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--ink)">capogruppo · nuova</text>
+        <text x="140" y="186" text-anchor="middle" font-size="10" fill="var(--ink-soft)">dentro il proprio budget</text>
+
+        <rect x="600" y="100" width="200" height="42" rx="5" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="700" y="119" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--ink)">dominio di casa</text>
+        <text x="700" y="134" text-anchor="middle" font-size="10" fill="var(--ink-soft)">il vertice stesso</text>
+
+        <rect x="600" y="152" width="200" height="42" rx="5" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="700" y="171" text-anchor="middle" font-size="11.5" font-weight="600" fill="var(--ink)">sub-commander</text>
+        <text x="700" y="186" text-anchor="middle" font-size="10" fill="var(--ink-soft)">macchina o fetta di cluster</text>
+
+        <rect x="270" y="234" width="340" height="66" rx="5" fill="var(--sunk)" stroke="var(--line)" stroke-dasharray="3 3"/>
+        <text x="440" y="256" text-anchor="middle" font-size="12" font-weight="650" fill="var(--ink)">il processo di lavoro</text>
+        <text x="440" y="274" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">appartiene a UN gruppo e vive in UN dominio</text>
+        <text x="440" y="290" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">due genitori, due mestieri distinti</text>
+
+        <g fill="none" stroke="currentColor" stroke-width="1.4" color="var(--ink-faint)" stroke-dasharray="4 3">
+          <path d="M240,130 L270,130 L270,250"/>
+          <path d="M240,180 L258,180 L258,262"/>
+          <path d="M600,130 L610,130 L610,250"/>
+          <path d="M600,180 L622,180 L622,262"/>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <p class="caption">La matrice versione × capacità non è compilata dall'alto: <strong>emerge dal basso</strong>, come somma delle decisioni dei capigruppo, vincolata dai budget che il vertice assegna e dalla capacità che i domini dichiarano.</p>
+</section>
+
+<section id="canali">
+  <h2><span class="kicker">Il meccanismo</span>Figli come canali tipizzati</h2>
+  <div class="prose">
+    <p>Il vertice tiene i propri figli come <strong>canali tipizzati</strong>, di due specie: un processo di lavoro che ha generato e sorveglia lui stesso, oppure un sub-commander remoto che si è agganciato. Le due specie possono convivere nello stesso vertice.</p>
+  </div>
+
+  <pre>IL VERTICE  <b>(utenti, gruppi, budget, giudizio)</b>
+├── <b>worker</b>            processo di casa, generato qui
+├── <b>worker</b>            processo di casa, generato qui
+├── <b>sub-commander</b>     macchina remota  ── worker … worker
+└── <b>sub-commander</b>     dominio su cluster ── worker … worker</pre>
+
+  <div class="prose">
+    <p>La proprietà che rende questo disegno sostenibile è che <strong>il tipo del canale non produce mai una diramazione nel codice</strong>. Chi deve raggiungere un destinatario risolve l'indirizzo, prende il canale, spedisce la busta: lo stesso gesto identico per un processo di casa e per una macchina all'altro capo della rete. Cosa ci sia dietro il canale è una proprietà del dato, non un ramo nella logica.</p>
+    <p>È lo stesso principio già visto nel ruolo singolo: quando tutto vive in un processo, il canale è una coppia di code in memoria che codifica i messaggi esattamente come farebbe un socket. Un solo protocollo, tre collocazioni — in processo, su un'altra macchina, su una fetta di cluster — e una sola batteria di test di contratto che le verifica tutte, perché due implementazioni della stessa cosa divergono appena qualcosa non le obbliga a restare uguali.</p>
+    <p>Un sub-commander <strong>è il vertice stesso</strong>, la stessa classe, con l'indicazione di chi sia il proprio genitore. Non è un componente a parte da mantenere in parallelo: è la stessa macchina montata un livello più in basso.</p>
+    <p>Una regola sola tiene a bada la complessità: <strong>la gerarchia è profonda un livello</strong>. Un sub-commander non ha a sua volta sub-commander. Non c'è ricorsione, non ci sono cammini di lunghezza imprevedibile, e non esiste la topologia che nessuno riesce più a disegnare alla lavagna.</p>
+    <p>Il traffico segue i rami dell'albero: un processo parla al proprio commander, che lo indirizza al canale di destinazione. Non ci sono scorciatoie laterali fra domini — e questa è la ragione per cui i processi di lavoro non si affacciano mai sulla rete: gli unici esposti sono il vertice e i sub-commander.</p>
+  </div>
+</section>
+
+<section id="mappe">
+  <h2><span class="kicker">La chiave</span>Mappa grossa in alto, mappa fine in basso</h2>
+  <div class="prose">
+    <p>Il problema più insidioso di un registro distribuito è la duplicazione: se due livelli sanno la stessa cosa, prima o poi divergono, e non c'è modo di stabilire quale dei due abbia ragione.</p>
+    <p>La soluzione è che i due livelli sanno cose <em>diverse</em>, con precisione diversa:</p>
+  </div>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>Livello</th><th>Cosa sa</th><th>Per decidere</th></tr></thead>
+    <tbody>
+      <tr><td>Il vertice</td><td>utente → <strong>indirizzo</strong> (un dominio, oppure un processo di casa)</td><td>dove mandare la richiesta; le domande globali; l'arbitraggio fra gruppi</td></tr>
+      <tr><td>Il dominio</td><td>utente → <strong>processo</strong>, e il carico dei propri processi</td><td>la distribuzione interna: assegnare, ribilanciare, far nascere</td></tr>
+      <tr><td>Il processo</td><td>utente → connessioni → <strong>pagine</strong>, con tutti i contenuti</td><td>eseguire</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="prose">
+    <p>La <strong>mappa fine</strong> — quale processo esatto tiene una persona — vive solo dove vivono i processi. Il vertice tiene la <strong>mappa grossa</strong>: sa che Maria sta nel dominio B, non sa quale processo di B la stia servendo, e non ha bisogno di saperlo.</p>
+    <p>Quindi la risoluzione è a due tappe, ognuna su un solo livello: il vertice riconosce il dominio e spedisce lì; il dominio risolve il processo e serve. Nessuna ricerca ricorsiva, nessuna cache da invalidare in cascata, e — soprattutto — <strong>nessuna verità duplicata</strong>: quando il dominio B sposta Maria da un suo processo a un altro, il vertice non ha nulla da aggiornare, perché quello che il vertice sa è ancora vero.</p>
+    <p>Vale anche per gli aggiornamenti dei dati: una modifica destinata a una pagina che sta altrove risale al vertice, che la indirizza al dominio, che la consegna al processo. Un solo schema per il traffico di controllo e per quello dei dati.</p>
+  </div>
+
+  <div class="note">
+    <span class="label">La regola sotto tutte le altre</span>
+    <p>Un solo scrittore per ogni fatto, e ogni livello sa una cosa più grossa di quello sotto. È ciò che permette a ogni livello di decidere in autonomia senza chiedere permesso: le informazioni non si sovrappongono, quindi non possono contraddirsi.</p>
+  </div>
+</section>
+
+<section id="chi">
+  <h2><span class="kicker">La divisione dei poteri</span>Chi decide, chi arbitra, chi esegue</h2>
+  <div class="prose">
+    <p>Un sistema distribuito si rompe quando due componenti credono entrambe di decidere la stessa cosa. Qui i mestieri sono tre, e sono disgiunti — l'immagine è quella di un'azienda con sezioni autonome dentro un budget.</p>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h4>Il capogruppo decide</h4>
+      <p>Guarda l'occupazione dei processi della propria versione e decide: far nascere, ritirare, ricollocare una persona, cambiare la propria versione con un rilascio graduale. Decide da solo, dentro il budget che gli è stato assegnato. Le sezioni hanno vite indipendenti: quello che accade in un gruppo non passa dal cervello di un altro.</p>
+    </div>
+    <div class="card">
+      <h4>Il vertice arbitra</h4>
+      <p>Non micro-decide. Fa tre cose: smista una persona verso il gruppo giusto quando entra; assegna i budget e i massimali di ciascun gruppo, che è il vero arbitraggio del ferro condiviso; governa le operazioni che attraversano i gruppi, come portare una persona da una versione all'altra.</p>
+    </div>
+    <div class="card">
+      <h4>Il sub-commander offre ed esegue</h4>
+      <p>Pubblica la capacità del proprio dominio, materializza le nascite e le morti che i capigruppo ordinano, riferisce la salute di quel che ospita. <strong>Non conosce la strategia</strong>: non sa perché serva un processo in più, sa come procurarlo.</p>
+    </div>
+  </div>
+
+  <div class="prose">
+    <p>Questa divisione risponde anche alla domanda pratica di come nasce un nuovo processo quando le risorse si esauriscono, e vale la pena essere precisi su chi tiene la penna, perché è il punto in cui è facile immaginare la catena al contrario.</p>
+    <p>Non è il processo saturo a chiedere aiuto per sé. Il processo <em>misura</em> e riferisce: quanta memoria sta usando davvero, quanto sono saturi i suoi componenti. Chi legge quelle misure è il capogruppo, che vede l'intera sezione e non un pezzo, e che quindi può distinguere il caso in cui basta spostare qualcuno da quello in cui serve davvero un'unità in più. Se la conclusione è che serve, il capogruppo <strong>ordina</strong>; il sub-commander del dominio scelto <strong>materializza</strong>; il processo nuovo nasce, si presenta al proprio commander, e da quel momento è nel giro.</p>
+    <p class="pull">Chi misura non decide, chi decide non esegue, chi esegue non conosce la strategia.</p>
+  </div>
+</section>
+
+<section id="stagionale">
+  <h2><span class="kicker">La prova del disegno</span>Il cliente stagionale</h2>
+  <div class="prose">
+    <p>C'è un caso che ha guidato una revisione importante del disegno, e vale la pena raccontarlo perché mostra cosa si guadagna dall'ammettere figli di specie mista.</p>
+    <p>Un cliente lavora per dieci mesi l'anno su una macchina sola, comodamente. Poi arriva la stagione — la campagna, la chiusura, il picco — e per qualche settimana servono tre macchine. Poi il picco passa.</p>
+    <p>Una versione precedente del disegno vietava i ruoli doppi: il vertice non poteva possedere processi di lavoro, doveva sempre esserci un livello intermedio. Era coerente, e imponeva una cerimonia costante: anche per la macchina singola servivano tre processi, uno dei quali esisteva solo per rispettare la simmetria.</p>
+    <p>Ammettendo la specie mista, il caso stagionale diventa <strong>una transizione a costo zero</strong>. Il vertice possiede i suoi processi di casa; quando arrivano le macchine di picco, la sua tabella comincia a contenere anche voci di dominio remoto; quando il picco passa, quelle voci scompaiono. <strong>Il vertice non cambia mai ruolo</strong>, non c'è una riconfigurazione, non c'è un momento di migrazione da una topologia all'altra: crescere e restringersi sono la stessa operazione in due direzioni.</p>
+    <p>E il caso comune — che per la maggior parte dei clienti è l'unico — non paga processi che esistono solo per la coerenza dello schema. Il minimo di sviluppo resta due processi: il vertice e un lavoratore.</p>
+  </div>
+</section>
+
+<section id="kube">
+  <h2><span class="kicker">La piattaforma</span>Kubernetes, preso per le parti giuste</h2>
+  <div class="prose">
+    <p>Su un cluster, un dominio di capacità è una fetta di cluster e il sub-commander è il processo che la governa: materializza i processi di lavoro chiamando le API della piattaforma, e quei processi attaccano il proprio canale a lui. La catena non cambia di una virgola — cambia soltanto chi, dietro il canale, ha le mani sul ferro.</p>
+    <h3>La corrispondenza dei concetti</h3>
+  </div>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>Da noi</th><th>Sul cluster</th></tr></thead>
+    <tbody>
+      <tr><td>processo di lavoro</td><td>un pod, con un solo processo dentro — la forma idiomatica</td></tr>
+      <tr><td>gruppo, cioè una versione</td><td>un Deployment</td></tr>
+      <tr><td>versione dell'ambiente</td><td>l'immagine del container: sul cluster la domanda «come faccio arrivare il runtime alla macchina» si risponde da sé</td></tr>
+      <tr><td>capogruppo</td><td>il controllore del proprio Deployment</td></tr>
+      <tr><td>dominio di capacità</td><td>il sub-commander: un processo che materializza pod via API e a cui i pod si agganciano</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="prose">
+    <p>Resta possibile, come via di mezzo, il pod che contiene un sub-commander e diversi processi di lavoro insieme — utile in certi assetti, ma non è il disegno primario.</p>
+    <h3>Cosa della piattaforma non usiamo, e perché</h3>
+    <p>Questa è la parte che sorprende chi arriva dal mondo dei container, e sono tre rinunce deliberate. Nessuna è ideologica: ognuna corrisponde a un meccanismo che, applicato a processi che tengono stato, farebbe danno.</p>
+  </div>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>Meccanismo</th><th>Perché non lo usiamo</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Il bilanciatore del cluster</td>
+        <td>Distribuisce il traffico su chi è disponibile: è esattamente ciò che non deve accadere. Il traffico degli utenti entra solo dalla nostra porta, e l'inoltro va al pod preciso che il registro indica — non a uno equivalente.</td>
+      </tr>
+      <tr>
+        <td>L'autoscaling della piattaforma</td>
+        <td>Scala su metriche che non sanno cosa sia una persona: aggiungerebbe unità guardando la CPU mentre la risorsa che si esaurisce è la memoria di chi sta fermo con un oggetto grosso in pancia. La scala la decide il capogruppo, e la <em>ordina</em> alle API — la piattaforma è pienamente comandabile in modo imperativo, ed è così che la usiamo.</td>
+      </tr>
+      <tr>
+        <td>Il rilascio graduale nativo</td>
+        <td>Sostituisce i pod con i propri tempi, ignorando chi ci sta sopra: applicato a processi con stato significa scollegare gli utenti. Il cambio di versione resta la nostra coreografia — porta su il gruppo nuovo, spostagli le persone a caldo, ritira il vecchio quando è vuoto — eseguita chiamando le API.</td>
+      </tr>
+    </tbody>
+  </table></div>
+
+  <div class="note warn">
+    <span class="label">Ciò che la piattaforma fa comunque, e va digerito</span>
+    <p>Un cluster prende iniziative fisiche unilaterali: un nodo muore e i suoi pod vengono rischedulati altrove, un pod viene sfrattato perché il nodo serve ad altro. Non si può impedirlo, e non si deve provarci.</p>
+    <p>Ma non è un dovere nuovo: <strong>è lo stesso dovere che abbiamo sul ferro nostro</strong>, dove i processi muoiono comunque. Il piano è costruito sul presupposto che un processo possa sparire in qualunque momento — la morte è un canale che si chiude, e ciò che quel processo teneva viene liberato e ricostruito. Su un cluster quel presupposto si verifica più spesso; il meccanismo che lo affronta è identico.</p>
+  </div>
+</section>
+
+<section id="costi">
+  <h2><span class="kicker">Onestà tecnica</span>Il costo che abbiamo accettato</h2>
+  <div class="prose">
+    <p>Il disegno ha un prezzo dichiarato: il traffico verso un dominio remoto fa <strong>un salto in più</strong>, perché passa dal vertice al sub-commander e da lì al processo, invece di andare diretto.</p>
+    <p>È stato accettato con tre ragioni, che vale la pena esporre perché è il tipo di scelta su cui un lettore tecnico vuole vedere i conti:</p>
+    <ul class="tight">
+      <li><strong>I processi di casa non pagano nulla.</strong> Sono figli diretti del vertice: zero salti aggiuntivi. Nel caso più comune — una macchina — il costo semplicemente non esiste.</li>
+      <li><strong>Il salto è dentro il centro dati.</strong> Si misura in frazioni di millisecondo, contro i venti o cinquanta millisecondi che separano comunque il browser dal server. È rumore dentro un ritardo che c'è già.</li>
+      <li><strong>Gli eventi si accorpano.</strong> Ciò che viaggia verso un dominio remoto viene raggruppato per destinazione, così un aggiornamento destinato a molte pagine dello stesso dominio costa una sola spedizione.</li>
+    </ul>
+    <p>In cambio si ottiene la proprietà che rende il sistema comprensibile: i processi di lavoro non si affacciano sulla rete, il perimetro esposto è fatto di due sole specie di componenti, e il traffico segue l'albero — quindi il cammino di un messaggio è sempre disegnabile.</p>
+    <p>È registrata come possibile evoluzione, non come impegno, l'ipotesi che su una rete piatta e fidata il solo traffico dei dati possa andare diretto, mantenendo il controllo sull'albero. È un'ottimizzazione che si fa quando i numeri la chiedono, non prima.</p>
+  </div>
+</section>
+
+<section id="guasti">
+  <h2><span class="kicker">La prova del fuoco</span>Quando qualcosa muore</h2>
+  <div class="prose">
+    <p>Un'architettura distribuita si giudica da cosa succede quando un pezzo sparisce. Qui i casi sono tre, con raggi di danno diversi e dichiarati.</p>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h4>Muore un processo di lavoro</h4>
+      <p>Il suo canale si chiude, e questo è il segnale: ciò che teneva viene liberato, i permessi che aveva in mano rilasciati, e un sostituto nasce con un nome nuovo — mai riusato, così nessun messaggio in ritardo può essere confuso col nuovo arrivato. Il danno è limitato alle sessioni che quel processo ospitava.</p>
+    </div>
+    <div class="card">
+      <h4>Muore una macchina remota</h4>
+      <p>È <strong>un solo canale che si chiude</strong>, e questa è la virtù del disegno: il raggio del danno coincide con il dominio. Il vertice cancella dalla propria tabella le voci che puntavano lì, e le persone che vivevano su quella macchina vengono ricollocate sui domini che restano.</p>
+    </div>
+    <div class="card">
+      <h4>Muore la macchina del vertice</h4>
+      <p>Si porta via il cervello, e va detto chiaramente. Ma è un costo di <em>qualunque</em> topologia che ospiti il cervello da qualche parte, non un costo di questo disegno in particolare: il coordinamento sta su una macchina, e quella macchina è un punto singolo. La difesa è la stessa che vale per il caso mono-macchina — la sessione applicativa sopravvive al riavvio, perché lo stato viene raccolto scendendo e ripiazzato risalendo.</p>
+    </div>
+  </div>
+</section>
+
+<section id="pannello">
+  <h2><span class="kicker">Il pannello</span>Come si guarda un parco</h2>
+  <div class="prose">
+    <p>Il pannello del secondo documento guarda i processi e le persone di <em>un</em> pool. Salendo al vertice la vista cambia grana, e cambia per la stessa ragione per cui la tabella degli indirizzi è più grossa: <strong>il vertice non sa quale processo serva chi, e non deve saperlo</strong>. Guarda domini.</p>
+    <p>Chi vuole scendere al dettaglio apre il pannello del dominio — che è lo stesso pannello, perché un sub-commander è la stessa cosa del vertice montata un livello più in basso.</p>
+  </div>
+
+  <h3>I domini</h3>
+  <div class="diagram">
+    <svg viewBox="0 0 880 336" role="img" aria-label="Illustrazione della videata dei domini di capacità">
+      <g font-family="system-ui, sans-serif">
+        <rect x="1" y="1" width="878" height="334" rx="7" fill="var(--surface)" stroke="var(--line)"/>
+        <path d="M1,42 H879" stroke="var(--line)" fill="none"/>
+        <text x="20" y="27" font-size="12.5" font-weight="650" fill="var(--ink)">supervisione · domini</text>
+        <text x="600" y="27" font-size="10.5" fill="var(--ink-faint)">4 domini · 1 irraggiungibile · 187 persone</text>
+
+        <g font-size="9.5" font-weight="650" letter-spacing=".08em" fill="var(--ink-faint)">
+          <text x="20" y="64">DOMINIO</text>
+          <text x="170" y="64">CANALE</text>
+          <text x="290" y="64">CAPACITÀ</text>
+          <text x="500" y="64">PROCESSI</text>
+          <text x="590" y="64">PERSONE</text>
+          <text x="680" y="64">GRUPPI OSPITATI</text>
+        </g>
+        <path d="M20,74 H860" stroke="var(--line)" fill="none"/>
+
+        <g>
+          <text x="20" y="100" font-size="11.5" font-weight="600" fill="var(--ink)">casa</text>
+          <text x="20" y="115" font-size="8.5" fill="var(--ink-faint)">il vertice stesso</text>
+          <rect x="170" y="90" width="58" height="16" rx="3" fill="var(--accent-soft)"/>
+          <text x="199" y="102" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--accent)">locale</text>
+          <text x="170" y="118" font-size="8.5" fill="var(--ink-faint)">nessun salto</text>
+          <rect x="290" y="94" width="170" height="8" rx="4" fill="var(--sunk)"/>
+          <rect x="290" y="94" width="99" height="8" rx="4" fill="var(--accent)"/>
+          <text x="470" y="102" font-size="10" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">0.58</text>
+          <text x="500" y="102" font-size="10.5" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">3</text>
+          <text x="590" y="102" font-size="10.5" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">89</text>
+          <text x="680" y="102" font-size="10" fill="var(--ink-soft)">stabile · nuova</text>
+          <path d="M20,128 H860" stroke="var(--line-soft)" fill="none"/>
+        </g>
+
+        <g>
+          <text x="20" y="154" font-size="11.5" font-weight="600" fill="var(--ink)">nodo-2</text>
+          <text x="20" y="169" font-size="8.5" fill="var(--ink-faint)">macchina · ferro proprio</text>
+          <rect x="170" y="144" width="58" height="16" rx="3" fill="var(--accent-soft)"/>
+          <text x="199" y="156" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--accent)">attivo</text>
+          <text x="170" y="172" font-size="8.5" fill="var(--ink-faint)">agganciato 6 g · 0.4 ms</text>
+          <rect x="290" y="148" width="170" height="8" rx="4" fill="var(--sunk)"/>
+          <rect x="290" y="148" width="121" height="8" rx="4" fill="var(--accent)"/>
+          <text x="470" y="156" font-size="10" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">0.71</text>
+          <text x="500" y="156" font-size="10.5" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">4</text>
+          <text x="590" y="156" font-size="10.5" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">71</text>
+          <text x="680" y="156" font-size="10" fill="var(--ink-soft)">stabile</text>
+          <path d="M20,182 H860" stroke="var(--line-soft)" fill="none"/>
+        </g>
+
+        <g>
+          <text x="20" y="208" font-size="11.5" font-weight="600" fill="var(--ink)">cluster-eu</text>
+          <text x="20" y="223" font-size="8.5" fill="var(--ink-faint)">fetta di cluster · pod via API</text>
+          <rect x="170" y="198" width="58" height="16" rx="3" fill="var(--accent-soft)"/>
+          <text x="199" y="210" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--accent)">attivo</text>
+          <text x="170" y="226" font-size="8.5" fill="var(--ink-faint)">agganciato 2 g · 1.1 ms</text>
+          <rect x="290" y="202" width="170" height="8" rx="4" fill="var(--sunk)"/>
+          <rect x="290" y="202" width="58" height="8" rx="4" fill="var(--accent)"/>
+          <text x="470" y="210" font-size="10" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">0.34</text>
+          <text x="500" y="210" font-size="10.5" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">6</text>
+          <text x="590" y="210" font-size="10.5" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">27</text>
+          <text x="680" y="210" font-size="10" fill="var(--ink-soft)">nuova</text>
+          <path d="M20,236 H860" stroke="var(--line-soft)" fill="none"/>
+        </g>
+
+        <g>
+          <text x="20" y="262" font-size="11.5" font-weight="600" fill="var(--ink-soft)">nodo-3</text>
+          <text x="20" y="277" font-size="8.5" fill="var(--ink-faint)">macchina · ferro proprio</text>
+          <rect x="170" y="252" width="104" height="16" rx="3" fill="var(--warn-soft)"/>
+          <text x="222" y="264" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--warn)">irraggiungibile</text>
+          <text x="170" y="280" font-size="8.5" fill="var(--warn)">caduto 40 s fa</text>
+          <text x="290" y="264" font-size="10" fill="var(--ink-faint)">— nessuna lettura —</text>
+          <text x="500" y="264" font-size="10.5" fill="var(--ink-faint)">—</text>
+          <text x="590" y="264" font-size="10.5" fill="var(--ink-faint)">—</text>
+          <text x="680" y="264" font-size="10" fill="var(--ink-faint)">28 persone ricollocate</text>
+        </g>
+
+        <rect x="20" y="292" width="840" height="30" rx="5" fill="var(--sunk)"/>
+        <text x="36" y="311" font-size="10.5" fill="var(--ink-soft)">un dominio muto non azzera i suoi numeri: li dichiara mancanti · le sue persone sono già altrove, il raggio del guasto è il dominio</text>
+      </g>
+    </svg>
+  </div>
+  <p class="caption">Ogni riga è un canale del vertice. «Casa» è il dominio che il vertice governa direttamente e non paga salti; gli altri sono agganciati, con la latenza del salto in chiaro accanto — quella frazione di millisecondo che è il costo dichiarato del disegno. La capacità è ciò che il dominio <em>offre</em> contro ciò che ha <em>impegnato</em>: è il numero su cui il vertice assegna i budget.</p>
+
+  <h3>La matrice che emerge dal basso</h3>
+  <div class="diagram">
+    <svg viewBox="0 0 880 232" role="img" aria-label="Matrice gruppi per domini">
+      <g font-family="system-ui, sans-serif">
+        <rect x="1" y="1" width="878" height="230" rx="7" fill="var(--surface)" stroke="var(--line)"/>
+        <path d="M1,42 H879" stroke="var(--line)" fill="none"/>
+        <text x="20" y="27" font-size="12.5" font-weight="650" fill="var(--ink)">supervisione · gruppi × domini</text>
+        <text x="660" y="27" font-size="10.5" fill="var(--ink-faint)">processi · persone</text>
+
+        <g font-size="9.5" font-weight="650" letter-spacing=".08em" fill="var(--ink-faint)">
+          <text x="180" y="66">CASA</text>
+          <text x="340" y="66">NODO-2</text>
+          <text x="510" y="66">CLUSTER-EU</text>
+          <text x="690" y="66">TOTALE GRUPPO</text>
+        </g>
+        <path d="M20,74 H860" stroke="var(--line)" fill="none"/>
+
+        <g>
+          <text x="20" y="106" font-size="11.5" font-weight="600" fill="var(--ink)">stabile</text>
+          <text x="20" y="121" font-size="8.5" fill="var(--ink-faint)">1.4.2 · in svuotamento</text>
+          <rect x="170" y="88" width="120" height="40" rx="4" fill="var(--accent-soft)"/>
+          <text x="230" y="106" text-anchor="middle" font-size="11" font-weight="600" fill="var(--ink)">2 · 64</text>
+          <text x="230" y="120" text-anchor="middle" font-size="8.5" fill="var(--ink-soft)">sat 0.61</text>
+          <rect x="330" y="88" width="120" height="40" rx="4" fill="var(--accent-soft)"/>
+          <text x="390" y="106" text-anchor="middle" font-size="11" font-weight="600" fill="var(--ink)">4 · 71</text>
+          <text x="390" y="120" text-anchor="middle" font-size="8.5" fill="var(--ink-soft)">sat 0.71</text>
+          <rect x="500" y="88" width="120" height="40" rx="4" fill="var(--sunk)"/>
+          <text x="560" y="112" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)">—</text>
+          <text x="690" y="112" font-size="11" font-weight="600" font-variant-numeric="tabular-nums" fill="var(--ink)">6 processi · 135</text>
+        </g>
+
+        <g>
+          <text x="20" y="170" font-size="11.5" font-weight="600" fill="var(--ink)">nuova</text>
+          <text x="20" y="185" font-size="8.5" fill="var(--ink-faint)">1.5.0 · in arrivo</text>
+          <rect x="170" y="152" width="120" height="40" rx="4" fill="var(--accent-soft)"/>
+          <text x="230" y="170" text-anchor="middle" font-size="11" font-weight="600" fill="var(--ink)">1 · 25</text>
+          <text x="230" y="184" text-anchor="middle" font-size="8.5" fill="var(--ink-soft)">sat 0.52</text>
+          <rect x="330" y="152" width="120" height="40" rx="4" fill="var(--sunk)"/>
+          <text x="390" y="176" text-anchor="middle" font-size="10.5" fill="var(--ink-faint)">—</text>
+          <rect x="500" y="152" width="120" height="40" rx="4" fill="var(--accent-soft)"/>
+          <text x="560" y="170" text-anchor="middle" font-size="11" font-weight="600" fill="var(--ink)">6 · 27</text>
+          <text x="560" y="184" text-anchor="middle" font-size="8.5" fill="var(--ink-soft)">sat 0.34</text>
+          <text x="690" y="176" font-size="11" font-weight="600" font-variant-numeric="tabular-nums" fill="var(--ink)">7 processi · 52</text>
+        </g>
+
+        <path d="M20,206 H860" stroke="var(--line)" fill="none"/>
+        <text x="20" y="224" font-size="10.5" fill="var(--ink-faint)">nessuno ha compilato questa griglia: è la somma delle decisioni dei capigruppo, dentro i budget del vertice e la capacità dei domini</text>
+      </g>
+    </svg>
+  </div>
+  <p class="caption">Le caselle vuote non sono un errore di configurazione: nessuno ha deciso che «stabile» debba stare sul cluster, e nessuno gliel'ha vietato. Quella casella si riempirà se e quando il capogruppo di «stabile» avrà bisogno di capacità e il cluster sarà il posto migliore per prenderla. È il senso pratico di una matrice che emerge dal basso invece di essere dichiarata.</p>
+</section>
+
+<section id="metriche">
+  <h2><span class="kicker">Osservabilità</span>Il terzo livello di metriche</h2>
+  <div class="prose">
+    <p>I due documenti precedenti descrivono i primi due livelli: il processo che espone se stesso, e il supervisore che ripubblica le letture dei propri processi — raccolte dalla sonda che già gira, perché i processi di lavoro non parlano HTTP.</p>
+    <p>Con più macchine la stessa forma si ripete di un livello, e questa è la proprietà interessante: <strong>il terzo livello non è un meccanismo nuovo</strong>. Un sub-commander sta verso i propri processi esattamente come il vertice sta verso i suoi, quindi espone le metriche del proprio dominio nello stesso modo. Il vertice, a sua volta, espone ciò che sa alla propria scala.</p>
+    <p>E ciò che il vertice sa è deliberatamente più grosso, per la stessa ragione per cui la sua tabella degli indirizzi è più grossa: non tiene un doppione di quello che sanno i domini.</p>
+  </div>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>Livello</th><th>Chi lo espone</th><th>Le grandezze</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Il processo</td>
+        <td>se stesso, quando serve HTTP; altrimenti risponde al supervisore sul canale</td>
+        <td>traffico e tempi di risposta, pool di lavoro, sessioni e accessi, task nello spool</td>
+      </tr>
+      <tr>
+        <td>Il dominio</td>
+        <td>il suo titolare — il vertice per i processi di casa, il sub-commander per gli altri</td>
+        <td>saturazione e memoria di ciascun processo, ampiezza del pool, nascite e ritiri con la causa, spostamenti, traffico dello stato vivo</td>
+      </tr>
+      <tr>
+        <td>Il sistema</td>
+        <td>il vertice</td>
+        <td>capacità offerta e impegnata per dominio, distribuzione delle persone fra domini e fra gruppi, budget assegnati e consumati, canali agganciati e loro cadute, operazioni fra gruppi</td>
+      </tr>
+    </tbody>
+  </table></div>
+
+  <div class="prose">
+    <p>La raccolta non attraversa la gerarchia: chi raccoglie interroga ogni livello dove è esposto, senza che un livello debba fare da tramite per le metriche di quello sotto. È l'opposto di quel che accade al traffico applicativo, che invece segue i rami dell'albero — e la differenza è voluta, perché il percorso delle metriche non deve poter influenzare le prestazioni di ciò che misura.</p>
+    <p>Un dominio irraggiungibile non fa cadere la lettura del sistema: risulta come tale, esattamente come nel pannello di supervisione. Un buco nei dati che si dichiara è un'informazione; un buco che passa per zero è un errore.</p>
+  </div>
+
+  <div class="note">
+    <span class="label">Cosa si guadagna dallo stesso formato tre volte</span>
+    <p>Gli allarmi si scrivono una volta sola. «La saturazione di qualcosa è oltre soglia da dieci minuti» ha la stessa forma per un processo, per un pool e per un dominio intero — e la stessa dashboard, cambiando solo l'etichetta, serve il caso mono-macchina e il parco di dieci nodi. Chi cresce non cambia strumenti: cambia solo quante righe legge.</p>
+  </div>
+</section>
+
+<section id="roadmap">
+  <h2><span class="kicker">Appendice</span>Roadmap: dove siamo</h2>
+  <div class="prose">
+    <p>Il documento descrive l'architettura distribuita nella sua forma compiuta. Questa appendice è il solo posto dove si legge lo stato di avanzamento.</p>
+    <p>Il fondamento è già in piedi: il protocollo del canale è nato con due collocazioni — in processo e su socket — e una sola batteria di test di contratto le verifica insieme. È la premessa che rende il sub-commander un'aggiunta e non una riscrittura, perché non introduce un protocollo nuovo: monta quello esistente un livello più in basso.</p>
+  </div>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>Capitolo</th><th>Stato</th><th>Nota</th></tr></thead>
+    <tbody>
+      <tr><td>Protocollo del canale con più collocazioni</td><td><span class="tag ok">operativo</span></td><td>in processo e su socket, verificate dalla stessa batteria di test</td></tr>
+      <tr><td>Il vertice come titolare del dominio di casa</td><td><span class="tag ok">operativo</span></td><td>genera, sorveglia, rilancia, misura</td></tr>
+      <tr><td>Spostamento a caldo di una persona fra processi</td><td><span class="tag ok">operativo</span></td><td>la primitiva su cui poggia ogni ricollocazione, anche fra domini</td></tr>
+      <tr><td>Sopravvivenza dello stato al riavvio</td><td><span class="tag ok">operativo</span></td><td>raccolta allo spegnimento, ripiazzamento all'avvio</td></tr>
+      <tr><td>Misura delle risorse e giudizio sull'occupazione</td><td><span class="tag ok">operativo</span></td><td>saturazione per componente, memoria misurata onestamente</td></tr>
+      <tr><td>Canali di specie mista sul vertice</td><td><span class="tag wip">in implementazione</span></td><td>oggi il vertice tiene processi di casa; l'aggancio di un dominio remoto è il passo che apre il multi-macchina</td></tr>
+      <tr><td>Sub-commander</td><td><span class="tag wip">in implementazione</span></td><td>è la stessa classe del vertice con il genitore armato: il disegno prevede due collocazioni fin dall'inizio, oggi ne esiste una</td></tr>
+      <tr><td>Capogruppo come decisore della propria versione</td><td><span class="tag wip">in implementazione</span></td><td>le politiche — nascita, ritiro, ribilanciamento, ricambio — sono operative sul pool; resta da separarle per gruppo</td></tr>
+      <tr><td>Mappa grossa e risoluzione a due tappe</td><td><span class="tag wip">in implementazione</span></td><td>la mappa fine utente → processo è operativa; l'indirizzo tipizzato è il passo che la affianca</td></tr>
+      <tr><td>Attuatore per cluster</td><td><span class="tag wip">in implementazione</span></td><td>materializzazione dei pod via API, con bilanciatore, autoscaling e rilascio graduale nativi deliberatamente non usati</td></tr>
+      <tr><td>Pannello dei domini e matrice gruppi × domini</td><td><span class="tag wip">in implementazione</span></td><td>il pannello del pool è operativo e il sub-commander espone lo stesso; la vista di sistema arriva con i canali di specie mista</td></tr>
+      <tr><td>Metriche di sistema in formato Prometheus</td><td><span class="tag wip">in implementazione</span></td><td>terzo livello: capacità per dominio, distribuzione fra gruppi, budget · stesso formato dei livelli sottostanti</td></tr>
+      <tr><td>Budget per gruppo</td><td><span class="tag wip">in implementazione</span></td><td>l'arbitraggio del ferro condiviso fra sezioni autonome</td></tr>
+    </tbody>
+  </table></div>
+
+  <p class="roadmap-note">Ultimo aggiornamento della roadmap: 13 agosto 2026. Le voci del corpo del documento non cambiano quando una riga di questa tabella passa a «operativo».</p>
+
+  <div class="back">
+    <span class="label">I documenti precedenti</span>
+    <p>Il primo descrive il server: routing agnostico dal trasporto, grammatiche di configurazione, OpenAPI e MCP, autenticazione, sessioni, task, storage. Il secondo spiega perché lo stato di lavoro vive in memoria, perché questo lega una persona al suo processo, e come i gruppi permettono di far convivere due versioni. Questo terzo porta lo stesso disegno oltre il confine della macchina.</p>
+  </div>
+</section>
+
+<footer>
+  <p>genro-asgi · documento 3 di 3 · Apache License 2.0 · Softwell S.r.l.</p>
+</footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,868 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>genro-asgi — schema a blocchi e stato delle feature</title>
+<style>
+:root {
+  --ground: #f2f4f3;
+  --surface: #ffffff;
+  --surface-sunk: #e9edec;
+  --line: #d5dcdb;
+  --line-soft: #e4e9e8;
+  --ink: #141d1e;
+  --ink-soft: #4a5657;
+  --ink-faint: #6d7b7b;
+  --accent: #0f6b74;
+  --accent-soft: #e0eeee;
+  --done: #3a7a55;
+  --done-soft: #e2efe7;
+  --partial: #94631a;
+  --partial-soft: #f6ecd9;
+  --planned: #64717c;
+  --planned-soft: #e8ebee;
+  --open: #7b4a6e;
+  --open-soft: #f0e6ee;
+  --shadow: 0 1px 2px rgba(20, 29, 30, .06), 0 8px 24px -16px rgba(20, 29, 30, .3);
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0d1416;
+    --surface: #141d20;
+    --surface-sunk: #101819;
+    --line: #263436;
+    --line-soft: #1c282a;
+    --ink: #e4ecea;
+    --ink-soft: #a8b6b5;
+    --ink-faint: #7d8c8c;
+    --accent: #56b9c2;
+    --accent-soft: #123338;
+    --done: #6bb98c;
+    --done-soft: #14291f;
+    --partial: #d3a355;
+    --partial-soft: #2b2317;
+    --planned: #93a1ac;
+    --planned-soft: #1b2226;
+    --open: #c393b6;
+    --open-soft: #271c25;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 30px -20px rgba(0, 0, 0, .8);
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #0d1416;
+  --surface: #141d20;
+  --surface-sunk: #101819;
+  --line: #263436;
+  --line-soft: #1c282a;
+  --ink: #e4ecea;
+  --ink-soft: #a8b6b5;
+  --ink-faint: #7d8c8c;
+  --accent: #56b9c2;
+  --accent-soft: #123338;
+  --done: #6bb98c;
+  --done-soft: #14291f;
+  --partial: #d3a355;
+  --partial-soft: #2b2317;
+  --planned: #93a1ac;
+  --planned-soft: #1b2226;
+  --open: #c393b6;
+  --open-soft: #271c25;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 30px -20px rgba(0, 0, 0, .8);
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.62;
+}
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px 96px; }
+.prose { max-width: 68ch; }
+
+/* ---------- header ---------- */
+header.top {
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  padding: 56px 0 36px;
+}
+.eyebrow {
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 14px;
+}
+h1 {
+  font-family: var(--serif);
+  font-size: clamp(34px, 5.2vw, 54px);
+  line-height: 1.08;
+  font-weight: 600;
+  letter-spacing: -.015em;
+  margin: 0 0 18px;
+  text-wrap: balance;
+}
+.lede { font-size: 20px; color: var(--ink-soft); margin: 0 0 34px; max-width: 60ch; }
+
+.facts { display: flex; flex-wrap: wrap; gap: 0; border-top: 1px solid var(--line); }
+.fact {
+  flex: 1 1 150px;
+  padding: 16px 20px 14px 0;
+  border-right: 1px solid var(--line-soft);
+}
+.fact:last-child { border-right: 0; }
+.fact dt {
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0 0 6px;
+}
+.fact dd {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 26px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em;
+}
+.fact dd small { font-size: 13px; font-weight: 500; color: var(--ink-faint); }
+
+/* ---------- sections ---------- */
+section { margin: 0 0 72px; scroll-margin-top: 70px; }
+h2 {
+  font-size: clamp(25px, 3.2vw, 33px);
+  font-weight: 600;
+  letter-spacing: -.012em;
+  margin: 0 0 8px;
+  text-wrap: balance;
+}
+h2 .num {
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: .08em;
+  display: block;
+  margin-bottom: 8px;
+}
+h3 { font-size: 21px; font-weight: 600; margin: 40px 0 10px; letter-spacing: -.01em; }
+p { margin: 0 0 18px; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+code, .mono { font-family: var(--mono); font-size: .87em; }
+p code, li code, td code { background: var(--surface-sunk); padding: 1px 5px; border-radius: 3px; }
+
+/* ---------- sticky nav ---------- */
+nav.sticky {
+  position: sticky; top: 0; z-index: 20;
+  background: color-mix(in srgb, var(--ground) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 40px;
+}
+nav.sticky .inner {
+  max-width: 1180px; margin: 0 auto; padding: 10px 24px;
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+  font-family: var(--sans); font-size: 13px;
+}
+nav.sticky a {
+  color: var(--ink-soft); text-decoration: none; padding: 5px 10px; border-radius: 4px;
+}
+nav.sticky a:hover { background: var(--surface-sunk); color: var(--ink); }
+nav.sticky button {
+  margin-left: auto; font-family: var(--sans); font-size: 12px; font-weight: 600;
+  color: var(--accent); background: var(--accent-soft); border: 1px solid transparent;
+  padding: 6px 12px; border-radius: 4px; cursor: pointer;
+}
+nav.sticky button:hover { border-color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- diagram ---------- */
+.diagram {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 6px;
+  padding: 28px 24px; margin: 28px 0; overflow-x: auto; box-shadow: var(--shadow);
+}
+.diagram svg { display: block; min-width: 620px; width: 100%; height: auto; }
+.caption {
+  font-family: var(--sans); font-size: 13px; color: var(--ink-faint);
+  margin: -12px 0 32px; max-width: 68ch;
+}
+
+/* ---------- block grid ---------- */
+.blocks { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; margin: 28px 0; }
+details.block {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 6px;
+  box-shadow: var(--shadow); overflow: hidden;
+}
+details.block[open] { grid-column: 1 / -1; }
+details.block > summary {
+  list-style: none; cursor: pointer; padding: 16px 18px;
+  display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: baseline;
+}
+details.block > summary::-webkit-details-marker { display: none; }
+details.block > summary:hover { background: var(--surface-sunk); }
+.block-name { font-family: var(--sans); font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
+.block-meta {
+  font-family: var(--sans); font-size: 12px; font-variant-numeric: tabular-nums;
+  color: var(--ink-faint); text-align: right; white-space: nowrap;
+}
+.block-note { grid-column: 1 / -1; font-size: 15px; color: var(--ink-soft); line-height: 1.5; }
+.block-body { padding: 4px 18px 20px; border-top: 1px solid var(--line-soft); }
+
+/* ---------- module table ---------- */
+table { width: 100%; border-collapse: collapse; font-family: var(--sans); font-size: 14px; }
+.tablewrap { overflow-x: auto; margin: 18px 0 8px; }
+th {
+  text-align: left; font-size: 11px; font-weight: 650; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink-faint);
+  padding: 10px 12px 8px 0; border-bottom: 1px solid var(--line);
+}
+td { padding: 9px 12px 9px 0; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; padding-right: 18px; }
+tr:last-child td { border-bottom: 0; }
+td .mono { font-size: 13px; color: var(--ink); }
+td .desc { color: var(--ink-soft); }
+
+/* ---------- status pills ---------- */
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--sans); font-size: 11.5px; font-weight: 600;
+  padding: 3px 9px 3px 7px; border-radius: 3px; white-space: nowrap;
+  border: 1px solid transparent;
+}
+.pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.pill.done { color: var(--done); background: var(--done-soft); }
+.pill.partial { color: var(--partial); background: var(--partial-soft); }
+.pill.partial::before { border-radius: 1px; transform: rotate(45deg); }
+.pill.planned { color: var(--planned); background: var(--planned-soft); }
+.pill.planned::before { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
+.pill.open { color: var(--open); background: var(--open-soft); }
+.pill.open::before { border-radius: 1px; }
+
+.legend { display: grid; gap: 10px; margin: 24px 0 34px; }
+.legend div { display: grid; grid-template-columns: 190px 1fr; gap: 16px; align-items: baseline; font-family: var(--sans); font-size: 14px; color: var(--ink-soft); }
+
+/* ---------- callout ---------- */
+.callout {
+  background: var(--surface); border: 1px solid var(--line);
+  border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0;
+  padding: 18px 22px; margin: 26px 0; font-size: 16px;
+}
+.callout p:last-child { margin-bottom: 0; }
+.callout strong { font-family: var(--sans); font-size: 14px; letter-spacing: .01em; }
+
+ul.tight { margin: 0 0 18px; padding-left: 22px; }
+ul.tight li { margin-bottom: 7px; }
+
+footer {
+  border-top: 1px solid var(--line); padding-top: 26px; margin-top: 72px;
+  font-family: var(--sans); font-size: 13px; color: var(--ink-faint);
+}
+@media (max-width: 620px) {
+  body { font-size: 16px; }
+  .fact { border-right: 0; }
+  details.block > summary { grid-template-columns: 1fr; }
+  .block-meta { text-align: left; }
+  .legend div { grid-template-columns: 1fr; gap: 4px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <p class="eyebrow">genro-asgi · 0.33.0 · Beta</p>
+    <h1>Un server ASGI in blocchi</h1>
+    <p class="lede">Anatomia di genro-asgi: tredici blocchi logici, i loro sotto-blocchi, e il grado di completezza di ogni funzionalità progettata — misurato sul codice, non dichiarato.</p>
+    <dl class="facts">
+      <div class="fact"><dt>Righe di codice</dt><dd>9.405 <small>su 20.211 totali</small></dd></div>
+      <div class="fact"><dt>Moduli</dt><dd>84 <small>file Python</small></dd></div>
+      <div class="fact"><dt>Test</dt><dd>1.567 <small>verdi, 2 skip</small></dd></div>
+      <div class="fact"><dt>Copertura</dt><dd>96% <small>7.474 stmt</small></dd></div>
+      <div class="fact"><dt>Dipendenze</dt><dd>6 <small>pacchetti genro</small></dd></div>
+    </dl>
+  </div>
+</header>
+
+<nav class="sticky">
+  <div class="inner">
+    <a href="#flusso">Flusso</a>
+    <a href="#blocchi">Blocchi</a>
+    <a href="#spa">Piano SPA</a>
+    <a href="#feature">Feature</a>
+    <a href="#assente">Non implementato</a>
+    <a href="#metodo">Metodo</a>
+    <button type="button" id="toggle-all">Espandi tutti i blocchi</button>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<section id="premessa">
+  <div class="prose">
+    <p>genro-asgi non è un wrapper su Starlette: è un server ASGI scritto da zero a partire da una specifica ratificata — <code>SPECIFICATION.md</code>, 858 righe di decision log con 28 decisioni numerate. Questo documento ne mappa la struttura in blocchi navigabili e misura quanto di ciò che è stato progettato esiste davvero.</p>
+    <p>Ogni blocco si apre. Il primo livello dà il perimetro e il peso; dentro trovi i moduli reali con la loro copertura di test, così che «completo» sia un numero e non un'opinione.</p>
+  </div>
+</section>
+
+<section id="flusso">
+  <h2><span class="num">Il percorso di una richiesta</span>Dal socket alla risposta</h2>
+  <div class="prose">
+    <p>Una sola regola di smistamento governa ogni server: <strong>primo segmento del path → l'applicazione montata lì</strong>; altrimenti quella sulla radice del sito; altrimenti, per <code>/</code> con un <code>default</code> dichiarato, un 307; altrimenti 404. Un server mono-applicazione è un <em>uso</em> di questa regola, non un meccanismo diverso.</p>
+  </div>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 300" role="img" aria-label="Flusso della richiesta: uvicorn, server, catena middleware, demux, applicazione, handler, risposta">
+      <defs>
+        <marker id="ar" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+          <path d="M0,0 L9,4.5 L0,9 z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <g fill="none" stroke="currentColor" stroke-width="1.5" color="var(--ink-faint)" marker-end="url(#ar)">
+        <path d="M96,52 L96,74"/>
+        <path d="M96,126 L96,148"/>
+        <path d="M264,170 L300,170"/>
+        <path d="M470,170 L506,170"/>
+        <path d="M672,170 L708,170"/>
+        <path d="M780,148 L780,126"/>
+      </g>
+
+      <g font-family="system-ui, sans-serif">
+        <rect x="16" y="16" width="160" height="36" rx="4" fill="var(--surface-sunk)" stroke="var(--line)"/>
+        <text x="96" y="39" text-anchor="middle" font-size="13" font-weight="600" fill="var(--ink)">uvicorn</text>
+
+        <rect x="16" y="74" width="160" height="52" rx="4" fill="var(--accent-soft)" stroke="var(--accent)"/>
+        <text x="96" y="96" text-anchor="middle" font-size="13" font-weight="600" fill="var(--ink)">AsgiServer</text>
+        <text x="96" y="113" text-anchor="middle" font-size="11" fill="var(--ink-soft)">il server È l'app ASGI</text>
+
+        <rect x="16" y="148" width="248" height="44" rx="4" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="140" y="167" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--ink)">catena middleware</text>
+        <text x="140" y="183" text-anchor="middle" font-size="11" fill="var(--ink-soft)">errors → cors → auth → session</text>
+
+        <rect x="300" y="148" width="170" height="44" rx="4" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="385" y="167" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--ink)">demux</text>
+        <text x="385" y="183" text-anchor="middle" font-size="11" fill="var(--ink-soft)">1° segmento → mount</text>
+
+        <rect x="506" y="148" width="166" height="44" rx="4" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="589" y="167" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--ink)">applicazione</text>
+        <text x="589" y="183" text-anchor="middle" font-size="11" fill="var(--ink-soft)">RoutedApplication</text>
+
+        <rect x="708" y="148" width="176" height="44" rx="4" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="796" y="167" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--ink)">@route handler</text>
+        <text x="796" y="183" text-anchor="middle" font-size="11" fill="var(--ink-soft)">sync → pool, async → loop</text>
+
+        <rect x="700" y="74" width="160" height="52" rx="4" fill="var(--surface-sunk)" stroke="var(--line)"/>
+        <text x="780" y="96" text-anchor="middle" font-size="13" font-weight="600" fill="var(--ink)">Response</text>
+        <text x="780" y="113" text-anchor="middle" font-size="11" fill="var(--ink-soft)">buffered · streaming · SSE</text>
+
+        <rect x="16" y="228" width="868" height="56" rx="4" fill="none" stroke="var(--line)" stroke-dasharray="3 3"/>
+        <text x="34" y="250" font-size="11" font-weight="600" letter-spacing=".08em" fill="var(--ink-faint)">SEMPRE PRESENTI</text>
+        <text x="34" y="270" font-size="12" fill="var(--ink-soft)">thread pool monitorato · lifespan ordinato · request registry (richiesta corrente + quadro in volo) · app _server automatica su /_server</text>
+      </g>
+    </svg>
+  </div>
+  <p class="caption">Il middleware è ordinato da un numero, non da un tratto di classe: più piccolo è più esterno. Solo <code>errors</code> è attivo di default; <code>session</code> e <code>auth</code> vengono armati dai rispettivi mixin quando li configuri.</p>
+</section>
+
+<section id="blocchi">
+  <h2><span class="num">Zoom livello 1</span>I tredici blocchi</h2>
+  <div class="prose">
+    <p>Apri un blocco per scendere ai sotto-blocchi: moduli reali, con le loro istruzioni misurate e la copertura dei test. La percentuale è quella di <code>pytest --cov</code>, eseguito sul codice di questa versione.</p>
+  </div>
+
+  <div class="blocks" id="block-grid">
+
+    <details class="block">
+      <summary>
+        <span class="block-name">1 · Nucleo del server</span>
+        <span class="block-meta">356 stmt · 99%</span>
+        <span class="block-note">Il substrato comune: un loop, un pool, una regola di smistamento, un registro delle richieste.</span>
+      </summary>
+      <div class="block-body">
+        <div class="tablewrap"><table>
+          <thead><tr><th>Modulo</th><th>Ruolo</th><th class="num">Stmt</th><th class="num">Cov</th></tr></thead>
+          <tbody>
+            <tr><td><span class="mono">server.py</span></td><td class="desc">BaseServer: le app servite, il dispatch ASGI, l'avvio uvicorn, il socket websocket vuoto</td><td class="num">118</td><td class="num">99%</td></tr>
+            <tr><td><span class="mono">asgi_server.py</span></td><td class="desc">AsgiServer: la composizione spedita, tutti i mixin di capacità in un solo MRO</td><td class="num">93</td><td class="num">97%</td></tr>
+            <tr><td><span class="mono">request_registry.py</span></td><td class="desc">la richiesta corrente (un solo ContextVar, posseduto dall'istanza) e il quadro delle richieste in volo</td><td class="num">65</td><td class="num">98%</td></tr>
+            <tr><td><span class="mono">pool.py</span></td><td class="desc">l'unico thread pool per il lavoro bloccante, provvisto pigramente sul loop vivo</td><td class="num">41</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">lifespan.py</span></td><td class="desc">avvio ordinato, spegnimento inverso, isolamento degli errori</td><td class="num">35</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">types.py</span></td><td class="desc">alias di tipo ASGI</td><td class="num">8</td><td class="num">100%</td></tr>
+          </tbody>
+        </table></div>
+        <p class="caption">Decisioni di riferimento: D2 (cosa possiede il server base), D3 (una sola regola di demux), D5 (un solo registro delle richieste).</p>
+      </div>
+    </details>
+
+    <details class="block">
+      <summary>
+        <span class="block-name">2 · Applicazioni</span>
+        <span class="block-meta">599 stmt · 99%</span>
+        <span class="block-note">Il contratto lato app e le classi concrete: REST, OpenAPI, MCP, l'app di sistema, il front SPA.</span>
+      </summary>
+      <div class="block-body">
+        <div class="tablewrap"><table>
+          <thead><tr><th>Modulo</th><th>Ruolo</th><th class="num">Stmt</th><th class="num">Cov</th></tr></thead>
+          <tbody>
+            <tr><td><span class="mono">application.py</span></td><td class="desc">BaseApplication: <code>code</code> (identità), <code>mount</code> (prefisso URL), <code>server</code> assegnato una volta sola</td><td class="num">45</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">routed_application.py</span></td><td class="desc">innesta genro-routes: handler <code>@route</code> risolti dal router dell'app</td><td class="num">94</td><td class="num">96%</td></tr>
+            <tr><td><span class="mono">applications/openapi.py</span></td><td class="desc">OpenApiApplication: REST + schema OpenAPI + pagine di documentazione</td><td class="num">71</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">applications/mcp.py</span></td><td class="desc">McpApplication e McpOpenApiApplication: trasporto Streamable HTTP stateless</td><td class="num">175</td><td class="num">96%</td></tr>
+            <tr><td><span class="mono">applications/server_app.py</span></td><td class="desc">ServerApplication: l'app <code>_server</code> automatica, mai configurata</td><td class="num">112</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">applications/spa_app.py</span></td><td class="desc">SpaApplication: il front montabile che possiede un pool user-sticky, demux a due stadi</td><td class="num">96</td><td class="num">100%</td></tr>
+          </tbody>
+        </table></div>
+        <p class="caption">Una sola categoria di applicazione, non due: lo stesso albero di rotte serve REST e MCP insieme. <code>mount=""</code> è la radice del sito — un valore come un altro, non un'assenza.</p>
+      </div>
+    </details>
+
+    <details class="block">
+      <summary>
+        <span class="block-name">3 · L'app di sistema <span class="mono">_server</span></span>
+        <span class="block-meta">320 stmt · 100%</span>
+        <span class="block-note">Montata automaticamente su ogni AsgiServer: login, utenti, credenziali, task.</span>
+      </summary>
+      <div class="block-body">
+        <div class="tablewrap"><table>
+          <thead><tr><th>Sezione</th><th>Superficie</th><th class="num">Stmt</th><th class="num">Cov</th></tr></thead>
+          <tbody>
+            <tr><td><span class="mono">auth_section.py</span></td><td class="desc">il contenitore <code>/_server/auth</code>: monta solo i metodi che possiedono rotte proprie</td><td class="num">24</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">users_section.py</span></td><td class="desc">gestione utenti, cancello SUPERADMIN</td><td class="num">87</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">tokens_section.py</span></td><td class="desc">credenziali emesse e revocabili</td><td class="num">64</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">tasks_section.py</span></td><td class="desc">endpoint della spina dorsale dei task</td><td class="num">139</td><td class="num">100%</td></tr>
+          </tbody>
+        </table></div>
+        <p class="caption">Invariante 10 applicata nel codice: un metodo di login senza rotte vive nel registro ordinato, non nell'albero di routing. Il routing non è mai usato come registro.</p>
+      </div>
+    </details>
+
+    <details class="block">
+      <summary>
+        <span class="block-name">4 · I/O HTTP</span>
+        <span class="block-meta">359 stmt · 98%</span>
+        <span class="block-note">Richiesta, risposta, streaming, SSE ed eccezioni di controllo di flusso.</span>
+      </summary>
+      <div class="block-body">
+        <div class="tablewrap"><table>
+          <thead><tr><th>Modulo</th><th>Ruolo</th><th class="num">Stmt</th><th class="num">Cov</th></tr></thead>
+          <tbody>
+            <tr><td><span class="mono">request.py</span></td><td class="desc">una classe piatta sullo scope ASGI, parsing del corpo eager</td><td class="num">138</td><td class="num">96%</td></tr>
+            <tr><td><span class="mono">response.py</span></td><td class="desc">una classe piatta, bufferizzata, consapevole di TYTX</td><td class="num">111</td><td class="num">99%</td></tr>
+            <tr><td><span class="mono">sse.py</span></td><td class="desc">framing Server-Sent Events sopra StreamingResponse</td><td class="num">52</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">streaming.py</span></td><td class="desc">risposta a chunk, sorella ASGI di Response</td><td class="num">34</td><td class="num">97%</td></tr>
+            <tr><td><span class="mono">exceptions.py</span></td><td class="desc">eccezioni HTTP sollevabili ovunque, risposte dal middleware errors</td><td class="num">24</td><td class="num">100%</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <details class="block">
+      <summary>
+        <span class="block-name">5 · Catena middleware</span>
+        <span class="block-meta">361 stmt · 96%</span>
+        <span class="block-note">Sette middleware ordinati da un numero, armati dai mixin che li configurano.</span>
+      </summary>
+      <div class="block-body">
+        <div class="tablewrap"><table>
+          <thead><tr><th>Modulo</th><th>Ruolo</th><th class="num">Stmt</th><th class="num">Cov</th></tr></thead>
+          <tbody>
+            <tr><td><span class="mono">errors.py</span></td><td class="desc">il try/except più esterno e la giuntura del login</td><td class="num">79</td><td class="num">99%</td></tr>
+            <tr><td><span class="mono">cors.py</span></td><td class="desc">Cross-Origin Resource Sharing</td><td class="num">73</td><td class="num">96%</td></tr>
+            <tr><td><span class="mono">base.py</span></td><td class="desc">classe base e meccanismo della catena</td><td class="num">66</td><td class="num">98%</td></tr>
+            <tr><td><span class="mono">session.py</span></td><td class="desc">ciclo di vita della sessione guidato dal cookie</td><td class="num">44</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">logging.py</span></td><td class="desc">log di accesso HTTP</td><td class="num">41</td><td class="num">85%</td></tr>
+            <tr><td><span class="mono">wellknown.py</span></td><td class="desc">filtro dei path di probe e well-known</td><td class="num">17</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">authentication.py</span></td><td class="desc">pubblica l'identità della richiesta sullo scope</td><td class="num">10</td><td class="num">100%</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <details class="block">
+      <summary>
+        <span class="block-name">6 · Autenticazione e identità</span>
+        <span class="block-meta">469 stmt · 96%</span>
+        <span class="block-note">Il nucleo credenziali, i metodi di login (password, OIDC) e gli archivi di identità.</span>
+      </summary>
+      <div class="block-body">
+        <div class="tablewrap"><table>
+          <thead><tr><th>Modulo</th><th>Ruolo</th><th class="num">Stmt</th><th class="num">Cov</th></tr></thead>
+          <tbody>
+            <tr><td><span class="mono">auth/oidc_method.py</span></td><td class="desc">authorization-code + PKCE S256, discovery pigra e cachata, un'istanza per provider</td><td class="num">108</td><td class="num">97%</td></tr>
+            <tr><td><span class="mono">auth/core.py</span></td><td class="desc">configurazione credenziali e verifica degli header (basic, bearer, JWT)</td><td class="num">96</td><td class="num">95%</td></tr>
+            <tr><td><span class="mono">auth/api_key_store.py</span></td><td class="desc">registro delle credenziali bearer revocabili: contratto + backend su file</td><td class="num">93</td><td class="num">95%</td></tr>
+            <tr><td><span class="mono">auth/user_store.py</span></td><td class="desc">sorgente locale di identità: contratto + backend su file, contatore di lockout</td><td class="num">81</td><td class="num">94%</td></tr>
+            <tr><td><span class="mono">auth/mixin.py</span></td><td class="desc">risoluzione dell'identità da header o sessione, come capacità</td><td class="num">60</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">auth/auth_method.py</span></td><td class="desc">metodi di login auto-descrittivi montati sotto <code>_server/auth</code></td><td class="num">31</td><td class="num">100%</td></tr>
+          </tbody>
+        </table></div>
+        <p class="caption">Il lockout (D28) vive sul record utente — <code>failed_attempts</code>, <code>last_failed_at</code> — quindi sopravvive ai riavvii ed è condiviso tra processi. I tentativi rifiutati durante la finestra non incrementano il contatore: un attaccante non può prolungare il blocco di un utente legittimo.</p>
+      </div>
+    </details>
+
+    <details class="block">
+      <summary>
+        <span class="block-name">7 · Sessioni</span>
+        <span class="block-meta">190 stmt · 99%</span>
+        <span class="block-note">La sessione come continuum: il login vi attacca un'identità, l'id non cambia mai.</span>
+      </summary>
+      <div class="block-body">
+        <div class="tablewrap"><table>
+          <thead><tr><th>Modulo</th><th>Ruolo</th><th class="num">Stmt</th><th class="num">Cov</th></tr></thead>
+          <tbody>
+            <tr><td><span class="mono">session/store.py</span></td><td class="desc">il Protocol dello store e il default in memoria</td><td class="num">77</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">session/session.py</span></td><td class="desc">id, meta, dati come Bag, collezione di Avatar per chiave</td><td class="num">51</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">session/mixin.py</span></td><td class="desc">le sessioni HTTP come capacità sul server base</td><td class="num">39</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">session/avatar.py</span></td><td class="desc">l'unico tipo di identità autenticata del pacchetto</td><td class="num">18</td><td class="num">94%</td></tr>
+          </tbody>
+        </table></div>
+        <p class="caption">D24: <code>attach_avatar</code> muta la sessione esistente — quello che un visitatore anonimo ha accumulato sopravvive al login, e il cookie che il client già possiede resta valido. Nessun cookie viene emesso al login.</p>
+      </div>
+    </details>
+
+    <details class="block">
+      <summary>
+        <span class="block-name">8 · Configurazione</span>
+        <span class="block-meta">255 stmt · 100%</span>
+        <span class="block-note">Il server legge la propria configurazione: una ricetta, una porta di lettura, quattro livelli.</span>
+      </summary>
+      <div class="block-body">
+        <div class="tablewrap"><table>
+          <thead><tr><th>Modulo</th><th>Ruolo</th><th class="num">Stmt</th><th class="num">Cov</th></tr></thead>
+          <tbody>
+            <tr><td><span class="mono">config/handler.py</span></td><td class="desc">la porta di lettura: <code>server.config("server.host")</code> su valore scritto → default della firma → default della chiamata → KeyError rumoroso</td><td class="num">124</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">config/elements.py</span></td><td class="desc">AsgiServerGrammar: la grammatica delle sezioni</td><td class="num">52</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">config/default_config.py</span></td><td class="desc">il livello di default che una ricetta dichiara per sé</td><td class="num">48</td><td class="num">98%</td></tr>
+            <tr><td><span class="mono">config/builder.py</span></td><td class="desc">il dialetto <code>asgiconfig</code> su genro-builders contrib/config</td><td class="num">26</td><td class="num">100%</td></tr>
+          </tbody>
+        </table></div>
+        <p class="caption">I valori che vengono da fuori sono <em>resolver al loro posto</em>: metti un <code>EnvResolver</code> dove andrebbe il valore e si risolve alla lettura. Il vecchio modello a puntatori risolveva una volta sola alla materializzazione e perdeva interi livelli in silenzio.</p>
+      </div>
+    </details>
+
+    <details class="block">
+      <summary>
+        <span class="block-name">9 · Task</span>
+        <span class="block-meta">674 stmt · 97%</span>
+        <span class="block-note">Lo spool su file dove lo stato È la posizione: una transizione è uno spostamento di cartella.</span>
+      </summary>
+      <div class="block-body">
+        <div class="tablewrap"><table>
+          <thead><tr><th>Modulo</th><th>Ruolo</th><th class="num">Stmt</th><th class="num">Cov</th></tr></thead>
+          <tbody>
+            <tr><td><span class="mono">tasks/spool.py</span></td><td class="desc">lo spool su file, modello a spostamento di cartella, atomico su un mount</td><td class="num">148</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">tasks/scheduler.py</span></td><td class="desc">il ciclo che esegue le pianificazioni scadute</td><td class="num">140</td><td class="num">91%</td></tr>
+            <tr><td><span class="mono">tasks/schedule.py</span></td><td class="desc">parsing delle pianificazioni e calcolo della prossima esecuzione, tre tipi di task</td><td class="num">99</td><td class="num">98%</td></tr>
+            <tr><td><span class="mono">tasks/store.py</span></td><td class="desc">la metà persistente della spina dorsale (nessuno SQLite)</td><td class="num">94</td><td class="num">94%</td></tr>
+            <tr><td><span class="mono">tasks/manager.py</span></td><td class="desc">spool + executor + hub, posseduti dal server</td><td class="num">67</td><td class="num">97%</td></tr>
+            <tr><td><span class="mono">tasks/mixin.py</span></td><td class="desc">la spina dorsale come capacità, aperta pigramente sullo storage</td><td class="num">49</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">tasks/executor.py</span></td><td class="desc">esegue un task dello spool in-process sul server vivo</td><td class="num">42</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">tasks/hub.py</span></td><td class="desc">fan-out degli eventi per sessione, in memoria</td><td class="num">25</td><td class="num">100%</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <details class="block">
+      <summary>
+        <span class="block-name">10 · Canale (IPC)</span>
+        <span class="block-meta">518 stmt · 93%</span>
+        <span class="block-note">Buste con prefisso di lunghezza, zero dipendenze esterne, e un gemello in-process identico byte per byte.</span>
+      </summary>
+      <div class="block-body">
+        <div class="tablewrap"><table>
+          <thead><tr><th>Modulo</th><th>Ruolo</th><th class="num">Stmt</th><th class="num">Cov</th></tr></thead>
+          <tbody>
+            <tr><td><span class="mono">channel/hub.py</span></td><td class="desc">il lato padre, con buste tipizzate (CALL, REPLY, EVENT)</td><td class="num">202</td><td class="num">93%</td></tr>
+            <tr><td><span class="mono">channel/local.py</span></td><td class="desc">il filo in-process: una coppia di code al posto del socket, stessa codifica</td><td class="num">129</td><td class="num">92%</td></tr>
+            <tr><td><span class="mono">channel/client.py</span></td><td class="desc">il lato figlio — sapere <em>essere</em> figlio fa parte di ciò che un server è</td><td class="num">116</td><td class="num">91%</td></tr>
+            <tr><td><span class="mono">channel/frame.py</span></td><td class="desc">il protocollo di frame: il prefisso di lunghezza sostituisce il framing websocket</td><td class="num">71</td><td class="num">94%</td></tr>
+          </tbody>
+        </table></div>
+        <p class="caption">Il ruolo «single» è configurazione, non una sottoclasse: <code>local_worker=True</code> costruisce un worker in questo stesso processo e lo attacca all'hub tramite LocalChannel — stesso REGISTER, stessa codifica su ogni frame. Se il protocollo funziona nel ruolo singolo, passare a multi cambia solo il filo.</p>
+      </div>
+    </details>
+
+    <details class="block">
+      <summary>
+        <span class="block-name">11 · Piano SPA — orchestrazione</span>
+        <span class="block-meta">2.580 stmt · 95%</span>
+        <span class="block-note">Il blocco più grande: commander, worker, registri, store globale, valutatore di occupazione.</span>
+      </summary>
+      <div class="block-body">
+        <div class="tablewrap"><table>
+          <thead><tr><th>Modulo</th><th>Ruolo</th><th class="num">Stmt</th><th class="num">Cov</th></tr></thead>
+          <tbody>
+            <tr><td><span class="mono">spa/commander.py</span></td><td class="desc">il pool di worker e il quadro di routing sopra di esso: otto registri piatti, supervisione, sonda, battito del pool</td><td class="num">1209</td><td class="num">95%</td></tr>
+            <tr><td><span class="mono">spa/worker.py</span></td><td class="desc">il runtime di esecuzione: registri, quattro famiglie di op, outbox, due vie di segnale</td><td class="num">782</td><td class="num">95%</td></tr>
+            <tr><td><span class="mono">spa/register_registry.py</span></td><td class="desc">il registro dei registri, vocabolario di ciclo di vita utenti/pagine</td><td class="num">146</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">spa/evaluator.py</span></td><td class="desc">trasforma la finestra di metriche di un worker in un'occupazione in [0, 1]</td><td class="num">124</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">spa/global_store.py</span></td><td class="desc">un Bag master sopra, una replica per worker sotto</td><td class="num">75</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">spa/worker_entry.py</span></td><td class="desc">il punto d'ingresso del processo figlio: un canale, nient'altro</td><td class="num">69</td><td class="num">72%</td></tr>
+            <tr><td><span class="mono">spa/register.py</span></td><td class="desc">un dataset in-process con indici secondari</td><td class="num">66</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">spa/environ.py</span></td><td class="desc">il sintetizzatore di environ: fatti HTTP dentro, risposta WSGI fuori</td><td class="num">60</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">spa/subscription_index.py</span></td><td class="desc">sottoscrizioni a tabelle, entrambe le direzioni, un solo mutatore per lato</td><td class="num">44</td><td class="num">100%</td></tr>
+          </tbody>
+        </table></div>
+        <p class="caption">Chiavi e posizioni sopra, contenuti sotto: i registri di superficie del commander sono dizionari piatti, deliberatamente <em>non</em> la macchina Register del worker. Vedi la sezione dedicata più sotto.</p>
+      </div>
+    </details>
+
+    <details class="block">
+      <summary>
+        <span class="block-name">12 · Storage, database, plugin</span>
+        <span class="block-meta">275 stmt · 88%</span>
+        <span class="block-note">Le sezioni trasversali: storage come capacità, il contratto db, i dialetti di trasporto.</span>
+      </summary>
+      <div class="block-body">
+        <div class="tablewrap"><table>
+          <thead><tr><th>Modulo</th><th>Ruolo</th><th class="num">Stmt</th><th class="num">Cov</th></tr></thead>
+          <tbody>
+            <tr><td><span class="mono">plugins/openapi/translator.py</span></td><td class="desc">traduce l'output di <code>nodes()</code> di genro-routes in OpenAPI</td><td class="num">157</td><td class="num">86%</td></tr>
+            <tr><td><span class="mono">plugin_mixin.py</span></td><td class="desc">i plugin del router come capacità del server</td><td class="num">46</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">storage_mixin.py</span></td><td class="desc">genro-storage come capacità</td><td class="num">29</td><td class="num">100%</td></tr>
+            <tr><td><span class="mono">plugins/openapi/plugin.py</span></td><td class="desc">configurazione OpenAPI per singolo handler</td><td class="num">26</td><td class="num">77%</td></tr>
+            <tr><td><span class="mono">db.py</span></td><td class="desc">il contratto minimo per un database montato</td><td class="num">17</td><td class="num">100%</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </details>
+
+    <details class="block">
+      <summary>
+        <span class="block-name">13 · Riga di comando</span>
+        <span class="block-meta">282 stmt · 98%</span>
+        <span class="block-note">Un <code>config.py</code> più <code>genro-asgi serve</code> sono un'unità di deployment completa.</span>
+      </summary>
+      <div class="block-body">
+        <div class="tablewrap"><table>
+          <thead><tr><th>Comando</th><th>Comportamento</th></tr></thead>
+          <tbody>
+            <tr><td><span class="mono">serve &lt;sorgente&gt;</span></td><td class="desc">risolve in tre passi: assegnazione <code>application=&lt;target&gt;</code>, percorso <code>.py</code> esistente, altrimenti nome registrato. Opzioni <code>--host</code>, <code>--port</code>, <code>--reload</code>, <code>--name</code></td></tr>
+            <tr><td><span class="mono">apps</span></td><td class="desc">elenca i server registrati e il loro stato reale</td></tr>
+            <tr><td><span class="mono">stop &lt;nome&gt;</span></td><td class="desc">ferma un server avviato per nome</td></tr>
+            <tr><td><span class="mono">remove &lt;nome&gt;</span></td><td class="desc">rimuove la registrazione</td></tr>
+          </tbody>
+        </table></div>
+        <p class="caption">Il registro è un archivio di puntatori, mai una copia: <code>~/.genroasgi/apps/&lt;nome&gt;.json</code> tiene la stringa sorgente, quindi rilanciare per nome esegue sempre il codice corrente. Un pidfile non è mai creduto — mancante, illeggibile o riferito a un processo morto si leggono tutti come «non in esecuzione», così un server crashato risulta fermo e non fantasma.</p>
+      </div>
+    </details>
+
+  </div>
+</section>
+
+<section id="spa">
+  <h2><span class="num">Zoom livello 2</span>Dentro il piano SPA</h2>
+  <div class="prose">
+    <p>È il blocco che non ha controparte in Starlette o FastAPI, e da solo vale 2.580 istruzioni — un quarto abbondante del progetto. Serve una cosa sola: <strong>tenere viva la sessione applicativa di un utente attraverso più processi</strong>, con l'utente come chiave di partizione del carico e la pagina come unità di stato vivo.</p>
+  </div>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 380" role="img" aria-label="Architettura del piano SPA: front, commander, canale, worker">
+      <g font-family="system-ui, sans-serif">
+        <rect x="16" y="14" width="868" height="86" rx="5" fill="var(--accent-soft)" stroke="var(--accent)"/>
+        <text x="34" y="38" font-size="13" font-weight="650" fill="var(--ink)">SpaApplication — il front montabile</text>
+        <text x="34" y="58" font-size="11.5" fill="var(--ink-soft)">demux a due stadi: le rotte proprie rispondono native, tutto il resto è del sito ospitato</text>
+        <text x="34" y="76" font-size="11.5" fill="var(--ink-soft)">cookie sticky_cid letto una volta · zero stato proprio: legge la superficie del commander</text>
+
+        <path d="M450,100 L450,124" fill="none" stroke="currentColor" stroke-width="1.5" color="var(--ink-faint)" marker-end="url(#ar)"/>
+
+        <rect x="16" y="124" width="868" height="124" rx="5" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="34" y="148" font-size="13" font-weight="650" fill="var(--ink)">UserStickyCommander — chiavi e posizioni</text>
+
+        <rect x="34" y="160" width="196" height="72" rx="4" fill="var(--surface-sunk)" stroke="var(--line-soft)"/>
+        <text x="46" y="180" font-size="11.5" font-weight="600" fill="var(--ink)">otto registri piatti</text>
+        <text x="46" y="197" font-size="10.5" fill="var(--ink-soft)">worker_roster · user_worker_map</text>
+        <text x="46" y="212" font-size="10.5" fill="var(--ink-soft)">albero utenti → connessioni → pagine</text>
+        <text x="46" y="227" font-size="10.5" fill="var(--ink-soft)">contatori di forward</text>
+
+        <rect x="242" y="160" width="196" height="72" rx="4" fill="var(--surface-sunk)" stroke="var(--line-soft)"/>
+        <text x="254" y="180" font-size="11.5" font-weight="600" fill="var(--ink)">supervisione</text>
+        <text x="254" y="197" font-size="10.5" fill="var(--ink-soft)">spawn · REGISTER = pronto</text>
+        <text x="254" y="212" font-size="10.5" fill="var(--ink-soft)">EOF del canale = morte</text>
+        <text x="254" y="227" font-size="10.5" fill="var(--ink-soft)">rilancio con nome fresco</text>
+
+        <rect x="450" y="160" width="196" height="72" rx="4" fill="var(--surface-sunk)" stroke="var(--line-soft)"/>
+        <text x="462" y="180" font-size="11.5" font-weight="600" fill="var(--ink)">battito del pool</text>
+        <text x="462" y="197" font-size="10.5" fill="var(--ink-soft)">una passata per sonda tornata:</text>
+        <text x="462" y="212" font-size="10.5" fill="var(--ink-soft)">ribilanciamento XOR riciclo</text>
+        <text x="462" y="227" font-size="10.5" fill="var(--ink-soft)">XOR compattazione</text>
+
+        <rect x="658" y="160" width="208" height="72" rx="4" fill="var(--surface-sunk)" stroke="var(--line-soft)"/>
+        <text x="670" y="180" font-size="11.5" font-weight="600" fill="var(--ink)">instradamento</text>
+        <text x="670" y="197" font-size="10.5" fill="var(--ink-soft)">datachange di terzo livello</text>
+        <text x="670" y="212" font-size="10.5" fill="var(--ink-soft)">dbevent con esclusione origine</text>
+        <text x="670" y="227" font-size="10.5" fill="var(--ink-soft)">master dello store globale</text>
+
+        <g fill="none" stroke="currentColor" stroke-width="1.5" color="var(--ink-faint)" marker-end="url(#ar)">
+          <path d="M160,248 L160,272"/>
+          <path d="M450,248 L450,272"/>
+          <path d="M740,248 L740,272"/>
+        </g>
+        <text x="450" y="266" text-anchor="middle" font-size="10.5" font-style="italic" fill="var(--ink-faint)">canale: CALL / REPLY / EVENT</text>
+
+        <g>
+          <rect x="34" y="278" width="252" height="86" rx="5" fill="var(--surface)" stroke="var(--line)"/>
+          <text x="46" y="300" font-size="12.5" font-weight="650" fill="var(--ink)">UserStickyWorker</text>
+          <text x="46" y="318" font-size="10.5" fill="var(--ink-soft)">registri: contenuti veri, qui e solo qui</text>
+          <text x="46" y="333" font-size="10.5" fill="var(--ink-soft)">op: lifecycle · store · post · exchange</text>
+          <text x="46" y="348" font-size="10.5" fill="var(--ink-soft)">due pool: op e seam WSGI separati</text>
+
+          <rect x="324" y="278" width="252" height="86" rx="5" fill="var(--surface)" stroke="var(--line)"/>
+          <text x="336" y="300" font-size="12.5" font-weight="650" fill="var(--ink)">UserStickyWorker</text>
+          <text x="336" y="318" font-size="10.5" fill="var(--ink-soft)">REPLY a tre classi: risposta,</text>
+          <text x="336" y="333" font-size="10.5" fill="var(--ink-soft)">eventi sincroni, task ascendenti</text>
+          <text x="336" y="348" font-size="10.5" fill="var(--ink-soft)">consegna PULL, mai push</text>
+
+          <rect x="614" y="278" width="252" height="86" rx="5" fill="var(--surface)" stroke="var(--line)"/>
+          <text x="626" y="300" font-size="12.5" font-weight="650" fill="var(--ink)">UserStickyWorker</text>
+          <text x="626" y="318" font-size="10.5" fill="var(--ink-soft)">replica dello store globale</text>
+          <text x="626" y="333" font-size="10.5" fill="var(--ink-soft)">outbox: la via asincrona</text>
+          <text x="626" y="348" font-size="10.5" fill="var(--ink-soft)">sweep delle scadenze sul proprio orologio</text>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <p class="caption">Il commander non apre mai il contenuto che instrada: un datachange viaggia codificato TYTX e l'indirizzo è tutto ciò che legge. Un indirizzo che non sa risolvere viene scartato con un log — non esiste coda di ritenta.</p>
+
+  <div class="prose">
+    <h3>Le quattro decisioni che tengono in piedi il piano</h3>
+    <ul class="tight">
+      <li><strong>La mappa si scrive alla decisione.</strong> Un utente vive dove ha fatto login; il worker al login non spedisce nulla, annuncia soltanto — così la richiesta che portava il login continua a trovare le sue pagine dov'erano fino alla fine.</li>
+      <li><strong>Uno scrittore per fatto.</strong> Il worker possiede la verità delle sue pagine, il commander quella di chi-sta-dove. Niente viene mai scritto dall'alto dentro un registro di sotto.</li>
+      <li><strong>Nulla sopra il legame scritto è memorizzato.</strong> Il worker di una pagina si <em>deriva</em> risalendo pagina → connessione → utente → worker: nessun duplicato che possa divergere, e uno spostamento non richiede una sola scrittura per pagina.</li>
+      <li><strong>La consegna è pull.</strong> Una chiamata che porta un <code>page_id</code> è il ciclo richiesta/risposta di quella pagina, e la REPLY vi innesta ciò che era in attesa. Per una pagina che non chiama, il cambiamento resta nel suo collettore.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="feature">
+  <h2><span class="num">Zoom livello 3</span>Le feature e il loro stato</h2>
+  <div class="prose">
+    <p>La scala non è un giudizio: è derivata da tre fatti verificabili — se esiste il codice, se esistono test dedicati che lo esercitano, e se la specifica dichiara ancora punti aperti su quella feature.</p>
+  </div>
+
+  <div class="legend">
+    <div><span class="pill done">Consolidato</span> <span>codice completo, test dedicati, copertura ≥ 94%, decisione ratificata e chiusa</span></div>
+    <div><span class="pill partial">Attivo con riserve</span> <span>funzionante e testato, ma con costanti marcate PROVISIONAL o punti esplicitamente differiti</span></div>
+    <div><span class="pill planned">Solo progettato</span> <span>ratificato o discusso nella specifica, nessuna riga di codice</span></div>
+    <div><span class="pill open">Questione aperta</span> <span>nessuna decisione presa: la specifica lo registra come domanda</span></div>
+  </div>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>Feature</th><th>Stato</th><th>Evidenza</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Server base e regola unica di demux</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">D2/D3 · <span class="mono">test_demux.py</span> (12), <span class="mono">test_contract.py</span> (21) · 99%</td></tr>
+      <tr><td><strong>Contratto lato applicazione</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">D7 · app di prova dedicata (<span class="mono">throwaway_app.py</span>) · 100%</td></tr>
+      <tr><td><strong>Capacità come mixin cooperativi</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">D16/D17 · sette mixin in un MRO · 97%</td></tr>
+      <tr><td><strong>Thread pool e affinità al loop</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">invariante 1 · <span class="mono">test_pool.py</span> (12) · 100%</td></tr>
+      <tr><td><strong>Registro delle richieste</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">D5 · <span class="mono">test_request_registry.py</span> (11) · 98%</td></tr>
+      <tr><td><strong>Configurazione: ricetta, porta di lettura, resolver</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">D-config · <span class="mono">test_config.py</span> (72) + <span class="mono">test_config_env.py</span> (16) · 100%</td></tr>
+      <tr><td><strong>Catena middleware</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc"><span class="mono">test_middleware.py</span> + <span class="mono">test_middleware_std.py</span> (39) · 96%</td></tr>
+      <tr><td><strong>Sessioni HTTP e continuum del login</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">D24 · <span class="mono">test_session.py</span> (50), <span class="mono">test_login_flow.py</span> (28) · 99%</td></tr>
+      <tr><td><strong>Login password con lockout a backoff</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">D28 · contatore sul record utente · 94–95%</td></tr>
+      <tr><td><strong>Login OIDC (authorization-code + PKCE)</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">D27 · <span class="mono">test_oidc.py</span> (27) · 97%</td></tr>
+      <tr><td><strong>Credenziali su header: basic, bearer, JWT</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">invariante 5 · <span class="mono">test_auth.py</span> (46) · 95%</td></tr>
+      <tr><td><strong>Archivi utenti e chiavi API</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">contratto + backend su file · 42 test · 94–95%</td></tr>
+      <tr><td><strong>App <span class="mono">_server</span> automatica e sue sezioni</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">D4/D26 · quattro sezioni · 100%</td></tr>
+      <tr><td><strong>OpenAPI: schema, documentazione, plugin per handler</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc"><span class="mono">test_plugins.py</span> (32), <span class="mono">test_openapi_application.py</span> (11) · 77–100%</td></tr>
+      <tr><td><strong>MCP: engine JSON-RPC e trasporto Streamable HTTP</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">68 test su tre file · 96–98%</td></tr>
+      <tr><td><strong>Streaming e Server-Sent Events</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc"><span class="mono">test_sse.py</span> (13), <span class="mono">test_streaming.py</span> (9) · 97–100%</td></tr>
+      <tr><td><strong>Storage e handler di database</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">sezioni trasversali di D15 · 100%</td></tr>
+      <tr><td><strong>Spool dei task: lo stato è la posizione</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">invariante 7 · <span class="mono">test_task_spool.py</span> (28) · 100%</td></tr>
+      <tr><td><strong>Esecuzione task in-process e pianificazione</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">D22 · 5 file di test, 73 casi · 91–100%</td></tr>
+      <tr><td><strong>Protocollo di canale e lato figlio</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">◆D10 · <span class="mono">test_channel*.py</span> (58) · 91–94%</td></tr>
+      <tr><td><strong>Hub del canale (lato padre)</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc"><span class="mono">test_channel_hub.py</span> (22) · 93%</td></tr>
+      <tr><td><strong>Canale locale in-process, identico al socket</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">◆D13 · <span class="mono">test_channel_local.py</span> (12), <span class="mono">test_spa_single.py</span> (28) · 92%</td></tr>
+      <tr><td><strong>Riga di comando e registro dei server</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">D-cli · <span class="mono">test_cli.py</span> (47) · 98%</td></tr>
+      <tr><td><strong>Front SPA montabile con demux a due stadi</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">issue #3 · 47 test su tre file · 100%</td></tr>
+      <tr><td><strong>Registri del worker e indice delle sottoscrizioni</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc"><span class="mono">test_register_registry.py</span> (43), <span class="mono">test_subscription_index.py</span> (15) · 100%</td></tr>
+      <tr><td><strong>Spostamento di un utente tra worker</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc"><span class="mono">test_spa_move.py</span> — 119 casi, il file più esercitato del progetto · 95%</td></tr>
+      <tr><td><strong>Store globale: un master, repliche per worker</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">lock FIFO tutto-o-niente · <span class="mono">test_spa_global_store.py</span> (17) · 100%</td></tr>
+      <tr><td><strong>Datachange a tre livelli e fan-out dei dbevent</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">esclusione dell'origine · <span class="mono">test_spa_dbevents.py</span> (16), <span class="mono">test_spa_collect.py</span> (11) · 95%</td></tr>
+      <tr><td><strong>Sensore di occupazione e valutatore</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">issue #4 · <span class="mono">test_spa_evaluator.py</span> (47) · 100%</td></tr>
+      <tr><td><strong>Politiche del pool: piazzamento, crescita, compattazione, ribilanciamento</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">issue #5 · <span class="mono">test_spa_commander.py</span> (60) · 95%</td></tr>
+      <tr><td><strong>Riciclo dei processi su tempo-al-limite</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc">issue #8 · serie di pavimenti di memoria per worker · 95%</td></tr>
+      <tr><td><strong>Seam WSGI per il sito ospitato</strong></td><td><span class="pill done">Consolidato</span></td><td class="desc"><span class="mono">test_spa_http_form.py</span> (20) · 100%</td></tr>
+      <tr><td><strong>Dump e ripristino del registro al riavvio</strong></td><td><span class="pill partial">Attivo con riserve</span></td><td class="desc">D21 livello 1 completo e coperto — il commander sfratta ogni utente, scrive un pickle solo, e al riavvio lo ripiazza rinominandolo <code>_loaded</code> perché un restart morto a metà non lo installi due volte (4 test dedicati, compresi evict fallito e pacchetto rifiutato). Il livello 2 — i registri di <em>ogni</em> livello e il ri-aggancio per page_id — non esiste ancora</td></tr>
+      <tr><td><strong>Gruppi di worker</strong></td><td><span class="pill planned">Solo progettato</span></td><td class="desc">D11/D12 · esiste solo l'<em>etichetta</em>: un kwarg <code>group</code> di default <code>"default"</code> ricopiato in ogni riga del roster (<span class="mono">commander.py:445</span>, 990) e riletto solo dal log di sepoltura e dal monitor. L'instradamento è cieco al gruppo — <code>decide_worker</code> sceglie per saturazione — e nessun test passa mai un valore diverso</td></tr>
+      <tr><td><strong>Scadenze e sweep delle pagine</strong></td><td><span class="pill partial">Attivo con riserve</span></td><td class="desc">implementato e testato, ma <strong>disarmato</strong> se non passi <code>sweep_interval</code>: finché il canale del browser non porta un segnale di presenza, una pagina silenziosa e una morta si somigliano</td></tr>
+      <tr><td><strong>Ricarica selettiva in sviluppo</strong></td><td><span class="pill partial">Attivo con riserve</span></td><td class="desc">la primitiva ritiro+respawn esiste e <code>--reload</code> copre il processo intero; il watcher per gruppo di ◆D14 no</td></tr>
+      <tr><td><strong>Soglie di occupazione come configurazione</strong></td><td><span class="pill partial">Attivo con riserve</span></td><td class="desc">costanti PROVISIONAL in <span class="mono">evaluator.py:95</span> e <span class="mono">worker.py:366</span>, in attesa della configurazione per gruppo</td></tr>
+      <tr><td><strong>WebSocket / protocollo WSX</strong></td><td><span class="pill open">Questione aperta</span></td><td class="desc">Q1 · <span class="mono">server.py:253</span> accetta nulla e chiude con codice 1000: la presa esiste, il motore no</td></tr>
+      <tr><td><strong>Manager di gruppo remoto (forma C)</strong></td><td><span class="pill planned">Solo progettato</span></td><td class="desc">D11 · zero occorrenze di sotto-commander nel codice; il manager locale è l'unica implementazione</td></tr>
+      <tr><td><strong>Gerarchia multi-macchina</strong></td><td><span class="pill planned">Solo progettato</span></td><td class="desc">D11/D12 · le tre proiezioni di registro esistono su due livelli, non tre</td></tr>
+      <tr><td><strong>Esecuzione distribuita dei batch</strong></td><td><span class="pill planned">Solo progettato</span></td><td class="desc">D22 · il modello (spool, stati) è completo in-process; l'app commander dei batch e i worker dedicati no</td></tr>
+      <tr><td><strong>Configurazione viva a due stadi</strong></td><td><span class="pill planned">Solo progettato</span></td><td class="desc">D23 · parcheggiata esplicitamente come macro futura</td></tr>
+      <tr><td><strong>Server interno come sottoclasse</strong></td><td><span class="pill planned">Solo progettato</span></td><td class="desc">D26 · il flag di profilo è stato rimosso in favore di una sottoclasse che non ha ancora un consumatore</td></tr>
+      <tr><td><strong>Limite di frequenza per IP</strong></td><td><span class="pill planned">Solo progettato</span></td><td class="desc">D28 lo dichiara materia di un middleware futuro, fuori dal gestore di login</td></tr>
+      <tr><td><strong>Spec del runtime di gruppo (venv, pyz, OCI)</strong></td><td><span class="pill open">Questione aperta</span></td><td class="desc">Q9 · rinviata alla discussione sul server completo</td></tr>
+      <tr><td><strong>Modalità «pooled» per app senza stato</strong></td><td><span class="pill open">Questione aperta</span></td><td class="desc">Q7 · emersa dalla tabella di piazzamento, non ancora necessaria</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="assente">
+  <h2><span class="num">Il confine</span>Cosa manca, e perché è una scelta</h2>
+  <div class="prose">
+    <p>Le voci «solo progettato» hanno tutte la stessa forma: sono la <strong>fase 2+</strong> della specifica — la topologia dei <em>processi</em> oltre la singola macchina. Il taglio è dichiarato in D22 e ha una prova pratica: <em>ciò che deve sopravvivere alla morte di un worker vive nel nucleo</em> (sessioni, login, stato dello spool), <em>ciò che muore e viene ricostruito col suo processo vive nell'orchestrazione</em> (pagine, pendenze, sottoscrizioni).</p>
+    <p>Due assenze meritano una nota, perché non sono rinvii ma dipendenze da qualcosa che ancora non esiste.</p>
+  </div>
+
+  <div class="callout">
+    <p><strong>Il motore WebSocket.</strong> La presa è aperta e vuota fin dalla fase 0, per decisione: quando il motore arriverà dovrà essere <em>un solo</em> motore di dispatch con due trasporti (HTTP e WSX). Nel repository precedente i due erano divergenti perché nulla li obbligava a restare uguali — la lezione è registrata come invariante 9, «test di contratto su ogni interfaccia con più implementazioni».</p>
+  </div>
+
+  <div class="callout">
+    <p><strong>Lo sweep delle scadenze disarmato.</strong> Non è codice incompleto: è codice che aspetta un'informazione. Senza un segnale di presenza sul canale del browser, una pagina silenziosa e una pagina morta sono indistinguibili dal server — e scaduta per errore, una pagina viva perde il suo stato. Finché il segnale non c'è, la scelta è non spazzare.</p>
+  </div>
+</section>
+
+<section id="metodo">
+  <h2><span class="num">Nota</span>Come sono stati ricavati questi numeri</h2>
+  <div class="prose">
+    <ul class="tight">
+      <li><strong>Righe e istruzioni</strong>: conteggio via AST sui soli file tracciati da git sotto <code>src/</code>, separando codice, docstring, commenti e righe vuote. Il codice è 9.405 righe su 20.211 totali; le docstring sono 6.477, perché in questo progetto la docstring di modulo è la fonte di verità del design.</li>
+      <li><strong>Copertura</strong>: <code>pytest tests/ --cov=genro_asgi</code> eseguito su questa versione — 1.567 test passati, 2 saltati (richiedono glibc, la macchina è macOS), 7.474 istruzioni con 275 non coperte.</li>
+      <li><strong>Stato delle feature</strong>: incrociando <code>SPECIFICATION.md</code> (28 decisioni ratificate, 9 questioni aperte), le 12 issue chiuse su GitHub e la presenza effettiva del codice, verificata per simbolo.</li>
+    </ul>
+    <p>Due discrepanze rilevate durante la verifica, entrambe cosmetiche: <code>__version__</code> in <code>src/genro_asgi/__init__.py</code> è fermo a <code>0.23.0</code> mentre <code>pyproject.toml</code> dichiara <code>0.33.0</code>; e <code>SPECIFICATION.md</code>, insieme alle pagine di architettura e concetti, porta ancora il marcatore <em>DA REVISIONARE</em>.</p>
+  </div>
+</section>
+
+<footer>
+  <p>genro-asgi 0.33.0 · Apache License 2.0 · Softwell S.r.l. · documento generato dal codice del ramo <span class="mono">main</span></p>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  var button = document.getElementById('toggle-all');
+  var grid = document.getElementById('block-grid');
+  if (!button || !grid) { return; }
+  button.addEventListener('click', function () {
+    var blocks = grid.querySelectorAll('details.block');
+    var anyClosed = Array.prototype.some.call(blocks, function (b) { return !b.open; });
+    Array.prototype.forEach.call(blocks, function (b) { b.open = anyClosed; });
+    button.textContent = anyClosed ? 'Comprimi tutti i blocchi' : 'Espandi tutti i blocchi';
+  });
+})();
+</script>
+
+</body>
+</html>

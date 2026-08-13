@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>genro-asgi · 2 — One tree, three protocols</title>
+<link rel="stylesheet" href="_style.css">
+</head>
+<body>
+
+<div class="wrap">
+
+<header class="top">
+  <p class="kicker">A conversation about genro-asgi <span class="sep">·</span> Part two</p>
+  <h1>One tree, three protocols</h1>
+  <p class="standfirst">If the router doesn't know about HTTP, what does it know — and what do you get back for the inversion?</p>
+  <p class="readtime">6 min · previously: <a href="01-why-another-server.html">Why another ASGI server?</a></p>
+</header>
+
+<hr class="rule">
+
+<div class="talk">
+
+<p class="q">You said the routing engine knows nothing about HTTP. So how does a method become an endpoint?</p>
+
+<p class="a">By being asked for. A class owns exactly one router, created for it automatically. You mark methods with a decorator and they become entries in that router's tree. At that point they're just callable entries with names, signatures and metadata — no verb, no path, no status code anywhere.</p>
+
+<p class="q">So what turns them into a web API?</p>
+
+<p class="a">A transport adapter. The HTTP one is the server: a request arrives, it resolves the path against the tree, calls the entry, turns the return value into a response. The command line adapter does the same job against a terminal. Neither is privileged — HTTP just happens to be the one everyone starts with.</p>
+
+<p class="q">This feels like indirection for its own sake. What do I get that a decorator with a path on it doesn't give me?</p>
+
+<p class="a">Three things you'd otherwise build yourself. The first is that the tree is <em>readable</em>. You can ask it what's in there — entries, signatures, types, the metadata declared on each one — while the program is running.</p>
+
+<p class="q">Introspection. Everyone has that.</p>
+
+<p class="a">Everyone has some. The difference is what's downstream of it. The OpenAPI document isn't a file somebody maintains, it's a translation of that reading. Return type annotations become response schemas. Parameter signatures become request models. Nothing to keep in sync, because there's no second copy.</p>
+
+<p class="q">And the second thing?</p>
+
+<p class="a">MCP — the protocol AI agents use to discover and call tools. Here it's not a bolt-on: the engine speaks it over the same tree. A method you decorated once is a REST endpoint and a tool an agent can invoke, described to that agent by the same schema that documents it for humans.</p>
+
+<p class="q">A lot of people are shipping MCP adapters over existing APIs right now.</p>
+
+<p class="a">They are, and that's the honest comparison. An adapter is a second surface: it needs its own descriptions, and it drifts from the first one the moment somebody changes a signature and forgets. This isn't a second surface. It's the same tree answering a different caller.</p>
+
+<p class="q">Alright. Third thing?</p>
+
+<p class="a">Plugins that hook into the router rather than into your handlers. Validation builds the model from the method signature. Authorisation is a rule declared on the route — a small boolean algebra over the user's tags, so <code>admin|manager</code> means one of the two and <code>staff&amp;!suspended</code> means what it looks like. There's one for environment capabilities, one that makes a route visible from one channel and invisible from another.</p>
+
+<p class="q">Why does it matter whether that lives in the router or in my code?</p>
+
+<p class="a">Because in your code it's invisible from the outside. An <code>if user.is_admin</code> at the top of a function is a fact only that function knows. Declared on the route, it's a property anyone can read — including the thing that generates the documentation.</p>
+
+<div class="aside">
+  <span class="label">The consequence worth pausing on</span>
+  <p>What the documentation claims and what the server enforces are produced by the same reading. They can't drift apart, because there's nothing to keep aligned.</p>
+</div>
+
+<p class="q">Give me the failure mode. When does this bite me?</p>
+
+<p class="a">When you want a route whose shape genuinely doesn't fit the tree — some hand-rolled streaming protocol, a webhook with a signature scheme of its own. Then you're writing a handler that mostly ignores the machinery, and the machinery isn't buying you much.</p>
+
+<p class="q">Fair. And routes are static, I assume — you can't add one at three in the morning based on a database row?</p>
+
+<p class="a">Not from data, no. What exists is declared by code — decorated methods, and branches declared on the class. Routing is never used as a mutable registry, so what answers a request was always going to answer it.</p>
+
+<p class="q">So the whole tree gets built when the server starts.</p>
+
+<p class="a">That part isn't true, and it's worth being precise about. Materialisation is lazy. A router discovers its own routes the first time it's actually used, and a branch declared by class is constructed the first time somebody traverses it. Declare a hundred branches and you pay for the ones people visit.</p>
+
+<p class="q">Then you can't know the full surface without walking it.</p>
+
+<p class="a">You can, and that's the part that makes laziness affordable. A declared-but-not-yet-built branch still describes itself — from its class, without being instantiated. So introspection sees the whole shape: the documentation is complete on a server where nobody has touched half the tree yet.</p>
+
+<p class="q">Declared eagerly, built lazily, readable either way.</p>
+
+<p class="a">That's the sentence. The two properties are usually confused, and they're worth keeping apart: <em>what exists</em> is fixed and inspectable, <em>when it comes alive</em> is on demand.</p>
+
+<p class="q">And the second protocol, the socket one?</p>
+
+<p class="a">Same tree again. There's a WebSocket transport that carries HTTP semantics over an open connection, so a message arriving on the socket finds the same routes, the same plugins, the same authorisation as an HTTP request. One dispatch engine, two transports plugged into it.</p>
+
+<p class="q">Why one engine? Two transports each doing their own thing would be simpler to write.</p>
+
+<p class="a">Simpler to write, and we know what it costs — we already paid it once. Two engines diverged, because nothing forced them to stay equal, and every feature added to one had to be rediscovered in the other. Reconciling them cost more than writing one would have. Now a single contract test suite runs against both.</p>
+
+</div>
+
+<p class="hook">You keep mentioning that open connection like it's the whole reason for this design. Why does one socket change so much?</p>
+
+<div class="next">
+  <span class="lbl">Coming next</span>
+  <span class="ttl">The arithmetic of state</span>
+  <span class="dek">Why continuous traffic makes serialisation the dominant cost — and the objects that never survive the trip at all.</span>
+</div>
+
+<nav class="toc">
+  <h2>The series</h2>
+  <ol>
+    <li><a href="01-why-another-server.html">Why another ASGI server?</a></li>
+    <li class="here">One tree, three protocols</li>
+    <li class="todo">The arithmetic of state</li>
+    <li class="todo">What a load balancer can't do</li>
+    <li class="todo">Shipping a button to three people</li>
+    <li class="todo">Brains ours, muscle theirs</li>
+  </ol>
+</nav>
+
+<footer>
+  <p>genro-asgi · Apache License 2.0 · Softwell S.r.l.</p>
+</footer>
+
+</div>
+</body>
+</html>

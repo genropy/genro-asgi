@@ -1,0 +1,125 @@
+/* Stile condiviso della serie a puntate.
+   Un solo file: cambiarlo qui cambia tutte le puntate. */
+
+:root {
+  --ground: #f4f3f0;
+  --surface: #ffffff;
+  --sunk: #eae8e3;
+  --line: #dcd8d0;
+  --line-soft: #e8e5df;
+  --ink: #1a1815;
+  --ink-soft: #55504a;
+  --ink-faint: #7a746c;
+  --accent: #8a4b2a;
+  --accent-soft: #f4e7df;
+  --shadow: 0 1px 2px rgba(26,24,21,.05), 0 10px 28px -20px rgba(26,24,21,.4);
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #14120f; --surface: #1c1a16; --sunk: #17150f;
+    --line: #322e28; --line-soft: #26231e;
+    --ink: #ece8e1; --ink-soft: #b3ab9f; --ink-faint: #877f74;
+    --accent: #d99b6c; --accent-soft: #2a1d14;
+    --shadow: 0 1px 2px rgba(0,0,0,.45), 0 12px 32px -22px rgba(0,0,0,.85);
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #14120f; --surface: #1c1a16; --sunk: #17150f;
+  --line: #322e28; --line-soft: #26231e;
+  --ink: #ece8e1; --ink-soft: #b3ab9f; --ink-faint: #877f74;
+  --accent: #d99b6c; --accent-soft: #2a1d14;
+  --shadow: 0 1px 2px rgba(0,0,0,.45), 0 12px 32px -22px rgba(0,0,0,.85);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--ground); color: var(--ink);
+  font-family: var(--serif); font-size: 18px; line-height: 1.68;
+}
+.wrap { max-width: 40rem; margin: 0 auto; padding: 0 22px 90px; }
+
+header.top { padding: 56px 0 10px; }
+.kicker {
+  font-family: var(--sans); font-size: 11.5px; font-weight: 650;
+  letter-spacing: .16em; text-transform: uppercase; color: var(--accent); margin: 0 0 14px;
+}
+.kicker .sep { color: var(--ink-faint); }
+h1 {
+  font-size: clamp(30px, 6vw, 42px); line-height: 1.12; font-weight: 600;
+  letter-spacing: -.015em; margin: 0 0 16px; text-wrap: balance;
+}
+.standfirst { font-size: 19px; color: var(--ink-soft); margin: 0 0 6px; }
+.readtime { font-family: var(--sans); font-size: 12.5px; color: var(--ink-faint); margin: 0; }
+hr.rule { border: 0; border-top: 1px solid var(--line); margin: 34px 0 30px; }
+
+/* --- il dialogo: la forma distingue le due voci, senza etichette ripetute --- */
+.talk { margin: 0 0 30px; }
+.q, .a { margin: 0 0 20px; }
+.q {
+  border-left: 2px solid var(--accent); padding-left: 18px;
+  color: var(--ink-soft); font-style: italic;
+}
+.q strong, .a strong { font-weight: 650; font-style: normal; }
+.a { padding-left: 20px; }
+.q + .a { margin-top: -6px; }
+
+.aside {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 6px;
+  padding: 16px 20px; margin: 28px 0; font-size: 16px; color: var(--ink-soft);
+  box-shadow: var(--shadow);
+}
+.aside .label {
+  font-family: var(--sans); font-size: 11px; font-weight: 650; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 6px;
+}
+.aside p { margin: 0 0 10px; }
+.aside p:last-child { margin-bottom: 0; }
+code { font-family: var(--mono); font-size: .86em; background: var(--sunk); padding: 1px 5px; border-radius: 3px; }
+a { color: var(--accent); text-underline-offset: 2px; }
+
+/* --- il gancio: l'ultima domanda resta senza risposta --- */
+.hook {
+  border-left: 2px solid var(--accent); padding: 4px 0 4px 18px; margin: 34px 0 26px;
+  font-style: italic; font-size: 20px; color: var(--ink); text-wrap: balance;
+}
+.next {
+  display: block; background: var(--accent-soft); border-radius: 8px;
+  padding: 20px 24px; text-decoration: none; color: inherit; margin: 0 0 40px;
+}
+.next:hover { box-shadow: var(--shadow); }
+.next .lbl {
+  font-family: var(--sans); font-size: 11px; font-weight: 650; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 6px;
+}
+.next .ttl { font-size: 20px; font-weight: 600; letter-spacing: -.01em; display: block; }
+.next .dek { font-size: 15.5px; color: var(--ink-soft); display: block; margin-top: 5px; }
+
+/* --- indice della serie --- */
+.toc { border-top: 1px solid var(--line); padding-top: 24px; }
+.toc h2 {
+  font-family: var(--sans); font-size: 11.5px; font-weight: 650; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--ink-faint); margin: 0 0 16px;
+}
+.toc ol { list-style: none; counter-reset: ep; margin: 0; padding: 0; font-size: 16px; }
+.toc li { counter-increment: ep; display: grid; grid-template-columns: 2rem 1fr; gap: 10px; margin-bottom: 11px; }
+.toc li::before {
+  content: counter(ep, decimal-leading-zero);
+  font-family: var(--sans); font-size: 12px; font-weight: 650;
+  color: var(--ink-faint); padding-top: 4px; font-variant-numeric: tabular-nums;
+}
+.toc li.here { color: var(--ink); font-weight: 600; }
+.toc li.here::before { color: var(--accent); }
+.toc li.todo { color: var(--ink-faint); }
+.toc a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--line); }
+.toc a:hover { border-bottom-color: var(--accent); }
+
+footer {
+  border-top: 1px solid var(--line); margin-top: 40px; padding-top: 22px;
+  font-family: var(--sans); font-size: 12.5px; color: var(--ink-faint);
+}
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 560px) { body { font-size: 17px; } .a { padding-left: 0; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

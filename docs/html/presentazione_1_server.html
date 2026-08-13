@@ -1,0 +1,787 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>genro-asgi · 1 — Il server</title>
+<style>
+:root {
+  --ground: #f2f4f3; --surface: #ffffff; --sunk: #e9edec;
+  --line: #d5dcdb; --line-soft: #e4e9e8;
+  --ink: #141d1e; --ink-soft: #4a5657; --ink-faint: #6d7b7b;
+  --accent: #0f6b74; --accent-soft: #e0eeee;
+  --code-bg: #f6f8f7;
+  --warn: #8d5330;
+  --soon: #94631a; --soon-soft: #f6ecd9;
+  --shadow: 0 1px 2px rgba(20,29,30,.05), 0 10px 28px -20px rgba(20,29,30,.35);
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0d1416; --surface: #141d20; --sunk: #101819;
+    --line: #263436; --line-soft: #1c282a;
+    --ink: #e4ecea; --ink-soft: #a8b6b5; --ink-faint: #7d8c8c;
+    --accent: #56b9c2; --accent-soft: #123338; --code-bg: #0f181a;
+    --warn: #dda07c;
+    --soon: #d3a355; --soon-soft: #2b2317;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 32px -22px rgba(0,0,0,.85);
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #0d1416; --surface: #141d20; --sunk: #101819;
+  --line: #263436; --line-soft: #1c282a;
+  --ink: #e4ecea; --ink-soft: #a8b6b5; --ink-faint: #7d8c8c;
+  --accent: #56b9c2; --accent-soft: #123338; --code-bg: #0f181a;
+  --warn: #dda07c;
+  --soon: #d3a355; --soon-soft: #2b2317;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 32px -22px rgba(0,0,0,.85);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--serif); font-size: 17.5px; line-height: 1.65; }
+.wrap { max-width: 1140px; margin: 0 auto; padding: 0 24px 100px; }
+.prose { max-width: 68ch; }
+header.top { background: var(--surface); border-bottom: 1px solid var(--line); padding: 60px 0 42px; }
+.eyebrow { font-family: var(--sans); font-size: 12px; font-weight: 600; letter-spacing: .15em; text-transform: uppercase; color: var(--accent); margin: 0 0 16px; }
+.eyebrow .of { color: var(--ink-faint); }
+h1 { font-size: clamp(34px, 5.4vw, 56px); line-height: 1.06; font-weight: 600; letter-spacing: -.018em; margin: 0 0 20px; text-wrap: balance; max-width: 19ch; }
+.lede { font-size: 21px; color: var(--ink-soft); margin: 0; max-width: 62ch; }
+nav.toc { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--ground) 93%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); margin-bottom: 56px; }
+nav.toc .inner { max-width: 1140px; margin: 0 auto; padding: 9px 24px; display: flex; gap: 3px; flex-wrap: wrap; font-family: var(--sans); font-size: 12.5px; }
+nav.toc a { color: var(--ink-soft); text-decoration: none; padding: 5px 9px; border-radius: 4px; }
+nav.toc a:hover { background: var(--sunk); color: var(--ink); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+section { margin: 0 0 76px; scroll-margin-top: 64px; }
+h2 { font-size: clamp(26px, 3.4vw, 36px); font-weight: 600; letter-spacing: -.015em; margin: 0 0 14px; text-wrap: balance; }
+h2 .kicker { display: block; font-family: var(--sans); font-size: 12px; font-weight: 650; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); margin-bottom: 9px; }
+h3 { font-size: 20px; font-weight: 600; margin: 38px 0 10px; letter-spacing: -.008em; }
+h4 { font-family: var(--sans); font-size: 15px; font-weight: 650; margin: 26px 0 6px; }
+p { margin: 0 0 18px; }
+a { color: var(--accent); text-underline-offset: 2px; }
+strong { font-weight: 650; }
+code { font-family: var(--mono); font-size: .86em; }
+p code, li code, td code { background: var(--sunk); padding: 1px 5px; border-radius: 3px; }
+pre { font-family: var(--mono); font-size: 13.5px; line-height: 1.6; background: var(--code-bg); border: 1px solid var(--line-soft); border-radius: 6px; padding: 18px 20px; overflow-x: auto; margin: 22px 0; max-width: 78ch; }
+pre .c { color: var(--ink-faint); }
+pre .k { color: var(--accent); }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; margin: 30px 0; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 20px 22px; box-shadow: var(--shadow); }
+.card h4 { margin-top: 0; }
+.card p { font-size: 15.5px; color: var(--ink-soft); margin-bottom: 0; line-height: 1.55; }
+.card ul { margin: 8px 0 0; padding-left: 20px; font-size: 15px; color: var(--ink-soft); }
+.card ul li { margin-bottom: 5px; }
+ul.tight { margin: 0 0 20px; padding-left: 24px; }
+ul.tight li { margin-bottom: 9px; }
+.soon { display: inline-block; font-family: var(--sans); font-size: 10.5px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; color: var(--soon); background: var(--soon-soft); padding: 2px 7px; border-radius: 3px; vertical-align: 2px; margin-left: 6px; white-space: nowrap; }
+.tag { display: inline-block; font-family: var(--sans); font-size: 10.5px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; padding: 2px 8px; border-radius: 3px; white-space: nowrap; }
+.tag.ok { color: var(--accent); background: var(--accent-soft); }
+.tag.wip { color: var(--soon); background: var(--soon-soft); }
+.roadmap-note { font-family: var(--sans); font-size: 13.5px; color: var(--ink-faint); max-width: 70ch; margin-top: 22px; }
+.note { background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; padding: 18px 22px; margin: 28px 0; max-width: 72ch; }
+.note p:last-child { margin-bottom: 0; }
+.note .label { font-family: var(--sans); font-size: 11.5px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 7px; }
+.tablewrap { overflow-x: auto; margin: 26px 0; }
+table { width: 100%; border-collapse: collapse; font-family: var(--sans); font-size: 14.5px; }
+th { text-align: left; font-size: 11px; font-weight: 650; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-faint); padding: 10px 14px 8px 0; border-bottom: 1px solid var(--line); }
+td { padding: 10px 14px 10px 0; border-bottom: 1px solid var(--line-soft); vertical-align: top; color: var(--ink-soft); }
+td:first-child { color: var(--ink); font-weight: 550; }
+tr:last-child td { border-bottom: 0; }
+.diagram { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 26px 22px; margin: 30px 0; overflow-x: auto; box-shadow: var(--shadow); }
+.diagram svg { display: block; min-width: 600px; width: 100%; height: auto; }
+.caption { font-family: var(--sans); font-size: 13px; color: var(--ink-faint); margin: -14px 0 30px; max-width: 70ch; }
+.pull { font-size: 22px; line-height: 1.45; color: var(--ink); border-left: 3px solid var(--accent); padding: 4px 0 4px 24px; margin: 34px 0; max-width: 60ch; text-wrap: balance; }
+.next { background: var(--accent-soft); border-radius: 6px; padding: 24px 26px; margin: 40px 0 0; }
+.next .label { font-family: var(--sans); font-size: 11.5px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 8px; }
+.next p { margin-bottom: 0; max-width: 64ch; }
+footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px; font-family: var(--sans); font-size: 13px; color: var(--ink-faint); }
+@media (max-width: 620px) { body { font-size: 16.5px; } pre { font-size: 12.5px; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <p class="eyebrow">genro-asgi <span class="of">· documento 1 di 3</span></p>
+    <h1>Il server: tutto quello che un applicativo trova già montato</h1>
+    <p class="lede">Scrivi il metodo una volta e lo esponi come API REST, come strumento per un agente e come comando. Intorno, già pronto, tutto ciò che un applicativo reale finisce sempre per doversi costruire da sé.</p>
+  </div>
+</header>
+
+<nav class="toc">
+  <div class="inner">
+    <a href="#idea">L'idea</a>
+    <a href="#routes">Routes</a>
+    <a href="#plugin">Plugin</a>
+    <a href="#grammatiche">Grammatiche</a>
+    <a href="#app">Applicazioni</a>
+    <a href="#openapi">OpenAPI</a>
+    <a href="#mcp">MCP</a>
+    <a href="#auth">Autenticazione</a>
+    <a href="#sessioni">Sessioni</a>
+    <a href="#task">Task</a>
+    <a href="#storage">Storage e dati</a>
+    <a href="#http">HTTP e trasporti</a>
+    <a href="#metriche">Metriche</a>
+    <a href="#deploy">Deployment</a>
+    <a href="#roadmap">Roadmap</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<section id="idea">
+  <div class="prose">
+    <h2><span class="kicker">Il punto di partenza</span>Perché un altro server</h2>
+    <p>Un framework web classico lega il routing al protocollo: la funzione decorata <em>è</em> un endpoint HTTP, e se domani la stessa logica deve rispondere a un agente conversazionale o a un comando da terminale, la riscrivi.</p>
+    <p>genro-asgi parte dalla separazione opposta. Il motore di routing vive nelle tue classi applicative e non sa nulla di HTTP; il server è un <em>adattatore di trasporto</em> che mappa richieste esterne su voci del router.</p>
+    <p class="pull">Definisci gli handler una volta. Il protocollo è una vista su di essi, non la loro forma.</p>
+    <p>Da qui discende quasi tutto il resto: lo stesso albero di metodi diventa una API REST con il suo schema OpenAPI, un server MCP per gli agenti, e una CLI, senza duplicare una riga. E sopra questa base c'è montato tutto ciò che serve davvero: autenticazione con più metodi, sessioni, task pianificati e batch, storage astratto, configurazione dichiarativa, documentazione generata.</p>
+
+    <h3>Per che cosa è stato costruito</h3>
+    <p>Vale la pena dirlo subito, perché evita confronti fuori bersaglio. genro-asgi serve benissimo una API che riceve, risponde e dimentica — ed è quello che questo documento descrive. Ma non nasce lì: nasce dagli applicativi gestionali, dove <strong>una pagina resta aperta per ore</strong>, accumula contesto di lavoro, riceve aggiornamenti quando i dati cambiano e dialoga col server in continuazione.</p>
+    <p>È un caso d'uso che le architetture pensate per API senza stato affrontano male, e che ha prodotto scelte precise — l'utente come chiave di distribuzione del carico, la pagina come unità di stato vivo — raccontate nel secondo documento. Chi valuta genro-asgi per una API pura trova un server completo; chi lo valuta per un gestionale trova la ragione per cui esiste.</p>
+  </div>
+
+  <div class="note">
+    <span class="label">Come leggere questo documento</span>
+    <p>Descrive il server mono-processo nella sua forma compiuta: ciò che genro-asgi mette a disposizione di chi scrive un'applicazione. La <a href="#roadmap">roadmap in appendice</a> dichiara, voce per voce, cosa è già operativo oggi e cosa è in corso di implementazione.</p>
+    <p>Il piano di orchestrazione — lo stato vivo per utente e per pagina, i processi multipli — è materia del <strong>secondo documento</strong>, che spiega anche perché quella scelta è stata fatta.</p>
+  </div>
+
+  <pre><span class="c"># hello.py — un server completo</span>
+<span class="k">from</span> genro_asgi <span class="k">import</span> AsgiServer, RoutedApplication
+<span class="k">from</span> genro_routes <span class="k">import</span> route
+
+
+<span class="k">class</span> Hello(RoutedApplication):
+    mount = ""          <span class="c"># questa app risponde alla radice del sito</span>
+
+    @route()
+    <span class="k">def</span> index(self) -> dict[str, str]:
+        <span class="k">return</span> {"hello": "world"}
+
+    @route()
+    <span class="k">def</span> greet(self, name: str = "world") -> dict[str, str]:
+        <span class="k">return</span> {"hello": name}
+
+
+<span class="k">if</span> __name__ == "__main__":
+    server = AsgiServer(applications=[Hello()])
+    server.serve(host="127.0.0.1", port=8000)</pre>
+  <p class="caption">Da qui hai già: le due rotte, il loro schema OpenAPI, la documentazione navigabile, l'app di sistema <code>/_server</code> con login e gestione utenti, il registro delle richieste e il pool per il lavoro bloccante. Nessuna configurazione richiesta.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 210" role="img" aria-label="Il percorso di una richiesta">
+      <defs><marker id="ar" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="currentColor"/></marker></defs>
+      <g fill="none" stroke="currentColor" stroke-width="1.5" color="var(--ink-faint)" marker-end="url(#ar)">
+        <path d="M96,52 L96,74"/><path d="M96,126 L96,148"/>
+        <path d="M264,170 L300,170"/><path d="M470,170 L506,170"/><path d="M672,170 L708,170"/>
+        <path d="M780,148 L780,126"/>
+      </g>
+      <g font-family="system-ui, sans-serif">
+        <rect x="16" y="16" width="160" height="36" rx="4" fill="var(--sunk)" stroke="var(--line)"/>
+        <text x="96" y="39" text-anchor="middle" font-size="13" font-weight="600" fill="var(--ink)">uvicorn</text>
+        <rect x="16" y="74" width="160" height="52" rx="4" fill="var(--accent-soft)" stroke="var(--accent)"/>
+        <text x="96" y="96" text-anchor="middle" font-size="13" font-weight="600" fill="var(--ink)">AsgiServer</text>
+        <text x="96" y="113" text-anchor="middle" font-size="11" fill="var(--ink-soft)">il server È l'app ASGI</text>
+        <rect x="16" y="148" width="248" height="44" rx="4" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="140" y="167" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--ink)">catena middleware</text>
+        <text x="140" y="183" text-anchor="middle" font-size="11" fill="var(--ink-soft)">errori → CORS → auth → sessione</text>
+        <rect x="300" y="148" width="170" height="44" rx="4" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="385" y="167" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--ink)">smistamento</text>
+        <text x="385" y="183" text-anchor="middle" font-size="11" fill="var(--ink-soft)">1° segmento → mount</text>
+        <rect x="506" y="148" width="166" height="44" rx="4" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="589" y="167" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--ink)">applicazione</text>
+        <text x="589" y="183" text-anchor="middle" font-size="11" fill="var(--ink-soft)">il suo albero di rotte</text>
+        <rect x="708" y="148" width="176" height="44" rx="4" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="796" y="167" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--ink)">handler</text>
+        <text x="796" y="183" text-anchor="middle" font-size="11" fill="var(--ink-soft)">sync → pool, async → loop</text>
+        <rect x="700" y="74" width="160" height="52" rx="4" fill="var(--sunk)" stroke="var(--line)"/>
+        <text x="780" y="96" text-anchor="middle" font-size="13" font-weight="600" fill="var(--ink)">risposta</text>
+        <text x="780" y="113" text-anchor="middle" font-size="11" fill="var(--ink-soft)">buffer · flusso · SSE</text>
+      </g>
+    </svg>
+  </div>
+</section>
+
+<section id="routes">
+  <h2><span class="kicker">Il cuore</span>Le routes</h2>
+  <div class="prose">
+    <p>Ogni classe che eredita da <code>RoutingClass</code> possiede <strong>un router e uno solo</strong>, creato automaticamente ed esposto come proprietà <code>route</code>. Lo stato è isolato per istanza: due istanze della stessa classe hanno due router indipendenti, il che rende naturale servire la stessa classe due volte sotto nomi diversi.</p>
+    <p>Un metodo entra nel router con <code>@route()</code>. Il decoratore accetta un nome esplicito, un identificatore globale per la risoluzione inversa, un tipo di media per il risultato, e qualunque metadato aggiuntivo che i plugin sapranno leggere.</p>
+  </div>
+
+  <pre><span class="c"># gerarchie: si collega un'istanza già costruita</span>
+<span class="k">class</span> UsersAPI(RoutingClass):
+    @route()
+    <span class="k">def</span> list(self):
+        <span class="k">return</span> ["alice", "bob"]
+
+<span class="k">class</span> Application(RoutingClass):
+    <span class="k">def</span> __init__(self):
+        self.users = UsersAPI()
+        self.add_branches({"name": "users", "instance": self.users})
+
+app = Application()
+app.route.node("users/list")()      <span class="c"># ["alice", "bob"]
+</span>app.route.nodes()                  <span class="c"># l'albero, introspezionabile a runtime</span></pre>
+
+  <div class="grid">
+    <div class="card">
+      <h4>Dichiarate dal codice, costruite quando servono</h4>
+      <p>Quali rotte esistono lo dice il codice, mai un dato a runtime: il routing non è un registro mutabile. Ma l'albero non viene materializzato tutto all'avvio — un ramo prende vita alla prima volta che qualcuno lo attraversa, così un'applicazione con centinaia di rami paga solo quelli che vengono davvero visitati.</p>
+    </div>
+    <div class="card">
+      <h4>Introspezione</h4>
+      <p><code>nodes()</code> restituisce l'albero con firme, metadati e schemi. È ciò che alimenta la generazione di OpenAPI, la faccia MCP e qualunque interfaccia di amministrazione tu voglia costruire.</p>
+    </div>
+    <div class="card">
+      <h4>Schemi di risposta automatici</h4>
+      <p>L'annotazione di ritorno — un TypedDict, una dataclass — viene convertita in JSON Schema e pubblicata nei metadati della rotta. Documenti il tipo, non lo schema.</p>
+    </div>
+    <div class="card">
+      <h4>Più trasporti</h4>
+      <p>L'adattatore HTTP è genro-asgi; nel pacchetto delle routes ce n'è già un altro che costruisce una gerarchia di comandi da terminale dalla stessa classe.</p>
+    </div>
+  </div>
+</section>
+
+<section id="plugin">
+  <h2><span class="kicker">Sopra le routes</span>I plugin e la configurazione a runtime</h2>
+  <div class="prose">
+    <p>Un plugin si aggancia alla pipeline del router in due punti: quando una rotta viene dichiarata e quando un handler viene invocato. I plugin si <strong>ereditano lungo la gerarchia</strong>, così un ramo figlio riceve quelli del padre senza ridichiararli. Cinque arrivano nella scatola.</p>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h4>Validazione e schemi</h4>
+      <p>Il plugin pydantic costruisce il modello dalla firma del metodo: valida gli argomenti in ingresso e produce lo schema che finisce nella documentazione. In genro-asgi è struttura fissa, armata su ogni router — quindi le firme sono sempre catturate.</p>
+    </div>
+    <div class="card">
+      <h4>Autorizzazione a tag</h4>
+      <p>Ogni rotta può dichiarare una regola sui tag dell'utente, con una piccola algebra booleana:</p>
+      <ul>
+        <li><code>|</code> almeno uno dei tag</li>
+        <li><code>&amp;</code> tutti i tag</li>
+        <li><code>!</code> nessuno dei tag</li>
+        <li><code>()</code> raggruppamento</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Capacità d'ambiente</h4>
+      <p>Una rotta può richiedere una capacità dell'ambiente — un servizio raggiungibile, una libreria presente. Le capacità si accumulano lungo il cammino nella gerarchia: un ramo figlio eredita quelle del padre e aggiunge le sue.</p>
+    </div>
+    <div class="card">
+      <h4>Filtro per canale</h4>
+      <p>La stessa rotta può essere visibile da un canale e invisibile da un altro — accessibile via MCP ma non via HTTP pubblico, per esempio. I canali si dichiarano anche per pattern.</p>
+    </div>
+    <div class="card">
+      <h4>Logging</h4>
+      <p>Tracciamento delle invocazioni con controllo per singola rotta, attivabile e disattivabile senza toccare gli handler.</p>
+    </div>
+    <div class="card">
+      <h4>Configurazione a runtime</h4>
+      <p>Le impostazioni dei plugin si applicano a caldo, globalmente o per singolo handler, con caratteri jolly sui nomi. La stessa chiamata sa anche <em>riferire</em> lo stato invece di cambiarlo, così puoi interrogare la configurazione viva.</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <span class="label">Perché conta</span>
+    <p>Autorizzazione, validazione e visibilità non sono <code>if</code> dentro gli handler: sono proprietà dichiarate della rotta, leggibili dall'esterno. È la stessa lettura che genera la documentazione — quindi ciò che il documento dichiara e ciò che il server applica non possono divergere.</p>
+  </div>
+</section>
+
+<section id="grammatiche">
+  <h2><span class="kicker">La configurazione</span>Il sistema delle grammatiche</h2>
+  <div class="prose">
+    <p>La configurazione di genro-asgi non è un dizionario di stringhe né un file YAML da indovinare: è una <strong>grammatica</strong>. Ogni sezione è un elemento dichiarato con la sua firma — parametri, tipi, valori di default, quali figli ammette e in che cardinalità. Scrivere una configurazione è comporre quella grammatica in Python, e un errore di composizione è un errore al boot, non un <code>KeyError</code> in produzione sei mesi dopo.</p>
+  </div>
+
+  <pre><span class="k">from</span> genro_asgi <span class="k">import</span> AsgiServer
+<span class="k">from</span> genro_asgi.config <span class="k">import</span> AsgiConfigBuilder
+
+<span class="k">class</span> ServerConfiguration(AsgiConfigBuilder):
+    <span class="k">def</span> main(self, root):
+        cfg = root.configuration()
+        cfg.server(host="127.0.0.1", port=8000)
+
+server = AsgiServer(config=ServerConfiguration)</pre>
+
+  <div class="prose">
+    <h3>Ogni classe porta la propria grammatica</h3>
+    <p>La grammatica non è centralizzata: è un attributo della classe che la parla. Il server ha la sua, l'applicazione base ha la sua, il sottosistema dei task ha la sua — e quando monti un'applicazione, la sua grammatica entra <em>per riferimento</em> nella configurazione del sito. Chi scrive una nuova applicazione dichiara le proprie sezioni e le ottiene validate come tutte le altre, senza toccare il core.</p>
+    <h3>Le sezioni che trovi già</h3>
+  </div>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>Sezione</th><th>Cosa dichiara</th></tr></thead>
+    <tbody>
+      <tr><td><code>server</code></td><td>host, porta e i parametri di runtime; contiene <code>session</code> (durata) e <code>tasks</code></td></tr>
+      <tr><td><code>applications</code></td><td>le applicazioni montate, per codice, con l'applicazione predefinita; ognuna innesta la grammatica della propria classe</td></tr>
+      <tr><td><code>authentication</code></td><td>password di amministrazione, archivi di utenti e credenziali, politica di login, provider OIDC, credenziali su header</td></tr>
+      <tr><td><code>middleware</code></td><td>quali middleware armare e con quali parametri</td></tr>
+      <tr><td><code>databases</code></td><td>i database montati, per codice</td></tr>
+      <tr><td><code>storage</code></td><td>i punti di montaggio dello storage, con la chiave di cifratura quando serve</td></tr>
+      <tr><td><code>plugins</code></td><td>i plugin del router, abilitabili singolarmente con le loro opzioni</td></tr>
+      <tr><td><code>openapi</code></td><td>titolo, versione e descrizione del documento generato</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="prose">
+    <h3>I valori esterni si risolvono quando li leggi</h3>
+    <p>Un valore che viene dall'ambiente non è una stringa copiata al boot: metti un <em>resolver</em> dove andrebbe il valore, e si risolve alla lettura. Il runtime consuma sempre il valore corrente, e non esiste il caso in cui la configurazione materializzata perde in silenzio un livello intero.</p>
+    <h3>Il server legge se stesso</h3>
+    <p>Non c'è un componente esterno che costruisce un server da una configurazione: il server costruisce la propria porta di lettura e le chiede i valori che gli servono. La porta è pubblica e interrogabile per percorso — <code>server.config("server.host")</code> — su quattro livelli in cascata: il valore scritto, il default dichiarato nella firma dell'elemento, il default passato dalla chiamata, e infine un errore esplicito. Un'applicazione legge il proprio sottoalbero con <code>app.config(percorso)</code>: possiede un indirizzo nell'albero, mai una copia di una sua fetta.</p>
+    <p>Gli argomenti passati esplicitamente al costruttore vincono su quelli configurati, uno per uno. È la regola che rende <code>--host</code> e <code>--port</code> della riga di comando semplici argomenti, senza calcoli di precedenza da nessuna parte.</p>
+  </div>
+</section>
+
+<section id="app">
+  <h2><span class="kicker">Il modello</span>Server e applicazioni</h2>
+  <div class="prose">
+    <p>Un <strong>server</strong> possiede il runtime: il loop, la catena dei middleware, il pool per il lavoro bloccante, il ciclo di vita, il registro delle richieste, e l'insieme delle applicazioni che serve. Un'<strong>applicazione</strong> possiede il comportamento e non sa nulla di porte o middleware.</p>
+    <p>Ogni applicazione porta due metà della propria identità: il <strong>codice</strong>, che è il suo nome, e il <strong>mount</strong>, che è il prefisso di URL sotto cui risponde. Sono distinti, quindi la stessa classe può essere servita due volte sotto nomi diversi. Un mount vuoto è la radice del sito.</p>
+    <p>Lo smistamento ha una sola regola, uguale su ogni server: primo segmento del percorso verso l'applicazione montata lì; altrimenti quella sulla radice; altrimenti, per <code>/</code> con un default dichiarato, un redirect; altrimenti 404.</p>
+    <h3>Le classi che erediti</h3>
+  </div>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>Classe</th><th>Cosa aggiunge</th></tr></thead>
+    <tbody>
+      <tr><td><code>BaseApplication</code></td><td>il contratto minimo: identità, mount, riferimento al server, agganci di ciclo di vita</td></tr>
+      <tr><td><code>RoutedApplication</code></td><td>innesta il motore di routing: i metodi <code>@route</code> diventano la superficie dell'app</td></tr>
+      <tr><td><code>OpenApiApplication</code></td><td>aggiunge REST, lo schema OpenAPI e le pagine di documentazione</td></tr>
+      <tr><td><code>McpApplication</code></td><td>espone lo stesso albero come server MCP per gli agenti</td></tr>
+      <tr><td><code>McpOpenApiApplication</code></td><td>entrambe le facce sullo stesso albero di rotte</td></tr>
+      <tr><td><code>ServerApplication</code></td><td>l'app di sistema, montata da sola su ogni server</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="prose">
+    <h3>Le capacità si compongono</h3>
+    <p>Il server spedito impila su una base snella tutte le capacità come mixin cooperativi: comunicazione, autenticazione, sessioni, middleware, plugin, storage, task. Le capacità <em>esistono sempre</em> — non aggiungi una capacità sottoclassando, la alimenti passandole configurazione. Non esiste l'attributo che è <code>None</code> finché un flag non lo accende.</p>
+    <h3>L'app di sistema, senza configurarla</h3>
+    <p>Ogni server monta da sé un'applicazione di sistema sotto <code>/_server</code>: login e logout, elenco dei metodi di accesso disponibili, gestione degli utenti, gestione delle credenziali emesse, e la superficie completa dei task. Ha il suo schema OpenAPI come ogni altra applicazione. È automatica, non configurata: un server costruito a mano ce l'ha esattamente come uno costruito da una configurazione.</p>
+  </div>
+</section>
+
+<section id="openapi">
+  <h2><span class="kicker">Documentazione</span>OpenAPI, generato dall'albero vero</h2>
+  <div class="prose">
+    <p>Lo schema non è un file da mantenere allineato: è la traduzione dell'introspezione del router. Le firme catturate dal plugin di validazione diventano parametri e corpi; le annotazioni di ritorno diventano schemi di risposta; i metadati dichiarati sulla rotta diventano riassunti, tag e codici.</p>
+    <p>Ogni applicazione che eredita da <code>OpenApiApplication</code> pubblica il proprio documento e le pagine di documentazione navigabile sotto il proprio sottoalbero. Il controllo è anche per singolo handler: metodo HTTP, inclusione o esclusione, dettagli della voce.</p>
+    <p>Poiché i controlli per voce sono armati su ogni router come struttura fissa, valgono sempre — non c'è la configurazione dimenticata che lascia una rotta fuori dal documento senza che nessuno se ne accorga.</p>
+  </div>
+</section>
+
+<section id="mcp">
+  <h2><span class="kicker">Agenti</span>MCP sulla stessa superficie</h2>
+  <div class="prose">
+    <p>Model Context Protocol è il modo in cui un modello linguistico scopre e invoca strumenti. In genro-asgi è una <em>faccia</em>, non un'applicazione parallela: il motore parla JSON-RPC 2.0 sopra lo stesso router che serve la API REST, con il trasporto Streamable HTTP senza stato.</p>
+    <p>La conseguenza pratica è che <strong>un metodo decorato una volta è insieme un endpoint REST e uno strumento per l'agente</strong>. Lo schema che l'agente riceve per capire come chiamarlo è lo stesso schema che finisce nella documentazione — generato dalla stessa introspezione.</p>
+    <p>Il filtro per canale governa cosa l'agente vede: una rotta può essere dichiarata accessibile via MCP e non altrove, o viceversa, senza duplicare l'albero.</p>
+  </div>
+</section>
+
+<section id="auth">
+  <h2><span class="kicker">Identità</span>Autenticazione: il catalogo</h2>
+  <div class="prose">
+    <p>Un applicativo reale non ha <em>un</em> modo di autenticare: ne ha diversi, per interlocutori diversi — il browser di una persona, il processo che chiama la API, l'agente, il provider aziendale. genro-asgi li porta tutti, convergenti sullo stesso risultato.</p>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h4>Password, con blocco progressivo</h4>
+      <p>Login in due rotte distinte — una JSON per il client, una HTML per il browser — mai un fiuto dell'intestazione dentro l'handler. Il contatore dei fallimenti vive <em>sul record dell'utente</em>, quindi sopravvive ai riavvii ed è condiviso fra processi. Dopo N fallimenti l'attesa cresce esponenzialmente; i tentativi rifiutati durante il blocco non lo prolungano, così un attaccante non può tenere fuori un utente legittimo.</p>
+    </div>
+    <div class="card">
+      <h4>OIDC, un provider per istanza</h4>
+      <p>Flusso authorization-code con PKCE sempre attivo, quindi funziona anche senza segreto client. La scoperta dei metadati del provider è pigra e memorizzata: un server che parte mentre il provider è irraggiungibile non muore. Lo stato è legato alla sessione e verificato al ritorno; il token d'identità è validato per firma, destinatario ed emittente. Ogni provider configurato porta la propria identità e i propri tag.</p>
+    </div>
+    <div class="card">
+      <h4>Credenziali su intestazione</h4>
+      <p>Basic, bearer e JWT, dichiarati nella sezione di configurazione e consumati dal nucleo di autenticazione. L'intestazione vince sempre sulla sessione: una chiamata autenticata è quello che dichiara di essere, indipendentemente dal cookie che porta con sé.</p>
+    </div>
+    <div class="card">
+      <h4>Chiavi API revocabili</h4>
+      <p>Un registro di credenziali bearer emesse, ognuna revocabile singolarmente, con contratto astratto e implementazione su file già pronta — sostituibile con la tua senza toccare i consumatori.</p>
+    </div>
+    <div class="card">
+      <h4>Autorizzazione a tag</h4>
+      <p>L'identità autenticata porta i suoi tag, e ogni rotta dichiara la regola booleana che li interroga. Le sezioni di sistema sono protette così: la gestione di utenti, credenziali e task è dietro un cancello di amministrazione dichiarato, non dietro un controllo scritto a mano in ogni handler.</p>
+    </div>
+    <div class="card">
+      <h4>Un solo tipo di identità</h4>
+      <p>Comunque tu sia entrato — password, OIDC, token — il risultato è un <em>avatar</em>: l'unico tipo di identità autenticata del pacchetto. Chi consuma l'identità non sa da quale porta sia entrata, e non deve saperlo.</p>
+    </div>
+  </div>
+
+  <div class="prose">
+    <p>Aggiungere un metodo di login significa scrivere una classe che si descrive: come si chiama, che tipo è, e se possiede rotte proprie. Se ne possiede, entrano nell'albero sotto la superficie di sistema; se non ne possiede — il caso della password — vive nel registro ordinato che alimenta l'elenco dei metodi disponibili, senza inquinare l'albero di routing con nodi vuoti.</p>
+    <p>Il limite di frequenza per indirizzo IP è materia di un middleware dedicato, non del gestore di login: il blocco progressivo difende un'identità dai tentativi ripetuti, il limite per IP difende il server da chi lo martella, e sono due difese con vittime diverse.</p>
+  </div>
+</section>
+
+<section id="sessioni">
+  <h2><span class="kicker">Continuità</span>Sessioni</h2>
+  <div class="prose">
+    <p>Una sessione tiene lo stato di un visitatore tra una richiesta e l'altra: un identificatore, i suoi metadati, un albero di dati liberamente strutturato e una collezione di avatar per chiave.</p>
+    <p>La decisione che vale la pena conoscere è come si comporta al login: <strong>la sessione è un continuum, e il login la arricchisce di un'identità senza sostituirla</strong>. L'identificatore non cambia, i dati non si perdono — il carrello che un visitatore anonimo ha riempito sopravvive all'accesso — e il cookie che il client già possiede resta valido. Non esiste un cookie emesso al momento del login: se ne emette uno solo quando nasce una sessione anonima nuova.</p>
+    <p>La difesa contro la fissazione della sessione sta a monte, nella disciplina del cookie — non leggibile da script, con vincolo di provenienza, e il token mai letto dall'URL — invece che in una rotazione di identificatore che costerebbe la continuità.</p>
+    <p>Lo store è un contratto: quello in memoria è il predefinito, il tuo si innesta senza che nulla intorno cambi.</p>
+  </div>
+</section>
+
+<section id="task">
+  <h2><span class="kicker">Lavoro differito</span>Task, pianificazione e batch</h2>
+  <div class="prose">
+    <p>Il sottosistema dei task copre due bisogni che di solito richiedono due dipendenze esterne: <em>eseguire qualcosa più tardi o periodicamente</em>, ed <em>eseguire un lavoro lungo mantenendone traccia</em>.</p>
+    <h3>La pianificazione: tre forme</h3>
+  </div>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>Forma</th><th>Come si scrive</th><th>Semantica</th></tr></thead>
+    <tbody>
+      <tr><td><code>every</code></td><td><code>"30s"</code> · <code>"15m"</code> · <code>"2h"</code> · <code>"1d"</code></td><td>a intervallo fisso dall'ultima esecuzione</td></tr>
+      <tr><td><code>cron</code></td><td>i classici cinque campi, con <code>*</code> <code>,</code> <code>-</code> <code>/</code></td><td>semantica di sistema, valutata in ora locale — analizzata in casa, senza dipendenze aggiuntive</td></tr>
+      <tr><td><code>at</code></td><td>una lista di istanti ISO</td><td>ognuno scatta una volta sola; esaurita la lista non c'è più una prossima esecuzione</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="prose">
+    <p>Nessun recupero del passato: la prossima esecuzione si calcola sempre in avanti da adesso, mai riempiendo a ritroso il tempo in cui il server era spento.</p>
+
+    <h3>Lo spool: lo stato è la posizione</h3>
+    <p>Un task batch è una <strong>cartella</strong>, e il suo stato è dove quella cartella si trova nell'albero. Chi lo lancia la crea sotto <code>pending/</code>; il gestore la sposta nella cartella del worker assegnato; il worker la esegue e la sposta in <code>terminated/</code> o <code>aborted/</code>. Una transizione di stato è uno spostamento — atomico, su un solo punto di montaggio.</p>
+    <p>Non ci sono lock, perché la sicurezza è strutturale: un solo scrittore per ogni directory di stato, e prendere in carico un lavoro è una rinomina atomica. Dentro la cartella vivono il descrittore, i parametri della chiamata, l'ultimo stato di avanzamento scritto dal worker, il risultato, e un file-marcatore che segnala la richiesta di annullamento.</p>
+    <p>Un identificatore di batch è <strong>terminale</strong>: non si riprende e non si rilancia da sé. Un lavoro rimasto orfano perché il suo worker è morto viene chiuso come interrotto al riavvio successivo; rilanciarlo significa un lavoro nuovo, con un identificatore nuovo. Non esiste lo stato ambiguo in cui non sai se qualcosa stia ancora girando.</p>
+
+    <h3>Il termometro: l'avanzamento che si guarda mentre accade</h3>
+    <p>Un lavoro che dura dieci minuti ha bisogno di raccontarsi, altrimenti l'utente non sa distinguere «sta lavorando» da «è morto». Il codice del batch pubblica il proprio avanzamento — a che punto è, su quanto, con che messaggio — e ogni pubblicazione fa <strong>due cose in un colpo solo</strong>: scrive lo stato su disco, accanto al lavoro, e lo diffonde sul canale vivo verso chi lo ha lanciato.</p>
+    <p>La doppia natura è deliberata, e risolve il problema che di solito costringe a scegliere. Il file è la <em>verità</em>: chi ricarica la pagina, chi arriva dopo, chi vuole sapere a che punto era un lavoro di ieri legge quello. Il canale vivo è la <em>cortesia</em>: chi sta guardando adesso vede la barra muoversi senza interrogare il server a intervalli. Se il canale non c'è — nessuno sta guardando — la scrittura avviene comunque, e non si perde niente.</p>
+
+    <h3>Interrompere un lavoro</h3>
+    <p>Un batch lungo va potuto fermare, e il modo in cui lo si ferma non è indifferente. Uccidere il processo a metà lascia le cose a metà: una transazione aperta, un file scritto per un terzo, un contatore incrementato per righe che non esistono.</p>
+    <p>Quindi l'interruzione è <strong>cooperativa</strong>. Chi la chiede posa un segnale accanto al lavoro; il codice del batch lo controlla ai propri punti di respiro — tipicamente a ogni ciclo, dove sa di essere in uno stato consistente — e quando lo trova chiude ordinatamente e si dichiara interrotto. Il lavoro finisce nella cartella degli interrotti, con la sua storia leggibile.</p>
+    <p class="pull">Chi chiede lo stop non ammazza: chiede. È il batch che sa dove può fermarsi senza lasciare macerie.</p>
+    <p>Il costo di questa scelta è che un batch che non guarda mai il segnale non si ferma — ed è un costo accettato, perché l'alternativa è un sistema che promette una cancellazione pulita e non può mantenerla.</p>
+
+    <h3>La superficie di gestione</h3>
+    <p>Sotto la sezione di sistema, protetta dal cancello di amministrazione, trovi già gli endpoint per l'intero ciclo: elencare le pianificazioni, crearne, modificarle, abilitarle e disabilitarle, forzarne l'esecuzione immediata, cancellarle, leggerne i log; e per i batch: elencare lo spool filtrando per proprietario e stato, leggere l'avanzamento, chiedere l'interruzione, recuperare il risultato.</p>
+    <p>Sono endpoint con il loro schema OpenAPI come ogni altra rotta, quindi l'interfaccia di amministrazione è un consumatore come un altro — e le illustrazioni che seguono mostrano che forma può prendere.</p>
+    <p>L'esecuzione può stare in-processo, sul pool del server stesso, oppure essere affidata a processi dedicati: il modello — spool, stati, ciclo di vita — è lo stesso nei due casi, e quale dei due si usi è una questione di dispiegamento descritta nel secondo documento.</p>
+  </div>
+
+  <h3>La videata dei task</h3>
+  <div class="diagram">
+    <svg viewBox="0 0 880 372" role="img" aria-label="Illustrazione della videata di gestione dei task: pianificazioni e batch in corso con termometri">
+      <g font-family="system-ui, sans-serif">
+        <rect x="1" y="1" width="878" height="370" rx="7" fill="var(--surface)" stroke="var(--line)"/>
+        <path d="M1,42 H879" stroke="var(--line)" fill="none"/>
+        <text x="20" y="27" font-size="12.5" font-weight="650" fill="var(--ink)">_server · task</text>
+        <rect x="700" y="14" width="72" height="20" rx="4" fill="var(--accent-soft)"/>
+        <text x="736" y="28" text-anchor="middle" font-size="10.5" font-weight="600" fill="var(--accent)">pianifica</text>
+        <rect x="782" y="14" width="80" height="20" rx="4" fill="var(--sunk)"/>
+        <text x="822" y="28" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">esegui ora</text>
+
+        <text x="20" y="66" font-size="10" font-weight="650" letter-spacing=".09em" fill="var(--ink-faint)">IN ESECUZIONE</text>
+
+        <g>
+          <path d="M20,80 H860" stroke="var(--line-soft)" fill="none"/>
+          <text x="20" y="100" font-size="11.5" font-weight="600" fill="var(--ink)">Ricalcolo giacenze</text>
+          <text x="20" y="116" font-size="10" fill="var(--ink-faint)">avviato 14:02 · m.rossi · magazzino/ricalcolo</text>
+          <rect x="300" y="92" width="300" height="9" rx="4.5" fill="var(--sunk)"/>
+          <rect x="300" y="92" width="219" height="9" rx="4.5" fill="var(--accent)"/>
+          <text x="612" y="100" font-size="10.5" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">73%</text>
+          <text x="300" y="116" font-size="9.5" fill="var(--ink-faint)">14.600 di 20.000 · articolo AC-8841</text>
+          <rect x="672" y="88" width="80" height="19" rx="4" fill="var(--surface)" stroke="var(--line)"/>
+          <text x="712" y="101" text-anchor="middle" font-size="10" fill="var(--ink-soft)">interrompi</text>
+          <text x="800" y="101" font-size="10.5" fill="var(--ink-faint)">~2 min</text>
+        </g>
+
+        <g>
+          <path d="M20,132 H860" stroke="var(--line-soft)" fill="none"/>
+          <text x="20" y="152" font-size="11.5" font-weight="600" fill="var(--ink)">Export fatture Q3</text>
+          <text x="20" y="168" font-size="10" fill="var(--ink-faint)">avviato 14:09 · g.bianchi · contabilita/export</text>
+          <rect x="300" y="144" width="300" height="9" rx="4.5" fill="var(--sunk)"/>
+          <rect x="300" y="144" width="54" height="9" rx="4.5" fill="var(--accent)"/>
+          <text x="612" y="152" font-size="10.5" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">18%</text>
+          <text x="300" y="168" font-size="9.5" fill="var(--ink-faint)">1.100 di 6.200 · composizione PDF</text>
+          <rect x="672" y="140" width="80" height="19" rx="4" fill="var(--surface)" stroke="var(--line)"/>
+          <text x="712" y="153" text-anchor="middle" font-size="10" fill="var(--ink-soft)">interrompi</text>
+          <text x="800" y="153" font-size="10.5" fill="var(--ink-faint)">~9 min</text>
+        </g>
+
+        <g>
+          <path d="M20,184 H860" stroke="var(--line-soft)" fill="none"/>
+          <text x="20" y="204" font-size="11.5" font-weight="600" fill="var(--ink)">Invio solleciti</text>
+          <text x="20" y="220" font-size="10" fill="var(--ink-faint)">avviato 13:58 · pianificato · crediti/solleciti</text>
+          <rect x="300" y="196" width="300" height="9" rx="4.5" fill="var(--sunk)"/>
+          <rect x="300" y="196" width="288" height="9" rx="4.5" fill="var(--accent)"/>
+          <text x="612" y="204" font-size="10.5" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">96%</text>
+          <text x="300" y="220" font-size="9.5" fill="var(--warn, var(--ink-faint))" opacity=".85">interruzione richiesta · attende il punto di respiro</text>
+          <rect x="672" y="192" width="80" height="19" rx="4" fill="var(--sunk)"/>
+          <text x="712" y="205" text-anchor="middle" font-size="10" fill="var(--ink-faint)">richiesto</text>
+        </g>
+
+        <text x="20" y="258" font-size="10" font-weight="650" letter-spacing=".09em" fill="var(--ink-faint)">PIANIFICAZIONI</text>
+        <path d="M20,270 H860" stroke="var(--line)" fill="none"/>
+
+        <g font-size="10.5" fill="var(--ink-soft)">
+          <text x="20" y="290" font-size="11" font-weight="600" fill="var(--ink)">Chiusura giornaliera</text>
+          <text x="300" y="290" font-family="var(--mono), monospace">cron · 0 2 * * *</text>
+          <text x="520" y="290">ultima 02:00 · ok</text>
+          <text x="700" y="290">prossima 02:00</text>
+          <circle cx="856" cy="286" r="4" fill="var(--accent)"/>
+
+          <text x="20" y="314" font-size="11" font-weight="600" fill="var(--ink)">Sincronia listini</text>
+          <text x="300" y="314" font-family="var(--mono), monospace">every · 15m</text>
+          <text x="520" y="314">ultima 14:00 · ok</text>
+          <text x="700" y="314">prossima 14:15</text>
+          <circle cx="856" cy="310" r="4" fill="var(--accent)"/>
+
+          <text x="20" y="338" font-size="11" font-weight="600" fill="var(--ink)">Riconciliazione banca</text>
+          <text x="300" y="338" font-family="var(--mono), monospace">at · 3 istanti</text>
+          <text x="520" y="338">ultima 09:30 · errore</text>
+          <text x="700" y="338">disabilitata</text>
+          <circle cx="856" cy="334" r="4" fill="none" stroke="var(--ink-faint)" stroke-width="1.4"/>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <p class="caption">Illustrazione teorica, non uno screenshot: mostra quali informazioni la superficie di sistema già espone. I termometri vengono dal canale vivo, il resto dagli endpoint dello spool e delle pianificazioni. Il terzo lavoro ha l'interruzione richiesta e sta finendo il proprio ciclo — lo stato intermedio che una cancellazione cooperativa rende visibile invece di nascondere.</p>
+
+  <h3>La videata degli utenti</h3>
+  <div class="diagram">
+    <svg viewBox="0 0 880 300" role="img" aria-label="Illustrazione della videata di gestione utenti">
+      <g font-family="system-ui, sans-serif">
+        <rect x="1" y="1" width="878" height="298" rx="7" fill="var(--surface)" stroke="var(--line)"/>
+        <path d="M1,42 H879" stroke="var(--line)" fill="none"/>
+        <text x="20" y="27" font-size="12.5" font-weight="650" fill="var(--ink)">_server · utenti</text>
+        <rect x="746" y="14" width="116" height="20" rx="4" fill="var(--accent-soft)"/>
+        <text x="804" y="28" text-anchor="middle" font-size="10.5" font-weight="600" fill="var(--accent)">nuovo utente</text>
+
+        <g font-size="9.5" font-weight="650" letter-spacing=".08em" fill="var(--ink-faint)">
+          <text x="20" y="64">IDENTITÀ</text>
+          <text x="270" y="64">TAG</text>
+          <text x="470" y="64">ACCESSO</text>
+          <text x="620" y="64">ULTIMO INGRESSO</text>
+          <text x="790" y="64">STATO</text>
+        </g>
+        <path d="M20,74 H860" stroke="var(--line)" fill="none"/>
+
+        <g font-size="11">
+          <text x="20" y="98" font-weight="600" fill="var(--ink)">m.rossi@acme.it</text>
+          <text x="270" y="98" fill="var(--ink-soft)">magazzino · operatore</text>
+          <text x="470" y="98" fill="var(--ink-soft)">password</text>
+          <text x="620" y="98" fill="var(--ink-soft)">oggi 08:14</text>
+          <rect x="790" y="88" width="54" height="16" rx="3" fill="var(--accent-soft)"/>
+          <text x="817" y="100" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--accent)">attivo</text>
+          <path d="M20,112 H860" stroke="var(--line-soft)" fill="none"/>
+
+          <text x="20" y="136" font-weight="600" fill="var(--ink)">g.bianchi@acme.it</text>
+          <text x="270" y="136" fill="var(--ink-soft)">contabilita · superadmin</text>
+          <text x="470" y="136" fill="var(--ink-soft)">OIDC · azienda</text>
+          <text x="620" y="136" fill="var(--ink-soft)">oggi 09:02</text>
+          <rect x="790" y="126" width="54" height="16" rx="3" fill="var(--accent-soft)"/>
+          <text x="817" y="138" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--accent)">attivo</text>
+          <path d="M20,150 H860" stroke="var(--line-soft)" fill="none"/>
+
+          <text x="20" y="174" font-weight="600" fill="var(--ink)">l.verdi@acme.it</text>
+          <text x="270" y="174" fill="var(--ink-soft)">vendite</text>
+          <text x="470" y="174" fill="var(--ink-soft)">password</text>
+          <text x="620" y="174" fill="var(--ink-soft)">ieri 17:41</text>
+          <rect x="790" y="164" width="86" height="16" rx="3" fill="var(--sunk)"/>
+          <text x="833" y="176" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--ink-soft)">bloccato 4′</text>
+          <path d="M20,188 H860" stroke="var(--line-soft)" fill="none"/>
+
+          <text x="20" y="212" font-weight="600" fill="var(--ink)">integrazione-erp</text>
+          <text x="270" y="212" fill="var(--ink-soft)">servizio · sola lettura</text>
+          <text x="470" y="212" fill="var(--ink-soft)">chiave API</text>
+          <text x="620" y="212" fill="var(--ink-soft)">oggi 14:11</text>
+          <rect x="790" y="202" width="54" height="16" rx="3" fill="var(--accent-soft)"/>
+          <text x="817" y="214" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--accent)">attivo</text>
+        </g>
+
+        <rect x="20" y="240" width="840" height="44" rx="5" fill="var(--sunk)"/>
+        <text x="36" y="259" font-size="10" font-weight="650" letter-spacing=".08em" fill="var(--ink-faint)">L.VERDI · 5 TENTATIVI FALLITI</text>
+        <text x="36" y="275" font-size="10.5" fill="var(--ink-soft)">il contatore vive sul record dell'utente, quindi il blocco è già valido su ogni processo · azzeramento manuale disponibile</text>
+      </g>
+    </svg>
+  </div>
+  <p class="caption">Gli stessi endpoint alimentano l'elenco: identità, tag che governano l'autorizzazione, metodo con cui la persona entra, e lo stato del blocco progressivo — che essendo scritto sul record dell'utente è già coerente fra processi, senza un archivio condiviso di appoggio.</p>
+</section>
+
+<section id="storage">
+  <h2><span class="kicker">Persistenza</span>Storage, database e forma dei dati</h2>
+  <div class="prose">
+    <p>Lo storage è un'astrazione con <strong>punti di montaggio simbolici</strong>: il codice scrive su un nome logico — «il mount dei documenti, cartella fatture» — e dove quel nome atterri lo decide la configurazione. Non è zucchero sintattico: è ciò che permette allo stesso codice, non ricompilato e non ramificato, di lavorare su una cartella locale mentre sviluppi e su un archivio remoto in produzione.</p>
+
+    <h4>Disco locale e disco di rete, senza accorgersene</h4>
+    <p>La trasparenza copre due mondi che di solito richiedono due codici diversi.</p>
+    <p>Il primo è il filesystem, e comprende già i dischi di rete: un volume condiviso montato dal sistema operativo — un NAS aziendale, una condivisione di rete — per il processo <em>è</em> un percorso, quindi il mount lo raggiunge senza sapere che è remoto. Il secondo è l'archiviazione a oggetti e tutto ciò che si raggiunge per protocollo: bucket S3, Google Cloud Storage, archivi in memoria per i test. Cambia una riga nella configurazione, non una riga nel codice.</p>
+    <p>Questo è il motivo pratico per cui il modello vale la pena: il cliente che tiene i documenti sul proprio NAS e quello che li tiene su un bucket usano <strong>la stessa applicazione</strong>, e la differenza vive in un file di configurazione invece che in un ramo del codice da mantenere due volte.</p>
+
+    <h4>Le capacità si dichiarano, non si scoprono sbattendoci</h4>
+    <p>La trasparenza ha un limite onesto: i backend non sanno fare le stesse cose. Un bucket non sa aggiungere in coda a un file esistente; un disco locale non sa produrre un collegamento firmato a scadenza; un archivio di sola lettura non accetta scritture.</p>
+    <p>Invece di far finta che siano equivalenti — e lasciare che la differenza esploda in produzione — ogni backend <strong>dichiara le proprie capacità</strong>, diciannove in tutto: lettura, scrittura, cancellazione, elenco, metadati, collegamenti firmati e pubblici, atomicità, ricerca posizionale, aggiunta in coda, ottimizzazione della copia lato server, impronta nei metadati, sola lettura, temporaneità. Il codice può <em>chiedere</em> prima di provare.</p>
+    <p>E la dichiarazione non è un'etichetta scritta a mano: per un bucket, la capacità di gestire versioni viene verificata <strong>interrogando il bucket vero</strong>. Se il versioning è attivo su quel bucket la capacità è vera; se non lo è, è falsa. Non c'è un file di configurazione che possa mentire su un fatto verificabile.</p>
+
+    <h4>Il multiversione</h4>
+    <p>Tre delle diciannove capacità riguardano le versioni, e sono separate perché descrivono cose diverse: <em>tenere</em> la storia di un file, <em>elencarla</em>, e <em>accedere</em> a una versione precisa.</p>
+    <p>Dove il backend le possiede, un file non è un contenuto ma una <strong>storia di contenuti</strong>: si può chiedere a un nodo quali versioni abbia — con la loro data e il loro identificatore — e aprirne una vecchia per leggerla, senza toccare quella corrente. Sovrascrivere non distrugge: aggiunge.</p>
+    <p class="pull">Un allegato sostituito per errore è un problema di recupero, non di backup, se lo storage sotto tiene la storia.</p>
+    <p>Il valore per l'applicazione è che <strong>non deve costruirsi un sistema di versioni proprio</strong> — la tabella delle revisioni, i nomi con il suffisso progressivo, la cartella dello storico — quando il supporto sa già farlo. E dove il supporto non lo sa, la capacità risponde no: l'applicazione lo scopre interrogando, non con un file perduto.</p>
+    <p>La cifratura è un'opzione del montaggio, non una libreria da orchestrare a mano: si dichiara sul mount che deve essere protetto, e il codice che scrive non cambia.</p>
+
+    <h4>Database</h4>
+    <p>I database si dichiarano nella loro sezione, per codice, e il core espone il contratto minimo di un database montato: quel che serve al server per possederlo e passarlo alle applicazioni che lo chiedono.</p>
+    <h3>Le fondamenta condivise</h3>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h4>Bag — l'albero di dati</h4>
+      <p>Una struttura ad albero ordinata, con attributi sui nodi, osservabile: si può sottoscrivere e sapere cosa è cambiato. È la forma in cui viaggiano configurazione, dati di sessione e stato vivo delle pagine.</p>
+    </div>
+    <div class="card">
+      <h4>TYTX — tipi che sopravvivono al trasporto</h4>
+      <p>Un decimale spedito da Python arriva come decimale, non come stringa da riconvertire a mano. Un solo protocollo su tre formati — JSON, XML e MessagePack — e passare dall'uno all'altro è un parametro, non una riscrittura.</p>
+    </div>
+    <div class="card">
+      <h4>Builders — le grammatiche</h4>
+      <p>Il sistema che rende la configurazione una grammatica dichiarata invece che un dizionario: elementi con firma, cardinalità dei figli, validazione alla composizione.</p>
+    </div>
+    <div class="card">
+      <h4>Routes, storage, toolbox</h4>
+      <p>Il motore di routing, l'astrazione di persistenza e le utilità comuni. Sei pacchetti in tutto, ognuno pubblicato e testato per conto proprio.</p>
+    </div>
+  </div>
+
+  <div class="prose">
+    <h3>Le stesse strutture esistono lato browser</h3>
+    <p>Qui c'è una scelta che si vede solo quando si guarda l'intero percorso di un dato, dal database alla pagina. <strong>Bag e TYTX non sono soltanto librerie Python: esistono anche in JavaScript.</strong> Bag ha il proprio pacchetto per il browser; TYTX porta le due implementazioni nello stesso repository ed è pubblicato su entrambi i registri, quello Python e quello npm.</p>
+    <p>La conseguenza è che un albero di dati costruito sul server e lo stesso albero manipolato nella pagina <strong>hanno la stessa forma e la stessa semantica</strong>. Non c'è un modello di dominio di qua e un oggetto JSON appiattito di là, con il livello di traduzione in mezzo che va tenuto allineato a mano e che è il posto dove si annidano metà dei difetti di integrazione.</p>
+    <p class="pull">Il dato non cambia forma attraversando il confine fra i due linguaggi. Quel confine, di solito, è dove le informazioni si impoveriscono.</p>
+    <p>Vale in particolare per i tipi. Una data resta una data, un decimale resta un decimale con la sua precisione — il caso degli importi, dove passare per un numero in virgola mobile è un errore che si manifesta molto più tardi, in una somma che non torna di un centesimo. E vale per la struttura: gli attributi sui nodi, l'ordine dei figli, la possibilità di osservare cosa è cambiato sono gli stessi da entrambe le parti.</p>
+
+    <h4>Un'equivalenza verificata, non dichiarata</h4>
+    <p>Due implementazioni della stessa cosa divergono, appena qualcosa non le obbliga a restare uguali — è la stessa lezione che governa i due trasporti del motore di smistamento. Per questo TYTX porta una <strong>suite di prove attraverso i due linguaggi</strong>: un lato genera i dati, l'altro li rilegge e verifica di ottenere esattamente quello che ci si aspetta, nelle due direzioni. L'equivalenza è una proprietà provata a ogni build, non una promessa nel readme.</p>
+
+    <h4>MessagePack quando il volume lo chiede</h4>
+    <p>Che il formato sia un parametro e non un'architettura ha una conseguenza pratica sul canale fra pagina e server. Finché il traffico è modesto, JSON va benissimo ed è ispezionabile a occhio, il che in fase di sviluppo vale molto. Quando il dialogo si fa fitto — ed è esattamente ciò che accade con un canale aperto, come racconta il secondo documento — lo stesso identico contenuto può viaggiare in <strong>MessagePack</strong>: forma binaria, più compatta e più rapida da comporre e leggere.</p>
+    <p>Il codice applicativo non cambia di una riga, perché i tipi sono descritti dal protocollo e non dal formato. Si sceglie in base alla stagione del progetto: leggibile mentre si sviluppa, compatto quando si misura.</p>
+  </div>
+</section>
+
+<section id="http">
+  <h2><span class="kicker">Le basi</span>HTTP, flussi e trasporti</h2>
+  <div class="prose">
+    <p>Richiesta e risposta sono due classi piatte, senza gerarchie da imparare. La richiesta legge il corpo in anticipo e lo offre già interpretato; la risposta conosce il protocollo tipizzato, quindi un decimale o una data attraversano il confine senza conversioni manuali.</p>
+    <p>Per i flussi lunghi c'è la risposta a blocchi, e sopra di essa gli eventi inviati dal server già inquadrati — la via naturale per l'avanzamento di un lavoro o per una notifica.</p>
+    <p>Le eccezioni HTTP si sollevano da qualunque punto del codice e trovano risposta nel middleware più esterno: non passi codici di stato lungo la catena delle chiamate.</p>
+    <h3>La catena dei middleware</h3>
+    <p>Sette middleware pronti — errori, CORS, autenticazione, sessione, log di accesso, filtro dei percorsi di sonda — ordinati da un <em>numero</em>, non da una gerarchia di classi: il più piccolo è il più esterno, e inserire il tuo significa scegliere una posizione. Solo la gestione degli errori è attiva di default; le altre si armano quando configuri la capacità corrispondente.</p>
+  </div>
+
+  <h3>Due trasporti, un solo motore</h3>
+  <div class="prose">
+    <p>Accanto a HTTP il server parla <strong>WSX</strong> — WebSocket eXtended: un protocollo che porta la semantica HTTP sopra un canale WebSocket, così una chiamata che arriva dal socket trova lo stesso albero di rotte, gli stessi plugin e la stessa autorizzazione di una richiesta HTTP.</p>
+    <p>La regola che governa questa parte è che il motore di smistamento è <strong>uno solo</strong>, con due trasporti innestati. Non due motori paralleli: due motori divergono, perché nulla li obbliga a restare uguali, e ogni funzionalità aggiunta a uno va poi ritrovata nell'altro. Il contesto della chiamata, gli agganci sulla risoluzione della rotta e le pulizie dopo il servizio esistono identici su entrambi i trasporti, e una sola batteria di test di contratto li verifica insieme.</p>
+    <p>La stretta di mano del socket passa dal controllo di provenienza, come ogni altra difesa del server: un canale aperto è una porta, e vale la stessa disciplina delle altre.</p>
+  </div>
+</section>
+
+<section id="metriche">
+  <h2><span class="kicker">Osservabilità</span>Metriche in formato Prometheus</h2>
+  <div class="prose">
+    <p>Il monitor di sistema risponde alla domanda «cosa sta succedendo <em>adesso</em>»: quali lavori girano, chi è collegato, quali processi sono vivi. È fatto per una persona che guarda.</p>
+    <p>Le metriche rispondono a una domanda diversa — «come si è comportato questo sistema nell'ultima settimana, e cosa è cambiato da quando abbiamo rilasciato» — e il destinatario non è una persona ma un raccoglitore. Per questo il server espone un endpoint in <strong>formato Prometheus</strong>, che è di fatto lo standard con cui ogni sistema di raccolta sa parlare.</p>
+    <p>Quello che espone non è una traduzione di quel che si vede nel monitor: sono le grandezze che ha senso guardare nel tempo.</p>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h4>Il traffico</h4>
+      <p>Richieste servite, distinte per applicazione montata e per esito, e la distribuzione dei tempi di risposta — non la media, che nasconde esattamente i casi che interessano.</p>
+    </div>
+    <div class="card">
+      <h4>Il lavoro bloccante</h4>
+      <p>Occupazione del pool di thread: quanti stanno lavorando e quanti esistono. È la grandezza che dice se il server è al limite <em>prima</em> che i tempi di risposta comincino a peggiorare.</p>
+    </div>
+    <div class="card">
+      <h4>Identità e sessioni</h4>
+      <p>Sessioni vive, accessi riusciti e falliti per metodo — password, OIDC, credenziali su intestazione — e identità attualmente sotto blocco progressivo. Una curva di accessi falliti che si impenna è un fatto operativo, non solo una nota di sicurezza.</p>
+    </div>
+    <div class="card">
+      <h4>I task</h4>
+      <p>Lavori nelle rispettive posizioni dello spool — in attesa, in corso, terminati, interrotti — durata di quelli che finiscono e ritardo delle pianificazioni rispetto al loro istante previsto. Un ritardo che cresce è la prima avvisaglia di un sistema che non sta al passo.</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <span class="label">Un livello, tre in tutto</span>
+    <p>Questo è il <strong>primo dei tre livelli</strong> di osservabilità. Quello descritto qui è il processo che serve: espone se stesso, e su un'installazione mono-processo è tutto ciò che serve. Il secondo livello — il pool di processi con lo stato vivo — e il terzo — la distribuzione fra domini e macchine — sono nei documenti successivi, e sono costruiti sullo stesso formato: chi raccoglie non deve imparare tre linguaggi.</p>
+  </div>
+</section>
+
+<section id="deploy">
+  <h2><span class="kicker">Messa in esercizio</span>Dalla riga di comando</h2>
+  <div class="prose">
+    <p>Un file di configurazione più un comando sono un'unità di deployment completa. Il comando risolve quello che gli passi in tre passi: un'assegnazione che nomina direttamente una classe applicativa, un percorso a un file esistente, oppure il nome di un server già registrato.</p>
+    <p>I server registrati vivono in un registro che è un <strong>archivio di puntatori, mai una copia</strong>: tiene la stringa sorgente e le opzioni date, quindi rilanciare per nome esegue sempre il codice corrente. Un file di pid non viene mai creduto sulla parola — mancante, illeggibile o riferito a un processo che non c'è più si leggono tutti come «non in esecuzione», così un server crollato risulta fermo e non fantasma.</p>
+    <p>C'è la ricarica automatica per lo sviluppo. La supervisione multi-processo, invece, è deliberatamente fuori: appartiene a uno strumento dedicato della famiglia.</p>
+  </div>
+</section>
+
+<section id="roadmap">
+  <h2><span class="kicker">Appendice</span>Roadmap: dove siamo</h2>
+  <div class="prose">
+    <p>Il documento descrive il server nella sua forma compiuta. Questa appendice è il solo posto dove si legge lo stato di avanzamento, e l'unico che cambia mentre l'implementazione procede.</p>
+    <p>Il pacchetto è coperto da <strong>1.567 test</strong> con una copertura del <strong>96%</strong>.</p>
+  </div>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>Capitolo</th><th>Stato</th><th>Nota</th></tr></thead>
+    <tbody>
+      <tr><td>Routing, gerarchie, introspezione</td><td><span class="tag ok">operativo</span></td><td></td></tr>
+      <tr><td>Plugin del router e configurazione a runtime</td><td><span class="tag ok">operativo</span></td><td>validazione, autorizzazione a tag, capacità, canale, logging</td></tr>
+      <tr><td>Grammatiche e configurazione</td><td><span class="tag ok">operativo</span></td><td>tutte le sezioni, resolver, porta di lettura a quattro livelli</td></tr>
+      <tr><td>Server, applicazioni, smistamento</td><td><span class="tag ok">operativo</span></td><td></td></tr>
+      <tr><td>App di sistema <code>_server</code></td><td><span class="tag ok">operativo</span></td><td>login, utenti, credenziali, task</td></tr>
+      <tr><td>OpenAPI e documentazione</td><td><span class="tag ok">operativo</span></td><td></td></tr>
+      <tr><td>MCP</td><td><span class="tag ok">operativo</span></td><td></td></tr>
+      <tr><td>Autenticazione: password con blocco progressivo</td><td><span class="tag ok">operativo</span></td><td></td></tr>
+      <tr><td>Autenticazione: OIDC con PKCE</td><td><span class="tag ok">operativo</span></td><td>un provider per istanza</td></tr>
+      <tr><td>Autenticazione: basic, bearer, JWT, chiavi API</td><td><span class="tag ok">operativo</span></td><td></td></tr>
+      <tr><td>Sessioni e store</td><td><span class="tag ok">operativo</span></td><td></td></tr>
+      <tr><td>Task: pianificazione e spool</td><td><span class="tag ok">operativo</span></td><td>tre forme di pianificazione, superficie di gestione completa</td></tr>
+      <tr><td>Task: esecuzione su processi dedicati</td><td><span class="tag wip">in implementazione</span></td><td>il modello è completo, l'esecuzione in-processo funziona; la distribuzione riusa la supervisione del documento 2</td></tr>
+      <tr><td>Bag e TYTX anche in JavaScript</td><td><span class="tag ok">operativo</span></td><td>stesse strutture e stessi tipi da entrambe le parti · JSON, XML e MessagePack come formati intercambiabili · equivalenza verificata da una suite di prove attraverso i due linguaggi</td></tr>
+      <tr><td>Storage e database</td><td><span class="tag ok">operativo</span></td><td>mount simbolici · filesystem e dischi di rete, fsspec (S3, GCS, memoria) · 19 capacità dichiarate per backend, versioning verificato interrogando il supporto · cifratura per mount</td></tr>
+      <tr><td>HTTP, flussi, SSE, middleware</td><td><span class="tag ok">operativo</span></td><td></td></tr>
+      <tr><td>Trasporto WSX</td><td><span class="tag ok">operativo</span></td><td>secondo trasporto del motore unico: stesso albero di rotte, stessi plugin, stessa autorizzazione di HTTP</td></tr>
+      <tr><td>Limite di frequenza per IP</td><td><span class="tag wip">in implementazione</span></td><td>middleware dedicato; il blocco progressivo per identità è già operativo</td></tr>
+      <tr><td>Termometri e interruzione cooperativa dei batch</td><td><span class="tag ok">operativo</span></td><td>avanzamento su file e sul canale vivo in un colpo solo; il segnale di stop e la sua verifica</td></tr>
+      <tr><td>Metriche in formato Prometheus</td><td><span class="tag wip">in implementazione</span></td><td>le grandezze sono già misurate e leggibili dagli endpoint di sistema; manca l'endpoint nel formato che i raccoglitori consumano</td></tr>
+      <tr><td>Riga di comando e registro dei server</td><td><span class="tag ok">operativo</span></td><td></td></tr>
+    </tbody>
+  </table></div>
+
+  <p class="roadmap-note">Ultimo aggiornamento della roadmap: 13 agosto 2026. Le voci del corpo del documento non cambiano quando una riga di questa tabella passa a «operativo».</p>
+
+  <div class="next">
+    <span class="label">Continua nel documento 2</span>
+    <p>Quanto detto qui vale per un server che risponde e dimentica. Il secondo documento affronta il caso opposto — l'applicativo dove una pagina resta aperta per ore, accumula stato e riceve aggiornamenti — spiega perché abbiamo deciso di tenere quello stato in memoria invece di serializzarlo a ogni colpo, e perché un bilanciatore di carico, per quanto bravo, non può fare quel lavoro.</p>
+  </div>
+</section>
+
+<footer>
+  <p>genro-asgi · documento 1 di 3 · Apache License 2.0 · Softwell S.r.l.</p>
+</footer>
+
+</div>
+</body>
+</html>

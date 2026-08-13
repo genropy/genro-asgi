@@ -1,0 +1,778 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>genro-asgi · 2 — Lo stato e l'orchestrazione</title>
+<style>
+:root {
+  --ground: #f3f3f6; --surface: #ffffff; --sunk: #eaeaf0;
+  --line: #d7d7e0; --line-soft: #e6e6ee;
+  --ink: #16161f; --ink-soft: #4c4c5b; --ink-faint: #6e6e80;
+  --accent: #3a3f8f; --accent-soft: #e6e7f4;
+  --code-bg: #f7f7fb;
+  --warn: #8d3f3f; --warn-soft: #f6e6e6;
+  --soon: #8a6118; --soon-soft: #f6ecd8;
+  --shadow: 0 1px 2px rgba(22,22,31,.05), 0 10px 28px -20px rgba(22,22,31,.35);
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #101018; --surface: #191922; --sunk: #14141c;
+    --line: #2e2e3c; --line-soft: #23232e;
+    --ink: #e8e8f0; --ink-soft: #adadbe; --ink-faint: #82828f;
+    --accent: #9aa2f2; --accent-soft: #1e2040; --code-bg: #131320;
+    --warn: #e09a9a; --warn-soft: #2c1c1c;
+    --soon: #d3a355; --soon-soft: #2b2317;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 32px -22px rgba(0,0,0,.85);
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #101018; --surface: #191922; --sunk: #14141c;
+  --line: #2e2e3c; --line-soft: #23232e;
+  --ink: #e8e8f0; --ink-soft: #adadbe; --ink-faint: #82828f;
+  --accent: #9aa2f2; --accent-soft: #1e2040; --code-bg: #131320;
+  --warn: #e09a9a; --warn-soft: #2c1c1c;
+  --soon: #d3a355; --soon-soft: #2b2317;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 32px -22px rgba(0,0,0,.85);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--serif); font-size: 17.5px; line-height: 1.65; }
+.wrap { max-width: 1140px; margin: 0 auto; padding: 0 24px 100px; }
+.prose { max-width: 68ch; }
+header.top { background: var(--surface); border-bottom: 1px solid var(--line); padding: 60px 0 42px; }
+.eyebrow { font-family: var(--sans); font-size: 12px; font-weight: 600; letter-spacing: .15em; text-transform: uppercase; color: var(--accent); margin: 0 0 16px; }
+.eyebrow .of { color: var(--ink-faint); }
+h1 { font-size: clamp(34px, 5.4vw, 56px); line-height: 1.06; font-weight: 600; letter-spacing: -.018em; margin: 0 0 20px; text-wrap: balance; max-width: 19ch; }
+.lede { font-size: 21px; color: var(--ink-soft); margin: 0; max-width: 62ch; }
+nav.toc { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--ground) 93%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); margin-bottom: 56px; }
+nav.toc .inner { max-width: 1140px; margin: 0 auto; padding: 9px 24px; display: flex; gap: 3px; flex-wrap: wrap; font-family: var(--sans); font-size: 12.5px; }
+nav.toc a { color: var(--ink-soft); text-decoration: none; padding: 5px 9px; border-radius: 4px; }
+nav.toc a:hover { background: var(--sunk); color: var(--ink); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+section { margin: 0 0 78px; scroll-margin-top: 64px; }
+h2 { font-size: clamp(26px, 3.4vw, 36px); font-weight: 600; letter-spacing: -.015em; margin: 0 0 14px; text-wrap: balance; }
+h2 .kicker { display: block; font-family: var(--sans); font-size: 12px; font-weight: 650; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); margin-bottom: 9px; }
+h3 { font-size: 20px; font-weight: 600; margin: 40px 0 10px; letter-spacing: -.008em; }
+h4 { font-family: var(--sans); font-size: 15px; font-weight: 650; margin: 26px 0 6px; }
+p { margin: 0 0 18px; }
+a { color: var(--accent); text-underline-offset: 2px; }
+strong { font-weight: 650; }
+em { font-style: italic; }
+code { font-family: var(--mono); font-size: .86em; }
+p code, li code, td code { background: var(--sunk); padding: 1px 5px; border-radius: 3px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; margin: 30px 0; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 20px 22px; box-shadow: var(--shadow); }
+.card h4 { margin-top: 0; }
+.card p { font-size: 15.5px; color: var(--ink-soft); margin-bottom: 0; line-height: 1.55; }
+ul.tight { margin: 0 0 20px; padding-left: 24px; }
+ul.tight li { margin-bottom: 10px; }
+.tag { display: inline-block; font-family: var(--sans); font-size: 10.5px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; padding: 2px 8px; border-radius: 3px; white-space: nowrap; }
+.tag.ok { color: var(--accent); background: var(--accent-soft); }
+.tag.wip { color: var(--soon); background: var(--soon-soft); }
+.roadmap-note { font-family: var(--sans); font-size: 13.5px; color: var(--ink-faint); max-width: 70ch; margin-top: 22px; }
+.note { background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; padding: 18px 22px; margin: 28px 0; max-width: 72ch; }
+.note.warn { border-left-color: var(--warn); }
+.note p:last-child { margin-bottom: 0; }
+.note .label { font-family: var(--sans); font-size: 11.5px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 7px; }
+.note.warn .label { color: var(--warn); }
+.tablewrap { overflow-x: auto; margin: 26px 0; }
+table { width: 100%; border-collapse: collapse; font-family: var(--sans); font-size: 14.5px; }
+th { text-align: left; font-size: 11px; font-weight: 650; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-faint); padding: 10px 14px 8px 0; border-bottom: 1px solid var(--line); }
+td { padding: 11px 14px 11px 0; border-bottom: 1px solid var(--line-soft); vertical-align: top; color: var(--ink-soft); }
+td:first-child { color: var(--ink); font-weight: 550; }
+tr:last-child td { border-bottom: 0; }
+.diagram { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 26px 22px; margin: 30px 0; overflow-x: auto; box-shadow: var(--shadow); }
+.diagram svg { display: block; min-width: 580px; width: 100%; height: auto; }
+.caption { font-family: var(--sans); font-size: 13px; color: var(--ink-faint); margin: -14px 0 30px; max-width: 70ch; }
+.pull { font-size: 23px; line-height: 1.42; color: var(--ink); border-left: 3px solid var(--accent); padding: 6px 0 6px 26px; margin: 36px 0; max-width: 58ch; text-wrap: balance; }
+.back { background: var(--accent-soft); border-radius: 6px; padding: 24px 26px; margin: 40px 0 0; }
+.back .label { font-family: var(--sans); font-size: 11.5px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 8px; }
+.back p { margin-bottom: 0; max-width: 64ch; }
+footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px; font-family: var(--sans); font-size: 13px; color: var(--ink-faint); }
+@media (max-width: 620px) { body { font-size: 16.5px; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <p class="eyebrow">genro-asgi <span class="of">· documento 2 di 3</span></p>
+    <h1>Lo stato vivo, e perché un bilanciatore non basta</h1>
+    <p class="lede">Perché abbiamo deciso di tenere lo stato in memoria invece di serializzarlo a ogni colpo, perché questo obbliga a legare l'utente al suo processo, e che cosa serve davvero per farlo senza rimanerci intrappolati.</p>
+  </div>
+</header>
+
+<nav class="toc">
+  <div class="inner">
+    <a href="#problema">Il problema</a>
+    <a href="#websocket">Il canale aperto</a>
+    <a href="#oggetti">Gli oggetti che non viaggiano</a>
+    <a href="#decisione">La decisione</a>
+    <a href="#traefik">Perché non un bilanciatore</a>
+    <a href="#trappola">La trappola</a>
+    <a href="#complessita">Cosa serve davvero</a>
+    <a href="#spa">Il piano SPA</a>
+    <a href="#dettaglio">In dettaglio</a>
+    <a href="#videate">Il pannello</a>
+    <a href="#gruppi">Gruppi e versioni</a>
+    <a href="#metriche">Metriche</a>
+    <a href="#roadmap">Roadmap</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<section id="problema">
+  <div class="prose">
+    <h2><span class="kicker">Il caso d'uso</span>L'applicativo che resta aperto</h2>
+    <p>Il primo documento descrive un server che riceve una richiesta, risponde e dimentica. Per una API è il modello giusto, ed è il modello su cui è costruito tutto il web moderno.</p>
+    <p>Ma c'è una famiglia di applicativi per cui quel modello è sbagliato: il gestionale che una persona tiene aperto per otto ore. Una pagina di quel tipo non è una richiesta — è una <strong>sessione di lavoro</strong>. Accumula contesto: una griglia filtrata su seicentomila righe, un documento in composizione, un albero di selezioni, un calcolo intermedio. Riceve aggiornamenti quando un collega modifica un dato che quella pagina sta guardando. E dialoga col server in continuazione, non ogni tanto.</p>
+    <p>La domanda che decide l'architettura è una sola: <strong>dove vive quel contesto fra un messaggio e il successivo?</strong></p>
+    <p>La risposta ortodossa è: da nessuna parte nel processo — lo si scrive su un archivio condiviso, tipicamente Redis, e lo si rilegge a ogni colpo. È la risposta che rende i processi intercambiabili, e per moltissimi casi è quella giusta. Per questo caso non lo è, e vale la pena spiegare esattamente perché.</p>
+  </div>
+
+  <div class="note">
+    <span class="label">Come leggere questo documento</span>
+    <p>Descrive il piano nella sua forma compiuta, e argomenta le decisioni che lo hanno prodotto. La <a href="#roadmap">roadmap in appendice</a> dichiara, voce per voce, cosa è già operativo oggi e cosa è in corso di implementazione: è l'unica parte che cambia mentre il lavoro procede.</p>
+  </div>
+</section>
+
+<section id="websocket">
+  <h2><span class="kicker">Prima ragione</span>Il canale aperto cambia l'aritmetica</h2>
+  <div class="prose">
+    <p>Finché il dialogo è HTTP, la frequenza è bassa: una manciata di richieste al minuto per utente. Pagare una serializzazione e una deserializzazione a ogni richiesta è un costo trascurabile — è rumore rispetto al resto.</p>
+    <p>Con un canale WebSocket aperto l'aritmetica cambia di ordine di grandezza. Una pagina viva non fa richieste: <em>conversa</em>. Ogni tasto in un campo con completamento, ogni movimento in una griglia, ogni cambio di selezione, ogni notifica che scende, ogni battito di presenza è un messaggio. Il traffico diventa continuo e minuto: tanti messaggi piccoli, non pochi messaggi grandi.</p>
+    <p class="pull">Con lo stato fuori dal processo, ogni messaggio paga il costo di ricostruire il mondo prima di poter fare la cosa piccola che gli è stata chiesta.</p>
+    <p>E il costo non è la rete: è la <strong>serializzazione</strong>. Ricomporre l'oggetto, deserializzarlo, rimetterlo insieme, e poi riserializzarlo per riscriverlo. Su un messaggio ogni pochi secondi non lo noti; su un dialogo continuo moltiplicato per il numero di utenti collegati diventa la voce di costo dominante del server — e il paradosso è che <em>più l'applicazione è reattiva, più paga</em>.</p>
+    <p>Questa è la prima ragione per cui, in questo scenario, teniamo lo stato dove serve: in memoria, nel processo che sta servendo quella pagina.</p>
+  </div>
+
+  <div class="note">
+    <span class="label">Il canale, in concreto</span>
+    <p>Il protocollo che porta questo dialogo è <strong>WSX</strong> — WebSocket eXtended: semantica HTTP sopra un canale WebSocket, così un messaggio che arriva dal socket trova lo stesso albero di rotte, gli stessi plugin e la stessa autorizzazione di una richiesta HTTP. Un solo motore di smistamento, due trasporti innestati.</p>
+    <p>L'ordine in cui le due cose sono state costruite non è casuale: l'architettura dello stato viene <em>prima</em> del canale, perché è il canale a renderne evidente la necessità. Un WSX appoggiato su un modello senza stato dà un sistema che funziona in dimostrazione e cede sotto carico reale — il traffico che rende bella l'applicazione è lo stesso che ne moltiplica il costo.</p>
+    <p>Sul <strong>formato</strong> dei messaggi c'è un'altra leva, e riduce il costo dall'altro lato. Ciò che viaggia è descritto dal protocollo tipizzato, non dal formato in cui è scritto: gli stessi messaggi possono andare in JSON — leggibile, comodo mentre si sviluppa — oppure in <strong>MessagePack</strong>, forma binaria più compatta e più rapida da comporre e leggere. È un parametro, non una riscrittura, e non tocca una riga di codice applicativo. Su un dialogo fitto è la differenza fra pagare la leggibilità sempre e pagarla solo quando serve.</p>
+  </div>
+</section>
+
+<section id="oggetti">
+  <h2><span class="kicker">Seconda ragione</span>Gli oggetti che non entrano nel tubo</h2>
+  <div class="prose">
+    <p>C'è un secondo argomento, indipendente dal primo e più tagliente: <strong>ci sono oggetti che semplicemente non si serializzano a ogni giro</strong>.</p>
+    <p>Un dataframe con un milione di righe caricato per un'analisi. Una struttura calcolata a caro prezzo su cui l'utente sta iterando. Una connessione già aperta, un cursore, un contesto di calcolo. Sono oggetti <strong>grossi e mutabili</strong>: l'utente li modifica un pezzetto alla volta, e ogni modifica è piccola rispetto all'oggetto.</p>
+    <p>Con lo stato esterno, quella modifica piccola costa quanto l'oggetto intero: rileggi tutto, cambi una colonna, riscrivi tutto. Non è una questione di ottimizzazione — l'operazione è <em>strutturalmente</em> sproporzionata al lavoro che compie. E per alcuni di questi oggetti la serializzazione non è nemmeno possibile in modo sensato.</p>
+    <p>La conseguenza pratica, nei sistemi che scelgono comunque la via senza stato, è che quegli oggetti finiscono per non esistere: l'architettura respinge il caso d'uso. L'utente riceve una pagina che ricarica invece di una che lavora, e la funzionalità viene riprogettata per stare dentro il vincolo tecnico.</p>
+    <p class="pull">Non abbiamo scelto lo stato per comodità. Lo abbiamo scelto perché senza, certe funzionalità non si possono nemmeno proporre.</p>
+  </div>
+</section>
+
+<section id="decisione">
+  <h2><span class="kicker">La conseguenza</span>Se lo stato sta nel processo, l'utente deve tornarci</h2>
+  <div class="prose">
+    <p>Una volta deciso che il contesto di una sessione di lavoro vive nella memoria di un processo, tutto il resto discende per necessità, non per gusto.</p>
+    <p>Se lo stato di Maria è nel processo 3, ogni messaggio di Maria deve arrivare al processo 3. Non alla macchina meno carica, non a rotazione: <strong>a quello</strong>. La chiave con cui si partiziona il carico non è più la richiesta — è <strong>l'utente</strong>.</p>
+    <p>Da qui il nome: <em>user sticky</em>. L'utente è appiccicato al proprio processo, e il processo è l'unità che possiede una porzione della popolazione.</p>
+    <p>La seconda unità è la <strong>pagina</strong>. Una persona apre più schede, e ognuna è una sessione di lavoro a sé, con il proprio contesto. Quindi lo stato vivo si organizza su tre livelli annidati: l'utente possiede le sue connessioni, ogni connessione possiede le sue pagine, ogni pagina possiede il proprio albero di dati.</p>
+  </div>
+
+  <div class="diagram">
+    <svg viewBox="0 0 860 200" role="img" aria-label="I tre livelli: utente, connessioni, pagine">
+      <g font-family="system-ui, sans-serif">
+        <rect x="20" y="16" width="150" height="42" rx="5" fill="var(--accent-soft)" stroke="var(--accent)"/>
+        <text x="95" y="35" text-anchor="middle" font-size="12.5" font-weight="650" fill="var(--ink)">utente</text>
+        <text x="95" y="50" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">la chiave di partizione</text>
+
+        <g fill="none" stroke="currentColor" stroke-width="1.4" color="var(--ink-faint)">
+          <path d="M95,58 L95,80 L300,80 L300,96"/>
+          <path d="M95,80 L560,80 L560,96"/>
+        </g>
+
+        <rect x="225" y="96" width="150" height="42" rx="5" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="300" y="115" text-anchor="middle" font-size="12" font-weight="600" fill="var(--ink)">connessione</text>
+        <text x="300" y="130" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">una scheda del browser</text>
+
+        <rect x="485" y="96" width="150" height="42" rx="5" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="560" y="115" text-anchor="middle" font-size="12" font-weight="600" fill="var(--ink)">connessione</text>
+        <text x="560" y="130" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">un'altra scheda</text>
+
+        <g fill="none" stroke="currentColor" stroke-width="1.4" color="var(--ink-faint)">
+          <path d="M300,138 L300,150 L200,150 L200,162"/>
+          <path d="M300,150 L400,150 L400,162"/>
+          <path d="M560,138 L560,162"/>
+        </g>
+
+        <rect x="130" y="162" width="140" height="34" rx="5" fill="var(--sunk)" stroke="var(--line-soft)"/>
+        <text x="200" y="183" text-anchor="middle" font-size="11.5" fill="var(--ink)">pagina · il suo stato</text>
+        <rect x="330" y="162" width="140" height="34" rx="5" fill="var(--sunk)" stroke="var(--line-soft)"/>
+        <text x="400" y="183" text-anchor="middle" font-size="11.5" fill="var(--ink)">pagina · il suo stato</text>
+        <rect x="490" y="162" width="140" height="34" rx="5" fill="var(--sunk)" stroke="var(--line-soft)"/>
+        <text x="560" y="183" text-anchor="middle" font-size="11.5" fill="var(--ink)">pagina · il suo stato</text>
+
+        <text x="680" y="118" font-size="11.5" font-style="italic" fill="var(--ink-faint)">tutto questo vive</text>
+        <text x="680" y="134" font-size="11.5" font-style="italic" fill="var(--ink-faint)">in UN processo</text>
+      </g>
+    </svg>
+  </div>
+</section>
+
+<section id="traefik">
+  <h2><span class="kicker">L'obiezione ovvia</span>«Questo lo fa già un bilanciatore»</h2>
+  <div class="prose">
+    <p>È la prima domanda che riceve chiunque proponga questa architettura, ed è una domanda giusta. Traefik, nginx, HAProxy sanno tutti fare <em>sticky session</em>: emettono un cookie, e le richieste che lo portano tornano allo stesso backend. Perché costruire qualcosa quando esiste già?</p>
+    <p>Perché instradare è la parte facile, ed è l'unica che un bilanciatore può fare. Un bilanciatore vede pacchetti e connessioni TCP; non sa nulla di ciò che sta dentro il processo a cui li consegna. In particolare:</p>
+  </div>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>Serve</th><th>Perché il bilanciatore non può</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Instradare per <strong>identità</strong>, non per cookie</td>
+        <td>L'identità applicativa cambia in corsa: un visitatore arriva anonimo e a metà sessione fa login diventando un utente reale, che magari ha già un'altra scheda aperta altrove. Il bilanciatore vede due cookie diversi; l'applicazione sa che è la stessa persona e che le due sessioni devono ricongiungersi.</td>
+      </tr>
+      <tr>
+        <td><strong>Spostare</strong> lo stato, non solo il traffico</td>
+        <td>È il punto centrale. Un bilanciatore può mandare Maria a un altro processo, ma non può <em>portarci il suo lavoro</em>: la griglia filtrata, il documento aperto, il dataframe restano nel processo di prima. Reindirizzare senza trasferire non è un bilanciamento — è una perdita di dati travestita.</td>
+      </tr>
+      <tr>
+        <td>Misurare la risorsa <strong>che conta</strong></td>
+        <td>Un bilanciatore conta richieste al secondo e connessioni. Qui la risorsa che si esaurisce è la <strong>memoria</strong>, e la satura un utente che sta fermo con un oggetto grosso in pancia — un utente che, in termini di richieste, è invisibile.</td>
+      </tr>
+      <tr>
+        <td>Conoscere la <strong>struttura</strong> della popolazione</td>
+        <td>Per il bilanciatore l'unità è la connessione. Qui una persona ha N connessioni e M pagine, e la decisione — spostare, drenare, sfrattare — si prende sulla persona intera, con tutto ciò che le appartiene.</td>
+      </tr>
+      <tr>
+        <td><strong>Ordinare</strong> qualcosa al processo</td>
+        <td>Un bilanciatore parla ai backend solo mandando traffico. Qui serve un canale di comando bidirezionale: <em>consegnami l'utente Maria con tutto il suo stato</em>, <em>installa questo pacchetto di sessione</em>, <em>dimmi quanta memoria stai realmente usando</em>. Sono conversazioni che il protocollo di un proxy non prevede.</td>
+      </tr>
+      <tr>
+        <td>Ritirare un processo <strong>senza danni</strong></td>
+        <td>Rilasciare una versione, sostituire un processo che perde memoria, restringere il pool di notte: tutte operazioni ordinarie che con la sola stickiness significano buttare via le sessioni di chi era collegato.</td>
+      </tr>
+    </tbody>
+  </table></div>
+
+  <div class="prose">
+    <p>Nessuna di queste è una critica ai bilanciatori: fanno benissimo il lavoro per cui sono costruiti, e nella nostra architettura uno di essi sta davanti comunque. Il punto è che <strong>quel lavoro non è questo lavoro</strong>. Il bilanciatore instrada verso una macchina; ciò che decide dove vive una persona, e come ce la si sposta, deve stare dentro l'applicazione, perché solo lì si sa cosa sia una persona.</p>
+  </div>
+</section>
+
+<section id="trappola">
+  <h2><span class="kicker">Il rischio da evitare</span>La trappola della stickiness</h2>
+  <div class="prose">
+    <p>C'è un modo sbagliato di fare esattamente questa cosa, ed è il modo in cui viene fatta di solito: si attiva la sticky session sul bilanciatore, si tiene lo stato in memoria, e funziona. Funziona finché non devi cambiare qualcosa.</p>
+    <p>Il giorno del rilascio scopri che non puoi sostituire un processo senza scollegare chi ci sta sopra. Il giorno in cui un processo comincia a gonfiarsi scopri che non puoi riavviarlo. Il giorno in cui il carico si sbilancia scopri che non puoi ribilanciare, perché spostare un utente significa perderne il lavoro.</p>
+    <p class="pull">La stickiness senza mobilità dello stato non è un'architettura: è un vincolo che ti impedisce di toccare il sistema mentre è vivo.</p>
+    <p>La soluzione tipica a quel punto è rassegnarsi: si rilascia di notte, si accetta di scollegare tutti, si sovradimensiona per non dover mai ribilanciare. Sono compromessi che si pagano ogni settimana per sempre.</p>
+    <p>Per questo la primitiva fondante del nostro piano non è l'instradamento appiccicato — quello è la parte facile — ma <strong>lo spostamento a caldo di un utente con tutto il suo stato</strong>. È ciò che rende la stickiness sostenibile invece che paralizzante, ed è la ragione per cui il file di test più esercitato dell'intero progetto è quello che verifica lo spostamento: 119 casi, perché è l'operazione da cui dipende tutto il resto.</p>
+  </div>
+</section>
+
+<section id="complessita">
+  <h2><span class="kicker">Il prezzo</span>Cosa serve davvero per farlo</h2>
+  <div class="prose">
+    <p>Vale la pena essere espliciti sul costo, perché è la parte che si sottovaluta sempre. «Sposta l'utente da un processo all'altro» è una frase breve che nasconde una quantità di problemi reali.</p>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h4>Chi possiede quale verità</h4>
+      <p>Se due livelli sanno la stessa cosa, prima o poi divergono. La regola è: un solo scrittore per ogni fatto. Il processo possiede la verità delle sue pagine; il supervisore possiede la verità di chi-sta-dove. Nessuno scrive mai dentro il registro di un altro livello.</p>
+    </div>
+    <div class="card">
+      <h4>Il momento in cui l'utente non è da nessuna parte</h4>
+      <p>Durante uno spostamento c'è un istante in cui la sessione è stata staccata dall'origine e non è ancora installata a destinazione. Se una richiesta arriva proprio allora, deve attendere, non fallire — e se l'installazione non riesce, l'utente deve restare dov'era, non sparire.</p>
+    </div>
+    <div class="card">
+      <h4>Le chiamate in volo</h4>
+      <p>Non si può portare via una sessione mentre sta rispondendo a qualcosa. Serve una fase di quiete: si alza una barriera, si aspetta che le chiamate vive finiscano, e solo allora si fa il pacco. Con un tempo massimo, perché aspettare per sempre è un altro modo di rompersi.</p>
+    </div>
+    <div class="card">
+      <h4>L'ordine della rinascita</h4>
+      <p>A destinazione le cose vanno ricostruite in una sequenza precisa: prima l'utente, poi le connessioni, poi le pagine; e i collettori di modifiche vanno attaccati <em>dopo</em> che i dati sono stati reidratati, altrimenti la reidratazione stessa verrebbe scambiata per una raffica di cambiamenti da notificare al browser.</p>
+    </div>
+    <div class="card">
+      <h4>La morte di un processo</h4>
+      <p>Un processo può morire in qualunque momento, anche mentre gli si sta parlando. Va distinto un ritiro voluto da un crollo, rilanciato con un nome nuovo perché nessun messaggio in ritardo venga scambiato per il nuovo arrivato, e liberato tutto ciò che teneva — compresi i permessi di scrittura che aveva in mano.</p>
+    </div>
+    <div class="card">
+      <h4>Sapere quando intervenire</h4>
+      <p>Per decidere serve misurare, e la misura giusta non è il carico medio ma la saturazione della risorsa che si esaurisce per prima. E va misurata onestamente: la memoria che un processo dichiara non è quella che sta davvero usando.</p>
+    </div>
+  </div>
+
+  <div class="note warn">
+    <span class="label">Perché questa parte non si compra</span>
+    <p>Ognuno di questi problemi è risolvibile; il punto è che vanno risolti <em>insieme</em>, e che le loro soluzioni si vincolano a vicenda. È il motivo per cui non esiste un componente da installare che faccia questo lavoro: la logica di spostamento deve conoscere la forma dello stato applicativo, e la forma dello stato è dell'applicazione, non dell'infrastruttura.</p>
+  </div>
+</section>
+
+<section id="spa">
+  <h2><span class="kicker">La soluzione</span>Il piano SPA</h2>
+  <div class="prose">
+    <p>Tutto quanto sopra ha una forma concreta. Tre pezzi, un principio.</p>
+  </div>
+
+  <div class="diagram">
+    <svg viewBox="0 0 880 250" role="img" aria-label="Il front, il commander e i worker">
+      <defs><marker id="a2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="currentColor"/></marker></defs>
+      <g font-family="system-ui, sans-serif">
+        <rect x="14" y="12" width="852" height="52" rx="5" fill="var(--accent-soft)" stroke="var(--accent)"/>
+        <text x="32" y="34" font-size="12.5" font-weight="650" fill="var(--ink)">Il front — un'applicazione come le altre</text>
+        <text x="32" y="52" font-size="11" fill="var(--ink-soft)">le sue rotte rispondono native · tutto il resto appartiene al sito ospitato e viene inoltrato · non tiene stato proprio</text>
+
+        <path d="M440,64 L440,86" fill="none" stroke="currentColor" stroke-width="1.5" color="var(--ink-faint)" marker-end="url(#a2)"/>
+
+        <rect x="14" y="86" width="852" height="56" rx="5" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="32" y="108" font-size="12.5" font-weight="650" fill="var(--ink)">Il supervisore — chiavi e posizioni, mai contenuti</text>
+        <text x="32" y="126" font-size="11" fill="var(--ink-soft)">chi-sta-dove · nascita e morte dei processi · ribilanciamento, riciclo, compattazione · instradamento dei cambiamenti</text>
+
+        <g fill="none" stroke="currentColor" stroke-width="1.5" color="var(--ink-faint)" marker-end="url(#a2)">
+          <path d="M150,142 L150,168"/><path d="M440,142 L440,168"/><path d="M730,142 L730,168"/>
+        </g>
+        <text x="440" y="162" text-anchor="middle" font-size="10" font-style="italic" fill="var(--ink-faint)">canale di comando</text>
+
+        <rect x="14" y="174" width="272" height="62" rx="5" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="32" y="196" font-size="12" font-weight="650" fill="var(--ink)">Processo</text>
+        <text x="32" y="214" font-size="10.5" fill="var(--ink-soft)">i contenuti veri: utenti, connessioni,</text>
+        <text x="32" y="228" font-size="10.5" fill="var(--ink-soft)">pagine, con i loro dati vivi</text>
+
+        <rect x="304" y="174" width="272" height="62" rx="5" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="322" y="196" font-size="12" font-weight="650" fill="var(--ink)">Processo</text>
+        <text x="322" y="214" font-size="10.5" fill="var(--ink-soft)">esegue gli handler del sito</text>
+        <text x="322" y="228" font-size="10.5" fill="var(--ink-soft)">su pool separati da quelli di servizio</text>
+
+        <rect x="594" y="174" width="272" height="62" rx="5" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="612" y="196" font-size="12" font-weight="650" fill="var(--ink)">Processo</text>
+        <text x="612" y="214" font-size="10.5" fill="var(--ink-soft)">replica dello store globale</text>
+        <text x="612" y="228" font-size="10.5" fill="var(--ink-soft)">sottoscrizioni alle tabelle</text>
+      </g>
+    </svg>
+  </div>
+  <p class="caption">Il principio che tiene insieme il disegno: <strong>chiavi e posizioni sopra, contenuti sotto</strong>. Il supervisore sa dove si trova ogni persona, e non tocca mai ciò che quella persona possiede. Non ha una copia da tenere allineata, quindi non c'è un duplicato che possa divergere.</p>
+
+  <div class="prose">
+    <p>Il front è un'applicazione ordinaria che si monta come qualunque altra: le sue rotte rispondono da sé, e ciò che appartiene al sito ospitato viene inoltrato al processo giusto. Non conserva stato proprio — legge quello che il supervisore già sa.</p>
+    <p>In sviluppo tutto questo gira in <strong>un solo processo</strong>: il worker vive dentro il supervisore, attaccato allo stesso canale, che in quel caso è una coppia di code in memoria invece di un socket — ma codifica ogni messaggio esattamente allo stesso modo. Se il protocollo funziona nel ruolo singolo, passare a molti processi cambia solo il filo.</p>
+  </div>
+</section>
+
+<section id="dettaglio">
+  <h2><span class="kicker">Le capacità</span>Cosa fa, in concreto</h2>
+
+  <div class="prose">
+    <h3>Lo stato vivo e la sua consegna</h3>
+    <ul class="tight">
+      <li><strong>Un albero di dati per pagina.</strong> Ogni scheda aperta ha il proprio stato sul server, e ciò che cambia le viene consegnato al primo giro utile. La consegna è <em>a richiesta</em>, non spinta: se una pagina tace, i suoi aggiornamenti l'aspettano nel collettore invece di perdersi.</li>
+      <li><strong>Aggiornamenti dai dati.</strong> Una pagina sottoscrive le tabelle che la interessano; una modifica raggiunge tutti i sottoscrittori ovunque siedano. Chi ha originato il cambiamento serve prima i propri, poi il resto viaggia: una modifica su una tabella che nessuno guarda non costa un solo invio.</li>
+      <li><strong>Cache invalidata da sé.</strong> Un valore memorizzato in una pagina porta il segno della tabella da cui viene; quando quella tabella cambia, il valore viene invalidato con una scrittura vera, che la pagina riceve come ogni altro aggiornamento.</li>
+      <li><strong>Store globale condiviso.</strong> Un albero comune a tutti i processi, con un solo scrittore e una replica locale per ciascuno: le letture non costano un giro di rete. Le modifiche in lettura-e-scrittura passano da una concessione ordinata, tutto-o-niente, che viene rilasciata da sé se chi la teneva muore.</li>
+    </ul>
+
+    <h3>Il governo dei processi</h3>
+    <ul class="tight">
+      <li><strong>Spostamento a caldo.</strong> Tutto ciò che appartiene a una persona viaggia da un processo all'altro e rinasce nell'ordine giusto. La mappa si aggiorna per ultima: finché l'installazione non è confermata, la persona continua a essere servita dove si trova, e se la destinazione muore le si offre un altro posto.</li>
+      <li><strong>Bilanciamento sulla risorsa giusta.</strong> Si osserva la saturazione per componente, non un carico medio: un processo oltre soglia su una sola risorsa cede utenti anche se tutto il resto sembra tranquillo. Chi va via viene scelto in proporzione a quanto ha consumato di recente.</li>
+      <li><strong>Ricambio prima del limite.</strong> Il sistema tiene memoria di <em>come cresce</em> la memoria di ogni processo e ne sostituisce uno <em>prima</em> che raggiunga il tetto, portando i suoi utenti su un processo fresco. Il problema classico dei processi che si gonfiano diventa un'operazione pianificata invece di un incidente.</li>
+      <li><strong>Compattazione.</strong> Quando il carico cala, il pool si restringe: si drena il processo meno carico e lo si ritira. Un processo che tiene ancora qualcosa non viene mai ritirato.</li>
+      <li><strong>Sorveglianza che serve a due cose.</strong> Una sonda periodica chiede a ogni processo i suoi numeri: la risposta porta i dati <em>e</em> la prova che il processo è ancora vivo per produrli. Il silenzio è esso stesso l'informazione, e un processo muto viene abbattuto e rilanciato.</li>
+      <li><strong>Un riavvio completo non perde le sessioni.</strong> Andando giù, il pool raccoglie ogni utente e lo scrive su file; risalendo, li ripiazza prima che qualcosa possa essere instradato.</li>
+    </ul>
+
+    <h3>Il ponte con l'esistente</h3>
+    <ul class="tight">
+      <li><strong>Un sito già scritto può salire a bordo.</strong> Il processo sa sintetizzare l'ambiente standard di un'applicazione WSGI e invocarla al proprio interno, su un pool di thread dedicato e separato da quello delle operazioni di servizio — così una raffica di richieste al sito non affama la macchina di orchestrazione. WSGI come adattatore, mai come trasporto: un applicativo esistente entra nel piano senza essere riscritto, e guadagna sessione appiccicata, stato per pagina e spostamento a caldo.</li>
+      <li><strong>Il monitor.</strong> Una chiamata sola compone la popolazione viva: per ogni processo i suoi utenti, le sue connessioni, le sue pagine, con i consumi cumulativi di ciascuno; e per ogni processo lo stato nel ciclo di vita, quando è nato e, se è morto, quando e come. Un processo irraggiungibile non fa cadere la lettura: compare con il proprio stato di irraggiungibilità.</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <span class="label">La linea che divide i due documenti</span>
+    <p>C'è una regola che dice dove vive ogni cosa: <em>ciò che deve sopravvivere alla morte di un processo sta nel server</em> — sessioni, login, stato dei batch, e sono le cose del primo documento; <em>ciò che muore e viene ricostruito col suo processo sta nell'orchestrazione</em> — pagine, attese, sottoscrizioni. È la stessa linea che rende un riavvio un'operazione ordinaria invece di un evento.</p>
+  </div>
+</section>
+
+<section id="videate">
+  <h2><span class="kicker">Il pannello</span>Come si guarda un pool vivo</h2>
+  <div class="prose">
+    <p>Tutto quanto descritto finora produce informazione, e quell'informazione ha una forma. Le illustrazioni che seguono non sono schermate di un prodotto finito: mostrano <em>quali</em> dati la superficie di supervisione già possiede, e come si leggono insieme.</p>
+    <p>La cosa da notare è che le due viste rispondono a due domande diverse. La prima guarda i <strong>processi</strong>: come stanno, quanto reggono, cosa conviene fare. La seconda guarda le <strong>persone</strong>: chi c'è, dove sta, quanto pesa.</p>
+  </div>
+
+  <h3>I processi</h3>
+  <div class="diagram">
+    <svg viewBox="0 0 880 350" role="img" aria-label="Illustrazione della videata di supervisione dei processi">
+      <g font-family="system-ui, sans-serif">
+        <rect x="1" y="1" width="878" height="348" rx="7" fill="var(--surface)" stroke="var(--line)"/>
+        <path d="M1,42 H879" stroke="var(--line)" fill="none"/>
+        <text x="20" y="27" font-size="12.5" font-weight="650" fill="var(--ink)">supervisione · processi</text>
+        <text x="600" y="27" font-size="10.5" fill="var(--ink-faint)">4 attivi · 1 in drenaggio · 187 persone</text>
+
+        <g font-size="9.5" font-weight="650" letter-spacing=".08em" fill="var(--ink-faint)">
+          <text x="20" y="64">PROCESSO</text>
+          <text x="150" y="64">STATO</text>
+          <text x="258" y="64">SATURAZIONE</text>
+          <text x="470" y="64">MEMORIA</text>
+          <text x="620" y="64">PERSONE</text>
+          <text x="700" y="64">PAGINE</text>
+          <text x="775" y="64">VITA</text>
+        </g>
+        <path d="M20,74 H860" stroke="var(--line)" fill="none"/>
+
+        <g font-size="11">
+          <text x="20" y="98" font-weight="600" fill="var(--ink)">w-7·a41</text>
+          <text x="20" y="112" font-size="9" fill="var(--ink-faint)">accoglienza</text>
+          <rect x="150" y="88" width="52" height="16" rx="3" fill="var(--accent-soft)"/>
+          <text x="176" y="100" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--accent)">attivo</text>
+          <rect x="258" y="92" width="180" height="8" rx="4" fill="var(--sunk)"/>
+          <rect x="258" y="92" width="115" height="8" rx="4" fill="var(--accent)"/>
+          <text x="448" y="100" font-size="10" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">0.64</text>
+          <text x="258" y="113" font-size="8.5" fill="var(--ink-faint)">memoria 0.64 · thread 0.31 · attese 0.12</text>
+          <text x="470" y="100" font-size="10" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">1.9 GB</text>
+          <text x="470" y="113" font-size="8.5" fill="var(--ink-faint)">pavimento in crescita · limite fra ~6 h</text>
+          <text x="620" y="100" font-size="10" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">52</text>
+          <text x="700" y="100" font-size="10" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">96</text>
+          <text x="775" y="100" font-size="10" fill="var(--ink-soft)">2 g 4 h</text>
+          <path d="M20,124 H860" stroke="var(--line-soft)" fill="none"/>
+
+          <text x="20" y="148" font-weight="600" fill="var(--ink)">w-8·b12</text>
+          <rect x="150" y="138" width="52" height="16" rx="3" fill="var(--accent-soft)"/>
+          <text x="176" y="150" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--accent)">attivo</text>
+          <rect x="258" y="142" width="180" height="8" rx="4" fill="var(--sunk)"/>
+          <rect x="258" y="142" width="153" height="8" rx="4" fill="var(--warn)"/>
+          <text x="448" y="150" font-size="10" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">0.85</text>
+          <text x="258" y="163" font-size="8.5" fill="var(--warn)">oltre la soglia · ribilanciamento in corso</text>
+          <text x="470" y="150" font-size="10" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">3.4 GB</text>
+          <text x="470" y="163" font-size="8.5" fill="var(--ink-faint)">limite fra ~40 min · ricambio programmato</text>
+          <text x="620" y="150" font-size="10" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">61</text>
+          <text x="700" y="150" font-size="10" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">128</text>
+          <text x="775" y="150" font-size="10" fill="var(--ink-soft)">5 g 1 h</text>
+          <path d="M20,174 H860" stroke="var(--line-soft)" fill="none"/>
+
+          <text x="20" y="198" font-weight="600" fill="var(--ink)">w-9·c03</text>
+          <rect x="150" y="188" width="52" height="16" rx="3" fill="var(--accent-soft)"/>
+          <text x="176" y="200" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--accent)">attivo</text>
+          <rect x="258" y="192" width="180" height="8" rx="4" fill="var(--sunk)"/>
+          <rect x="258" y="192" width="34" height="8" rx="4" fill="var(--accent)"/>
+          <text x="448" y="200" font-size="10" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">0.19</text>
+          <text x="258" y="213" font-size="8.5" fill="var(--ink-faint)">appena nato · accoglie i ribilanciati</text>
+          <text x="470" y="200" font-size="10" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">0.6 GB</text>
+          <text x="620" y="200" font-size="10" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">18</text>
+          <text x="700" y="200" font-size="10" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">24</text>
+          <text x="775" y="200" font-size="10" fill="var(--ink-soft)">12 min</text>
+          <path d="M20,224 H860" stroke="var(--line-soft)" fill="none"/>
+
+          <text x="20" y="248" font-weight="600" fill="var(--ink)">w-6·9fe</text>
+          <rect x="150" y="238" width="72" height="16" rx="3" fill="var(--sunk)"/>
+          <text x="186" y="250" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--ink-soft)">drenaggio</text>
+          <rect x="258" y="242" width="180" height="8" rx="4" fill="var(--sunk)"/>
+          <rect x="258" y="242" width="21" height="8" rx="4" fill="var(--ink-faint)"/>
+          <text x="448" y="250" font-size="10" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">0.12</text>
+          <text x="258" y="263" font-size="8.5" fill="var(--ink-faint)">fuori da ogni scelta · si ritira quando è vuoto</text>
+          <text x="470" y="250" font-size="10" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">3.9 GB</text>
+          <text x="620" y="250" font-size="10" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">6</text>
+          <text x="700" y="250" font-size="10" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">9</text>
+          <text x="775" y="250" font-size="10" fill="var(--ink-soft)">6 g 3 h</text>
+        </g>
+
+        <rect x="20" y="284" width="840" height="48" rx="5" fill="var(--sunk)"/>
+        <text x="36" y="303" font-size="10" font-weight="650" letter-spacing=".08em" fill="var(--ink-faint)">DECISIONE IN CORSO</text>
+        <text x="36" y="320" font-size="10.5" fill="var(--ink-soft)">w-8 oltre soglia sulla memoria → 14 persone verso w-9, le più pesanti per prime · poi ricambio di w-8 su processo fresco</text>
+      </g>
+    </svg>
+  </div>
+  <p class="caption">Ogni riga porta le grandezze su cui il sistema decide davvero: la saturazione <em>per componente</em> con il totale accanto — perché è il componente peggiore a vincolare, non la media — e il pavimento di memoria con la stima di quando toccherà il limite, che è ciò su cui si fonda il ricambio programmato. In basso, la decisione che il pool sta eseguendo: mostrarla è ciò che rende un sistema automatico ispezionabile invece che magico.</p>
+
+  <h3>Le persone</h3>
+  <div class="diagram">
+    <svg viewBox="0 0 880 262" role="img" aria-label="Illustrazione della videata delle persone collegate">
+      <g font-family="system-ui, sans-serif">
+        <rect x="1" y="1" width="878" height="260" rx="7" fill="var(--surface)" stroke="var(--line)"/>
+        <path d="M1,42 H879" stroke="var(--line)" fill="none"/>
+        <text x="20" y="27" font-size="12.5" font-weight="650" fill="var(--ink)">supervisione · persone</text>
+        <text x="660" y="27" font-size="10.5" fill="var(--ink-faint)">187 collegate · 14 anonime</text>
+
+        <g font-size="9.5" font-weight="650" letter-spacing=".08em" fill="var(--ink-faint)">
+          <text x="20" y="64">PERSONA</text>
+          <text x="190" y="64">DOVE</text>
+          <text x="290" y="64">CONNESSIONI</text>
+          <text x="410" y="64">PAGINE</text>
+          <text x="520" y="64">CONSUMO</text>
+          <text x="660" y="64">ULTIMA ATTIVITÀ</text>
+          <text x="800" y="64">AZIONI</text>
+        </g>
+        <path d="M20,74 H860" stroke="var(--line)" fill="none"/>
+
+        <g font-size="11">
+          <text x="20" y="98" font-weight="600" fill="var(--ink)">m.rossi@acme.it</text>
+          <text x="190" y="98" font-family="var(--mono), monospace" font-size="10" fill="var(--ink-soft)">w-7·a41</text>
+          <text x="290" y="98" fill="var(--ink-soft)">2</text>
+          <text x="410" y="98" fill="var(--ink-soft)">5 · 1 in attesa</text>
+          <text x="520" y="98" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">1.240 chiam · 82 s</text>
+          <text x="660" y="98" fill="var(--ink-soft)">4 s</text>
+          <text x="800" y="98" font-size="10" fill="var(--accent)">sposta</text>
+          <path d="M20,112 H860" stroke="var(--line-soft)" fill="none"/>
+
+          <text x="20" y="136" font-weight="600" fill="var(--ink)">g.bianchi@acme.it</text>
+          <text x="190" y="136" font-family="var(--mono), monospace" font-size="10" fill="var(--ink-soft)">w-8·b12</text>
+          <text x="290" y="136" fill="var(--ink-soft)">1</text>
+          <text x="410" y="136" fill="var(--ink-soft)">3</text>
+          <text x="520" y="136" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">9.870 chiam · 610 s</text>
+          <text x="660" y="136" fill="var(--ink-soft)">1 s</text>
+          <text x="800" y="136" font-size="10" fill="var(--accent)">sposta</text>
+          <path d="M20,150 H860" stroke="var(--line-soft)" fill="none"/>
+
+          <text x="20" y="174" font-weight="600" fill="var(--ink)">l.verdi@acme.it</text>
+          <text x="190" y="174" font-family="var(--mono), monospace" font-size="10" fill="var(--ink-soft)">w-8·b12</text>
+          <text x="190" y="187" font-size="8.5" fill="var(--warn)">in trasferimento → w-9</text>
+          <text x="290" y="174" fill="var(--ink-soft)">1</text>
+          <text x="410" y="174" fill="var(--ink-soft)">8 · 2 in attesa</text>
+          <text x="520" y="174" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">21.400 chiam · 2.140 s</text>
+          <text x="660" y="174" fill="var(--ink-soft)">2 s</text>
+          <text x="800" y="174" font-size="10" fill="var(--ink-faint)">in corso</text>
+          <path d="M20,198 H860" stroke="var(--line-soft)" fill="none"/>
+
+          <text x="20" y="222" font-weight="600" fill="var(--ink-soft)">guest_8f21c4</text>
+          <text x="190" y="222" font-family="var(--mono), monospace" font-size="10" fill="var(--ink-soft)">w-7·a41</text>
+          <text x="290" y="222" fill="var(--ink-soft)">1</text>
+          <text x="410" y="222" fill="var(--ink-soft)">1</text>
+          <text x="520" y="222" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">12 chiam · 0.4 s</text>
+          <text x="660" y="222" fill="var(--ink-soft)">3 min</text>
+          <text x="800" y="222" font-size="10" fill="var(--ink-faint)">anonima</text>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <p class="caption">Il consumo cumulativo di ciascuna persona è la base su cui il ribilanciamento sceglie chi spostare: chi ha consumato più servizio di recente pesa più di chi ha molte pagine aperte e ferme. La terza riga mostra un trasferimento mentre accade — lo stato che in un sistema con stickiness e senza mobilità semplicemente non esiste.</p>
+</section>
+
+<section id="gruppi">
+  <h2><span class="kicker">Versioni</span>I gruppi: due versioni vive nello stesso momento</h2>
+  <div class="prose">
+    <p>Un <strong>gruppo</strong> è un insieme di processi che eseguono la <em>stessa versione</em> dell'applicazione con il proprio runtime. Il pool non è più una fila di processi identici: è un pool di gruppi, e ogni utente appartiene al gruppo del processo che lo tiene.</p>
+    <p>Serve per la cosa che senza di essa è impossibile: <strong>rilasciare una versione nuova mentre la gente lavora</strong>. Si porta su un gruppo con il codice nuovo, gli si spostano gli utenti a caldo — con la primitiva che già esiste, quella che porta la sessione intera senza perdere il lavoro in corso — e si ritira il gruppo vecchio quando è vuoto. Chi era collegato non se ne accorge, e chi arriva dopo entra sulla versione nuova.</p>
+    <p>Se qualcosa va storto, la stessa primitiva riporta indietro le persone: il rollback non è un ripristino, è uno spostamento nella direzione opposta.</p>
+  </div>
+
+  <div class="prose">
+    <h3>Non solo rilasci: mandare qualcuno avanti</h3>
+    <p>Il rilascio in blocco è il caso grosso, ed è il più raro. L'uso quotidiano dei gruppi è un altro, e vale la pena metterlo in evidenza perché è quello che si spende ogni settimana con i clienti.</p>
+    <p>La maggior parte delle novità non è una versione nuova del prodotto: è <em>un bottone</em>, un report modificato, una variante di comportamento chiesta da qualcuno. Con i gruppi si può portare quella modifica in esercizio e <strong>mandarci sopra solo chi deve provarla</strong> — un cliente, un reparto, una singola persona — mentre tutti gli altri continuano sulla versione stabile senza accorgersi di nulla.</p>
+    <p>Il costo dell'operazione è basso, ed è basso per una ragione precisa: quando la modifica non tocca le dipendenze, il lockfile è lo stesso e <strong>i due gruppi condividono l'ambiente</strong>. Quello che li distingue è il commit, che viaggia come differenza — kilobyte, non centinaia di megabyte. Non c'è un artefatto grosso da costruire e distribuire per far provare un bottone a tre persone.</p>
+    <p>Chi va sul gruppo di prova ci va con lo stesso meccanismo che assegna chiunque altro, e se la prova va male torna indietro a caldo, con la sessione di lavoro intatta. Il betatester non è una categoria speciale del sistema: è una persona assegnata a un gruppo diverso.</p>
+  </div>
+
+  <div class="note">
+    <span class="label">La differenza rispetto a un rilascio ordinario</span>
+    <p>Un deploy classico su processi senza stato è banale: spegni i vecchi, accendi i nuovi, il bilanciatore smette di mandarci traffico. Qui i processi <em>tengono qualcosa</em>, e spegnerli significa buttarlo. È il motivo per cui i gruppi e lo spostamento a caldo sono la stessa idea vista da due lati: la mobilità dello stato è ciò che rende il versionamento possibile.</p>
+  </div>
+
+  <div class="prose">
+    <h3>Il runtime di un gruppo è un artefatto, non un'installazione</h3>
+    <p>Ogni gruppo dichiara il proprio runtime: quale interprete e quale codice. La domanda vera è <em>chi lo costruisce e quando</em>, e la risposta è la decisione che tiene in piedi tutto il meccanismo.</p>
+    <p>Il runtime <strong>non</strong> viene assemblato sulla macchina che deve servire le richieste. Lo costruisce la CI, una volta, con <strong>uv</strong>: <code>uv sync --frozen</code> materializza l'ambiente esattamente come il lockfile lo descrive, e la versione diventa una <strong>directory immutabile a percorso canonico</strong> che nessuno tocca più. Un gruppo non installa nulla all'avvio: apre una cartella che esiste già.</p>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h4>uv pinna anche l'interprete</h4>
+      <p>È ciò che chiude il buco storico dei virtual environment: un venv tradizionale fissa i pacchetti ma non il Python sotto, e «python3.12» su due macchine può essere due cose diverse. Con gli interpreti standalone di uv la versione dell'ambiente comprende anche l'interprete, quindi due gruppi possono girare su Python differenti sulla stessa macchina.</p>
+    </div>
+    <div class="card">
+      <h4>Costruito una volta, non a ogni avvio</h4>
+      <p>Risolvere le dipendenze è l'operazione lenta e l'unica che può fallire per ragioni esterne — un indice non raggiungibile, una versione ritirata. Farla in CI significa che non può accadere durante un rilascio: al momento del rilascio l'ambiente esiste già, verificato.</p>
+    </div>
+    <div class="card">
+      <h4>Un artefatto che viaggia</h4>
+      <p>L'ambiente si sposta come archivio rilocabile, con un nome che porta il tag di piattaforma nello stile delle wheel — architettura e versione minima della libreria di sistema. «Linux» non è un'informazione sufficiente, e chi lo scompatta verifica il tag prima di farlo.</p>
+    </div>
+    <div class="card">
+      <h4>Ambienti condivisi quando sono identici</h4>
+      <p>Due gruppi con lo stesso lockfile condividono l'ambiente: nessuna copia. Quando differiscono, la cache di uv deduplica i pacchetti comuni con collegamenti fisici, così due versioni vicine costano poco più di una.</p>
+    </div>
+  </div>
+
+  <div class="prose">
+    <h3>Il codice viaggia per differenza</h3>
+    <p>Una versione è in realtà una coppia: <strong>l'ambiente e il commit</strong>. Le due metà cambiano con ritmi diversi — l'ambiente raramente, il codice spesso e per differenze minime, a volte tre moduli. Trattarle allo stesso modo significherebbe spedire centinaia di megabyte per cambiare tre file.</p>
+    <p>Quindi l'ambiente viaggia come archivio, e il codice come <strong>albero di lavoro git immutabile</strong>: un deposito di oggetti per macchina, e ogni versione è il suo albero al percorso canonico. Il delta si misura in kilobyte, gli oggetti comuni restano condivisi, e il rollback è ripuntare all'albero precedente. Non esiste un aggiornamento in place: quella è la strada che porta alla deriva, dove nessuno sa più con certezza quale codice stia girando.</p>
+
+    <h3>La CI sta fuori dal percorso di esecuzione</h3>
+    <p>È una scelta deliberata e vale la pena dichiararla: la CI <em>pubblica</em> gli artefatti su un archivio condiviso — l'ambiente e il pacchetto di codice, accanto — e finisce lì il suo compito. Chi avvia un processo li legge da quell'archivio, mai dalla forge.</p>
+    <p>La conseguenza è che il sistema si riavvia, si ribilancia e sostituisce processi anche con la piattaforma di integrazione irraggiungibile. Il momento in cui serve più affidabilità è quello in cui qualcosa è già andato storto, e in quel momento il numero di dipendenze esterne deve essere il più basso possibile.</p>
+    <p>Lo stesso meccanismo dichiarativo — il gruppo descrive il runtime che vuole, e chi avvia i processi lo realizza — ammette altri modi di confezionare un ambiente, immagini di container comprese, senza che nulla cambi nel resto del disegno: cambia l'attuatore, non il contratto.</p>
+  </div>
+
+  <h3>La videata dei gruppi</h3>
+  <div class="diagram">
+    <svg viewBox="0 0 880 330" role="img" aria-label="Illustrazione della videata dei gruppi con un rilascio graduale in corso">
+      <g font-family="system-ui, sans-serif">
+        <rect x="1" y="1" width="878" height="328" rx="7" fill="var(--surface)" stroke="var(--line)"/>
+        <path d="M1,42 H879" stroke="var(--line)" fill="none"/>
+        <text x="20" y="27" font-size="12.5" font-weight="650" fill="var(--ink)">supervisione · gruppi</text>
+        <text x="640" y="27" font-size="10.5" fill="var(--ink-faint)">2 versioni vive · rilascio in corso</text>
+
+        <g font-size="9.5" font-weight="650" letter-spacing=".08em" fill="var(--ink-faint)">
+          <text x="20" y="64">GRUPPO</text>
+          <text x="150" y="64">CODICE</text>
+          <text x="250" y="64">AMBIENTE</text>
+          <text x="420" y="64">PROCESSI</text>
+          <text x="510" y="64">PERSONE</text>
+          <text x="600" y="64">STATO</text>
+          <text x="790" y="64">AZIONI</text>
+        </g>
+        <path d="M20,74 H860" stroke="var(--line)" fill="none"/>
+
+        <g>
+          <text x="20" y="100" font-size="11.5" font-weight="600" fill="var(--ink)">stabile</text>
+          <text x="20" y="115" font-size="9" fill="var(--ink-faint)">predefinito</text>
+          <text x="150" y="100" font-size="10" font-family="var(--mono), monospace" fill="var(--ink-soft)">1.4.2 · 8f21c</text>
+          <text x="250" y="100" font-size="10" font-family="var(--mono), monospace" fill="var(--ink-soft)">venv a41c9 · py 3.12.9</text>
+          <text x="250" y="115" font-size="8.5" fill="var(--ink-faint)">condiviso con nessun altro gruppo</text>
+          <text x="420" y="100" font-size="10.5" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">3</text>
+          <text x="510" y="100" font-size="10.5" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">165</text>
+          <rect x="600" y="90" width="56" height="16" rx="3" fill="var(--accent-soft)"/>
+          <text x="628" y="102" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--accent)">in uso</text>
+          <text x="672" y="102" font-size="9.5" fill="var(--ink-faint)">in svuotamento</text>
+          <text x="790" y="102" font-size="10" fill="var(--ink-faint)">—</text>
+          <path d="M20,128 H860" stroke="var(--line-soft)" fill="none"/>
+        </g>
+
+        <g>
+          <text x="20" y="154" font-size="11.5" font-weight="600" fill="var(--ink)">nuova</text>
+          <text x="150" y="154" font-size="10" font-family="var(--mono), monospace" fill="var(--ink-soft)">1.5.0 · d0c74</text>
+          <text x="250" y="154" font-size="10" font-family="var(--mono), monospace" fill="var(--ink-soft)">venv b93f2 · py 3.13.1</text>
+          <text x="250" y="169" font-size="8.5" fill="var(--ink-faint)">lockfile diverso · pacchetti comuni deduplicati</text>
+          <text x="420" y="154" font-size="10.5" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">2</text>
+          <text x="510" y="154" font-size="10.5" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">22</text>
+          <rect x="600" y="144" width="80" height="16" rx="3" fill="var(--accent-soft)"/>
+          <text x="640" y="156" text-anchor="middle" font-size="9.5" font-weight="600" fill="var(--accent)">in arrivo</text>
+          <text x="790" y="156" font-size="10" fill="var(--accent)">promuovi</text>
+          <path d="M20,182 H860" stroke="var(--line-soft)" fill="none"/>
+        </g>
+
+        <rect x="20" y="196" width="840" height="52" rx="5" fill="var(--sunk)"/>
+        <text x="36" y="216" font-size="10" font-weight="650" letter-spacing=".08em" fill="var(--ink-faint)">TRAVASO VERSO «NUOVA»</text>
+        <rect x="36" y="226" width="520" height="9" rx="4.5" fill="var(--surface)"/>
+        <rect x="36" y="226" width="61" height="9" rx="4.5" fill="var(--accent)"/>
+        <text x="568" y="234" font-size="10.5" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">22 di 187</text>
+        <text x="650" y="234" font-size="10" fill="var(--ink-soft)">a caldo · nessuna sessione perduta</text>
+
+        <rect x="20" y="262" width="410" height="52" rx="5" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="36" y="282" font-size="10" font-weight="650" letter-spacing=".08em" fill="var(--ink-faint)">SE QUALCOSA VA STORTO</text>
+        <text x="36" y="299" font-size="10.5" fill="var(--ink-soft)">rientro = travaso nella direzione opposta</text>
+
+        <rect x="450" y="262" width="410" height="52" rx="5" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="466" y="282" font-size="10" font-weight="650" letter-spacing=".08em" fill="var(--ink-faint)">MIGRAZIONI</text>
+        <text x="466" y="299" font-size="10.5" fill="var(--ink-soft)">solo additive finché due versioni convivono</text>
+      </g>
+    </svg>
+  </div>
+  <p class="caption">Il rilascio ha il suo termometro come un batch: dice quante persone sono già passate e quante restano, e mentre scorre entrambe le versioni servono traffico reale. «In svuotamento» non significa spenta — significa che non riceve più nuovi arrivi. La barra è la stessa primitiva dello spostamento a caldo, applicata a un elenco di persone invece che a una sola.</p>
+
+  <div class="prose">
+    <h3>Lo stato di lavoro attraversa le versioni</h3>
+    <p>C'è una conseguenza del versionamento che riguarda proprio ciò che rende speciale questo piano, e va affrontata di petto: <strong>spostare una persona da un gruppo all'altro significa che il pacchetto del suo stato viene prodotto da una versione e installato da un'altra</strong>. È lo stesso trasferimento a caldo di sempre, ma con un codice diverso alle due estremità.</p>
+    <p>Finché i cambiamenti sono <em>additivi</em> — un campo nuovo nello stato di una pagina, una chiave in più — la cosa è trasparente: la versione vecchia ignora ciò che non conosce, la nuova tollera ciò che non trova. È la stessa disciplina che vale per il database, applicata alla memoria invece che al disco.</p>
+    <p>Quando invece la forma dello stato cambia davvero — una struttura riorganizzata, un oggetto che non ha più lo stesso significato — la regola è netta e vale la pena conoscerla:</p>
+    <p class="pull">Uno stato che la destinazione non riconosce non viene indovinato: la pagina riparte pulita, e lo dice.</p>
+    <p>Nessuna reidratazione approssimata, nessun tentativo di adattare al volo una struttura a un codice che si aspetta altro. Il costo è dichiarato e circoscritto: chi stava lavorando su quella pagina perde il <em>contesto della pagina</em> — la griglia filtrata, la selezione in corso — e la ritrova pulita. Non perde la sessione, non perde il login, non perde nulla di ciò che vive nel server: quello sopravvive, per la stessa linea di taglio che regge tutto il disegno.</p>
+    <p>Questo impone una disciplina a chi scrive una versione nuova, ed è esattamente l'analogo delle migrazioni additive: <strong>additivo è trasparente, strutturale è una ripartenza dichiarata</strong>. Un cambiamento di forma non è vietato — va saputo, perché ha un prezzo visibile per chi in quel momento sta lavorando.</p>
+    <p>Ciò che rende praticabile tutto questo è un vincolo posto all'origine: i registri contengono <strong>dati serializzabili per costruzione</strong>, mai oggetti vivi come verità. Un oggetto vivo non si può spedire e non si può versionare — e la regola esiste da prima che servisse, perché aggiungerla dopo avrebbe significato riscrivere ciò che nel frattempo si era appoggiato all'abitudine opposta.</p>
+  </div>
+
+  <div class="note warn">
+    <span class="label">La regola che il versionamento impone al database</span>
+    <p>Due versioni vive condividono un solo database, e questo è un vincolo, non un dettaglio: <strong>i gruppi versionano il codice, non lo schema</strong>. Finché due versioni convivono le migrazioni possono essere solo <em>additive</em> — tabelle e colonne nuove, annullabili o con valore predefinito, indici costruiti senza bloccare — e mai rimozioni o ridenominazioni: un rename è una rimozione travestita, e manda in errore la versione che non lo conosce.</p>
+    <p>La vecchia versione ignora ciò che non conosce, la nuova tollera il dato mancante. Le pulizie si fanno dopo, in una finestra in cui è rimasta una sola versione — e che quella condizione sia vera è un fatto che il sistema sa, perché sa quali gruppi sono vivi.</p>
+  </div>
+</section>
+
+<section id="metriche">
+  <h2><span class="kicker">Osservabilità</span>Il secondo livello di metriche</h2>
+  <div class="prose">
+    <p>Il primo documento descrive le metriche che un processo espone su di sé, nel formato che i raccoglitori consumano. Qui si aggiunge un livello, e con esso un problema di raccolta che vale la pena spiegare perché la soluzione è già nel disegno.</p>
+    <p><strong>I processi di lavoro non parlano HTTP.</strong> È una conseguenza voluta: un processo che tiene stato non si affaccia sulla rete, parla solo sul canale col proprio supervisore. Quindi nessun raccoglitore può interrogarli direttamente, e non è un limite da aggirare — è la stessa proprietà che li tiene fuori dal perimetro esposto.</p>
+    <p class="pull">Il supervisore è l'unico punto di raccolta, e non ha bisogno di un meccanismo nuovo per esserlo.</p>
+    <p>La sonda che già gira — quella che ogni pochi secondi chiede a ciascun processo i suoi numeri e nel farlo ne verifica la vitalità — <em>è</em> la raccolta. Il supervisore archivia quelle letture per governare il pool, e le ripubblica nel formato standard etichettate per processo. Un raccoglitore interroga un solo indirizzo e ottiene la fotografia di tutti, senza che nulla debba essere esposto in più.</p>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h4>Per ogni processo</h4>
+      <p>Saturazione totale e per singolo componente, memoria viva e pavimento della sua crescita, persone e pagine ospitate, stato nel ciclo di vita, età. Sono le stesse grandezze su cui il pool decide: chi guarda i grafici vede quello che vede il sistema.</p>
+    </div>
+    <div class="card">
+      <h4>Per il pool</h4>
+      <p>Ampiezza attuale, nascite e ritiri con la loro causa — crescita, ricambio, compattazione — spostamenti eseguiti e loro durata, e le morti distinte per genere: ritiro voluto o caduta.</p>
+    </div>
+    <div class="card">
+      <h4>Il traffico dello stato vivo</h4>
+      <p>Aggiornamenti consegnati e in attesa nei collettori, notifiche dai dati e loro fan-out, concessioni sullo store globale e tempo di attesa in coda. È qui che si legge se il costo del dialogo continuo sta crescendo.</p>
+    </div>
+    <div class="card">
+      <h4>Le anomalie che contano</h4>
+      <p>Sonde scadute, processi abbattuti per silenzio, spostamenti falliti e indirizzi non risolti. Ognuna di queste, in un sistema sano, è una curva piatta a zero — ed è per questo che vale la pena guardarla.</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <span class="label">Perché lo stesso formato a ogni livello</span>
+    <p>Le grandezze dei tre livelli sono diverse, il linguaggio è lo stesso. Chi raccoglie non deve imparare tre protocolli né installare tre adattatori, e — soprattutto — gli allarmi si scrivono una volta: la regola «la saturazione di qualcosa sta sopra la soglia da dieci minuti» ha la stessa forma se quel qualcosa è un processo, un pool o un dominio intero.</p>
+  </div>
+</section>
+
+<section id="roadmap">
+  <h2><span class="kicker">Appendice</span>Roadmap: dove siamo</h2>
+  <div class="prose">
+    <p>Il documento descrive il piano nella sua forma compiuta. Questa appendice è il solo posto dove si legge lo stato di avanzamento, e l'unico che cambia mentre l'implementazione procede.</p>
+    <p>La parte difficile è quella già fatta: lo spostamento a caldo di un utente con tutto il suo stato è operativo e verificato da 119 casi di test — è la primitiva da cui dipendono il ribilanciamento, il ricambio dei processi e il versionamento.</p>
+  </div>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>Capitolo</th><th>Stato</th><th>Nota</th></tr></thead>
+    <tbody>
+      <tr><td>Stato vivo per utente, connessione e pagina</td><td><span class="tag ok">operativo</span></td><td></td></tr>
+      <tr><td>Instradamento appiccicato all'identità</td><td><span class="tag ok">operativo</span></td><td>compresa la ricongiunzione al login di una sessione anonima</td></tr>
+      <tr><td>Spostamento a caldo con tutto lo stato</td><td><span class="tag ok">operativo</span></td><td>fase di quiete, ordine di rinascita, mappa aggiornata per ultima</td></tr>
+      <tr><td>Consegna a richiesta degli aggiornamenti</td><td><span class="tag ok">operativo</span></td><td></td></tr>
+      <tr><td>Sottoscrizioni ai dati e invalidazione della cache</td><td><span class="tag ok">operativo</span></td><td>con esclusione dell'origine dal fan-out</td></tr>
+      <tr><td>Store globale con replica per processo</td><td><span class="tag ok">operativo</span></td><td>concessione ordinata, tutto-o-niente</td></tr>
+      <tr><td>Bilanciamento sulla saturazione per componente</td><td><span class="tag ok">operativo</span></td><td></td></tr>
+      <tr><td>Ricambio dei processi prima del limite di memoria</td><td><span class="tag ok">operativo</span></td><td>misura onesta della memoria, serie storica per processo</td></tr>
+      <tr><td>Compattazione del pool</td><td><span class="tag ok">operativo</span></td><td></td></tr>
+      <tr><td>Sorveglianza e rilancio dei processi</td><td><span class="tag ok">operativo</span></td><td>la sonda porta i dati e la prova di vita</td></tr>
+      <tr><td>Sopravvivenza a un riavvio completo</td><td><span class="tag ok">operativo</span></td><td>raccolta allo spegnimento, ripiazzamento all'avvio</td></tr>
+      <tr><td>Monitor della popolazione viva</td><td><span class="tag ok">operativo</span></td><td></td></tr>
+      <tr><td>Ponte WSGI per un sito esistente</td><td><span class="tag ok">operativo</span></td><td>pool dedicato, separato da quello di servizio</td></tr>
+      <tr><td>Ruolo singolo per lo sviluppo</td><td><span class="tag ok">operativo</span></td><td>stesso protocollo, canale in memoria invece del socket</td></tr>
+      <tr><td>Metriche del pool in formato Prometheus</td><td><span class="tag wip">in implementazione</span></td><td>le letture esistono già — la sonda le raccoglie e il supervisore le archivia; manca la ripubblicazione nel formato standard</td></tr>
+      <tr><td>Trasporto WSX sul canale del browser</td><td><span class="tag ok">operativo</span></td><td>il canale che rende continuo il dialogo con la pagina, sullo stesso motore di smistamento di HTTP</td></tr>
+      <tr><td>Compatibilità dello stato fra versioni</td><td><span class="tag wip">in implementazione</span></td><td>la regola è ratificata — uno stato non riconosciuto fa ripartire la pagina pulita, mai una reidratazione approssimata — e il vincolo di serializzabilità dei registri è già rispettato; manca il riconoscimento della forma nel pacchetto, che arriva con i gruppi perché è lì che due versioni si scambiano stato</td></tr>
+      <tr><td>Gruppi e versioni conviventi</td><td><span class="tag wip">in implementazione</span></td><td>la colonna del gruppo è già presente in ogni registro; restano l'instradamento per gruppo e la costruzione degli ambienti in CI</td></tr>
+      <tr><td>Ri-aggancio della pagina dopo un riavvio</td><td><span class="tag wip">in implementazione</span></td><td>oggi la sessione applicativa sopravvive; il ri-aggancio della singola pagina per identificatore completa il quadro</td></tr>
+      <tr><td>Supervisore remoto e più macchine</td><td><span class="tag wip">in implementazione</span></td><td>il protocollo è disegnato dall'inizio per due implementazioni, in-processo e su rete; oggi ne esiste una</td></tr>
+      <tr><td>Batch su processi dedicati</td><td><span class="tag wip">in implementazione</span></td><td>modello ed esecuzione locale completi; la distribuzione riusa questa stessa supervisione</td></tr>
+    </tbody>
+  </table></div>
+
+  <p class="roadmap-note">Ultimo aggiornamento della roadmap: 13 agosto 2026. Le voci del corpo del documento non cambiano quando una riga di questa tabella passa a «operativo».</p>
+
+  <div class="back">
+    <span class="label">Gli altri due documenti</span>
+    <p>Il primo descrive il server su cui tutto questo poggia: routing agnostico dal trasporto, grammatiche di configurazione, OpenAPI e MCP sulla stessa superficie, autenticazione, sessioni, task e storage. Vale da solo, anche per chi non avrà mai bisogno di una riga di quanto descritto qui.</p>
+    <p>Il terzo porta questo stesso disegno oltre il confine della macchina: come si cresce su più nodi senza cedere a nessuno la decisione su dove vive una persona, e come si usa Kubernetes prendendone i muscoli e non il giudizio.</p>
+  </div>
+</section>
+
+<footer>
+  <p>genro-asgi · documento 2 di 3 · Apache License 2.0 · Softwell S.r.l.</p>
+</footer>
+
+</div>
+</body>
+</html>
