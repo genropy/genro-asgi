@@ -1,8 +1,12 @@
+from importlib.metadata import version
+
 import genro_asgi
 
 
 def test_version():
-    assert genro_asgi.__version__ == "0.23.0"
+    # The contract of #16: __version__ IS the installed distribution's
+    # version — never a literal that a release bump can leave behind.
+    assert genro_asgi.__version__ == version("genro-asgi")
 
 
 def test_root_exports_public_api():

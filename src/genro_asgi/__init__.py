@@ -14,6 +14,8 @@
 
 """Minimal ASGI server core: the base server and the app-side contract."""
 
+from importlib.metadata import version as _distribution_version
+
 from .application import ApplicationGrammar, BaseApplication
 from .applications import (
     McpApplication,
@@ -137,4 +139,6 @@ __all__ = [
     "router_openapi",
 ]
 
-__version__ = "0.23.0"
+# Derived from the installed distribution (issue #16): pyproject.toml is the
+# single place a release bump touches, and this can never drift again.
+__version__ = _distribution_version("genro-asgi")
