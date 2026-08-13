@@ -185,3 +185,27 @@ options, one perimeter decision for the owner. Two of the eleven (E24 "operativo
 B6 "Consolidato") cannot be answered by measurement at all — they ask the owner to
 weigh a word against the four fidelity deltas R1..R4, which is walkthrough
 material by construction.
+
+## Run inspection
+
+- 6/6 phases done in one pass, no repair, no block, ~65 minutes total
+  (13:10-14:15), all commits `wf(phase N): ...` on the branch.
+- Phase 1's own commit was denied by the ask-mode pre-commit hook (the
+  known unattended-session quirk in the plan Notes); the staged work
+  landed inside phase 2's commit `86bdc0a`. One commit carries two
+  phases; nothing lost. Later phases committed without incident — the
+  quirk fired once, not systematically.
+- Phase 3's seven strip experiments all restored byte-for-byte; the
+  suite stayed green at every phase boundary (1569 passed / 2 skipped)
+  and no committed state touches `src/` or `tests/`.
+- Phase 5 surfaced a plan-level coverage gap the zone phases could not
+  see: 11 of 36 ebook claims (zones `recycling-code`/`tests`) never
+  reached a card, because phases 2-3 worked by fidelity points and
+  strip experiments, not by the claims inventory. Recorded as §5 of
+  the reconciliation record — a perimeter decision for the owner, not
+  invented findings.
+- Phase 6 ran its three checks programmatically (641 file:line refs
+  resolve, 59/59 cards accounted, 46 verdict slots all empty), made 9
+  numeral-only auto-fixes and flagged 4 items for the owner in
+  `review.md` — including the stale "14 cards" in phase 3's plan note,
+  out of its write perimeter, to align at finalize if desired.
