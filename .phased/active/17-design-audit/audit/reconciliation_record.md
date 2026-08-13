@@ -44,7 +44,12 @@ sulla sonda resta e il BRIEF Q3a viene emendato a verbale.
 **Legato a**: R2 (la stessa decisione, vista dal lato del piano), voce L5 del
 ledger (i tre `trigger_*`, che il piano farebbe collassare).
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): il codice si adegua — «il
+piano ogni X minuti, assolutamente; non ha senso una mossa per volta».** Il
+planner nasce come task periodico (intervallo per gruppo, default da BRIEF
+Q3a), la sonda torna alla sola salute a 5s; le emergenze vere (un morto)
+restano sul riflesso rapido. Il gate a peso di R4 corre dentro la costruzione
+del piano, sulla lettura unica.
 
 ### R2 ← F2 · Il modello PLAN: una lettura → redistribuzione → sostituzioni dal peggiore → compattazione
 **L'autorità dice** (BRIEF Q3b, brief:114-136): «the commander reads the WHOLE
@@ -72,7 +77,12 @@ flag collassati.
 
 **Legato a**: R1; ledger L5 (i tre `trigger_*`).
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): il codice si adegua — si
+costruisce il PLAN come da BRIEF Q3b.** Una lettura dell'intero parco, lista
+ordinata di passi (riequilibrio → sostituzioni dal peggiore, anche più d'una,
+in sequenza → compattazione), un solo stato piano-in-volo che sostituisce i
+tre flag; un tick che atterra a piano aperto non fa nulla. I tre `trigger_*`
+cadono con lui (ledger L5).
 
 ### R3 ← F3 · `designated_reception` per l'accoglienza condannata
 **L'autorità dice** (BRIEF Q4-bis, brief:151-166): «when the plan condemns THE
@@ -104,7 +114,16 @@ dichiara che un ospite «is on no map and never moves»
 (`commander.py:3062-3063`). Resta PENDING: il worker non ha un'op di inventario
 degli ospiti.
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): designazione esplicita, con
+statuto speciale.** Quando si condanna l'accoglienza il rimpiazzo fresco
+nasce **sempre, subito, senza gate a peso** — unica eccezione alla regola di
+R4: qui non è capienza, è continuità del ruolo — e il ruolo gli viene
+designato immediatamente (puntatore sul commander, fallback posizionale se il
+designato muore, come da BRIEF Q4-bis). Travaso in quest'ordine: prima **gli
+ospiti** (la sotto-voce PENDING si chiude: sì, si rilocano, destinazione
+forzata la nuova accoglienza; serve l'op di inventario ospiti sul worker),
+poi gli utenti del vecchio portiere **fino alla capienza concordata** del
+fresco; l'eccedenza si colloca sugli altri con la regola best-fit di R4.
 
 ### R4 ← F4 · Spawn a libro mastro (`capacity_headroom`)
 **Le due autorità si contraddicono** — è il primo fatto della voce.
@@ -134,7 +153,26 @@ emendare Q4.
 **Nota di metodo**: questa è l'unica voce del registro in cui il verdetto
 decide anche **quale autorità prevale**, non solo cosa fa il codice.
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): prevale il BRIEF, raffinato
+— gate a peso, con margine; e le due autorità smettono di contraddirsi.** Al
+momento del piano si calcola il peso degli utenti da togliere e il peso
+ricevibile dagli altri processi **dello stesso gruppo**: se lo reggono **con
+ampiezza** (margine, non incastro esatto — i riceventi non devono finire a
+ridosso della saturazione, o il ricambio innesca altri ricambi a domino),
+nessun processo nuovo; altrimenti nasce il sostituto, e per quel ramo la
+garanzia delle NOTES resta intatta: prima vivo e registrato, poi si condanna.
+Le due autorità rispondevano a domande diverse — il BRIEF decide *se*
+spawnare, le NOTES *l'ordine* quando si spawna. In entrambi i casi il
+collocamento è a **best-fit sotto il tetto di saturazione**: ogni utente va
+sul processo **più pieno che può ancora accoglierlo senza saturare**, mai sul
+più vuoto (esempio del titolare: capienza 100, saturazione 80 — l'utente da
+10 va su chi ha 40 liberi, non sul fresco con 100 liberi). Consolidare, non
+spalmare: il fresco resta il più scarico possibile e il parco resta
+compattabile. La regola è una sola
+per ogni condanna, inclusa la destinazione marcata morente da
+un'installazione fallita (R17). «Peso» e «ampiezza» si definiscono sulla
+sensoristica di occupazione già ratificata (saturazione per componente) alla
+run di fix.
 
 ### R5 ← F5 · `floor_series_depth` 48 vs 72; minimo di fit 3 vs 6
 **L'autorità dice** (BRIEF Q6, brief:208-223): «Series depth K — default 48
@@ -163,7 +201,27 @@ entra in `__all__`?
 **Legato a**: ledger L2 (la correzione di accelerazione vive sulla stessa
 serie: i due numeri e la correzione si decidono nello stesso passaggio).
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): la questione si dissolve —
+il grilletto del ricambio cambia natura, e la previsione scende da giudice a
+strumento.** Lo scopo dichiarato dal titolare: la memoria che un processo
+tiene impegnata (X) oltre quella davvero usata (Y, il pavimento) è spreco che
+torna al sistema operativo solo ruotando il processo. Il ricambio decide
+quindi su **misure del momento, non su curve**, con tre grilletti
+configurabili per gruppo: (1) **necessità** — il pavimento si avvicina al
+limite del gruppo: sostituzione prioritaria; (2) **convenienza** — lo spreco
+X−Y supera una soglia (assoluta o in rapporto all'impegnata): candidato a
+rotazione, il piano prende dal più sprecone quando c'è ampiezza; (3)
+**vuoto** — un processo rimasto senza utenti (tipicamente ore notturne) si
+spegne senza rimpiazzo, rispettando un minimo di parco (il portiere resta
+sempre) ed eventuale attesa di grazia. Il «tetto a orologeria» resta
+rifiutato: la frequenza di rotazione attesa (~4-5 ore) è l'effetto dello
+spreco che si accumula, mai una scadenza di calendario. La serie dei
+pavimenti, la tendenza e il «mancano X» restano come **strumento di
+osservazione** nella fotografia del monitor (R19) e campanello d'anticipo
+della necessità; profondità, minimo di fit, correzione d'accelerazione e
+visibilità della costante diventano dettagli dello strumento, da fissare alla
+run di fix senza ratifica solenne. Valori di default delle tre soglie: run di
+fix.
 
 ### R6 ← F6 · I nomi coniati durante la run e mai ratificati
 **L'autorità dice**: il mandato di battesimo era «reasonable names for a reader
@@ -285,7 +343,11 @@ worker.
 `_server/<nome>` che sostituirà il log) · `flag_evacuation_stall`.
 **Legato a**: ledger L1 (se il report di stallo non è una voce di prodotto, il
 nome non serve affatto) e L4 (il throttle riusa la costante del riciclo).
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): il metodo cade — niente da
+battezzare.** Il WARNING di stallo è sostituito dalla scadenza che agisce
+(L1): allo scadere, migrazione forzata — la richiesta lenta muore, lo stato
+dell'utente si conserva. Il nome della nuova azione si battezza alla run di
+fix.
 
 ### R14 ← N8 · `regeneration_failed_at` · `commander.py:596`
 **Semantica**: l'istante monotonico in cui un rimpiazzo non è riuscito a
@@ -315,7 +377,8 @@ brief:269 — vedi R3).
 (`commander.py:3086-3089`).
 **Candidati**: `evacuation_warned_at` (tenere) · `stall_reported_at` ·
 `last_stall_warning`.
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): il campo cade** col WARNING
+di stallo (L1): il freno anti-raffica non ha più nulla da frenare.
 
 ---
 
@@ -349,7 +412,20 @@ lettera (`commander.py:2462-2467`, `2469-2474`).
 conferma — un rollback che oggi non esiste in nessun punto del disegno;
 (b) emendare la seconda clausola nella garanzia vera: «la fetta non si perde
 mai in silenzio — atterra da qualche parte, o muore rumorosamente».
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): il codice si adegua —
+consegna riordinata.** Flag → copia (la sorgente trattiene la sua) →
+installazione → conferma → solo allora cancellazione e caduta del flag:
+nessuna finestra in cui l'utente non è da nessuna parte, e la frase del libro
+diventa vera alla lettera. Prezzo accettato a verbale: i dati esistono in due
+posti per la durata del trasferimento (il flag impedisce ogni divergenza).
+Fallimento d'installazione: **nessun ripiego immediato su un'altra
+destinazione** — la catena `salvage_target` si rimuove; l'utente resta alla
+sorgente, integro; la destinazione fallita diventa **morente** ed entra nel
+percorso di ricambio standard, col rimpiazzo fresco creato in automatico (la
+politica di gate sullo spawn è la questione R4). Errore rumoroso a ogni
+fallimento; il riprovare è quello naturale delle passate periodiche. Sparisce
+il caso «utente spazzato mentre il pacco era in custodia»: la custodia come
+limbo non esiste più.
 
 ### R18 ← E14 · «la persona continua a essere servita dove si trova»
 **Il libro dice** (*Il governo dei processi*): «La mappa si aggiorna per ultima:
@@ -368,7 +444,14 @@ stessa finestra descritta in due modi incompatibili.
 **Opzioni**: (a) **nessun codice da cambiare**; (b) allineare la frase a quella
 di E4 («la richiesta attende, e quando la barriera cade trova la persona al
 posto giusto»).
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): nessun codice — si allinea
+la frase del libro, resa precisa e meno assoluta.** Il servizio durante la
+finestra è sospeso, non continuo: è la sospensione stessa a garantire che le
+due copie non divergano (ratificato dallo schema del titolare in R17). La
+frase nuova precisa la scala: la richiesta attende — nella quasi totalità dei
+casi una manciata di millisecondi, impercettibile — e quando il flag cade
+trova la persona al posto giusto. Da applicare alla prossima rigenerazione
+del libro, insieme alle correzioni numeriche di R22/R23.
 
 ### R19 ← E21 · «per ogni processo lo stato nel ciclo di vita, quando è nato e, se è morto, quando e come»
 **Il libro dice** (*Il ponte con l'esistente*): una chiamata sola compone la
@@ -395,7 +478,17 @@ implementazione. È il buco più grosso della sezione.
 `status`/`spawned_at`/`died_at`/`death` e la lista include le tombe finché la
 sepoltura non le rimuove; (b) togliere dal libro le due clausole, che
 descrivono il monitor legacy e non questo.
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): il codice si adegua —
+fotografia a due strati.** Uno strato del commander (lo stato del momento del
+pool: per ogni processo stato attivo/morente/morto, nascita, per i morenti
+da-quando e utenti residui, per i morti quando-e-come finché la sepoltura non
+rimuove la riga; più lo stato del pool — passata in volo, quarantena da
+rigenerazione fallita) e una fotografia per ogni worker (il suo interno,
+com'è già oggi; per i morti parla solo la riga del commander). Un worker muto
+non fa cadere la lettura, e lo stato accanto distingue «muto perché morente»
+da «muto perché malato». **Il dettaglio dei campi è rimandato al design della
+run di fix** — il titolare ha nominato esempi da valutare lì: le tabelle
+sottoscritte, le chiamate fatte da un certo utente.
 
 ### R20 ← E22 · «i registri contengono dati serializzabili per costruzione»
 **Il libro dice** (*Lo stato di lavoro attraversa le versioni*): «i registri
@@ -419,7 +512,12 @@ vivi dalle righe, cioè il disegno opposto a quello ratificato; (b) il libro
 precisa il soggetto: «ciò che viaggia è serializzabile per costruzione; gli
 oggetti vivi restano nel processo e vengono ricostruiti a destinazione, mai
 spediti».
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): il libro sbaglia — i
+registri ospitano oggetti vivi, per disegno.** Nessun codice da cambiare. La
+frase si riscrive col soggetto giusto: niente di vivo attraversa mai il
+confine tra processi o tra versioni — viaggia solo materia inerte, e il vivo
+si ricostruisce a destinazione. Da applicare alla prossima rigenerazione del
+libro.
 
 ### R21 ← E26 · «la colonna del gruppo è già presente in ogni registro»
 **Il libro dice** (Roadmap, *Gruppi e versioni conviventi — in
@@ -434,7 +532,11 @@ suo worker (`commander.py:48-49`). Nei registri del worker
 del *roster*»), E26 dice «in ogni registro».
 **Opzioni**: (a) **nessun codice** — il gruppo derivato è il disegno voluto;
 (b) allineare E26 al testo di B7.
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): nessun codice — il gruppo
+derivato dal roster è il disegno voluto.** La frase generalizzante di E26 si
+allinea al testo corretto di B7 alla prossima rigenerazione del libro. I
+gruppi come funzione vera restano lavoro di roadmap, non di questa
+riconciliazione.
 
 ### R22 ← B1 · I conteggi per modulo: nove esatti, uno derivato di +3
 **Il libro dice** (*11 · Piano SPA — orchestrazione*), colonna **Stmt**, totale
@@ -452,7 +554,9 @@ non sul numero.
 **Opzioni**: (a) nessun codice; (b) i due numeri si aggiornano alla prossima
 rigenerazione del libro — l'ebook si genera da misura, quindi questa è un
 promemoria di rigenerazione, non una correzione a mano.
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): nessun codice — promemoria
+di rigenerazione.** Il libro si rigenera dopo la run di fix (il codice sarà
+comunque cambiato); i numeri si riallineano da soli in quella sede.
 
 ### R23 ← B7 · «nessun test passa mai un valore diverso» (e l'àncora 990)
 **Il libro dice** (*Stato delle capacità*): «Gruppi di worker — Solo progettato
@@ -474,7 +578,9 @@ comportamento cambia col valore.
 asserisce solo che viene inoltrato»).
 **Opzioni**: (a) nessun codice; (b) correggere àncora e clausola alla prossima
 rigenerazione.
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): nessun codice — àncora e
+clausola si correggono alla prossima rigenerazione del libro**, insieme a
+R18, R20, R21 e R22.
 
 ---
 

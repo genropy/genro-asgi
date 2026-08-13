@@ -64,7 +64,22 @@ notes:79), se no cadono con lui `warn_stalled_evacuation` (R13), il campo
 L3 e L7. **La decisione su questa voce ne muove altre cinque**: è la prima da
 prendere al walkthrough.
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): scadenza che agisce, non
+avviso che si lamenta.** Lo sgombero ha una scadenza: la riga porta già
+l'istante d'inizio (campo ratificato — ha finalmente un consumatore vero); la
+contabilità di battito, oltre a ritirare i vuoti, fa rispettare la scadenza.
+Allo scadere, **migrazione forzata, non uccisione del processo**: la
+richiesta lenta che bloccava il trasloco viene abbattuta (muore lei sola, con
+errore rumoroso verso il chiamante), lo stato dell'utente si conserva e
+viaggia con la consegna riordinata di R17; svuotato, il processo si ritira
+per la via normale. Il WARNING di stallo cade con tutto il corredo:
+`warn_stalled_evacuation` (R13), `evacuation_warned_at` (R16), la guardia di
+L18, il terzo lavoro di `RECYCLE_RETRY_SECONDS` (L4) e l'orologio in prestito
+`CONNECTION_MAX_AGE`; la scadenza prende una costante propria, battezzata
+alla run di fix. La visibilità dello stallo passa alla fotografia del monitor
+(R19: «in sgombero da quando, quanti utenti restano»). Le due porte del BRIEF
+restano il nucleo; la forma finale (fusione L3/L7) si decide nelle voci di
+forma.
 
 ## L2 ← C2 · La correzione di accelerazione sulla serie dei pavimenti
 **Leva stimata**: ~45 righe → ~15.
@@ -98,7 +113,13 @@ ratifica ed entra nel BRIEF, o si toglie** — e nello stesso passaggio decidere
 due valori di R5 (48 vs 72, 3 vs 6) e la privatezza di `_FLOOR_FIT_MINIMUM`.
 Sono la stessa serie: deciderli separatamente costa due walkthrough.
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): la voce si declassa con la
+macchina che la ospita.** Il grilletto del ricambio diventa a misure del
+momento (R5: necessità / convenienza / vuoto) e la previsione a curve resta
+solo come strumento di osservazione del monitor: la correzione
+d'accelerazione non decide più la vita di nessun processo. Se resti o cada è
+un dettaglio dello strumento, da decidere alla run di fix insieme a
+profondità e minimo — non più materia di ratifica.
 
 ## L3 ← I3 · `evacuation_pass` e `drain_worker`, cicli gemelli
 **Leva stimata**: due cicli (23 + 28 righe) → uno.
@@ -192,7 +213,10 @@ proprio `finally` (`commander.py:2769`, `3023`, `2921`).
 il flag in `pool_beat`. Da decidere **dopo** R1/R2: se il piano si fa, la voce
 si risolve da sé.
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): si risolve con R1/R2 — i
+tre `trigger_*` cadono col piano.** Lo stato piano-in-volo sostituisce i tre
+flag e non c'è più nulla da innescare uno per uno; i due test che chiamano i
+trigger due volte di seguito si riscrivono sul piano.
 
 ## L6 ← SD4 · I due `except Exception` sui batch discendenti
 **Leva stimata**: −4 righe e una duplicazione, a comportamento invariato.
@@ -508,7 +532,11 @@ esiste), **oppure** renderlo errore rumoroso — che è ciò che l'esperimento h
 temporaneamente fatto senza rompere nulla. **Nessun test da rimuovere.**
 Dipendente da L1: se il report di stallo cade, la voce cade con lui.
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): cade con L1.** Il metodo
+che conteneva la guardia sparisce con l'intero corredo del WARNING; il
+controllo di scadenza che lo sostituisce legge il timestamp scritto in coppia
+con lo stato, senza guardia sul `None` (una riga in sgombero senza timbro non
+esiste).
 
 ## L19 ← D1 + T-D1 · `recycle_worker`: la guardia sul worker in-process
 **Leva stimata**: due righe in un posto o nell'altro — **mai in entrambi**.
@@ -568,7 +596,10 @@ rumoroso qui — e allora la coppia da riscrivere è `evaluator.py:292-293` + qu
 test, che diventa un `pytest.raises`. Da decidere insieme a L2: se la correzione
 di accelerazione cade, `max(...)` sparisce e con lui il vincolo.
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): segue la sorte di L2 alla
+run di fix.** Con la previsione declassata a strumento di osservazione, il
+ramo e il suo test non sono più materia di walkthrough: si sistemano insieme
+alla forma finale dello strumento.
 
 ## L21 ← I5 · I due `wait_*_ready`: concetti distinti, corpi duplicati
 **Leva stimata**: un corpo di attesa invece di due.
