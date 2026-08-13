@@ -64,7 +64,7 @@ recyclable").
 **Lo scenario esiste nel prodotto?** No, e ora è confermato da due lati: la
 fase 2 ha mostrato che fra la scelta (`commander.py:3018`) e il controllo
 (`commander.py:3132`) non c'è `await`, e la suite non contiene un solo test che
-chiami `recycle_worker` su una riga non-`active`. I sette chiamanti di test
+chiami `recycle_worker` su una riga non-`active`. Gli otto chiamanti di test
 (`tests/test_spa_move.py:2184`, `2207`, `2233`, `2467`, `2503`, `2517`, `2543`,
 `2677`) passano tutti o un worker `active` o il worker in-process.
 **Proposta**: rimozione secca delle due righe — nessun test da toccare. È la
@@ -109,7 +109,7 @@ temporaneamente fatto, senza rompere nulla).
 **Guardia tolta**: `evaluator.py:318` → `list(series)[-1]["floor"]`.
 **Test caduti**: **nessuno — il default è incementato.** 249 passati.
 
-**Lo scenario esiste nel prodotto?** No, e nemmeno nei test: sette chiamanti di
+**Lo scenario esiste nel prodotto?** No, e nemmeno nei test: otto chiamanti di
 `worker_time_to_limit` nella suite (`tests/test_spa_evaluator.py:472`, `479`,
 `481`, `490`, `505`, `512`, `523`; `tests/test_spa_move.py:2357`) e nessuno
 arriva alla riga 318 con una serie falsa — la velocità `None` li ferma prima
@@ -191,11 +191,11 @@ chiama, proporne la rimozione.
 **Cosa c'è nell'albero** (verificato 2026-08-13, come già rilevato in fase 1):
 
 1. **`LocalPool.settled` non esiste.** La classe `LocalPool`
-   (`tests/test_spa_move.py:149-189`) ha quattro membri: `__init__`, `start`,
-   `add_worker`, `stop` e la property `names`. Nessun `settled`.
+   (`tests/test_spa_move.py:149-189`) ha quattro metodi — `__init__`, `start`,
+   `add_worker`, `stop` — più la property `names`. Nessun `settled`.
 2. **`settled_at` esiste ed è vivo** — funzione a livello di modulo, non metodo
    di `LocalPool` (`tests/test_spa_move.py:78-87`). Attende che la mappa nomini
-   la destinazione e che nessun hold di quell'utente sia in piedi. **17
+   la destinazione e che nessun hold di quell'utente sia in piedi. **16
    chiamanti** nella suite: `tests/test_spa_move.py:546`, `748`, `768`, `783`,
    `816`, `835`, `848`, `869`, `915`, `975`, `1010`, `1047`, `1202`, `1281`,
    `1506`, `2773`. Non è codice morto: è il modo in cui l'intera sezione «la
@@ -285,11 +285,12 @@ completezza della rassegna: è l'unico test dei quattro file la cui premessa
 
 ## Conteggio
 
-**14 schede**, tutte con verdetto VUOTO:
+**12 schede**, tutte con verdetto VUOTO:
 7 esperimenti di rimozione (T-D1..T-D7) · 1 registrazione delle guardie
 necessarie (sezione B) · 1 igiene (`LocalPool.settled`, sezione C) ·
-3 di rassegna (TS1..TS3) · più le due conclusioni trasversali annotate sopra
-(la coppia sana di `wait_worker_ready`, l'assenza di cementazione per D2/D3/D4/D5/D6).
+3 di rassegna (TS1..TS3). A queste si aggiungono le due conclusioni trasversali
+annotate sopra, che non sono schede e non hanno casella di verdetto (la coppia
+sana di `wait_worker_ready`, l'assenza di cementazione per D2/D3/D4/D5/D6).
 
 Esito quantitativo della lente: su sette difese specie-1, **cinque sono
 completamente incementate** (D2, D3, D4, D5, D6 — nessun test cade) e due hanno

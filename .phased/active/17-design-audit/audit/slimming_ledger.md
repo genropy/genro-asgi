@@ -431,7 +431,7 @@ ValueError(...)`.
 tolta, **249/249 passati, nessun test caduto**. Doppia conferma: fra la scelta
 (`commander.py:3018`) e il controllo (`commander.py:3132`) non c'è `await` — sono
 nella stessa coroutine — e `recycle_candidate` itera su `active_workers`
-(`commander.py:3000`). I sette chiamanti di test
+(`commander.py:3000`). Gli otto chiamanti di test
 (`tests/test_spa_move.py:2184`, `2207`, `2233`, `2467`, `2503`, `2517`, `2543`,
 `2677`) passano tutti un worker `active` o il worker in-process.
 
@@ -451,7 +451,7 @@ nella stessa coroutine — e `recycle_candidate` itera su `active_workers`
 righe sopra (`evaluator.py:314-316`) la velocità è già `not None`, e la velocità
 è `None` per costruzione quando la serie è vuota o più corta di
 `_FLOOR_FIT_MINIMUM` (`evaluator.py:288`). E il default **non difende nulla**: su
-lista vuota `[-1]` alza `IndexError` comunque. Sette chiamanti nella suite
+lista vuota `[-1]` alza `IndexError` comunque. Otto chiamanti nella suite
 (`tests/test_spa_evaluator.py:472`, `479`, `481`, `490`, `505`, `512`, `523`;
 `tests/test_spa_move.py:2357`) e nessuno arriva alla riga con una serie falsa; il
 test del monitor senza serie (`tests/test_spa_monitor.py:248-254`) si ferma allo
@@ -631,7 +631,7 @@ abbandono: nessuna scheda è caduta in silenzio.
 | **SI4** — `holds_target` | `worker.py:1306-1308` | **Tenere**: due chiamanti (`worker.py:1282` nello switch, `1348` nel batch discendente) e un nome che dice il concetto («questo worker tiene il destinatario?») nei due soli punti che decidono su di esso. Registrata perché il caso risulti **guardato e archiviato**, non dimenticato. |
 | **TS1** — i test di contratto sugli errori rumorosi del fold | `tests/test_spa_commander.py:393-398`, `401-404`, `407-410` | **Non sono specie 2**: sono la faccia-test della regola di casa — il ramo che cementano non è una difesa da togliere, è l'**assenza** di difesa resa visibile. Se domani qualcuno aggiungesse un `.get(..., set())` di comodo, questi tre test cadrebbero: è il loro mestiere. |
 | **TS2** — i test «unknown worker / unknown user» degli osservatori | `tests/test_spa_evaluator.py:341`, `416`; `tests/test_spa_commander.py:926`, `690` | Il ramo difeso è **raggiungibile per davvero**: sono osservatori interrogati da superfici esterne (`metrics_view`, `monitor_state`) su nomi che possono spegnersi fra la fotografia e la lettura — finestra documentata da `tests/test_spa_monitor.py:130`. Registrati per chiudere la rassegna in modo esplicito: non è vero che ogni ramo `None` sia una difesa da togliere. |
-| **Sezione C** — `LocalPool.settled` (voce dell'issue #17) | `tests/test_spa_move.py` | **La voce non ha un referente nell'albero.** `LocalPool` (`tests/test_spa_move.py:149-189`) non ha `settled`; il vivo `settled_at` (`78-87`) ha **17 chiamanti** e non è codice morto; la convenzione `None` non è abolita — `new_roster_row` la ammette ancora nella firma (`commander.py:976`) e il commander la legge a `1089`, `1136`, `863`. Terza conferma indipendente (fasi 1, 3, 5). Si riapre in un colpo solo se il titolare ricorda quale simbolo aveva in mente. |
+| **Sezione C** — `LocalPool.settled` (voce dell'issue #17) | `tests/test_spa_move.py` | **La voce non ha un referente nell'albero.** `LocalPool` (`tests/test_spa_move.py:149-189`) non ha `settled`; il vivo `settled_at` (`78-87`) ha **16 chiamanti** e non è codice morto; la convenzione `None` non è abolita — `new_roster_row` la ammette ancora nella firma (`commander.py:976`) e il commander la legge a `1089`, `1136`, `863`. Terza conferma indipendente (fasi 1, 3, 5). Si riapre in un colpo solo se il titolare ricorda quale simbolo aveva in mente. |
 
 **Totale schede rendicontate**: 29 nelle 21 voci di questo registro + 8 qui
 scartate = 37 della lente 2 e dell'igiene di specie 1. Le altre 24 schede delle

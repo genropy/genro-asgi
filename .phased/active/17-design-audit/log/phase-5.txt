@@ -1,0 +1,5 @@
+✓ Phase 5 completed: Consolidation — the two registers
+
+Both registers written in Italian with every verdict slot empty: `reconciliation_record.md` (24 entries — 6 fidelity, 10 baptism, 7 ebook disagreements, 1 hygiene closed as superseded) and `slimming_ledger.md` (21 entries ordered by leverage, merging the code-side and test-side views of each species-1 defense, plus a Scartate section motivating the 8 discarded cards). Card accounting, verdict emptiness and 254 `file:line` references verified programmatically; suite 1569 passed / 2 skipped, ruff clean, no source or test file touched — committed as 0fa8746.
+
+Two unattended decisions are recorded in the plan: H2 closed as superseded (phase 4 read `worker.py` whole without finding the sentence, confirmed here), and a new §5 recording that 11 of the 36 ebook claims were never brought to a card — a coverage gap left as a perimeter decision rather than audited now.

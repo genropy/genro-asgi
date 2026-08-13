@@ -639,10 +639,10 @@ questa fase non legge (la zona `spa-world`, fase 4 — `worker.py` è dove il
 
 ## Conteggio
 
-32 schede: 6 di fedeltà (F1-F6) · 10 di battesimo (N1-N10) · 7 di specie 1
+33 schede: 6 di fedeltà (F1-F6) · 10 di battesimo (N1-N10) · 7 di specie 1
 (D1-D7) più D8, che registra 6 guardie verificate NECESSARIE perché la fase 3
 non le tocchi · 5 di specie 3 (I1-I5) · 3 di specie 4 (C1-C3) · 1 di igiene
-(H2). **32 voci, 32 in attesa di verdetto.**
+(H2). **33 voci, 33 in attesa di verdetto.**
 
 Le schede di specie 1 che la fase 3 deve provare con lo strip: D1, D2, D3, D4,
 D5, D6 (D7 è una scheda di probabilità, non di raggiungibilità; D8 è l'elenco

@@ -228,7 +228,7 @@ English.
   > .phased/active/17-design-audit/audit/slimming_ledger.md,
   > .phased/active/17-design-audit/plan.md, .phased/active/17-design-audit/notes.md
 
-- [ ] **Phase 6**: Coherence review and auto-fix (final, mandatory)
+- [x] **Phase 6**: Coherence review and auto-fix (final, mandatory)
   - Pattern reference: cross-check against Phases 1..5 (their `Files:` fields)
   - Files: only the files written by Phases 1..5 (`.phased/active/17-design-audit/audit/*.md`); plus `.phased/active/17-design-audit/review.md` (new). Never touch a pre-existing file they did not modify.
   - Decisions:
@@ -236,6 +236,47 @@ English.
     - Never auto-fix: the substance of a card or register entry, verdicts (they must stay empty), adding or removing findings. Those go to `review.md` only.
   - Details: Convergence loop (max 3 cycles): (1) parse every `path:line` reference in the five audit files and verify the path exists and the line number is within the file (a small inline python check); (2) verify coverage — every fidelity point and baptism name from 00_authorities.md appears in the reconciliation record, every zone card is accounted for in a register or in Scartate; (3) fix what is auto-fixable, re-check. Then run `pytest tests/ -q` (must be green — asserts no experiment residue from Phase 3) and confirm `git status --porcelain` shows only `.phased/` changes. Write `review.md` with three sections: **Auto-fixed** (file, what), **Flagged for human** (file, description, suggested action), **Final state** (reference-check output, suite result, files reviewed).
   - Done: `review.md` exists in the plan directory with the three sections; every `file:line` reference in the audit files resolves; `pytest tests/ -q` passes; `git status --porcelain` clean after the phase commit.
+  > Done: `review.md` written with the three sections (Auto-corretto, Segnalato al
+  > titolare, Stato finale). Three checks executed, not read: (1) reference
+  > resolution — **641 `file:line` references, 0 unresolved** against the current
+  > tree, range and comma forms included; (2) coverage — F1..F6 all in the
+  > reconciliation record, all 10 baptism symbols there, all 36 ebook claims
+  > accounted for (7 carded, 18 confirmed in zone, 11 in §5), **59/59 zone cards
+  > resolve in a register or in Scartate**, 46 verdict slots and **0 non-empty**;
+  > (3) a semantic anchor check (185 `symbol` + `file:line` pairs: the symbol must
+  > sit within ±12 lines or the anchor must fall inside a def of that name) —
+  > 4 flagged, all four explained and correct, 0 to fix.
+  > Auto-fixed 9 items, all one species: **a numeral contradicting its own
+  > tree-verified anchor list**. Six caller counts (`recycle_worker`'s test callers
+  > sette→otto in zone_tests and the ledger; `worker_time_to_limit`'s sette→otto in
+  > both; `settled_at`'s 17→16 in both — the 17 came from a `grep -c` that counted
+  > the definition line), one card count (zone_recycling_code's Conteggio said 32
+  > while its own enumeration, its 33 headings, its 33 verdict slots and the
+  > ledger's 37+24=61 arithmetic all say 33), and two form fixes in zone_tests
+  > (a "quattro membri" announcing four and listing five; the Conteggio's "14
+  > schede" for a file holding 12 cards + 2 cross-cutting conclusions). No card
+  > substance, finding or verdict touched.
+  > Decided without asking (unattended): `review.md` is written in Italian — its
+  > "Segnalato al titolare" section is read next to the Italian registers at the
+  > walkthrough, matching the audit deliverables; the plan, commits and notes stay
+  > English per policy.
+  > Also decided: the "14 schede" fix stops at the deliverable. Phase 3's `> Done:`
+  > note still says 14 and was left untouched — closed phases' notes are outside
+  > this phase's `Files:`. Flagged as item 1 for the owner instead.
+  > Also decided: the 11 never-carded ebook claims (§5) were NOT turned into cards
+  > — that is new audit work, not a coherence fix. The review confirms the gap and
+  > hands it to the walkthrough as a perimeter call, alongside L1 and R4.
+  > Suite 1569 passed / 2 skipped, `ruff check .` clean, `git status --porcelain`
+  > only under `.phased/`. No source or test file touched in this phase, and none
+  > left modified by the whole run.
+  > Verify: at walkthrough — item 1 of "Segnalato al titolare" is the only fix that
+  > moved a headline number (14 → 12 schede in zone_tests); the owner confirms the
+  > reading, or finalize aligns phase 3's note.
+  > Files: .phased/active/17-design-audit/review.md,
+  > .phased/active/17-design-audit/audit/zone_tests.md,
+  > .phased/active/17-design-audit/audit/zone_recycling_code.md,
+  > .phased/active/17-design-audit/audit/slimming_ledger.md,
+  > .phased/active/17-design-audit/plan.md
 
 ## Notes
 - The run STOPS at the cards. Verdicts are the owner's, given at a walkthrough
