@@ -90,7 +90,7 @@ English.
   > Files: .phased/active/17-design-audit/audit/zone_recycling_code.md,
   > .phased/active/17-design-audit/plan.md, .phased/active/17-design-audit/notes.md
 
-- [ ] **Phase 3**: Zone reading — the tests that cement
+- [x] **Phase 3**: Zone reading — the tests that cement
   - Pattern reference: `temp/audit_essenzialita_2a_2026-08-01.md` (verdict style); method is the issue's own: strip the code, see which tests fall
   - Files: `.phased/active/17-design-audit/audit/zone_tests.md` (new); read-only: `tests/test_spa_move.py`, `tests/test_spa_commander.py`, `tests/test_spa_evaluator.py`, `tests/test_spa_monitor.py`, `audit/zone_recycling_code.md`; transiently modified and restored: `src/genro_asgi/spa/commander.py`, `src/genro_asgi/spa/evaluator.py`
   - Decisions:
@@ -100,6 +100,40 @@ English.
     - A test asserting behaviour for an unreachable state is itself a slimming-ledger candidate: the card proposes the pair removal, not the test alone.
   - Details: Read `audit/zone_recycling_code.md` for the species-1 defense cards. For each: perform the strip experiment as decided above, write one card — guard (file:line), tests that fell (test file::test name), reachability verdict proposal, pair-removal proposal. Also sweep the four test files for tests that only exercise defensive branches (no experiment needed when reading suffices — say so on the card). Write `audit/zone_tests.md`. Before finishing: `git status --porcelain` must show changes only under `.phased/`, and the full suite must be green.
   - Done: `audit/zone_tests.md` exists with one card per species-1 defense from Phase 2 (each naming the falling tests or stating "no test falls — the defense is uncemented") plus the LocalPool.settled card; `git status --porcelain` shows changes only under `.phased/`; `pytest tests/ -q` passes.
+  > Done: `audit/zone_tests.md` written — 14 cards, every verdict slot EMPTY: 7 strip
+  > experiments (T-D1..T-D7, one per species-1 defense D1..D7), 1 section B recording D8's
+  > six necessary guards as deliberately not stripped, 1 hygiene card (`LocalPool.settled`),
+  > 3 reading-sweep cards (TS1..TS3). 63 `file:line` references, all verified to resolve
+  > against the current tree by an inline python check.
+  > Experiment outcome: **five of seven defenses are completely uncemented** — stripping
+  > D2 (commander.py:3132-3133), D3 (3127-3129), D4 (3084 `since is None`), D5
+  > (evaluator.py:318 `or []`) or D6 (commander.py:2591 isinstance) leaves 249/249 spa
+  > tests passing. D1 fells exactly one test
+  > (test_spa_move.py::test_the_in_process_worker_is_never_recycled, and only its second
+  > half — the two options of D1 cost half of it each, never both); D7 fells exactly one
+  > (test_spa_evaluator.py::test_floor_velocity_is_none_when_no_pair_is_separated_in_time,
+  > which writes eight samples sharing one `time.time()` reading).
+  > Decided without asking (unattended): D4 and D7 were stripped INTO a loud
+  > `AssertionError` rather than out — a removed silent `return` proves nothing, since the
+  > suite passes either way; the raise makes any test reaching the branch explode, so
+  > silence becomes evidence of unreachability. D4 stayed silent, D7 exploded.
+  > Also decided: T-D7 offers only "keep" or "make it loud here", not "remove" — without
+  > the `return None` at evaluator.py:292-293, `max(velocity, accelerated)` at
+  > evaluator.py:298 would compare None with a float, a loud error three lines from its
+  > cause. Phase 5 must not write a removal proposal that cannot be executed.
+  > Also decided: the `LocalPool.settled` item is recorded as a no-removal card (second
+  > confirmation after phase 1) — `LocalPool` (tests/test_spa_move.py:149-189) has no
+  > `settled`, the live `settled_at` (tests/test_spa_move.py:78) has 17 callers, and the
+  > `process=None` convention is still admitted by `new_roster_row` (commander.py:976) and
+  > read at commander.py:863, 1089, 1136. The card hands phase 5 its "Scartate" motivation.
+  > Every experiment restored the original file text byte for byte. Suite 1569 passed /
+  > 2 skipped, `ruff check .` clean, `git status --porcelain` only under `.phased/`.
+  > No source or test file left modified.
+  > Verify: at walkthrough — the 14 cards are proposals with empty verdicts; the owner's
+  > call on each, one at a time. (The hook quirk phase 2 flagged did not recur: this
+  > phase's commit landed from the unattended session, 27aaa62.)
+  > Files: .phased/active/17-design-audit/audit/zone_tests.md,
+  > .phased/active/17-design-audit/plan.md, .phased/active/17-design-audit/notes.md
 
 - [ ] **Phase 4**: Zone reading — the spa world vs the ebook  `vast`
   - Pattern reference: `temp/audit_fedelta_2a_2026-08-02.md` (disagreement-as-finding table)

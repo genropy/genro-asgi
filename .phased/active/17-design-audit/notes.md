@@ -44,3 +44,45 @@ list (commander.py:304-321) while the tests import it
 where an undeclared public name belongs. And the same constant times three
 unrelated things (503 window, recycle re-pick gate, stall-report throttle),
 which is C3's whole subject.
+
+---
+
+## Phase 3 — Zone reading: the tests that cement
+
+**Five of seven species-1 defenses are uncemented.** The strip experiments
+answered the phase's own question with numbers: removing D2, D3, D4, D5 or D6
+breaks no test at all (249 passed each time). Only D1 and D7 have a test
+apiece, and both of those tests construct by hand a scenario production cannot
+produce — a faked in-process worker called directly (tests/test_spa_move.py:2462-2467)
+and eight floor samples sharing one `time.time()` reading
+(tests/test_spa_evaluator.py:518-521). That is the shape of the finding: the
+guards were not added because a test demanded them.
+
+**D4 and D7 were stripped INTO a loud error, not out.** Removing a `return`
+that silences a branch proves nothing — the test suite would pass either way.
+Replacing it with an `AssertionError` makes any test that reaches the branch
+explode, so silence is evidence of unreachability rather than absence of
+assertion. D4 stayed silent (uncemented); D7 exploded, naming its one test.
+
+**D7 has no "remove" option, and the card says so.** Without the `return None`
+at evaluator.py:292-293, `max(velocity, accelerated)` at evaluator.py:298 would
+compare None with a float — a loud error, but three lines away from its cause.
+The card offers only "keep" or "make it loud here", so phase 5 does not write a
+removal proposal that cannot be executed.
+
+**The `LocalPool.settled` hygiene item has no referent (second confirmation).**
+Phase 1 recorded it as a claim to verify; phase 3 was to locate it. It is not
+there: `LocalPool` (tests/test_spa_move.py:149-189) has no `settled`; the live
+helper `settled_at` (tests/test_spa_move.py:78) has 17 callers; and the only
+`None` convention the class uses — `process=None` — is still admitted by
+`new_roster_row`'s signature (commander.py:976) and read in three live places
+(commander.py:863, 1089, 1136). Recorded as a no-removal card that hands
+phase 5 the "Scartate" motivation, since a hygiene item that cannot be located
+must land somewhere rather than evaporate.
+
+**A defensive-looking test is not automatically a ledger entry.** The reading
+sweep found three families that look like species 2 and are not: the loud-error
+contract tests (tests/test_spa_commander.py:393-410) are the house rule's own
+test face, and the "unknown worker" tests of the observers guard a window that
+tests/test_spa_monitor.py:130 documents as real. They are recorded as non-entries
+so phase 5 does not mistake them for cementing tests.
