@@ -301,7 +301,9 @@ serie intera, `evaluator.py:296` sulla metà recente) e un test
 né la robustezza) · `floor_climb_rate` · `floor_trend_per_hour`.
 **Nota**: il BRIEF §7 battezza solo `worker_floor_velocity` (brief:266); questo
 è il gradino sotto, e `slope` è l'unica parola del gruppo che non porta l'unità.
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): si tiene.** Non è della
+famiglia removal, e con R5 la previsione è strumento di osservazione: il nome
+va bene lì dove sta.
 
 ### R8 ← N2 · `wait_worker_ready(name)` · `commander.py:3159`
 **Semantica**: attende che **quel** worker passi ad `active`, polling a 20ms e
@@ -328,7 +330,9 @@ prima chi non ha chiamate in `pending`, poi gli altri.
 (`commander.py:3059`) — non è più solo del drenaggio.
 **Candidati**: `drain_order` (tenere — l'evacuazione *è* un drenaggio) ·
 `departure_order` · `idle_first_users`.
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): entra nella famiglia
+«removal» (R6)** — si ribattezza alla run di fix sul corpo riscritto
+(candidato naturale: `removal_order`).
 
 ### R10 ← N4 · `advance_evacuations()` · `commander.py:3025`
 **Semantica**: **non muove nessuno**. Scorre le righe `evacuating`, ritira
@@ -340,7 +344,10 @@ sincrona, per battito.
 evacuazioni già finite. È la trappola dell'omonimia già vista in wf#4.
 **Candidati**: `close_finished_evacuations` · `settle_evacuations` ·
 `review_evacuations`.
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): il metodo viene riscritto
+da L1** — diventa la contabilità di battito con la scadenza che agisce
+(ritira i vuoti, forza la migrazione degli scaduti). Si battezza alla run di
+fix, nel vocabolario removal (R6).
 
 ### R11 ← N5 · `evacuation_pass(worker)` · `commander.py:3044`
 **Semantica**: la passata di **apertura** — muove ora solo gli utenti senza
@@ -353,7 +360,9 @@ flag; questa sta dentro `recycle_worker` e non ha flag proprio — la simmetria 
 nome promette una simmetria di meccanica che non c'è.
 **Candidati**: `evacuation_pass` (tenere — «pass» è il vocabolario in uso) ·
 `evacuate_the_idle` · `open_evacuation`.
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): il metodo viene riscritto
+da R17/L1** (passata d'apertura della removal, dentro il piano). Si battezza
+alla run di fix, nel vocabolario removal (R6).
 
 ### R12 ← N6 · `evacuate_user(user, worker)` · `commander.py:2243`
 **Semantica**: porta via **un** utente appena liberatosi da un worker in
@@ -364,7 +373,10 @@ rumoroso e il client rifà login.
 **Il problema**: «evacuare un utente» suggerisce che l'utente esca dal sistema;
 esce dal **worker**.
 **Candidati**: `evacuate_user` (tenere) · `carry_user_out` · `move_freed_user`.
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): entra nella famiglia
+«removal» (R6)** — si ribattezza alla run di fix sul corpo riordinato da R17;
+attenzione alla collisione già sciolta: l'oblio dalla superficie è `drop_user`
+(vocabolario legacy), il trasloco è removal.
 
 ### R13 ← N7 · `warn_stalled_evacuation(worker)` · `commander.py:3073`
 **Semantica**: emette un WARNING quando un'evacuazione è aperta da più di
