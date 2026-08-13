@@ -86,3 +86,56 @@ contract tests (tests/test_spa_commander.py:393-410) are the house rule's own
 test face, and the "unknown worker" tests of the observers guard a window that
 tests/test_spa_monitor.py:130 documents as real. They are recorded as non-entries
 so phase 5 does not mistake them for cementing tests.
+
+## Phase 4
+
+**The ebook's per-module numbers are STATEMENTS, not lines — and the plan's own
+prediction was wrong about it.** 00_authorities:360-363 warned phase 4 to expect
+a count drift, offering "commander.py è oggi 3183 righe" as evidence. The book's
+table header reads `Modulo · Ruolo · Stmt · Cov`
+(docs/html/architettura_blocchi.html:610), so the figures are coverage.py
+statement counts: measured today, nine of ten modules match to the digit
+(worker.py 782, register_registry 146, evaluator 124, global_store 75,
+worker_entry 69 at 72%, register 66, environ 60, subscription_index 44) and only
+commander.py moved, 1209 → 1212, taking the block total 2.580 → 2.583. The card
+records the +3 and the method correction together, because a reader who inherits
+the wrong reading will "fix" numbers that are already right.
+
+**A claim can be true of what travels and false of what is stored.** E22 ("i
+registri contengono dati serializzabili per costruzione, mai oggetti vivi come
+verità") is upheld by the move machinery — MOVE_REBUILT_FIELDS
+(worker.py:341-343) and LIVE_ROW_FIELDS (worker.py:333-337) keep every live
+object out of the parcel and out of every op result — and contradicted by the
+rows themselves: a page row carries `collector`/`user_view`
+(register_registry.py:308-324) and a roster row carries `process`/`caretaker`
+(commander.py:29-31, 976). Recorded as a disagreement whose option (a) is
+explicitly "no code": the alternative would be the opposite of the ratified
+design, and the register whose rows hold OS handles is never serialized at all.
+
+**Two ebook claims describe the same window and disagree with each other.** E4
+says a request arriving mid-move "deve attendere, non fallire"; E14 says the
+person "continua a essere servita dove si trova". The code parks the call on the
+per-user barrier (commander.py:2087, 2617-2624) and releases it at
+commander.py:2612-2615: waiting is right, "being served" is not. The card is
+filed against the book, not the code — there is nothing to implement — so that
+phase 5 does not open a work entry for it.
+
+**Where the audit found real holes, it named the delivered guarantee instead of
+the missing one.** E4's second clause and E21's lifecycle clauses are the two
+genuine absences. For E4 the point is not that a rollback is missing but that
+the evict is the point of no return (worker.py:2251), so what the system
+actually promises is "the slice lands somewhere or dies loudly"
+(commander.py:2481-2498, 2603-2610). Stating the delivered guarantee is what
+lets the owner choose option (b) — amend the book — with the same confidence as
+option (a).
+
+**Lens 2 on this zone produced proposals, and two deliberate non-proposals.**
+SD1..SD5 are five species-1 candidates, each with its coverage evidence (37 of
+worker.py's 782 statements are unexecuted, and the never-run branches are named
+line by line). SI1 (`Outbox.ping_now`, worker.py:440-443) is the zone's one pure
+dead surface: no caller in src/, one test asserting it. SI2 refuses to propose
+removing the three `RegisterRegistry` one-line forwarders — the module docstring
+declares them an extension seam (register_registry.py:48-61) for a consumer that
+lives in another repo — and SI4 records `holds_target` as an examined keep. A
+zone audit that only proposes deletions teaches the next reader that everything
+thin is waste.

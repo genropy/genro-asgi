@@ -1,0 +1,3 @@
+✓ Phase 3 completed: Zone reading — the tests that cement
+
+Seven strip experiments ran against the species-1 defenses from Phase 2, each restored byte-for-byte; five of the seven (D2, D3, D4, D5, D6) turn out completely uncemented — no test falls — while D1 and D7 fell one test each, both constructing a scenario production cannot produce. The `LocalPool.settled` hygiene item has no referent in the tree (second confirmation): the card proposes no removal and hands Phase 5 its "Scartate" motivation. Suite 1569 passed / 2 skipped, `ruff check .` clean, tree carries only `.phased/` changes.

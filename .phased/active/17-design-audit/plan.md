@@ -135,7 +135,7 @@ English.
   > Files: .phased/active/17-design-audit/audit/zone_tests.md,
   > .phased/active/17-design-audit/plan.md, .phased/active/17-design-audit/notes.md
 
-- [ ] **Phase 4**: Zone reading — the spa world vs the ebook  `vast`
+- [x] **Phase 4**: Zone reading — the spa world vs the ebook  `vast`
   - Pattern reference: `temp/audit_fedelta_2a_2026-08-02.md` (disagreement-as-finding table)
   - Files: `.phased/active/17-design-audit/audit/zone_spa_world.md` (new); read-only: `src/genro_asgi/spa/worker.py`, `src/genro_asgi/spa/worker_entry.py`, `src/genro_asgi/spa/register.py`, `src/genro_asgi/spa/register_registry.py`, `src/genro_asgi/spa/subscription_index.py`, `src/genro_asgi/spa/global_store.py`, `src/genro_asgi/spa/environ.py`, `src/genro_asgi/spa/__init__.py`, `audit/00_authorities.md`
   - Decisions:
@@ -144,6 +144,41 @@ English.
     - worker.py was NOT touched by wf#8 (verified at planning) — drift here is ebook-vs-code, not brief-vs-code; do not re-audit it against the brief.
   - Details: Read the ebook claims inventory, then the eight modules. For each ebook claim about these modules: confirm with file:line or write a disagreement card (book says X — section; code does Y — file:line; options: adapt code / amend book). For lens 2: one card per impossible-scenario defense or meaningless indirection found, same card format as Phase 2. Write `audit/zone_spa_world.md`.
   - Done: `audit/zone_spa_world.md` exists; every ebook claim tagged `spa-world` in 00_authorities.md is either confirmed (with file:line) or has a disagreement card; every card carries a `file:line`; `git status --porcelain` shows changes only under `.phased/`.
+  > Done: `audit/zone_spa_world.md` written — all 25 `spa-world` claims accounted for
+  > (checked programmatically against 00_authorities §4): 18 confirmed with anchors,
+  > 7 disagreement cards (E4, E14, E21, E22, E26, B1, B7), plus 9 lens-2 cards
+  > (SD1..SD5 species-1 defenses, SI1..SI4 species-3 indirections). 16 verdict slots,
+  > every one EMPTY. 168 `file:line` references, all verified to resolve against the
+  > current tree by an inline python check; no card is without one.
+  > Substantive outcome: **B1's numbers are not the drift phase 1 predicted** — the
+  > ebook column is `Stmt` (coverage statements), not physical lines, so nine of ten
+  > modules match to the digit and the only real drift is +3 statements in
+  > commander.py (block total 2.580 → 2.583). The two genuine holes are E21 (the
+  > lifecycle clauses — status, birth, death-and-how — have no implementation:
+  > `population()` returns id/group/error/users/connections/pages and walks only
+  > active workers, commander.py:1976-2006) and E4's second clause (after the evict
+  > there is no "stays where it was": the source strips itself at worker.py:2251, so
+  > the guarantee is salvage-or-loud-error, and a user swept mid-custody is discarded,
+  > commander.py:2481-2498).
+  > Decided without asking (unattended): E14 and E22 are recorded as DISAGREEMENT
+  > cards even though neither asks for a code change — E14 because the ebook
+  > contradicts itself (E4 says the call waits, E14 says the person keeps being
+  > served), E22 because the claim is true of what travels and false of the register
+  > rows, which hold live objects by design (page `collector`/`user_view`, roster
+  > `process`/`caretaker`). Both carry option (a) "no code" explicitly so phase 5
+  > cannot read them as work.
+  > Also decided: SI2 (the three one-line `RegisterRegistry` forwarders with no
+  > in-repo caller) proposes NO removal — the module docstring declares them an
+  > extension seam for genropy-asgi; the card hands phase 5 its "Scartate"
+  > motivation. SI4 (`holds_target`) is a deliberate "keep", recorded so the case
+  > reads as examined rather than missed.
+  > Suite 1569 passed / 2 skipped, `ruff check .` clean, `git status --porcelain` only
+  > under `.phased/`. No source or test file touched (no strip experiments in this
+  > phase, per the plan).
+  > Verify: at walkthrough — the 16 cards are proposals with empty verdicts; the
+  > owner's call on each, one at a time.
+  > Files: .phased/active/17-design-audit/audit/zone_spa_world.md,
+  > .phased/active/17-design-audit/plan.md, .phased/active/17-design-audit/notes.md
 
 - [ ] **Phase 5**: Consolidation — the two registers
   - Pattern reference: `temp/audit_essenzialita_2a_2026-08-01.md` §G "Sintesi — TUTTI I VERDETTI" (the ratifiable-list shape, but with verdicts EMPTY)
