@@ -577,10 +577,16 @@ class UserStickyCommander:
         # the barrier every forward of that user parks on until it lands. Since
         # the login stopped shipping (2026-08-12) this is the ONLY hold there is.
         self.moving: dict[str, asyncio.Event] = {}
-        # One handover at most is in flight toward a worker (users arrive
-        # minutes apart): worker -> when its unanswered add_user CALL left.
+        # One handover at most is in flight toward a worker — BY CONSTRUCTION,
+        # not by assumption (issue #15: an evacuation's burst of call-close
+        # moves all aims at one compaction target): worker -> when its
+        # unanswered add_user CALL left.
         # Written and cleared by hand_user_to, read by the caretaker (#9).
         self.pending_users: dict[str, float] = {}
+        # The removalist of each destination: one delivery at a time per
+        # worker — hand_user_to queues on it. Minted on first delivery,
+        # buried with the roster row.
+        self.removalists: dict[str, asyncio.Lock] = {}
         # The beat's three forces, one flag each: a pass in flight is never
         # doubled (one pool, one pass), and the task set is what keeps it alive.
         # When a recycling's replacement failed to register the pool cannot
@@ -893,6 +899,7 @@ class UserStickyCommander:
                 counters.get("seconds", 0.0),
             )
             del self.worker_roster[name]
+            self.removalists.pop(name, None)
 
     async def caretaker(self, name: str) -> None:
         """Probe ONE worker on its own cadence, forever — the legacy per-child beat.
@@ -2527,29 +2534,35 @@ class UserStickyCommander:
         """Deliver one user's encoded slice to ``worker`` and await its answer.
 
         The single door of the ``add_user`` handover — the move's custody and
-        the dump restore both pass through here — so
-        ``pending_users`` always knows which worker is sitting on a delivery
-        and since when: that is what the caretaker's second eye reads. The
-        entry falls with the answer, whatever the answer is.
+        the dump restore both pass through here. One delivery at a time per
+        destination: the worker's REMOVALIST (its lock in ``removalists``)
+        queues the deliveries, so ``pending_users`` holds at most one entry
+        per worker BY CONSTRUCTION and the caretaker's second eye reads an
+        exact clock — the entry is written when the CALL actually leaves
+        (time spent queueing is never "sitting on a delivery") and falls with
+        the answer, whatever the answer is. The serving guard is read AFTER
+        the queue, so a delivery that waited its turn sees the destination's
+        CURRENT status, not the one it entered the queue with.
         """
-        entry = self.worker_roster.get(worker)
-        if entry is None or entry["status"] not in ("active", "evacuating"):
-            # The rare landing race, ACCEPTED (probability-weighted rule,
-            # 2026-08-12): a delivery decided an instant before its target
-            # stopped serving fails HERE, loudly — the caller errors, the
-            # client retries, and by then the surface names a living worker.
-            # No machinery covers the window; what is forbidden is landing a
-            # slice on a worker under SIGTERM and telling the client "done".
-            raise RuntimeError(f"worker {worker!r} is not serving: cannot deliver {user}")
-        path = f"{OP_PATH_PREFIX}add_user"
-        self.pending_users.setdefault(worker, time.time())
-        try:
-            payload = await self.hub.call(
-                worker, path, {"identity": user, "kwargs": {"encoded": encoded}}
-            )
-            return await self.unwrap_reply(worker, path, payload)
-        finally:
-            self.pending_users.pop(worker, None)
+        async with self.removalists.setdefault(worker, asyncio.Lock()):
+            entry = self.worker_roster.get(worker)
+            if entry is None or entry["status"] not in ("active", "evacuating"):
+                # The rare landing race, ACCEPTED (probability-weighted rule,
+                # 2026-08-12): a delivery decided an instant before its target
+                # stopped serving fails HERE, loudly — the caller errors, the
+                # client retries, and by then the surface names a living worker.
+                # No machinery covers the window; what is forbidden is landing a
+                # slice on a worker under SIGTERM and telling the client "done".
+                raise RuntimeError(f"worker {worker!r} is not serving: cannot deliver {user}")
+            path = f"{OP_PATH_PREFIX}add_user"
+            self.pending_users[worker] = time.time()
+            try:
+                payload = await self.hub.call(
+                    worker, path, {"identity": user, "kwargs": {"encoded": encoded}}
+                )
+                return await self.unwrap_reply(worker, path, payload)
+            finally:
+                self.pending_users.pop(worker, None)
 
     async def install_in_custody(self, user: str, target: str, encoded: str) -> str:
         """Plant the parcel, re-deciding the room until one takes it.

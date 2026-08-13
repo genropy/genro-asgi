@@ -1737,6 +1737,84 @@ async def test_hand_user_to_clears_its_entry_whatever_the_answer(pool: Any) -> N
     assert commander.pending_users == {}
 
 
+async def test_deliveries_toward_one_worker_queue_on_its_removalist() -> None:
+    """One delivery at a time per destination (#15): the burst serializes.
+
+    An evacuation's call-close moves all aim at one compaction target: launched
+    together, only the first leaves — the queued one never appears in
+    ``pending_users`` (queueing is not "sitting on a delivery") — and the
+    second departs only once the first has answered.
+    """
+    running = LocalPool()
+    await running.start(1)
+    try:
+        commander = running.commander
+        target = running.names[0]
+        gate = asyncio.Event()
+        order: list[tuple[str, str]] = []
+
+        async def gated_call(
+            worker: str, path: str, payload: Any, timeout: Any = None
+        ) -> dict[str, Any]:
+            order.append(("start", payload["identity"]))
+            await gate.wait()
+            order.append(("end", payload["identity"]))
+            return {"result": "installed"}
+
+        commander.hub.call = gated_call  # type: ignore[method-assign]
+        first = asyncio.ensure_future(commander.hand_user_to(target, "anna", "blob-a"))
+        second = asyncio.ensure_future(commander.hand_user_to(target, "bruno", "blob-b"))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert order == [("start", "anna")]
+        assert target in commander.pending_users
+        gate.set()
+        assert await first == "installed"
+        assert await second == "installed"
+        assert order == [
+            ("start", "anna"),
+            ("end", "anna"),
+            ("start", "bruno"),
+            ("end", "bruno"),
+        ]
+        assert commander.pending_users == {}
+    finally:
+        await running.stop()
+
+
+async def test_a_queued_delivery_reads_the_destinations_current_status() -> None:
+    """The serving guard runs AFTER the queue (#15): a mid-queue death is loud.
+
+    The destination stops serving while the second delivery waits its turn:
+    the first CALL had already left and completes, the queued one re-reads the
+    roster and errors instead of landing a slice on a dead worker.
+    """
+    running = LocalPool()
+    await running.start(1)
+    try:
+        commander = running.commander
+        target = running.names[0]
+        gate = asyncio.Event()
+
+        async def gated_call(
+            worker: str, path: str, payload: Any, timeout: Any = None
+        ) -> dict[str, Any]:
+            await gate.wait()
+            return {"result": "installed"}
+
+        commander.hub.call = gated_call  # type: ignore[method-assign]
+        first = asyncio.ensure_future(commander.hand_user_to(target, "anna", "blob-a"))
+        second = asyncio.ensure_future(commander.hand_user_to(target, "bruno", "blob-b"))
+        await asyncio.sleep(0)
+        commander.worker_roster[target]["status"] = "dead"
+        gate.set()
+        assert await first == "installed"
+        with pytest.raises(RuntimeError, match="not serving"):
+            await second
+    finally:
+        await running.stop()
+
+
 async def test_a_rebalance_already_in_flight_is_never_doubled(
     commander: UserStickyCommander,
 ) -> None:
