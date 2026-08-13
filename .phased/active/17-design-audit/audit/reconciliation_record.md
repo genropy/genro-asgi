@@ -269,6 +269,18 @@ dieci nomi sono battezzati voce per voce (R7..R16); dei tre nomi del pannello
 di finalize non sopravvive nulla: `RECYCLE_RETRY_SECONDS` muore con L4, e
 `abandon_recycle`/`recycle_failed_at` cadono col concetto stesso di
 condizione persistente (R14 — punto 3 delle NOTES superseduto a verbale).
+**Regola di vocabolario (stessa intervista): una parola sola — «removal» —
+per tutta la storia dello svuotamento di un condannato**: lo stato di riga,
+la passata, l'ordine di uscita (`drain_order` → famiglia removal), il
+trasferimento del singolo utente (`evacuate_user` → famiglia removal), in
+fila con `removal_started_at` (R15). I battesimi puntuali avvengono alla run
+di fix sui corpi riscritti, dentro questo vocabolario. **Collisione sciolta (stessa intervista)**: l'esistente `remove_user`
+(commander) significa «dimentica dalla superficie», non trasloco — diventa
+**`drop_user`**, il vocabolario del legacy verificato sul repo
+(siteregister.py:595, con la famiglia coerente `drop_page`,
+`drop_connection`). Due parole, due concetti: **removal** = trasloco fuori da
+un condannato, **drop** = oblio dalla superficie. `floor_slope` non è della
+famiglia e si tiene.
 
 ---
 
@@ -648,7 +660,11 @@ Tutte le docstring candidate sono coerenti col proprio codice.
 da un lavoro precedente all'issue; (b) se il titolare ricorda un quinto testo,
 la scheda si riapre nominandolo.
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): SUPERATA.** La frase da
+correggere non esiste nell'albero (cercata in tre fasi indipendenti; tutte le
+docstring candidate sono coerenti col proprio codice) — era con ogni
+probabilità il ricordo di una versione precedente, già sistemata prima
+dell'issue. Si riapre solo nominando il testo esatto.
 
 ---
 
@@ -683,7 +699,26 @@ da esecuzione. **Opzioni**: (a) il titolare le dichiara fuori perimetro (il
 libro sul riciclo si rigenererà dopo la run di fix); (b) diventano il perimetro
 di una fase di verifica successiva.
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): triage completato in
+intervista, nessuna resta cieca.**
+- **Chiuse ora, verificate con misure fresche (4)**: E2 (il file dello
+  spostamento è tuttora il più esercitato: 121 casi misurati vs 119), B9
+  (51/60/121 vs 47/60/119 — commander esatto), B8 (le costanti PROVISIONAL
+  esistono, àncore slittate di 1-2 righe; la «configurazione per gruppo»
+  attesa è quella decisa oggi in R5), E25 (esatta alla lettera:
+  `metrics_view` a commander.py:1919, nessuna traccia di formato Prometheus).
+- **Superate dalle decisioni di oggi (4)**: E16, E23, E24, B6 — descrivono il
+  ricambio fondato sulla previsione del tempo-al-limite, che R5 ha declassato
+  a strumento: quei capitoli si riscrivono alla rigenerazione, non si
+  verificano.
+- **In coda alla run di fix (3)**: E15, E17, E18 — la sostanza regge anche nel
+  disegno nuovo, ma le zone (riequilibrio, compattazione, sonda) vengono
+  riscritte dal piano: la verifica alla lettera si fa sul codice nuovo, nella
+  stessa passata che rigenera il libro.
+**Regola di rigenerazione (dettata dal titolare)**: nella prosa i numeri
+volatili si scrivono arrotondati — «oltre 120 test», mai «119 casi» — e le
+cifre esatte vivono solo nelle tabelle di stato, rimisurate a ogni
+rigenerazione.
 
 ---
 
