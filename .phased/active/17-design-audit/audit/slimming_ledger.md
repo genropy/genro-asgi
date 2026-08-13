@@ -182,7 +182,12 @@ pacate: l'attributo, il timbro, il controllo in `worker_for` e il gate in
 `RECYCLE_RETRY_SECONDS` non è nemmeno in `__all__`), **oppure** ratificare il
 riuso dichiarandolo nel BRIEF.
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): la costante muore intera.**
+Lavoro 3 (freno all'avviso di stallo) caduto con L1; lavoro 1 (finestra del
+503) caduto con la supersessione del punto 3 delle NOTES (R14: il 503 è una
+risposta per-richiesta, non uno stato); lavoro 2 (freno alle ricondanne)
+assorbito dalla cadenza del planner (R1). Con lei si dissolve la questione
+`__all__` (R6). Il test che la importa si riscrive nella run di fix.
 
 ## L5 ← I1 · I tre `trigger_*` gemelli
 **Leva stimata**: 27 righe → ~8, o zero.

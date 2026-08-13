@@ -215,7 +215,18 @@ rotazione, il piano prende dal più sprecone quando c'è ampiezza; (3)
 spegne senza rimpiazzo, rispettando un minimo di parco (il portiere resta
 sempre) ed eventuale attesa di grazia; e la compattazione è anche attiva —
 **parte sempre dal processo più vuoto e cerca di togliergli gli ultimi
-utenti** (destinazione a best-fit come da R4), così da liberarlo e spegnerlo. Il «tetto a orologeria» resta
+utenti** (destinazione a best-fit come da R4), così da liberarlo e spegnerlo.
+**Addendum (stessa intervista) — i rifiuti come segnale**: il conteggio dei
+503 d'ingresso in una finestra di tempo è un allarme di **capacità del
+pool**, non di salute di un worker: dove il contesto di deploy ha la
+gerarchia multi-macchina (parte 3 del libro), il commander scala fuori
+creando/chiedendo un **sub-commander**; dove non c'è gerarchia, nessuna
+meccanica — il segnale resta visibile nella fotografia (R19) e la decisione
+è umana. Gli **errori del singolo worker** sono invece un grilletto: troppi
+in una finestra di tempo (richieste fallite, operazioni rifiutate, risposte
+che non tornano) → marcato morente, percorso di rimozione standard — seconda
+voce della *necessità*, accanto alla memoria e coerente con l'installazione
+fallita (R17). Soglie e finestra: run di fix. Il «tetto a orologeria» resta
 rifiutato: la frequenza di rotazione attesa (~4-5 ore) è l'effetto dello
 spreco che si accumula, mai una scadenza di calendario. La serie dei
 pavimenti, la tendenza e il «mancano X» restano come **strumento di
@@ -253,7 +264,11 @@ condizione è del pool, non di un worker, quindi la differenza da ratificare non
 **Legato a**: ledger L4 (`RECYCLE_RETRY_SECONDS` che fa tre lavori con lo
 stesso numero).
 
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): chiusa per rimando.** I
+dieci nomi sono battezzati voce per voce (R7..R16); dei tre nomi del pannello
+di finalize non sopravvive nulla: `RECYCLE_RETRY_SECONDS` muore con L4, e
+`abandon_recycle`/`recycle_failed_at` cadono col concetto stesso di
+condizione persistente (R14 — punto 3 delle NOTES superseduto a verbale).
 
 ---
 
@@ -288,7 +303,11 @@ male ad alta voce.
 `wait_worker_ready` accettando la vicinanza al plurale.
 **Legato a**: ledger L21 (i corpi delle due attese sono duplicati; il concetto
 invece è distinto e resta).
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): battezzati entrambi i
+gemelli.** Il singolare diventa **`wait_for_worker`** (attesa del proprio
+rimpiazzo); il plurale diventa **`wait_pool_ready`** (cancello di prontezza
+del parco — la cosa che diventa pronta è il pool, non il commander che
+aspetta). La *s* ambigua sparisce.
 
 ### R9 ← N3 · `drain_order(worker)` · `commander.py:2947`
 **Semantica**: gli utenti della riga ordinati in due scaglioni alfabetici —
@@ -363,7 +382,14 @@ primo REGISTER riuscito (`commander.py:1132-1134`).
 coniato `recycle_failed_at` come campo di riga (NOTES notes:169-171); il codice
 ha fatto un attributo di commander, perché la condizione è del pool. Vedi R6
 opzione (c).
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): l'attributo cade — il
+titolare SUPERSEDE a verbale il punto 3 delle NOTES.** La rigenerazione
+fallita non è più uno stato che dura: **il 503 è una risposta, non una
+condizione** — solo la richiesta che ha trovato il pool incapace di
+accoglierla lo riceve; la successiva ci riprova da capo. Il freno alle nuove
+condanne lo fornisce gratis la cadenza del planner (R1): un passo di piano
+fallito si ritenta alla passata successiva, che rilegge il mondo. Niente
+stato, niente battesimo, niente sede.
 
 ### R15 ← N9 · roster `evacuating_since` · `commander.py:1006` (documentato a 989-992)
 **Semantica**: istante monotonico in cui il riciclo ha messo la riga in
@@ -372,7 +398,12 @@ un'evacuazione stallata (`commander.py:3083-3084`).
 **Candidati**: `evacuating_since` (tenere) · `evacuation_opened_at` ·
 `condemned_at` (allinea al vocabolario del BRIEF, `condemned_workers`,
 brief:269 — vedi R3).
-**Verdetto: —**
+**Verdetto (2026-08-13, intervista col titolare): battezzato
+`removal_started_at`.** Concetto del titolare («la rimozione è iniziata il»),
+vestito nella convenzione della riga di roster (`spawned_at`, `died_at`): il
+ciclo di vita si legge in tre campi — nascita, inizio rimozione, morte. Il
+campo resta il motore della scadenza di sgombero (L1) e la sorgente del
+«in rimozione da quando» della fotografia (R19).
 
 ### R16 ← N10 · roster `evacuation_warned_at` · `commander.py:1007` (documentato a 992)
 **Semantica**: istante dell'ultimo WARNING di stallo, per il throttle
