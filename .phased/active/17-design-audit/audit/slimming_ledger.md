@@ -80,6 +80,13 @@ alla run di fix. La visibilità dello stallo passa alla fotografia del monitor
 (R19: «in sgombero da quando, quanti utenti restano»). Le due porte del BRIEF
 restano il nucleo; la forma finale (fusione L3/L7) si decide nelle voci di
 forma.
+**Emendamento (2026-08-13, review di finalize):** la contabilità di battito
+vive nella **passata del planner** (R1): ritiro dei vuoti e scadenza degli
+sgomberi si applicano a granularità di passata — un processo svuotato può
+restare acceso fino alla passata successiva (costa memoria per minuti, nessun
+utente coinvolto) e la migrazione forzata scatta alla prima passata oltre la
+scadenza. Nessun lavoro di forma torna sulla sonda. Il ritiro-a-vuoto segue
+inoltre la regola di capacità di R5 emendata.
 
 ## L2 ← C2 · La correzione di accelerazione sulla serie dei pavimenti
 **Leva stimata**: ~45 righe → ~15.
@@ -150,6 +157,15 @@ chiamanti.
 **Verdetto (2026-08-13, intervista col titolare): assorbita dalla
 riscrittura.** La famiglia removal (R17 + L1) riscrive entrambi i cicli; la
 politica sugli occupati si decide sul corpo nuovo, alla run di fix.
+**Emendamento (2026-08-13, review di finalize):** **fusione piena, non
+attribuzione.** Svuotare un processo è **un'operazione sola**, qualunque sia
+il motivo (condanna o compattazione): un unico ciclo — scorri gli utenti,
+collocali con la regola di R4, il processo si ritira secondo la regola di
+capacità (R5 emendata) — chiamato sia dalla famiglia removal sia dalla
+passata di compattazione. Unica differenza ammessa: la politica sugli
+occupati (attendi / salta), decisa sul corpo nuovo alla run di fix.
+Motivazione del titolare: «non importa per che ragione uno user trasloca:
+il meccanismo di trasporto non cambia».
 
 ## L4 ← C3 · `RECYCLE_RETRY_SECONDS`: una costante, tre lavori
 **Leva stimata**: ~12 righe con una costante contro il gruppo attuale, e un
@@ -189,7 +205,8 @@ Lavoro 3 (freno all'avviso di stallo) caduto con L1; lavoro 1 (finestra del
 503) caduto con la supersessione del punto 3 delle NOTES (R14: il 503 è una
 risposta per-richiesta, non uno stato); lavoro 2 (freno alle ricondanne)
 assorbito dalla cadenza del planner (R1). Con lei si dissolve la questione
-`__all__` (R6). Il test che la importa si riscrive nella run di fix.
+`__all__` (R6). I due test che la usano (tests/test_spa_move.py:2572, 2690) si riscrivono
+nella run di fix.
 
 ## L5 ← I1 · I tre `trigger_*` gemelli
 **Leva stimata**: 27 righe → ~8, o zero.

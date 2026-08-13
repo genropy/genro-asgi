@@ -94,7 +94,8 @@ fidelity points absent from reconciliation_record: none   (F1..F6)
 baptism names absent from reconciliation_record:   none   (i 10 simboli)
 ebook claims absent from both registers:           none   (36 dichiarate: 7 a scheda,
                                                            18 confermate in zona, 11 in §5)
-zone cards found: 59
+zone cards found: 61 (il contatore d'origine ne vedeva 59: saltava le due
+  schede a livello di sezione di zone_tests — Sezione B e C, entrambe in Scartate)
 unaccounted (neither register nor Scartate): none
 verdict slots: 46; non-empty: 0
 ```

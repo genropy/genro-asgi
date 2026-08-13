@@ -83,6 +83,13 @@ ordinata di passi (riequilibrio → sostituzioni dal peggiore, anche più d'una,
 in sequenza → compattazione), un solo stato piano-in-volo che sostituisce i
 tre flag; un tick che atterra a piano aperto non fa nulla. I tre `trigger_*`
 cadono con lui (ledger L5).
+**Emendamento (2026-08-13, review di finalize):** il «dal peggiore» di Q3b si
+rilegge col vocabolario di R5, che è il metro ratificato: dentro un piano,
+prima le sostituzioni di **necessità** (misure del momento), poi quelle di
+**convenienza**, «dal più sprecone» in giù; la struttura del piano resta
+questa. La previsione del tempo-al-limite resta strumento d'osservazione (R5)
+e `recycle_horizon_hours` si declassa con lei: non condanna più nessuno; se
+sopravviva come parametro del monitor si decide alla run di fix.
 
 ### R3 ← F3 · `designated_reception` per l'accoglienza condannata
 **L'autorità dice** (BRIEF Q4-bis, brief:151-166): «when the plan condemns THE
@@ -124,6 +131,11 @@ ospiti** (la sotto-voce PENDING si chiude: sì, si rilocano, destinazione
 forzata la nuova accoglienza; serve l'op di inventario ospiti sul worker),
 poi gli utenti del vecchio portiere **fino alla capienza concordata** del
 fresco; l'eccedenza si colloca sugli altri con la regola best-fit di R4.
+**Emendamento (2026-08-13, review di finalize):** per il collocamento degli
+utenti del vecchio portiere prevale questo statuto su R4 (che prende la
+clausola speculare). Motivazione del titolare: la regola madre è **non avere
+processi in eccesso** — un portiere appena nato che restasse quasi vuoto
+sarebbe esso stesso l'eccesso.
 
 ### R4 ← F4 · Spawn a libro mastro (`capacity_headroom`)
 **Le due autorità si contraddicono** — è il primo fatto della voce.
@@ -173,6 +185,11 @@ per ogni condanna, inclusa la destinazione marcata morente da
 un'installazione fallita (R17). «Peso» e «ampiezza» si definiscono sulla
 sensoristica di occupazione già ratificata (saturazione per componente) alla
 run di fix.
+**Emendamento (2026-08-13, review di finalize):** «la regola è una sola per
+ogni condanna» prende l'unica eccezione dichiarata: **lo statuto del portiere
+(R3)** — i suoi ospiti e i suoi utenti tornano sul portiere fresco fino alla
+capienza concordata, l'eccedenza best-fit come qui. Non avere processi in
+eccesso prevale sul tenere scarico il fresco.
 
 ### R5 ← F5 · `floor_series_depth` 48 vs 72; minimo di fit 3 vs 6
 **L'autorità dice** (BRIEF Q6, brief:208-223): «Series depth K — default 48
@@ -235,6 +252,16 @@ della necessità; profondità, minimo di fit, correzione d'accelerazione e
 visibilità della costante diventano dettagli dello strumento, da fissare alla
 run di fix senza ratifica solenne. Valori di default delle tre soglie: run di
 fix.
+**Emendamento (2026-08-13, review di finalize):** il grilletto «vuoto» e la
+compattazione obbediscono alla **stessa regola di capacità globale**, che
+sostituisce «minimo di parco» ed «eventuale attesa di grazia»: se la capacità
+residua complessiva scende sotto la soglia di policy nasce un worker anche
+vuoto (capacità di scorta); un worker senza utenti — svuotatosi da sé o
+svuotato dalla compattazione, nessuna differenza — si spegne **solo se la
+capacità residua complessiva resta sufficiente senza di lui**; la soglia che
+autorizza a spegnere sta sopra quella che impone di creare, così lo
+spegni-e-riaccendi è escluso per costruzione (i due valori alla run di fix).
+Il portiere esiste sempre. È la stessa logica capacity-aware del gate di R4.
 
 ### R6 ← F6 · I nomi coniati durante la run e mai ratificati
 **L'autorità dice**: il mandato di battesimo era «reasonable names for a reader
@@ -414,6 +441,15 @@ accoglierla lo riceve; la successiva ci riprova da capo. Il freno alle nuove
 condanne lo fornisce gratis la cadenza del planner (R1): un passo di piano
 fallito si ritenta alla passata successiva, che rilegge il mondo. Niente
 stato, niente battesimo, niente sede.
+**Emendamento (2026-08-13, review di finalize):** confermato che il verdetto
+basta a sé. Il «ready» del rimpiazzo esiste già ed è il REGISTER entro
+scadenza (`wait_worker_ready`, 30s, commander.py:3136): il suo mancare è già
+oggi errore rumoroso (TimeoutError nel log, 503 ai nuovi ingressi). **Nessun
+grilletto automatico di cessazione su fallimenti ripetuti**: la causa è
+sistemica (deploy rotto, macchina senza memoria) e nessuna decisione di forma
+del parco la cura — interviene l'uomo, avvisato dai segnali che già ci sono.
+Ogni 503 resta un evento con il suo istante, visibile nella fotografia (R19
+emendata).
 
 ### R15 ← N9 · roster `evacuating_since` · `commander.py:1006` (documentato a 989-992)
 **Semantica**: istante monotonico in cui il riciclo ha messo la riga in
@@ -546,6 +582,12 @@ non fa cadere la lettura, e lo stato accanto distingue «muto perché morente»
 da «muto perché malato». **Il dettaglio dei campi è rimandato al design della
 run di fix** — il titolare ha nominato esempi da valutare lì: le tabelle
 sottoscritte, le chiamate fatte da un certo utente.
+**Emendamento (2026-08-13, review di finalize):** la voce «quarantena da
+rigenerazione fallita» cade — R14 ha abolito quello stato e niente lo fa
+risorgere. Al suo posto lo strato del pool porta **gli eventi 503 recenti
+(quando, quanti)**: pura osservazione, che copre il bisogno «al momento ts
+c'è stato un 503» ed è la stessa serie che l'addendum di R5 dichiara segnale
+di capacità.
 
 ### R20 ← E22 · «i registri contengono dati serializzabili per costruzione»
 **Il libro dice** (*Lo stato di lavoro attraversa le versioni*): «i registri
@@ -715,7 +757,9 @@ di una fase di verifica successiva.
 intervista, nessuna resta cieca.**
 - **Chiuse ora, verificate con misure fresche (4)**: E2 (il file dello
   spostamento è tuttora il più esercitato: 121 casi misurati vs 119), B9
-  (51/60/121 vs 47/60/119 — commander esatto), B8 (le costanti PROVISIONAL
+  (sull'unità del libro, funzioni di test: 47/60/121 misurate vs 47/60/119 —
+  evaluator e commander esatti, move +2; i 51 dell'evaluator contano i casi
+  parametrizzati, unità diversa), B8 (le costanti PROVISIONAL
   esistono, àncore slittate di 1-2 righe; la «configurazione per gruppo»
   attesa è quella decisa oggi in R5), E25 (esatta alla lettera:
   `metrics_view` a commander.py:1919, nessuna traccia di formato Prometheus).
