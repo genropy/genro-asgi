@@ -2230,8 +2230,9 @@ class UserStickyWorker(RoutingClass):
     def encode_user(self, user: str) -> str:
         """Seal the whole slice of ``user`` into its encoded wire form and spend it here.
 
-        The one road out of a worker, and the commanded eviction is its only
-        caller: the parcel is the user entry without its live fields, the store
+        The one road out of a worker, and the two commanded departures —
+        ``evict_user`` toward another worker, ``freeze_user`` toward a file —
+        are its only callers: the parcel is the user entry without its live fields, the store
         itself, every connection row, every page drained on the way out — and
         it leaves nothing behind, because a slice that is on the wire must be
         nowhere else. The order is the one ``evict_pages`` describes: the pages
@@ -2260,11 +2261,32 @@ class UserStickyWorker(RoutingClass):
         and the worker answers with the parcel. OPERATIONAL, so it shapes NO
         event: the surface is the one that asked, and it learns the outcome
         from this very reply. Since the login stopped shipping (ratified
-        2026-08-12) this is the ONLY way a slice leaves a living worker.
+        2026-08-12) this is the ONLY way a slice leaves a living worker, and
+        ``freeze_user`` is its sibling toward a file rather than a worker.
         """
         with self.dispatch_lock:
             if self.user_items.get(identity) is None:
                 raise KeyError(f"evict_user: unknown user {identity!r}")
+            return {"encoded": self.encode_user(identity)}
+
+    @route()
+    def freeze_user(self, identity: str) -> dict[str, Any]:
+        """Seal the slice of ``identity`` into the parcel the freezer parks on disk.
+
+        The sibling of ``evict_user``, same one road out: the parcel is
+        ``encode_user``'s, field for field, and the slice is spent here the
+        moment this answers. What differs is the destination the commander
+        gives it — a file instead of another worker — so the two ops can
+        diverge without the freezer riding the move's own surface.
+
+        Sync, and that is the whole of the off-loop discipline: ``execute``
+        runs a sync op on a pool thread through ``run_in_executor``, so both
+        the seal under ``dispatch_lock`` and the pickle of the user's Bags
+        happen off the loop. OPERATIONAL, so it shapes no event.
+        """
+        with self.dispatch_lock:
+            if self.user_items.get(identity) is None:
+                raise KeyError(f"freeze_user: unknown user {identity!r}")
             return {"encoded": self.encode_user(identity)}
 
     def install_connection(self, user: str, connection_id: str, packed: dict[str, Any]) -> None:
@@ -2308,8 +2330,35 @@ class UserStickyWorker(RoutingClass):
             page["collector"].append(change)
         page["dbevents"].extend(packed["pending_dbevents"])
 
+    def adopt_carried_store(self, user: str, store: Any) -> None:
+        """Put the parcel's own store under a resident entry, watchers and all.
+
+        The wake's exception to the JOIN, and the reason it is safe: a frozen
+        user had no live entry anywhere, so a resident found at the destination
+        is minutes old against days of hibernated state. Every page already
+        watching the old Bag is re-attached exactly as
+        ``change_connection_user`` re-attaches on a login — a fresh collector on
+        the new Bag with the same prefixes, re-deposited with everything the old
+        one still held — so no captured change is lost in the swap.
+        """
+        entry = self.user_items.get(user)
+        entry["store"] = store
+        for connection_id in entry["connections"]:
+            for page_id in self.connection_items.get(connection_id)["pages"]:
+                page = self.page_items.get(page_id)
+                view = page["user_view"]
+                if view is None:
+                    continue
+                view.detach()
+                fresh = self.registry.new_collector(
+                    store, paths=set(page["store_subscriptions"])
+                )
+                for change in view.changes:
+                    fresh.append(change)
+                page["user_view"] = fresh
+
     @route()
-    def add_user(self, identity: str, encoded: str) -> dict[str, Any]:
+    def add_user(self, identity: str, encoded: str, parcel_wins: bool = False) -> dict[str, Any]:
         """Install a moved user's slice from its encoded wire form — the rebirth.
 
         Operational, like every install primitive: the commander orders it, so
@@ -2329,6 +2378,14 @@ class UserStickyWorker(RoutingClass):
         join what is already open, so the arriving pages' ``user_view``
         collectors attach to the resident Bag. Only the connections and the
         pages are ever installed twice over; the user is installed once.
+
+        **Unless the parcel wins.** ``parcel_wins`` inverts that one rule for
+        the wake of a hibernated user, and for nothing else: the commander
+        knows the identity had no live entry anywhere, so it declares the
+        carried store the truth and ``adopt_carried_store`` puts it under the
+        resident entry, re-attaching whatever was watching the old Bag. The
+        entry itself stays the resident's — it is the one the open connection
+        already answers through.
         """
         blob = pickle.loads(base64.b64decode(encoded))
         user = blob["user"]
@@ -2340,6 +2397,8 @@ class UserStickyWorker(RoutingClass):
             if entry is None:
                 carried = {k: v for k, v in blob["user_entry"].items() if k != "register_item_id"}
                 entry = self.registry.new_user(user, store=blob["user_store"], **carried)
+            elif parcel_wins:
+                self.adopt_carried_store(user, blob["user_store"])
             for connection_id, packed in blob["connections"].items():
                 self.install_connection(user, connection_id, packed)
             for page_id, packed in blob["pages"].items():

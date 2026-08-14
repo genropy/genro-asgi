@@ -1,0 +1,35 @@
+{
+  "capacity": 3.5,
+  "load": 1.55,
+  "headroom": 1.95,
+  "workers": {
+    "W:w-1": {
+      "status": "active",
+      "saturation": 0.9,
+      "load": 0.7,
+      "memory_pressure": 0.0,
+      "idle_users": {"alice": 4000.0}
+    },
+    "W:w-2": {
+      "status": "active",
+      "saturation": 0.3,
+      "load": 0.25,
+      "memory_pressure": 1.0,
+      "idle_users": {}
+    },
+    "W:w-3": {
+      "status": "active",
+      "saturation": 0.0,
+      "load": 0.0,
+      "memory_pressure": 0.0,
+      "idle_users": {}
+    },
+    "W:w-4": {
+      "status": "active",
+      "saturation": 0.7,
+      "load": 0.6,
+      "memory_pressure": 0.0,
+      "idle_users": {"dave": 10.0}
+    }
+  }
+}

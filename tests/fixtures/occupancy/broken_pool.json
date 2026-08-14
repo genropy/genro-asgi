@@ -1,0 +1,14 @@
+{
+  "capacity": 1.5,
+  "load": 0.1,
+  "headroom": 1.4,
+  "workers": {
+    "W:w-1": {
+      "status": "active",
+      "saturation": 0.9,
+      "load": 0.1,
+      "memory_pressure": 0.0,
+      "idle_users": {}
+    }
+  }
+}

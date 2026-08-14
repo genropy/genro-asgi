@@ -1,0 +1,28 @@
+{
+  "capacity": 2.5,
+  "load": 1.95,
+  "headroom": 0.55,
+  "workers": {
+    "W:w-1": {
+      "status": "active",
+      "saturation": 0.9,
+      "load": 0.8,
+      "memory_pressure": 0.5,
+      "idle_users": {"alice": 3600.0}
+    },
+    "W:w-2": {
+      "status": "active",
+      "saturation": 0.95,
+      "load": 0.9,
+      "memory_pressure": 0.95,
+      "idle_users": {"bob": 120.0}
+    },
+    "W:w-3": {
+      "status": "active",
+      "saturation": 0.3,
+      "load": 0.25,
+      "memory_pressure": 0.0,
+      "idle_users": {}
+    }
+  }
+}

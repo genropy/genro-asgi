@@ -30,9 +30,13 @@ contents down there). There are exactly eight, in five groups:
   worker's: ``{status, pid, group, spawned_at, died_at, death, process, users,
   occupancy, floors, floor_readings, caretaker}``.
   ``status`` walks ``nascent`` (spawned, not yet presented) →
-  ``active`` (REGISTER seen) → [``evacuating`` (being recycled: its successor is
-  up and its users are being carried over, and it is out of every picker while
-  it still serves whoever remains)] → ``draining`` (deliberately retired) →
+  ``active`` (REGISTER seen) → [``retiring`` (a plan in flight names it for a
+  replace or a compact: it still serves who it holds and still counts toward the
+  target, but it is never a destination again)] → [``evacuating`` (being
+  condemned: its users are being carried over, and it is out of every picker
+  while it still serves whoever remains — with a successor already up on the
+  replace branch, with none at all when the weight gate opened ``spawn=False``
+  and the pool narrows by one)] → ``draining`` (deliberately retired) →
   ``dead`` — except a nascent one, which jumps straight to ``dead`` when culled
   or retired (no channel means no drain to complete); ``died_at``/``death``
   (``retired``/``crash``/``stillborn``) are the tombstone stamps
@@ -47,7 +51,9 @@ contents down there). There are exactly eight, in five groups:
   next sample (issue #8); ``caretaker`` is that worker's
   own probe task, ``None`` when it has none. A user's routing group is its
   worker's ``group``, read from the row.
-- ``user_worker_map`` — user identity → the name of the worker holding it. It
+- ``user_worker_map`` — user identity → its PLACEMENT: the name of the worker
+  holding it, or ``FROZEN`` when its slice is hibernated to a file in
+  ``frozen_users_dir`` and no worker holds it (absent means unplaced). It
   is the ONLY structure that says WHERE a user is, and both it and the rows
   mutate through the single pair ``assign_user`` / ``remove_user``.
 - ``connection_user`` / ``user_connections`` — the middle level of the ownership
@@ -227,20 +233,29 @@ holds the only copy and keeps offering it rooms — the destination dying sends 
 to another worker, the source included — and only an empty pool loses it, with
 an explicit error.
 
-**The pool's own beat rides the probe return.** Every archived occupancy report
-is fresh knowledge, so ``pool_beat`` runs right behind it and dispatches ONE
-pass — rebalance XOR recycle XOR compaction. ``rebalance_excess`` non-empty —
-somebody is over its own threshold — sends a rebalance; else a
-``recycle_candidate`` — a worker whose live memory meets the limit within
-``recycle_horizon_hours`` — sends a recycling; else a compaction. Excess before
-the leak before slack, one flag per force, and the pass is detached: a caretaker
-never waits on what it started.
+**The pool's shape is decided by a PLAN, built from ONE reading, on its own
+clock.** The ``planner`` task wakes every ``decision_interval`` — minutes, not
+seconds — and asks ``build_plan`` for the ordered list of steps the pool as it
+then reads calls for: at most one rebalance, then one replacement per condemned
+worker — the NECESSITY candidates first (a live-memory floor that has reached
+its budget), then the CONVENIENCE ones most wasteful first — then the
+compaction, emptiest worker first. ``execute_plan`` runs them in that order, one
+at a time, and the plan as a whole is the ONE operation in flight: it stands in
+``active_plan`` for the whole run, and a tick landing mid-plan builds nothing.
+The probes decide nothing: they carry health and the numbers at 5s, and the real
+emergencies stay on the fast reflexes (the caretaker's kill, ``channel_lost``,
+the reconcile's respawn).
 The compaction reads the capacity ledger — ``C`` what the pool may take (the
 reception up to its threshold, a whole gate each for the others), ``O`` what it
-holds in ``worker_load`` — and while ``C - O`` stays over ``compaction_margin``, and
-the pool is wider than ``min_workers``, it drains the least loaded NON-reception
-worker with ``move_user`` and retires it. A drain that does not empty ends the
-pass and retires nothing: a worker still holding state is never retired.
+holds in ``worker_load`` — and takes a worker only while ``C - O`` READ WITHOUT
+it stays over ``compaction_margin``. The step drains it with ``move_user`` and
+retires it; a drain that does not empty retires nothing, because a worker still
+holding state is never retired.
+A replacement spawns a fresh worker only when the rest of the pool cannot
+absorb the condemned one's users with margin (``pool_absorbs``): with the room
+already there the worker is condemned and evacuated without a new process, and
+the pool narrows by one. Condemning the reception always spawns — that is role
+continuity, not capacity.
 
 The rebalance works in SATURATION instead: what it relieves is the binding
 resource, so a worker one component over its target sheds even while its load
@@ -269,7 +284,7 @@ import sys
 import time
 import uuid
 from collections import deque
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -287,6 +302,7 @@ from .global_store import (
     CapturingGlobalStore,
     GlobalStoreLock,
 )
+from .register_registry import GUEST_PREFIX
 from .subscription_index import SubscriptionIndex
 from .worker import (
     CONNECTION_MAX_AGE,
@@ -305,8 +321,16 @@ __all__ = [
     "COMPACTION_MARGIN",
     "CONSUMPTION_BUCKETS",
     "CONSUMPTION_BUCKET_SECONDS",
+    "DECISION_INTERVAL",
     "DEFAULT_GROUP",
+    "EVACUATION_WARN_INTERVAL",
+    "FLOOR_LIMIT_RATIO",
     "FLOOR_SERIES_DEPTH",
+    "FREEZE_IDLE_AFTER",
+    "FREEZE_IDLE_FLOOR",
+    "FROZEN",
+    "FROZEN_GUEST_LIFETIME",
+    "FROZEN_USER_LIFETIME",
     "MAX_PENDING_CYCLES",
     "METRICS_WINDOW",
     "MOVE_QUIESCE_TIMEOUT",
@@ -316,8 +340,10 @@ __all__ = [
     "REBALANCE_MIN_SHARE",
     "RECEPTION_THRESHOLD",
     "RECYCLE_HORIZON_HOURS",
+    "SPAWN_MARGIN",
     "TOMBSTONE_SECONDS",
     "UserStickyCommander",
+    "WASTE_RATIO",
 ]
 
 #: The single routing group of 2a: the group column exists everywhere, the
@@ -343,6 +369,12 @@ CONSUMPTION_BUCKETS = 6
 #: Seconds between two probes of the same worker. PROVISIONAL — it becomes
 #: per-group configuration.
 PROBE_INTERVAL = 5.0
+
+#: How often the ``planner`` reads the whole pool and runs the plan that reading
+#: calls for. The shape of a pool is not an emergency: it is decided on its own
+#: slow clock, minutes apart, while the probes keep their 5s health cadence.
+#: PROVISIONAL — it becomes per-group configuration.
+DECISION_INTERVAL = 300.0
 
 #: How long a worker may take to answer its occupancy probe before it is
 #: declared gone. The probe is the one CALL that may expire: it carries nothing
@@ -383,24 +415,71 @@ COMPACTION_MARGIN = 1.5
 
 #: How far under the gate a rebalance fills its target: the absorber must still
 #: sit at ``1.0 - REBALANCE_MARGIN`` once it has taken the whole excess. The
-#: anti-ping-pong margin — a target filled right up to the gate would be the next
-#: beat's hot worker. PROVISIONAL — it becomes per-group configuration.
+#: anti-ping-pong margin — a target filled right up to the gate would be the hot
+#: worker of the next planner tick. PROVISIONAL — it becomes per-group configuration.
 REBALANCE_MARGIN = 0.1
 
-#: The comfort horizon of the recycling (issue #8): a worker whose live-memory
-#: floor is heading for the limit within this many hours is succeeded by a fresh
-#: process. Wide enough that the evacuation happens on the pool's own terms,
-#: hours before the limit is anybody's problem. PROVISIONAL — it becomes
-#: per-group configuration.
+#: How often a stalled evacuation is reported again while it stays stalled. A
+#: sysop cadence, not a connection clock: the condition does not change from one
+#: planner tick to the next, and the report is for a human. PROVISIONAL.
+EVACUATION_WARN_INTERVAL = 300.0
+
+#: The placement of a user parked on disk: ``user_worker_map`` holds a worker
+#: name, or nothing at all while the user is being assigned, or THIS. It cannot
+#: collide with a worker name, which always carries the ``W:`` prefix.
+FROZEN = "frozen"
+
+#: How long a user must sit idle before the freezer parks it on disk, at a
+#: worker with no memory pressure at all. The valve shortens it as the pressure
+#: rises — see ``freeze_candidates``. PROVISIONAL — it becomes per-group
+#: configuration (issue #18), and it is the value a deployment arms
+#: ``freeze_idle_after`` with: the kwarg itself defaults to None, the freezer
+#: disarmed, because no instance name reaches this layer to derive a parcel
+#: directory from.
+FREEZE_IDLE_AFTER = 1800.0
+
+#: The shortest wait the valve may come down to, whatever the memory pressure:
+#: a user that answered seconds ago is not hibernated because its worker is
+#: full. PROVISIONAL — it becomes per-group configuration (issue #18).
+FREEZE_IDLE_FLOOR = 300.0
+
+#: How long a GUEST's parcel is kept in the freezer before ``reap_frozen_files``
+#: deletes it: the guest cookie's own day, after which nobody can come back for
+#: it anyway. The class is read off the parcel's name, which carries
+#: ``GUEST_PREFIX`` by construction. PROVISIONAL — the per-class lifetimes become
+#: configuration together with the cookie ages (issue #18).
+FROZEN_GUEST_LIFETIME = 86400.0
+
+#: How long a logged user's parcel is kept in the freezer: a week, long enough
+#: for a Monday to find what Friday hibernated. PROVISIONAL, as above.
+FROZEN_USER_LIFETIME = 604800.0
+
+#: The comfort horizon the floor TREND is read against (issue #8): how many hours
+#: from the memory limit a worker's live-memory floor counts as heading for it.
+#: An OBSERVATION parameter — the replacement decides on current measures (R5),
+#: never on the projection, so nothing is condemned by this number; the monitor's
+#: photograph is its only reader. PROVISIONAL — it becomes per-group
+#: configuration.
 RECYCLE_HORIZON_HOURS = 12.0
 
-#: How long the pool pauses between REGENERATION probes after a replacement
-#: failed to register. A pool that cannot spawn children is declared (503 to
-#: the new entries, the residents keep being served) and probing it every beat
-#: would fork one stillborn per beat; one metrics window between probes keeps
-#: the churn bounded while the condition still clears itself the moment any
-#: spawn succeeds. PROVISIONAL — it becomes per-group configuration.
-RECYCLE_RETRY_SECONDS = 300.0
+#: How close to its memory limit a worker's live-memory floor may sit before the
+#: pool replaces it out of NECESSITY: the floor is what the process will not give
+#: back, so a floor at this share of the limit is a worker that has already spent
+#: its budget. PROVISIONAL — it becomes per-group configuration.
+FLOOR_LIMIT_RATIO = 0.8
+
+#: How much memory a worker may hold beyond its live floor before the pool
+#: replaces it out of CONVENIENCE: the waste is what the process keeps without
+#: using it, measured against the floor it actually needs. 0.5 is "half again as
+#: much as it needs". PROVISIONAL — it becomes per-group configuration.
+WASTE_RATIO = 0.5
+
+#: How little free capacity — in whole admitting workers — the pool may be left
+#: with before a spawn is due even when no worker is hot. Lower than
+#: ``COMPACTION_MARGIN`` by construction: the band between the two is where the
+#: pool neither folds nor widens, and without it every fold would be undone by
+#: the spawn that follows. PROVISIONAL — it becomes per-group configuration.
+SPAWN_MARGIN = 0.5
 
 #: The smallest share of its worker's saturation a user must carry to be worth
 #: shedding onto a LOADED target: under it the move buys nothing and costs a
@@ -449,6 +528,7 @@ class UserStickyCommander:
         max_workers: int | None = None,
         probe_interval: float = PROBE_INTERVAL,
         probe_timeout: float = PROBE_TIMEOUT,
+        decision_interval: float = DECISION_INTERVAL,
         max_pending_cycles: int = MAX_PENDING_CYCLES,
         local_worker: bool = False,
         dump_path: str | None = None,
@@ -458,11 +538,16 @@ class UserStickyCommander:
         reception_threshold: float = RECEPTION_THRESHOLD,
         move_quiesce_timeout: float = MOVE_QUIESCE_TIMEOUT,
         compaction_margin: float = COMPACTION_MARGIN,
-        min_workers: int = 1,
+        spawn_margin: float = SPAWN_MARGIN,
         rebalance_margin: float = REBALANCE_MARGIN,
         rebalance_min_share: float = REBALANCE_MIN_SHARE,
         floor_series_depth: int = FLOOR_SERIES_DEPTH,
         recycle_horizon_hours: float = RECYCLE_HORIZON_HOURS,
+        floor_limit_ratio: float = FLOOR_LIMIT_RATIO,
+        waste_ratio: float = WASTE_RATIO,
+        freeze_idle_after: float | None = None,
+        freeze_idle_floor: float = FREEZE_IDLE_FLOOR,
+        frozen_users_dir: str | Path | None = None,
     ) -> None:
         """Args:
         workers: how many children to keep alive.
@@ -476,6 +561,8 @@ class UserStickyCommander:
         max_workers: ceiling the capacity check never scales past (None = unbounded).
         probe_interval: seconds between two probes of the same worker.
         probe_timeout: how long a worker may take to answer its probe.
+        decision_interval: seconds between two readings of the pool by the
+            ``planner`` — the cadence the pool's shape is decided on.
         max_pending_cycles: probe cycles a worker may sit on an unanswered
             ``add_user`` handover before the caretaker kills it (issue #9).
         local_worker: hold one worker in this process (the single role, §3.5a);
@@ -495,9 +582,9 @@ class UserStickyCommander:
         compaction_margin: the free capacity, in whole admitting workers, the pool
             keeps above what it holds — the compaction folds a worker away only
             while the headroom stays over it.
-        min_workers: the floor the compaction never goes under. Only compaction
-            reads it: the scale-up has its own ceiling and ``workers`` is just
-            the boot target.
+        spawn_margin: the headroom under which a spawn is due even with no hot
+            worker. Strictly under ``compaction_margin`` — the band between the
+            two is where the pool neither folds nor widens.
         rebalance_margin: how far under the gate a rebalance leaves its target
             once it has absorbed the whole excess — the anti-ping-pong margin.
         rebalance_min_share: the smallest share of its worker's saturation a user
@@ -506,9 +593,26 @@ class UserStickyCommander:
             long series the recycling trend is read off (issue #8). One floor per
             full ``METRICS_WINDOW`` of readings.
         recycle_horizon_hours: how close to the memory limit a worker's floor may
-            be heading — in hours left — before the pool succeeds it with a fresh
-            process (issue #8). A flat or falling floor never qualifies.
+            be heading — in hours left — before the trend counts as heading for it
+            (issue #8). Read by the monitor's photograph only: it condemns nobody.
+        floor_limit_ratio: the share of ``memory_limit_mb`` a worker's live-memory
+            floor may reach before its replacement is a NECESSITY.
+        waste_ratio: how much a worker may hold beyond its live floor, as a share
+            of that floor, before its replacement is a CONVENIENCE.
+        freeze_idle_after: how long a user may sit idle before the freezer parks
+            it on disk, at a worker under no memory pressure (``FREEZE_IDLE_AFTER``
+            is the provisional value to arm it with). None disarms the freezer.
+        freeze_idle_floor: the shortest wait the memory valve may bring that
+            number down to.
+        frozen_users_dir: where the freezer writes its parcels, one file per user.
+            Required whenever ``freeze_idle_after`` is set: no instance name
+            reaches this layer, so a directory cannot be derived without one.
         """
+        if spawn_margin >= compaction_margin:
+            raise ValueError(
+                "spawn_margin must stay under compaction_margin, "
+                f"got {spawn_margin} >= {compaction_margin}"
+            )
         self.target = workers
         self.group = group
         self.worker_class = worker_class
@@ -518,17 +622,29 @@ class UserStickyCommander:
         self.reception_threshold = reception_threshold
         self.probe_interval = probe_interval
         self.probe_timeout = probe_timeout
+        self.decision_interval = decision_interval
         self.max_pending_cycles = max_pending_cycles
         self.local_worker = local_worker
         self.dump_path = dump_path
         self.memory_limit_mb = int(memory_limit_mb) if memory_limit_mb is not None else None
         self.move_quiesce_timeout = move_quiesce_timeout
         self.compaction_margin = compaction_margin
-        self.min_workers = min_workers
+        self.spawn_margin = spawn_margin
         self.rebalance_margin = rebalance_margin
         self.rebalance_min_share = rebalance_min_share
         self.floor_series_depth = floor_series_depth
         self.recycle_horizon_hours = recycle_horizon_hours
+        self.floor_limit_ratio = floor_limit_ratio
+        self.waste_ratio = waste_ratio
+        self.freeze_idle_after = freeze_idle_after
+        self.freeze_idle_floor = freeze_idle_floor
+        if frozen_users_dir is None and freeze_idle_after is not None:
+            raise ValueError(
+                "freeze_idle_after is armed but frozen_users_dir is not given, and "
+                "no instance name reaches the commander to derive one from: two "
+                "instances sharing a directory would wake each other's users"
+            )
+        self.frozen_users_dir = Path(frozen_users_dir) if frozen_users_dir is not None else None
         # The judge of the occupancy windows this commander archives.
         self.evaluator = OccupancyEvaluator(
             self,
@@ -587,18 +703,18 @@ class UserStickyCommander:
         # worker — hand_user_to queues on it. Minted on first delivery,
         # buried with the roster row.
         self.removalists: dict[str, asyncio.Lock] = {}
-        # The beat's three forces, one flag each: a pass in flight is never
-        # doubled (one pool, one pass), and the task set is what keeps it alive.
-        # When a recycling's replacement failed to register the pool cannot
-        # regenerate: new entries are refused (503) while the stamp stands, any
-        # successful REGISTER clears it, and after RECYCLE_RETRY_SECONDS the
-        # recycling may probe the world again.
-        self.regeneration_failed_at: float | None = None
-        self.compacting = False
-        self.rebalancing = False
-        self.recycling = False
+        # The pool-shape work in flight: the ordered steps of the plan being
+        # executed, None when idle. One plan at a time (one pool, one shape),
+        # and the task set is what keeps its pass alive.
+        self.active_plan: list[dict[str, Any]] | None = None
+        # Whether the pool can still take strangers in: ``ready`` normally,
+        # ``restricted`` from the moment a plan aborted because no fresh worker
+        # would register. A STATE of the pool, not of any request — the first
+        # REGISTER that lands is the positive proof that ends it.
+        self.pool_status = "ready"
         self._pool_tasks: set[asyncio.Task[None]] = set()
         self._reconcile_task: asyncio.Task[None] | None = None
+        self._planner_task: asyncio.Task[None] | None = None
         # Strong refs to the task-class commands in flight: the loop keeps only
         # weak ones, and nobody awaits these.
         self._command_tasks: set[asyncio.Task[None]] = set()
@@ -611,18 +727,30 @@ class UserStickyCommander:
 
     @property
     def active_workers(self) -> list[str]:
-        """The names of the workers currently connected, in spawn order."""
+        """The names of the workers currently connected, in spawn order.
+
+        A ``retiring`` one is still here: a plan has named it, but until its own
+        step runs it serves who it holds and counts in every picture. What it is
+        not is a DESTINATION — the placement rules exclude it by name.
+        """
         return [
-            name for name, entry in self.worker_roster.items() if entry["status"] == "active"
+            name
+            for name, entry in self.worker_roster.items()
+            if entry["status"] in ("active", "retiring")
         ]
 
     @property
     def living_workers(self) -> list[str]:
-        """The names of the workers that count toward the target (nascent + active)."""
+        """The names of the workers that count toward the target.
+
+        ``nascent`` + ``active`` + ``retiring``: a worker a plan has condemned
+        still holds its process and its users, so the reconcile must not read it
+        as a shortfall and spawn a second one beside it.
+        """
         return [
             name
             for name, entry in self.worker_roster.items()
-            if entry["status"] in ("nascent", "active")
+            if entry["status"] in ("nascent", "active", "retiring")
         ]
 
     @property
@@ -646,6 +774,9 @@ class UserStickyCommander:
         first member of the roster and therefore the reception. The caretakers
         are not started here: each is born with its own worker's REGISTER.
 
+        Two periodic tasks are started here: the reconcile, which keeps the
+        pool's SIZE at the target, and the planner, which decides its SHAPE.
+
         The dump of the previous run is read back LAST, when there is a pool to
         install it on.
         """
@@ -653,6 +784,7 @@ class UserStickyCommander:
         if self.local_worker:
             await self.attach_local_worker()
         self._reconcile_task = asyncio.create_task(self.reconcile_loop())
+        self._planner_task = asyncio.create_task(self.planner())
         self._wakeup.set()
         await self.restore_dump()
 
@@ -673,16 +805,24 @@ class UserStickyCommander:
         shortfall math and stays untouched. A worker mid-recycling
         (``evacuating``) or already ``draining`` has a live process that this
         stop must still signal and await; only the tombstones have nothing
-        left to end.
+        left to end. A plan caught in flight is released FIRST, so the retire
+        walk finds plain rows rather than the stamps of a plan nobody will run.
+        A ``restricted`` pool goes back to ``ready`` here too: the restriction
+        described a pool that could not regenerate, and this one is closing.
         """
+        if self.active_plan is not None:
+            self.release_plan()
+        self.pool_status = "ready"
         await self.write_dump()
-        if self._reconcile_task is not None:
-            self._reconcile_task.cancel()
-            try:
-                await self._reconcile_task
-            except asyncio.CancelledError:
-                pass
+        for task in (self._reconcile_task, self._planner_task):
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
         self._reconcile_task = None
+        self._planner_task = None
         self.target = 0
         retired = [
             name for name, entry in self.worker_roster.items() if entry["status"] != "dead"
@@ -713,11 +853,16 @@ class UserStickyCommander:
         The surface forgets each user the moment its parcel is in hand — the
         same ``remove_user`` every other departure folds into — so a stopped
         commander holds no placement for what now lives on disk.
+
+        A frozen user is skipped: its parcel is already a file, and asking for
+        it would only wake it onto a worker this very method is emptying.
         """
         if self.dump_path is None:
             return
         packages: dict[str, str] = {}
         for user in list(self.user_worker_map):
+            if self.user_worker_map[user] == FROZEN:
+                continue
             try:
                 result = await self.forward_call(user, f"{OP_PATH_PREFIX}evict_user")
             except Exception as exc:
@@ -819,16 +964,18 @@ class UserStickyCommander:
     def retire(self, name: str) -> None:
         """Retire one named worker and lower the target so reconcile keeps it out.
 
-        Only a living worker (``nascent`` or ``active``) is retirable: a
-        draining or evacuating one is already on its way out (the recycling
-        retires its source itself), and a dead one is a tombstone —
+        Only a living worker (``nascent``, ``active`` or ``retiring``) is
+        retirable: a draining or evacuating one is already on its way out (the
+        recycling retires its source itself), and a dead one is a tombstone —
         flipping it back to ``draining`` would make it unburiable (its
         ``channel_lost`` already fired) and shrink the target for a corpse.
+        ``retiring`` is in because a compaction step retires exactly the worker
+        its own plan stamped on the way in.
         """
         entry = self.worker_roster.get(name)
         if entry is None:
             raise KeyError(f"no such worker to retire: {name!r}")
-        if entry["status"] not in ("nascent", "active"):
+        if entry["status"] not in ("nascent", "active", "retiring"):
             raise ValueError(f"worker {name!r} is {entry['status']}: not retirable")
         self.target = max(0, self.target - 1)
         self.retire_worker(name)
@@ -926,12 +1073,12 @@ class UserStickyCommander:
             self.worker_roster[name]["caretaker"] = None
 
     async def probe_worker(self, name: str) -> None:
-        """Ask one worker for its occupancy, archive it, and let the beat read it.
+        """Ask one worker for its occupancy and archive it: health, nothing more.
 
-        The archived report is fresher knowledge about the pool than anything the
-        commander had a moment ago, so the beat runs right behind it: the probe
-        return IS the pool's heartbeat (the legacy beat rode the push envelope,
-        which the pull probe replaced — declared divergence).
+        The probe is the proof of life and the source of the numbers, at 5s. It
+        decides no shape: the pool is read whole by the ``planner`` on its own
+        slow clock (R1), so an archived report waits there instead of pulling a
+        move behind itself.
 
         A good answer is not the whole verdict: the second eye (issue #9) then
         checks ``pending_users`` — a worker that keeps answering probes while
@@ -967,7 +1114,6 @@ class UserStickyCommander:
                     self.signal_worker(name, signal.SIGKILL)
                     return
             self.record_occupancy(name, report)
-            self.pool_beat()
 
     def next_worker_name(self) -> str:
         """Mint a fresh typed channel name; collision is impossible by construction."""
@@ -1122,16 +1268,21 @@ class UserStickyCommander:
         because the newcomer's replica is seeded HERE, inside the registration
         itself, which is the only place where "the snapshot before any
         incremental change" is a fact rather than a hope.
+
+        A REGISTER is also the one POSITIVE PROOF that the pool can regenerate,
+        so it is what lifts a ``restricted`` pool: whatever refused to start
+        when the plan aborted, a child has just presented itself, and the door
+        opens again for the strangers that were being turned away.
         """
         entry = self.worker_roster.get(member.name)
         if entry is None:
             self.logger.warning("Foreign member on the commander hub: %s", member.name)
             return
         entry["status"] = "active"
+        if self.pool_status != "ready":
+            self.pool_status = "ready"
+            self.logger.info("Pool ready again: %s registered", member.name)
         entry["pid"] = member.pid
-        if self.regeneration_failed_at is not None:
-            self.regeneration_failed_at = None
-            self.logger.info("A worker registered: the pool regenerates again")
         await self.bootstrap_replica(member.name)
         if entry["process"] is not None:
             entry["caretaker"] = asyncio.create_task(self.caretaker(member.name))
@@ -1270,12 +1421,16 @@ class UserStickyCommander:
         there is no retry queue (the legacy rule, verbatim). A ``connection_store`` target is a session id, resolved in
         two hops along the ownership chain — ``connection_user`` then
         ``user_worker_map`` — since a connection lives where its user lives.
+
+        A ``FROZEN`` placement is as unroutable as a missing one and drops the
+        same way: the user's pages are in a file, so no worker holds them, and a
+        change is a signal with no retry queue.
         """
         if message["filters"] is not None:
             return [
                 (worker, {**message, "target": page_id, "filters": None})
                 for page_id, worker in self.matching_pages(message["filters"])
-                if worker is not None
+                if worker is not None and worker != FROZEN
             ]
         target = message["target"]
         if message["kind"] == "user_store":
@@ -1285,6 +1440,8 @@ class UserStickyCommander:
             worker = None if user is None else self.user_worker_map.get(user)
         else:
             worker = self.page_worker(target)
+        if worker == FROZEN:
+            worker = None
         if worker is None:
             self.logger.debug(
                 "exchange dropped: no routable target %r (%s)", target, message["kind"]
@@ -1386,15 +1543,17 @@ class UserStickyCommander:
         already served its own pages, so every page it holds is skipped here —
         the ``worker`` stamp on the message is what says which. A page the
         surface cannot resolve is skipped too: a dbevent is a signal and there
-        is no retry queue. Deposits sharing a destination worker are batched, so a
-        commit reaching N pages of one worker costs ONE send.
+        is no retry queue — and a page whose user is FROZEN resolves to no
+        worker at all, its subscriptions waiting in a file. Deposits sharing a
+        destination worker are batched, so a commit reaching N pages of one
+        worker costs ONE send.
         """
         origin = message.get("worker")
         buffer: dict[str, list[dict[str, Any]]] = {}
         for deposit in message.get("deposits") or []:
             for page_id in self.page_subscriptions.pages_for(deposit["table"]):
                 worker = self.page_worker(page_id)
-                if worker is None or worker == origin:
+                if worker is None or worker == FROZEN or worker == origin:
                     continue
                 buffer.setdefault(worker, []).append({"page_id": page_id, "deposit": deposit})
         await self.flush_dbevents(buffer)
@@ -1749,10 +1908,15 @@ class UserStickyCommander:
         The user's connections and pages travel with it and NOTHING is written
         for them: they answer the new worker the moment this map entry changes,
         because that is where their answer is derived from.
+
+        A user coming back from the freezer has ``FROZEN`` as its previous
+        placement — a state, not a worker — so there is no half-row to carry
+        over: it was dropped when the parcel went to disk, and the wake gets a
+        fresh one.
         """
         previous = self.user_worker_map.get(user)
         carried = None
-        if previous is not None and previous != worker:
+        if previous is not None and previous not in (worker, FROZEN):
             carried = self.worker_roster[previous]["users"].pop(user, None)
         users = self.worker_roster[worker]["users"]
         if user not in users:
@@ -1766,9 +1930,13 @@ class UserStickyCommander:
         connection of the user, every page of each connection, and the
         connection entries after them: a page without its user exists nowhere,
         and neither does a connection.
+
+        A ``FROZEN`` placement holds no half-row anywhere — the parcel took the
+        slice off its worker — so only the map entry and the rows below it go.
+        The parcel file stays for the reaper: nothing here reads it any more.
         """
         worker = self.user_worker_map.pop(user, None)
-        if worker is not None:
+        if worker is not None and worker != FROZEN:
             del self.worker_roster[worker]["users"][user]
         self.forget_users([user])
         for session_id in sorted(self.user_connections.pop(user, set())):
@@ -1954,6 +2122,47 @@ class UserStickyCommander:
             }
         return view
 
+    @property
+    def pool_occupancy(self) -> dict[str, Any]:
+        """The whole pool as the planner reads it: one picture, taken once.
+
+        Takes nothing, modifies nothing. Returns ``{capacity, load, headroom,
+        workers}``: the ledger totals in QUANTITY (``capacity_headroom`` is the
+        authority — ``capacity`` is derived from it, so the two can never drift)
+        plus one row per ACTIVE worker, keyed by name, carrying ``status``,
+        ``saturation`` (the gate), ``load`` (the quantity), ``memory_pressure``
+        — the last archived live-memory floor over the necessity budget
+        ``memory_limit_mb * floor_limit_ratio``, 0.0 with no limit configured or
+        no floor closed yet — and ``idle_users``: every held user with nothing
+        pending, mapped to its idle age in seconds. An empty pool reads
+        ``{0.0, 0.0, 0.0, {}}``.
+        """
+        now = time.time()
+        budget = (self.memory_limit_mb or 0) * 1024 * 1024 * self.floor_limit_ratio
+        workers: dict[str, Any] = {}
+        for name in self.active_workers:
+            row = self.worker_roster[name]
+            floors = self.worker_floors(name)
+            workers[name] = {
+                "status": row["status"],
+                "saturation": self.evaluator.worker_saturation(name),
+                "load": self.evaluator.worker_load(name),
+                "memory_pressure": (floors[-1]["floor"] / budget) if (floors and budget) else 0.0,
+                "idle_users": {
+                    user: now - entry["last_activity_ts"]
+                    for user, entry in row["users"].items()
+                    if not entry["pending"]
+                },
+            }
+        load = sum(entry["load"] for entry in workers.values())
+        headroom = self.capacity_headroom()
+        return {
+            "capacity": load + headroom if workers else 0.0,
+            "load": load,
+            "headroom": headroom,
+            "workers": workers,
+        }
+
     async def fetch_monitor_state(self, worker: str) -> dict[str, Any] | None:
         """One worker's monitor rows, None if it does not answer.
 
@@ -2083,9 +2292,20 @@ class UserStickyCommander:
         map's answer provisional. The loop re-reads on every wakeup — a move
         that lands may be followed by another one raised for the same user —
         and with nothing up at the start it awaits nothing at all.
+
+        This is also where a frozen user comes back: the placement says
+        ``FROZEN``, the wake installs the parcel on a living worker and the pick
+        below finds it there. The wake raises its own hold synchronously, so a
+        second request arriving in the same instant parks on it instead of
+        installing the parcel twice. A wake that answers False — the parcel
+        expired while the placement still said ``FROZEN`` — has cleared that
+        placement, so the pick below seats the user as the stranger it now is
+        instead of failing every request it will ever make.
         """
         while self.is_held(identity):
             await self.await_move(identity)
+        if self.user_worker_map.get(identity) == FROZEN:
+            await self.wake_user(identity)
         return self.worker_for(identity)
 
     def is_held(self, identity: str) -> bool:
@@ -2098,27 +2318,43 @@ class UserStickyCommander:
         A miss is a guest (or a user whose worker died): it goes to the reception,
         which is also the moment to check whether the pool still has room for one.
 
-        A pool that cannot regenerate (a recycling's replacement failed to
-        register) refuses the NEW entries with a 503 — the honest signal the
-        infrastructure already watches — while the residents, whose worker is
-        alive and holding their state, keep being served. The 503 is the answer
-        of the MOMENT, not a quarantine: it covers one retry window
-        (``RECYCLE_RETRY_SECONDS``) around an actual failure, a new failure
-        renews it, a successful REGISTER ends it early — the visitor turned
-        away comes back in five minutes and finds the door open.
+        WHO IS TURNED AWAY IS DECIDED BY THE POOL'S STATE, not by the request.
+        While ``pool_status`` is ``restricted`` — a plan aborted because no fresh
+        worker would register — a STRANGER is refused with a 503 and a
+        ``Retry-After`` of one decision interval, which is when the pool will
+        have decided again. A stranger is whoever the pool holds nothing of:
+        neither a placement nor a parcel in the freezer. Everybody already
+        inside is served exactly as ever, hibernated users included.
 
-        An ``evacuating`` worker still serves whoever is still on it: it holds
-        their slices until the drain carries them over, and sending them to the
-        reception instead would serve them where their state is not.
+        With no reception at all there is nowhere to send anyone: at ``ready``
+        that is an impossible state and says so with a RuntimeError, since a
+        pool that answers requests always has a worker; ``restricted`` is the
+        one condition in which it is expected, and it is the same 503.
+
+        An ``evacuating`` or ``retiring`` worker still serves whoever is still on
+        it: it holds their slices until the plan carries them over, and sending
+        them to the reception instead would serve them where their state is not.
+
+        A ``FROZEN`` placement never reaches here: ``resolve_worker`` wakes the
+        user before it asks. Reaching it anyway is a broken caller and says so
+        — the alternative, sending a frozen user to the reception, would serve
+        it as a guest while its whole slice waits in a file.
         """
         if identity in self.user_worker_map:
             worker = self.user_worker_map[identity]
-            if self.worker_roster[worker]["status"] in ("active", "evacuating"):
+            if worker == FROZEN:
+                raise RuntimeError(f"{identity} is frozen: wake it before routing it")
+            if self.worker_roster[worker]["status"] in ("active", "evacuating", "retiring"):
                 return worker
-        failed = self.regeneration_failed_at
-        if failed is not None and time.monotonic() - failed < RECYCLE_RETRY_SECONDS:
-            raise HTTPException(503, "the pool cannot regenerate: not admitting new entries")
+        stranger = identity not in self.user_worker_map and not self.has_frozen_parcel(identity)
         reception = self.reception
+        if self.pool_status == "restricted" and (stranger or reception is None):
+            # One of the two declared emitters of the anomaly channel (issue #19):
+            # a pool that turned somebody away is a fact the sysop must see.
+            # Retry-After is one decision interval: when the pool will have
+            # re-read itself and decided again, so nobody has to guess.
+            retry_after = str(int(self.decision_interval)).encode()
+            raise HTTPException(503, "server busy", [(b"retry-after", retry_after)])
         if reception is None:
             raise RuntimeError("no worker available to serve the request")
         self.check_capacity()
@@ -2146,10 +2382,23 @@ class UserStickyCommander:
         return chosen
 
     def pick_placement(self, candidates: list[str]) -> str:
-        """The reception-first pick over ``candidates`` (the active workers)."""
+        """The reception-first pick over ``candidates`` (the active workers).
+
+        A ``retiring`` worker is out of the choice: a plan in flight is taking it
+        away, and a login seated there would be moved again within the tick. The
+        reception is the one exception the pool cannot afford — with every other
+        worker retiring it still takes the login, because a placement always
+        answers.
+        """
         reception = candidates[0]
-        others = candidates[1:]
-        if not others or self.evaluator.worker_saturation(reception) < self.reception_threshold:
+        others = [
+            name for name in candidates[1:] if self.worker_roster[name]["status"] != "retiring"
+        ]
+        under_threshold = (
+            self.evaluator.worker_saturation(reception) < self.reception_threshold
+            and self.worker_roster[reception]["status"] != "retiring"
+        )
+        if not others or under_threshold:
             return reception
         admitting = [name for name in others if self.evaluator.worker_saturation(name) < 1.0]
         if not admitting:
@@ -2168,11 +2417,15 @@ class UserStickyCommander:
         NON-reception worker still admits, the reception being the guests' worker
         rather than a placement target. A spawn already in flight is waited for
         instead of being stacked on, and ``max_workers`` is a hard ceiling.
+
+        A ``retiring`` worker does not count as room: it is on its way out, so a
+        pool whose only spare capacity sits on one still has to widen.
         """
         active = self.active_workers
         if not active:
             return
-        reception, others = active[0], active[1:]
+        reception = active[0]
+        others = [name for name in active[1:] if self.worker_roster[name]["status"] != "retiring"]
         if others:
             if any(self.evaluator.worker_saturation(name) < 1.0 for name in others):
                 return
@@ -2306,7 +2559,15 @@ class UserStickyCommander:
     def settle_login(self, worker: str, user: str, session_id: str, prior: str | None) -> None:
         """One login's decision, taken synchronously on the fold's own tick.
 
-        Three shapes, told apart by ``prior``:
+        A ``FROZEN`` PLACEMENT answers before ``prior`` is even consulted: the
+        user has a slice waiting on disk, so the login is a WAKE and it carries
+        the file to the worker the connection is already open on — ``add_user``
+        joins the parcel to the rows the login just made there. The question is
+        asked of the MAP and not of the disk, so a parcel nobody is placed on
+        any more — an orphan the reaper has not reached — can never be
+        delivered over a user who is alive and logging in.
+
+        Three shapes otherwise, told apart by ``prior``:
 
         - nobody held the user: the fold just mapped it to ``worker``, where it
           logged in. ``decide_worker`` — the same reception-first policy as
@@ -2321,6 +2582,23 @@ class UserStickyCommander:
           fold's tick, so the detached task never confuses them with pages
           born at the residence afterwards.
 
+        The wake's per-user barrier is raised HERE, synchronously, before the
+        task detaches: a request arriving in the window between this tick and
+        the task's first step would otherwise find a ``FROZEN`` placement with
+        no hold up and install the same parcel a second time. The detached wake
+        inherits the hold and releases it in its own ``finally`` — the guarantee
+        ``resolve_worker`` documents, extended to the one path that lacked it.
+
+        A hold ALREADY up for a user the map reads ``FROZEN`` means a wake of
+        that user is in flight — the near-impossible case, since the cookie
+        state that produces a login and the one that produces a request are
+        exclusive. The login does not touch that hold and spawns no wake: one
+        owner per Event, never a shared hold. It is logged as a WARNING and
+        left alone, because it is self-healing — the wake in flight lands the
+        user on a worker and the NEXT login of that session reconciles the
+        connection through ``rehome_login``, the ordinary path for a login that
+        arrives away from the residence.
+
         One race is ACCEPTED (probability-weighted rule, 2026-08-12): a second
         guest logging in as the SAME user inside the evict-to-switch window of
         that user's login move re-keys onto the source and settles as "at
@@ -2329,7 +2607,16 @@ class UserStickyCommander:
         KeyError on the ghost's next call, a reload — and the expiry sweep
         retires the leftovers. No machinery covers it.
         """
-        if prior is None:
+        if self.user_worker_map.get(user) == FROZEN:
+            if user in self.moving:
+                self.logger.warning(
+                    "login of %s found a hold already up; leaving the wake to the next request",
+                    user,
+                )
+            else:
+                self.moving[user] = asyncio.Event()
+                self.spawn_settlement(self.wake_user(user, worker), name=f"login-wake:{user}")
+        elif prior is None:
             chosen = self.decide_worker()
             if chosen != worker:
                 self.spawn_settlement(self.move_user(user, chosen), name=f"login-move:{user}")
@@ -2530,8 +2817,15 @@ class UserStickyCommander:
         result = await self.unwrap_reply(source, path, payload)
         return str(result["encoded"])
 
-    async def hand_user_to(self, worker: str, user: str, encoded: str) -> Any:
+    async def hand_user_to(
+        self, worker: str, user: str, encoded: str, parcel_wins: bool = False
+    ) -> Any:
         """Deliver one user's encoded slice to ``worker`` and await its answer.
+
+        ``parcel_wins`` decides who is the truth if the destination already has
+        this user: normally the RESIDENT is, and the parcel joins it. The wake
+        of a hibernated user is the one exception — see ``wake_user`` — and it
+        passes True, so the carried store takes the resident's place.
 
         The single door of the ``add_user`` handover — the move's custody and
         the dump restore both pass through here. One delivery at a time per
@@ -2546,7 +2840,7 @@ class UserStickyCommander:
         """
         async with self.removalists.setdefault(worker, asyncio.Lock()):
             entry = self.worker_roster.get(worker)
-            if entry is None or entry["status"] not in ("active", "evacuating"):
+            if entry is None or entry["status"] not in ("active", "evacuating", "retiring"):
                 # The rare landing race, ACCEPTED (probability-weighted rule,
                 # 2026-08-12): a delivery decided an instant before its target
                 # stopped serving fails HERE, loudly — the caller errors, the
@@ -2558,7 +2852,12 @@ class UserStickyCommander:
             self.pending_users[worker] = time.time()
             try:
                 payload = await self.hub.call(
-                    worker, path, {"identity": user, "kwargs": {"encoded": encoded}}
+                    worker,
+                    path,
+                    {
+                        "identity": user,
+                        "kwargs": {"encoded": encoded, "parcel_wins": parcel_wins},
+                    },
                 )
                 return await self.unwrap_reply(worker, path, payload)
             finally:
@@ -2603,8 +2902,17 @@ class UserStickyCommander:
         raise RuntimeError(f"move of {user} lost its room: no worker left to install it on")
 
     def salvage_target(self, tried: set[str]) -> str | None:
-        """The least loaded active worker no install of this move has burned yet."""
-        candidates = [name for name in self.active_workers if name not in tried]
+        """The least loaded active worker no install of this move has burned yet.
+
+        A ``retiring`` worker is never a salvage landing: a plan in flight has
+        already named it, so the rescued user would only be moved again by the
+        very next step.
+        """
+        candidates = [
+            name
+            for name in self.active_workers
+            if name not in tried and self.worker_roster[name]["status"] != "retiring"
+        ]
         if not candidates:
             return None
         return min(candidates, key=self.evaluator.worker_load)
@@ -2627,41 +2935,604 @@ class UserStickyCommander:
             await barrier.wait()
 
     # ------------------------------------------------------------------
-    # The beat: one pass per probe return, rebalance XOR recycle XOR compaction
+    # The freezer: an idle user hibernates to a file, and wakes from it
     # ------------------------------------------------------------------
 
-    def pool_beat(self) -> None:
-        """Dispatch the one pass this probe return calls for, if any.
+    @property
+    def freeze_candidates(self) -> list[tuple[str, str]]:
+        """The ``(user, worker)`` pairs due for the freezer, longest idle first.
 
-        Three ways a pool can be wrong, in the order they hurt. Excess first: a
-        worker over its own threshold is somebody's latency RIGHT NOW, while
-        everything else is measured in hours. Then the leak: a worker heading
-        for the memory limit is an hours-scale sickness, but it still outranks
-        narrowing the pool — recycling while the pool is wide is safer than
-        compacting first and then evacuating into a tighter one. Slack last: a
-        pool wider than it needs to be only costs memory.
-
-        "Never together" is read here, once, over ALL THREE flags: a compaction
-        in flight is narrowing the pool the rebalance would shed onto, a
-        rebalance is moving the users the ledger would count, and a recycling is
-        carrying a whole worth of users across. So a beat that finds any force
-        up dispatches nothing and lets it finish; the XOR only ever chooses what
-        a FREE beat starts.
-
-        Before the choice, the beat closes the books of the open evacuations —
-        retiring the emptied, reporting the stalled. The moves themselves ride
-        the users' own calls (``close_request``), so this step holds no flag
-        and costs nothing: the other forces always proceed.
+        Takes nothing, modifies nothing. Empty while the freezer is disarmed
+        (``freeze_idle_after`` is None). A user is due once its idle age passes
+        the EFFECTIVE idle of the worker holding it: ``freeze_idle_after``
+        shortened in proportion to that worker's memory pressure and never
+        brought under ``freeze_idle_floor`` — the fuller the memory, the sooner
+        an idle user goes to disk. Read off the ONE ``pool_occupancy`` picture,
+        whose ``idle_users`` already leaves out everybody with work in flight:
+        a user mid-call is never a candidate. An identity that cannot be a
+        filename is exempt — see ``has_freezable_name``.
         """
-        if self.compacting or self.rebalancing or self.recycling:
+        if self.freeze_idle_after is None:
+            return []
+        due: list[tuple[float, str, str]] = []
+        for worker, row in self.pool_occupancy["workers"].items():
+            effective = max(
+                self.freeze_idle_after * (1.0 - row["memory_pressure"]), self.freeze_idle_floor
+            )
+            for user, idle_age in row["idle_users"].items():
+                if idle_age <= effective:
+                    continue
+                if not self.has_freezable_name(user):
+                    self.logger.debug(
+                        "Freeze of %s skipped: its identity cannot be a filename", user
+                    )
+                    continue
+                due.append((idle_age, user, worker))
+        due.sort(reverse=True)
+        return [(user, worker) for _, user, worker in due]
+
+    def has_freezable_name(self, user: str) -> bool:
+        """Whether ``user`` can name a file in the freezer directory at all.
+
+        PATH SAFETY ONLY: an identity carrying a separator or a ``..`` segment
+        would put the parcel somewhere other than ``frozen_users_dir``, and an
+        empty name or a bare ``.`` names the directory itself. The freezer
+        simply does NOT apply to such a user: it is never a candidate and it
+        never has a parcel. No encoding scheme — inventing one is a design
+        decision about identities, and such a user is perfectly well served
+        where it already lives, on a worker.
+        """
+        return (
+            user not in ("", ".")
+            and "/" not in user
+            and "\\" not in user
+            and ".." not in user
+        )
+
+    def has_frozen_parcel(self, user: str) -> bool:
+        """Whether a parcel of ``user`` is waiting in the freezer.
+
+        False with the freezer disarmed, and False for an identity the freezer
+        does not apply to — asked BEFORE the disk, so an unsafe name never
+        builds a path. The one question the login asks: the
+        files are the truth about who is hibernating, so a commander that has
+        forgotten everything still finds them.
+        """
+        return (
+            self.frozen_users_dir is not None
+            and self.has_freezable_name(user)
+            and (self.frozen_users_dir / user).exists()
+        )
+
+    async def freeze_user(self, user: str) -> bool:
+        """Park one user's whole slice in a file and mark its placement ``FROZEN``.
+
+        QUIESCE → seal → file → placement: the freezer's half of the move
+        machinery, and it raises the SAME per-user barrier, so every forward of
+        this user parks while the slice leaves. The worker seals and spends its
+        copy answering (off its loop, see ``UserStickyWorker.freeze_user``), and
+        the commander writes the parcel under ``frozen_users_dir / <user>``,
+        DIRECTLY: a parcel is 2–45 KB, and the half-write window a temp file
+        would retire is narrower than the cost of the discipline. A truncated
+        parcel is not silent — it fails to unpickle at the wake, which treats
+        it exactly as an expired one.
+
+        The rows below the user STAY: a frozen user still owns its connections
+        and its pages, and they answer a worker again the moment ``wake_user``
+        re-points the map. What goes is its half-row on the worker — there is no
+        worker holding it any more.
+
+        Returns whether the user actually went to disk. A user nobody holds, one
+        already frozen, one whose calls do not drain inside the quiesce budget,
+        and one whose worker died mid-seal all stay exactly as they were.
+
+        Everything that can refuse the freeze is asked BEFORE the seal, the
+        directory included: past the seal the slice exists nowhere but in this
+        call, so a refusal there would destroy it. The directory is made and
+        asked whether it takes writes at all — the ordinary case of a freezer
+        pointed at somewhere unwritable.
+
+        A disk that fills BETWEEN that question and the write is an operations
+        concern, not this code's: the write is logged as an ERROR naming the
+        user and the directory, and the user is dropped from the surface so
+        that its next contact restarts it cleanly as a stranger instead of
+        spamming KeyErrors against a worker that has already let the slice go.
+        """
+        worker = self.user_worker_map.get(user)
+        if worker is None or worker == FROZEN:
+            return False
+        if self.frozen_users_dir is None:
+            raise ValueError(f"freeze of {user}: the freezer has no directory to write to")
+        if not self.has_freezable_name(user):
+            raise ValueError(f"freeze of {user!r}: this identity cannot name a file")
+        if user in self.moving:
+            raise RuntimeError(f"move of {user} is already in flight")
+        self.moving[user] = asyncio.Event()
+        try:
+            self.frozen_users_dir.mkdir(parents=True, exist_ok=True)
+            if not os.access(self.frozen_users_dir, os.W_OK):
+                self.logger.warning(
+                    "Freeze of %s skipped: %s does not take writes",
+                    user,
+                    self.frozen_users_dir,
+                )
+                return False
+            if not await self.quiesce_user(user, worker):
+                self.logger.warning(
+                    "Freeze of %s skipped: its calls did not drain in %ss",
+                    user,
+                    self.move_quiesce_timeout,
+                )
+                return False
+            path = f"{OP_PATH_PREFIX}freeze_user"
+            try:
+                payload = await self.hub.call(worker, path, {"identity": user, "kwargs": {}})
+                encoded = str((await self.unwrap_reply(worker, path, payload))["encoded"])
+            except Exception as exc:
+                self.logger.warning(
+                    "Freeze of %s on %s aborted (%s: %s)", user, worker, type(exc).__name__, exc
+                )
+                return False
+            if self.user_worker_map.get(user) != worker:
+                # The same window ``move_user`` documents: the sweep took the
+                # user while its parcel was on the wire. Writing the file now
+                # would park a slice whose surface rows are already demolished,
+                # so it is dropped and the user is as gone as it already is.
+                self.logger.warning(
+                    "Freeze of %s: swept mid-seal (its worker died), parcel discarded", user
+                )
+                return False
+            parcel = self.frozen_users_dir / user
+            try:
+                parcel.write_text(encoded)
+            except OSError as exc:
+                self.logger.error(
+                    "Freeze of %s: the parcel could not be written to %s (%s: %s); "
+                    "the user is dropped and comes back as a stranger",
+                    user,
+                    self.frozen_users_dir,
+                    type(exc).__name__,
+                    exc,
+                )
+                self.remove_user(user)
+                return False
+            del self.worker_roster[worker]["users"][user]
+            self.user_worker_map[user] = FROZEN
+            self.logger.info("Froze %s off %s into %s", user, worker, parcel)
+            return True
+        finally:
+            self.release_move(user)
+
+    async def wake_user(self, user: str, worker: str | None = None) -> bool:
+        """Bring a frozen user back out of its file, onto a living worker.
+
+        The install goes through the ORDINARY placement — ``decide_worker``,
+        the same reception-first policy a login gets — unless ``worker`` names
+        one: a login carries its own destination, because the connection that
+        woke the user is already open there. Either way the parcel travels the
+        ordinary handover, so a worker that cannot take it fails this wake
+        loudly instead of half-installing.
+
+        **On a wake the PARCEL is the truth** (declared exception to the
+        ``add_user`` JOIN, this path only). A frozen user by definition had no
+        live entry anywhere, so an entry found at the destination was made
+        minutes ago by the login's own re-key, against days of hibernated
+        state: the delivery goes out with ``parcel_wins``, the carried store
+        takes the resident's place with every watching page re-attached to it,
+        and the override is logged. Every other path — logins, moves — keeps
+        the ratified JOIN, where the resident wins.
+
+        The surface is relearned from the parcel, exactly as ``restore_dump``
+        relearns it: an operational install shapes no event, so a commander that
+        has forgotten this user — restarted since the hibernation — would hold
+        its placement and none of the connections, pages and table
+        subscriptions under it. ``adopt_slice`` re-hangs them with the lifecycle
+        mutators, which re-state what a same-process wake already knows rather
+        than duplicating it.
+
+        The file is DELETED once the install has answered: the parcel is spent,
+        and a spent parcel is nobody's.
+
+        Returns whether the user came back. A parcel that is missing has
+        EXPIRED — the reaper outlived its class, or the file went by hand — and
+        one that will not unpickle is truncated, the loud end of writing a
+        parcel straight to its name. Neither is an impossible state: the
+        placement and the rows under it are cleared (``remove_user`` already
+        handles a ``FROZEN`` row), the answer is False, and ``resolve_worker``
+        falls through to ``worker_for`` so the user restarts as a stranger. A
+        permanent 500 on every future request is the alternative this refuses.
+
+        The per-user barrier may already be up when this is called: the login
+        path raises it synchronously in ``settle_login`` and hands it over, so a
+        hold found here is this wake's own and is adopted rather than refused.
+        No other hold can be up — a FROZEN placement is on no roster, so no move
+        of this user can be in flight.
+        """
+        if not self.has_frozen_parcel(user):
+            if self.user_worker_map.get(user) == FROZEN:
+                self.logger.warning("frozen parcel of %s expired; treating as new", user)
+                self.remove_user(user)
+            if user in self.moving:
+                self.release_move(user)
+            return False
+        if user not in self.moving:
+            self.moving[user] = asyncio.Event()
+        try:
+            assert self.frozen_users_dir is not None  # has_frozen_parcel answered True
+            parcel = self.frozen_users_dir / user
+            try:
+                encoded = parcel.read_text()
+                pickle.loads(base64.b64decode(encoded))
+            except Exception as exc:
+                self.logger.warning(
+                    "frozen parcel of %s is unreadable (%s: %s); treating as new",
+                    user,
+                    type(exc).__name__,
+                    exc,
+                )
+                parcel.unlink(missing_ok=True)
+                if self.user_worker_map.get(user) == FROZEN:
+                    self.remove_user(user)
+                return False
+            destination = worker or self.decide_worker()
+            answer = await self.hand_user_to(destination, user, encoded, parcel_wins=True)
+            if isinstance(answer, dict) and answer.get("joined"):
+                self.logger.warning(
+                    "Wake of %s on %s found a resident entry: the hibernated store "
+                    "overrode the one the login had just made",
+                    user,
+                    destination,
+                )
+            self.assign_user(user, destination)
+            self.adopt_slice(user, destination, encoded)
+            parcel.unlink()
+            self.logger.info("Woke %s onto %s", user, destination)
+            return True
+        finally:
+            self.release_move(user)
+
+    def reap_frozen_files(self) -> None:
+        """Delete the parcels that have outlived their class. Nothing else.
+
+        PURE housekeeping: it moves no user, touches no placement and reads no
+        map — it only takes files off the disk. Nothing to do with the freezer
+        disarmed or before the first parcel has been written.
+
+        A parcel is kept until it outlives its class: ``FROZEN_GUEST_LIFETIME``
+        for a guest — the name carries ``GUEST_PREFIX``, so the class is read
+        off the file itself — ``FROZEN_USER_LIFETIME`` for a logged user. A
+        spent parcel is not its business either: ``wake_user`` deletes the file
+        it installed.
+
+        The ``FROZEN`` placement of a user whose parcel is reaped here is left
+        exactly where it is, and that is deliberate: ``wake_user`` already
+        answers a missing parcel by clearing the placement and restarting the
+        user as a stranger, so the expiry needs no second implementation on the
+        housekeeping side.
+        """
+        if self.frozen_users_dir is None or not self.frozen_users_dir.exists():
             return
-        self.advance_evacuations()
+        now = time.time()
+        for path in sorted(self.frozen_users_dir.iterdir()):
+            lifetime = (
+                FROZEN_GUEST_LIFETIME
+                if path.name.startswith(GUEST_PREFIX)
+                else FROZEN_USER_LIFETIME
+            )
+            if now - path.stat().st_mtime > lifetime:
+                path.unlink()
+                self.logger.info("Reaped the expired parcel %s (over %ss old)", path.name, lifetime)
+
+    # ------------------------------------------------------------------
+    # The planner: one PLAN per tick, built from one reading of the pool
+    # ------------------------------------------------------------------
+
+    async def planner(self) -> None:
+        """Decide the pool's shape on its own slow clock, and run what it decides.
+
+        The shape of a pool is not an emergency: it is read whole every
+        ``decision_interval`` and never one move per probe return. The probes
+        keep their 5s cadence for HEALTH alone, and the fast reflexes that end a
+        dead worker — the caretaker's kill, ``channel_lost``, the reconcile's
+        respawn — are untouched by this cadence.
+
+        Each tick closes the books of the open evacuations first: retiring the
+        emptied, reporting the stalled. That bookkeeping never waits on
+        anything, and the moves themselves ride the users' own calls
+        (``close_request``). The freezer's disk is swept in the same breath
+        (``reap_frozen_files``): housekeeping is not a plan step, it moves nobody.
+
+        Then the shape: ``build_plan`` answers with the ordered steps, or with
+        nothing when a plan is already in flight. This task IS the executor —
+        the plan is awaited here, so the next tick finds it finished. A tick
+        that falls over leaves its line on the log and the clock keeps running:
+        a pool whose shape stopped being decided at all would go unnoticed.
+        """
+        while True:
+            await asyncio.sleep(self.decision_interval)
+            try:
+                self.advance_evacuations()
+                self.reap_frozen_files()
+                plan = self.build_plan()
+                if plan:
+                    await self.execute_plan(plan)
+            except Exception:
+                self.logger.exception("Planner tick failed")
+
+    def build_plan(self) -> list[dict[str, Any]]:
+        """The ordered steps ONE reading of the pool calls for, and the claim on them.
+
+        THE LADDER, rung by rung, every one of them decided against the same
+        instant — the build is one synchronous breath, so nothing re-reads a pool
+        an earlier rung has changed:
+
+        1. FREEZE. The idle go to disk first, because a user hibernated is a user
+           nobody has to move: every rung above it reasons on a lighter pool.
+        2. REBALANCE. A worker over its own threshold is somebody's latency RIGHT
+           NOW, which is the only thing here that hurts a request in flight.
+        3. REPLACE, worst first — the workers whose live-memory floor has reached
+           its budget (NECESSITY), then the ones holding memory they are not
+           using, most wasteful first (CONVENIENCE); a worker that is both is
+           condemned once, as a necessity. A replacement spawns only when the
+           rest of the pool cannot take its users with margin — a gate asked NET
+           of the condemnations this same plan already absorbs, so the second
+           one does not count the room the first is taking away — and condemning
+           the reception always spawns (R3: role continuity, not capacity).
+        4. SPAWN of spare. R5's "create" half, asked of the pool AS THIS PLAN
+           WOULD LEAVE IT: net of the workers leaving without a successor, the
+           condemnations the gate absorbs and the folds below. At most one — a
+           pool one worker short of comfortable is widened once, and the next
+           tick reads the result.
+        5. COMPACT. Slack last: it only costs memory to leave alone.
+
+        A ``restricted`` pool carries ONE probe spawn at the TAIL of the ladder
+        whatever the ledger says: the restriction is lifted by positive proof
+        that a fresh process can start, so the planner is its retry engine — a
+        trigger that has since lapsed must not strand the latch. It goes last
+        because a failed spawn aborts the plan: nothing below the probe depends
+        on the widening (unlike the ladder's own rung 4, which the folds read
+        after), so a probe that fails must not suppress the freeze, replace and
+        compact rungs the ledger did ask for. The probe is the plan's only
+        spawn: any step that already raises a process — the ladder's own spawn
+        rung, or a replace carrying ``spawn`` — IS the proof the restriction is
+        waiting for, and two children for one tick is a pool widened twice. It
+        carries ``probe``, so the execute side can drop it once the restriction
+        has meanwhile lifted, and it runs under the same guards as any spawn.
+
+        The in-process worker of the single role is never condemned: it IS the
+        commander's process, so no successor could shed its leak.
+
+        Returning the steps also CLAIMS them: ``active_plan`` is set here, in the
+        same synchronous breath as the reading, so two planner ticks landing in
+        the same loop iteration cannot both build. A build while a
+        plan is in flight returns no second plan.
+
+        Every worker a step NAMES is stamped ``retiring`` in that same breath,
+        and the condemnations stamp INSIDE their own loop: from the instant a
+        worker is named it stops being a destination, so no later step of this
+        plan sheds onto a worker an earlier one takes out, and no gate counts as
+        a receiver a worker already condemned. ``release_plan`` un-stamps
+        whatever the plan never actually took out. A freeze step names a USER,
+        not a worker: it stamps nothing.
+        """
+        if self.active_plan is not None:
+            return []
+        steps: list[dict[str, Any]] = [
+            {"op": "freeze", "user": user, "worker": worker}
+            for user, worker in self.freeze_candidates
+        ]
         if self.rebalance_excess():
-            self.trigger_rebalance()
-        elif self.recycle_candidate() is not None:
-            self.trigger_recycle()
-        else:
-            self.trigger_compaction()
+            steps.append({"op": "rebalance"})
+        reception = self.reception
+        condemned = self.condemned_workers()
+        leaving: list[str] = []
+        for worker in condemned:
+            spawn = worker == reception or not self.pool_absorbs(worker, leaving=leaving)
+            steps.append({"op": "replace", "worker": worker, "spawn": spawn})
+            self.worker_roster[worker]["status"] = "retiring"
+            if not spawn:
+                leaving.append(worker)
+        folding = self.compaction_order(condemned)
+        if self.needs_spare_capacity(leaving + folding):
+            if self.max_workers is not None and self.target >= self.max_workers:
+                self.logger.warning(
+                    "Pool full at max_workers=%s; the plan cannot spawn", self.max_workers
+                )
+            else:
+                steps.append({"op": "spawn"})
+        for worker in folding:
+            steps.append({"op": "compact", "worker": worker})
+            self.worker_roster[worker]["status"] = "retiring"
+        if self.pool_status == "restricted" and not any(
+            step["op"] == "spawn" or step.get("spawn") for step in steps
+        ):
+            steps.append({"op": "spawn", "probe": True})
+        self.active_plan = steps or None
+        return steps
+
+    def release_plan(self) -> None:
+        """Drop the claim on the plan and give back whoever it never took out.
+
+        Clears ``active_plan`` and rolls every row still stamped ``retiring``
+        back to ``active``. A step that RAN has already moved its worker on —
+        ``evacuating`` for a replacement, ``draining`` for a fold — so what still
+        reads ``retiring`` is exactly what was skipped or never reached, and it
+        goes back to being a full member of the pool. Building and discarding a
+        plan without releasing it is impossible by construction: this is the one
+        door out.
+        """
+        self.active_plan = None
+        for entry in self.worker_roster.values():
+            if entry["status"] == "retiring":
+                entry["status"] = "active"
+
+    def condemned_workers(self) -> list[str]:
+        """The workers this plan replaces, necessity first then convenience.
+
+        The two triggers of R5 in the order the register puts them, each worker
+        named once. The in-process worker is out: it cannot be succeeded.
+        """
+        in_process = self.worker.name if self.worker is not None else None
+        condemned = []
+        for worker in self.necessity_candidates() + self.convenience_candidates():
+            if worker != in_process and worker not in condemned:
+                condemned.append(worker)
+        return condemned
+
+    def compaction_order(self, condemned: Sequence[str] = ()) -> list[str]:
+        """The workers this plan folds away, emptiest first, while the ledger allows it.
+
+        Emptiest first is literal: the ones already holding no user come first —
+        their fold costs no move at all — then the rest of the pool by ascending
+        load, because the compaction is ACTIVE (R5) and takes the last users off
+        the emptiest worker to free it.
+
+        A worker this plan already CONDEMNS is not folded on top of that: its
+        replacement step takes it out of the pool by itself, and a fold aimed at
+        a row already on its way out would find nothing left to retire. The same
+        goes for a row already stamped ``retiring`` — a fold this very build has
+        just planned, or one an earlier plan has yet to run.
+
+        A candidate is kept only while the headroom READ WITHOUT the folds
+        already planned stays OVER ``compaction_margin`` — a margin means a
+        margin, so a fold landing exactly on it is refused; the pool as it would
+        stand once this plan has run, not as it reads now. Each fold costs a
+        whole gate of capacity and gives back what its worker holds, which is the
+        ledger's own arithmetic applied to a pool that is still hypothetical.
+        The reception is never a candidate: it is the guests' worker, the one
+        address a pool always has.
+        """
+        empty = [
+            name
+            for name in self.empty_workers()
+            if name not in condemned and self.worker_roster[name]["status"] != "retiring"
+        ]
+        rest = sorted(
+            (
+                name
+                for name in self.active_workers[1:]
+                if name not in empty
+                and name not in condemned
+                and self.worker_roster[name]["status"] != "retiring"
+            ),
+            key=self.evaluator.worker_load,
+        )
+        headroom = self.capacity_headroom()
+        folding = []
+        for name in empty + rest:
+            after = headroom - 1.0 + self.evaluator.worker_load(name)
+            if after <= self.compaction_margin:
+                break
+            folding.append(name)
+            headroom = after
+        return folding
+
+    async def execute_plan(self, plan: list[dict[str, Any]]) -> None:
+        """Run the steps in order, one at a time, then release the claim.
+
+        Sequential by construction: each step reads a pool the previous one has
+        already changed, which is why they were ordered at build time and not
+        dispatched together. A step that raises ends the whole plan — the next
+        tick re-reads the world and decides again, which is the only retry there
+        is. However it ends, the claim is dropped through ``release_plan``, which
+        also hands back every worker this plan named and never took out.
+
+        A compaction step re-reads the pool before it moves anybody: the plan was
+        ordered against a pool the steps before it have since changed. A fold the
+        ledger no longer authorizes is skipped rather than paid for, and so is one
+        whose worker has meanwhile left the active pool or BECOME the reception —
+        a replacement step ahead of it moves that role, and the reception is never
+        folded away. The drain is what makes it ACTIVE — the last users leave, one
+        whole ``move_user`` each — and a drain that does not empty its worker
+        retires nothing.
+
+        A freeze step is a whole ``freeze_user`` round trip, and a user that has
+        meanwhile moved, gone or come back to life simply does not go to disk:
+        the freezer answers False and the plan carries on. A spawn step raises the
+        target first — the reconcile must not read the new process as a surplus —
+        and then waits for the child to present itself, so the rungs below it
+        (the folds) reason on a pool the widening has already reached.
+
+        Every step is re-asked at execute time what the build could only ask of
+        an older pool. A freeze whose user has since raised the per-user barrier
+        is skipped — the freezer's own contract is that a move in flight answers
+        False and the plan carries on, and it is not the plan's business to
+        raise. A spawn is skipped when the pool has meanwhile reached
+        ``max_workers`` or already has a child on its way, the guards
+        ``rebalance_spawn`` applies to its own scale-up — and a PROBE spawn is
+        skipped outright once the restriction it exists to lift has been lifted
+        by somebody else. A skip is not a failure: the plan goes on to the rung
+        below.
+
+        A step that REPORTS its failure ends the plan exactly like one that
+        raises, and for the same reason: what failed is the pool's ability to
+        put a fresh process up, so every step ordered after it was decided
+        against a world that no longer holds. A replace escalates first — the
+        soft succession is given its 30 seconds, then ``hard_restart`` — and
+        only a pool that refuses even that aborts, leaving ``pool_status``
+        ``restricted`` behind it. The next tick re-reads the world and decides
+        again: that is the only retry there is.
+        """
+        try:
+            for step in plan:
+                if step["op"] == "freeze":
+                    if step["user"] in self.moving:
+                        continue
+                    await self.freeze_user(step["user"])
+                elif step["op"] == "rebalance":
+                    await self.rebalance_pass()
+                elif step["op"] == "replace":
+                    if not await self.recycle_worker(step["worker"], spawn=step["spawn"]):
+                        if not await self.hard_restart(step["worker"]):
+                            # Anomaly-channel emitter (issue #19).
+                            self.logger.error(
+                                "plan aborted: %s step failed on %s", step["op"], step["worker"]
+                            )
+                            self.pool_status = "restricted"
+                            return
+                elif step["op"] == "spawn":
+                    if step.get("probe") and self.pool_status == "ready":
+                        continue
+                    if self.max_workers is not None and self.target >= self.max_workers:
+                        self.logger.warning(
+                            "Pool full at max_workers=%s; the plan cannot spawn",
+                            self.max_workers,
+                        )
+                        continue
+                    if len(self.living_workers) > len(self.active_workers):
+                        continue
+                    self.target += 1
+                    child = self.spawn_worker()
+                    try:
+                        await self.wait_worker_ready(child)
+                    except TimeoutError:
+                        self.target = max(0, self.target - 1)
+                        if self.worker_roster[child]["status"] != "dead":
+                            self.retire_worker(child)  # who opens a manoeuvre closes it
+                        # Anomaly-channel emitter (issue #19).
+                        self.logger.error(
+                            "plan aborted: %s step failed on %s", step["op"], child
+                        )
+                        self.pool_status = "restricted"
+                        return
+                    self.logger.info("Plan widened the pool to %s workers", self.target)
+                else:
+                    worker = step["worker"]
+                    if worker not in self.active_workers or worker == self.reception:
+                        continue
+                    if self.capacity_headroom(exclude=worker) <= self.compaction_margin:
+                        continue
+                    if not await self.drain_worker(worker):
+                        self.logger.warning(
+                            "Compaction skipped: worker %s did not drain, keeping it", worker
+                        )
+                        continue
+                    self.retire(worker)
+                    self.logger.info(
+                        "Compaction retired worker %s; target is %s", worker, self.target
+                    )
+        finally:
+            self.release_plan()
 
     def worker_threshold(self, worker: str) -> float:
         """The saturation ``worker`` is judged at: its own if reception, else the gate.
@@ -2684,44 +3555,12 @@ class UserStickyCommander:
                 excess.append((name, over))
         return sorted(excess, key=lambda item: -item[1])
 
-    def trigger_rebalance(self) -> None:
-        """Start a rebalance pass unless one is already in flight."""
-        if self.rebalancing:
-            return
-        self.rebalancing = True
-        try:
-            self.spawn_pool_pass(self.rebalance_pass())
-        except Exception:
-            self.rebalancing = False
-            raise
-
-    def trigger_recycle(self) -> None:
-        """Start a recycling pass unless one is already in flight."""
-        if self.recycling:
-            return
-        self.recycling = True
-        try:
-            self.spawn_pool_pass(self.recycle_pass())
-        except Exception:
-            self.recycling = False
-            raise
-
-    def trigger_compaction(self) -> None:
-        """Start a compaction pass unless one is already in flight."""
-        if self.compacting:
-            return
-        self.compacting = True
-        try:
-            self.spawn_pool_pass(self.compact_pass())
-        except Exception:
-            self.compacting = False
-            raise
-
     def spawn_pool_pass(self, pass_coroutine: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
-        """Run one pool pass detached: the beat never waits on what it started.
+        """Run one pool pass detached: the caller never waits on what it started.
 
         The loop holds only a weak reference to a task, so the set is what keeps
-        the pass alive; the caretaker that dispatched it goes back to its cadence.
+        the pass alive; the caller returns at once. The only caller left in the
+        package is ``close_request``.
         """
         task = asyncio.create_task(pass_coroutine)
         self._pool_tasks.add(task)
@@ -2736,7 +3575,8 @@ class UserStickyCommander:
         of it, so it is picked against the sum rather than against the worker
         being relieved. No target able to take it — nobody is cool enough, or
         every other worker is hot too — and the pass widens the pool instead and
-        ends: the next beat finds a fresh, empty worker and sheds onto that.
+        ends: the next planner tick, one ``decision_interval`` later (300s by
+        default), finds a fresh, empty worker and sheds onto that.
 
         With a target, each hot worker from the hottest down hands over the users
         ``pick_rebalance_users`` names for it, one whole ``move_user`` each. A move
@@ -2744,50 +3584,53 @@ class UserStickyCommander:
         this pass was decided on. Nothing is ever retired here — a rebalance
         levels the pool, only the compaction narrows it.
         """
-        try:
-            excess = self.rebalance_excess()
-            if not excess:
-                return
-            target = self.pick_rebalance_target(sum(value for _, value in excess))
-            if target is None:
-                self.rebalance_spawn()
-                return
-            for worker, budget in excess:
-                target_empty = not self.users_on(target)
-                for user in self.pick_rebalance_users(worker, budget, target_empty, now):
-                    if self.user_worker_map.get(user) != worker:
-                        continue
-                    if not await self.move_user(user, target):
-                        self.logger.warning(
-                            "Rebalance of %s: %s did not land on %s, ending the pass",
-                            worker,
-                            user,
-                            target,
-                        )
-                        return
-        finally:
-            self.rebalancing = False
+        excess = self.rebalance_excess()
+        if not excess:
+            return
+        target = self.pick_rebalance_target(sum(value for _, value in excess))
+        if target is None:
+            self.rebalance_spawn()
+            return
+        for worker, budget in excess:
+            target_empty = not self.users_on(target)
+            for user in self.pick_rebalance_users(worker, budget, target_empty, now):
+                if self.user_worker_map.get(user) != worker:
+                    continue
+                if not await self.move_user(user, target):
+                    self.logger.warning(
+                        "Rebalance of %s: %s did not land on %s, ending the pass",
+                        worker,
+                        user,
+                        target,
+                    )
+                    return
 
     def pick_rebalance_target(self, total_excess: float) -> str | None:
         """The one worker that absorbs the whole excess, or None when nobody can.
 
         A candidate is a NON-reception worker that is not hot itself and whose
         saturation still sits under ``1.0 - rebalance_margin`` once the whole
-        excess has landed on it — a target filled up to the gate would be the next
-        beat's hot worker. Among those the least LOADED wins: the fit is judged on
-        the binding resource, the choice on the whole picture.
+        excess has landed on it — a target filled up to the gate would be the hot
+        worker of the next planner tick. Among those the FULLEST wins: placement consolidates
+        rather than spreads (R5), so the shed users pack onto a worker already
+        carrying its share and the emptier rows stay foldable.
+
+        A ``retiring`` worker is never eligible: the plan in flight folds or
+        replaces it, and shedding onto it would hand the very next step a drain
+        of the users this one just carried over.
         """
         ceiling = 1.0 - self.rebalance_margin
         saturation = self.evaluator.worker_saturation
         eligible = [
             name
             for name in self.active_workers[1:]
-            if saturation(name) <= self.worker_threshold(name)
+            if self.worker_roster[name]["status"] != "retiring"
+            and saturation(name) <= self.worker_threshold(name)
             and saturation(name) + total_excess <= ceiling
         ]
         if not eligible:
             return None
-        return min(eligible, key=self.evaluator.worker_load)
+        return max(eligible, key=self.evaluator.worker_load)
 
     def rebalance_weights(self, worker: str, now: float | None = None) -> dict[str, float]:
         """``worker``'s saturation apportioned over its MOVABLE users, by recent seconds.
@@ -2826,8 +3669,16 @@ class UserStickyCommander:
         ``rebalance_min_share`` of the worker — a nearly idle user sheds nothing
         and the move would cost a whole slice on the wire. Users accumulate until
         their weights cover the budget, or until there are none left.
+
+        A user already being carried is never picked: its hold would make the
+        move answer False and end the pass on a user somebody else is moving
+        anyway.
         """
-        weights = self.rebalance_weights(worker, now)
+        weights = {
+            user: weight
+            for user, weight in self.rebalance_weights(worker, now).items()
+            if user not in self.moving
+        }
         if not weights:
             return []
         if target_empty:
@@ -2853,7 +3704,8 @@ class UserStickyCommander:
         The scale-up's own guards: a worker already on its way is waited for
         instead of being stacked on, and ``max_workers`` is a hard ceiling. The
         pass ends here either way — the fresh worker is cold and empty, which is
-        exactly the target the next beat needs.
+        exactly the target the next planner tick needs, one ``decision_interval``
+        later (300s by default).
         """
         if len(self.living_workers) > len(self.active_workers):
             return
@@ -2869,56 +3721,161 @@ class UserStickyCommander:
     # Compaction: the capacity ledger, and the workers it folds away
     # ------------------------------------------------------------------
 
-    def capacity_headroom(self) -> float:
+    def capacity_headroom(self, exclude: str | None = None) -> float:
         """The ledger ``C - O``: how much room the pool has beyond what it holds.
 
         ``C`` is what the pool may take — the reception up to its own threshold
         plus a whole gate for every other worker — and ``O`` is what it holds,
         summed in QUANTITY (``worker_load``): the ledger asks how much fits, not which
         resource binds. A pool with no active worker has no capacity to report.
+
+        ``exclude`` reads the same ledger WITHOUT one worker, as if it were
+        already gone: the question a retirement asks before it commits.
         """
-        active = self.active_workers
+        active = [name for name in self.active_workers if name != exclude]
         if not active:
             return 0.0
         capacity = self.reception_threshold + (len(active) - 1) * 1.0
         occupied = sum(self.evaluator.worker_load(name) for name in active)
         return capacity - occupied
 
-    async def compact_pass(self) -> None:
-        """Fold workers away while the pool has room to spare, one at a time.
+    def needs_spare_capacity(self, leaving: Sequence[str] = ()) -> bool:
+        """Whether the pool is due a spawn on the ledger alone, hot worker or not.
 
-        The ledger decides how many: while the headroom stays over
-        ``compaction_margin`` — one whole gate being 1.0 — the least loaded
-        NON-reception worker is drained and retired. The reception is never a
-        candidate: it is the guests' worker, the one address a pool always has.
-        A drain that does not empty its worker STOPS the pass and retires
-        nothing: a worker still holding state is never retired.
+        True while the headroom sits under ``spawn_margin``: a pool this tight
+        has nowhere to put the next login even though nobody is over threshold.
 
-        An open evacuation never leaves an anonymous overlap for this pass to
-        misread: the flagged source is outside both ``active_workers`` and
-        ``living_workers`` while its replacement covers it one for one, so the
-        books this fold keeps — one target decrement per fold — stay honest.
+        ``leaving`` names the workers that are on their way out WITHOUT a
+        successor — the condemnations the weight gate absorbs and the folds — and
+        the answer is then read on the pool as it would stand once they are gone:
+        each of them gives back what it holds and takes a whole gate of capacity
+        with it, the compaction's own arithmetic. A worker being REPLACED one for
+        one is not leaving: its users land on its successor.
         """
-        try:
-            while True:
-                active = self.active_workers
-                candidates = active[1:]
-                if not candidates or len(active) <= self.min_workers:
-                    return
-                if self.capacity_headroom() <= self.compaction_margin:
-                    return
-                candidate = min(candidates, key=self.evaluator.worker_load)
-                if not await self.drain_worker(candidate):
-                    self.logger.warning(
-                        "Compaction stopped: worker %s did not drain, keeping it", candidate
-                    )
-                    return
-                self.retire(candidate)
-                self.logger.info(
-                    "Compaction retired worker %s; target is %s", candidate, self.target
-                )
-        finally:
-            self.compacting = False
+        headroom = self.capacity_headroom()
+        for name in leaving:
+            headroom += self.evaluator.worker_load(name) - 1.0
+        return headroom < self.spawn_margin
+
+    def necessity_candidates(self) -> list[str]:
+        """The active workers whose live-memory floor has reached its budget.
+
+        The floor is what the process will not give back, so a floor at
+        ``memory_limit_mb * floor_limit_ratio`` is a worker that has spent what
+        it was given: its replacement is a NECESSITY. Read off the last archived
+        floor (``worker_floors``) — a worker that has closed no window yet, and a
+        commander with no ``memory_limit_mb`` at all, have no necessity to
+        answer for.
+        """
+        if not self.memory_limit_mb:
+            return []
+        budget = self.memory_limit_mb * 1024 * 1024 * self.floor_limit_ratio
+        candidates = []
+        for name in self.active_workers:
+            floors = self.worker_floors(name)
+            if floors and floors[-1]["floor"] >= budget:
+                candidates.append(name)
+        return candidates
+
+    def convenience_candidates(self) -> list[str]:
+        """The active workers holding memory they are not using, worst first.
+
+        The waste is what the last occupancy report shows the process keeping
+        over its live floor — ``rss`` minus ``rss - reusable`` — measured against
+        that floor: over ``waste_ratio`` the replacement buys back memory the
+        worker was never going to return, which is a CONVENIENCE, not an
+        emergency. A report with no ``rss`` reading, or a floor of zero, weighs
+        nothing and never qualifies.
+        """
+        wastes: dict[str, float] = {}
+        for name in self.active_workers:
+            window = self.worker_window(name)
+            if not window:
+                continue
+            report = window[-1].get("report") or {}
+            rss = report.get("rss")
+            if rss is None:
+                continue
+            floor = rss - (report.get("reusable") or 0)
+            if floor <= 0:
+                continue
+            waste = (rss - floor) / floor
+            if waste > self.waste_ratio:
+                wastes[name] = waste
+        return sorted(wastes, key=lambda name: wastes[name], reverse=True)
+
+    def empty_workers(self) -> list[str]:
+        """The active workers holding no user at all, in spawn order.
+
+        The reception is never one of them: it is the guests' worker whatever it
+        holds, and the pool always keeps that one address.
+        """
+        reception = self.reception
+        return [
+            name
+            for name in self.active_workers
+            if name != reception and not self.users_on(name)
+        ]
+
+    def pick_best_fit(self, weight: float, exclude: str | None = None) -> str | None:
+        """The FULLEST active worker that still takes ``weight``, ``None`` if none does.
+
+        Placement packs rather than spreads: among the workers whose saturation
+        plus the incoming weight stays under the candidate's OWN admission
+        ceiling — ``worker_threshold``, so the reception is never filled past the
+        lower gate it is judged at — the answer is the one with the LEAST room
+        left: a 10-weight user goes to the worker with 40 free, not to the fresh
+        one with a whole gate free, so the fresh one stays available for what
+        only it can take. ``exclude`` leaves the condemned worker out: it is the
+        one the users are leaving.
+
+        A ``retiring`` worker never fits anything: a plan in flight has already
+        named it, so admitting a user there would only queue another move. This
+        is also what stops a condemnation gate from counting, as a receiver, a
+        worker an earlier step of the SAME plan is taking out.
+        """
+        saturation = self.evaluator.worker_saturation
+        fitting = [
+            name
+            for name in self.active_workers
+            if name != exclude
+            and self.worker_roster[name]["status"] != "retiring"
+            and saturation(name) + weight < self.worker_threshold(name)
+        ]
+        if not fitting:
+            return None
+        return max(fitting, key=saturation)
+
+    def pool_absorbs(self, worker: str, leaving: Sequence[str] = ()) -> bool:
+        """Whether the rest of the pool takes ``worker``'s users WITH MARGIN.
+
+        The gate a condemnation asks before it decides to replace without
+        spawning. Two answers must agree: the ledger read WITHOUT the condemned
+        worker still stands OVER ``compaction_margin`` — the same margin a
+        retirement demands, no second knob — and every user leaving is
+        INDIVIDUALLY placeable by ``pick_best_fit``. The aggregate is not
+        enough: room spread over three workers takes nobody if no single one of
+        them fits the user carrying it. The weights are the ones
+        ``rebalance_weights`` already computes — one weighing vocabulary.
+
+        ``leaving`` names the workers THIS SAME PLAN already condemns without a
+        successor, and the aggregate is read on the pool as it would stand once
+        they are gone: each gives back what it holds and takes a whole gate with
+        it, the same arithmetic ``needs_spare_capacity`` uses. Without it the
+        second condemnation of a tick would count room the first one is
+        about to take away. The receivers half needs no such netting: a
+        condemned worker is stamped ``retiring`` in the same breath, and
+        ``pick_best_fit`` already refuses those.
+        """
+        headroom = self.capacity_headroom(exclude=worker)
+        for name in leaving:
+            headroom += self.evaluator.worker_load(name) - 1.0
+        if headroom <= self.compaction_margin:
+            return False
+        weights = self.rebalance_weights(worker)
+        return all(
+            self.pick_best_fit(weight, exclude=worker) is not None for weight in weights.values()
+        )
 
     async def drain_worker(self, worker: str) -> bool:
         """Move every user off ``worker``; returns whether it ended up empty.
@@ -2948,87 +3905,54 @@ class UserStickyCommander:
         """The users of ``worker`` in the order a drain takes them: idle first.
 
         Two alphabetical tiers — the users whose half-row has nothing pending,
-        then the rest.
+        then the rest. A user already being carried is left out: its hold would
+        make the drain's move answer False and abort the whole fold, where
+        leaving it simply means the worker does not end up empty and is kept.
         """
         rows = self.worker_roster[worker]["users"]
-        return sorted(rows, key=lambda user: (bool(rows[user]["pending"]), user))
+        return sorted(
+            (user for user in rows if user not in self.moving),
+            key=lambda user: (bool(rows[user]["pending"]), user),
+        )
 
     def pick_compaction_target(self, drained: str) -> str | None:
-        """Where one user of ``drained`` belongs: the admission rule, once.
+        """Where one user of ``drained`` belongs: the best-fit rule, once.
 
-        The least loaded worker that still admits, and the least loaded of all if
-        none does — the ledger already promised the pool fits, so a gate closed
-        everywhere is a reading in flight, not a reason to abandon the user.
-        None only when ``drained`` is the whole pool.
+        Every condemnation places by R4: the FULLEST worker that still admits one
+        more (``pick_best_fit``), so the pool packs instead of spreading and a
+        fresh worker stays available for what only it can take. The weight asked
+        for is the bare admission — the drain moves ONE user and re-reads, so the
+        question at each step is who has room now, not who could hold the whole
+        worker.
+
+        With nobody admitting, the least loaded of all takes the user anyway: the
+        ledger already promised the pool fits, so a gate closed everywhere is a
+        reading in flight, not a reason to abandon the user. A ``retiring``
+        worker is out of that fallback too: the same plan is taking it away, and
+        the user would be drained a second time. None only when ``drained`` is
+        the whole pool.
         """
-        candidates = [name for name in self.active_workers if name != drained]
+        candidates = [
+            name
+            for name in self.active_workers
+            if name != drained and self.worker_roster[name]["status"] != "retiring"
+        ]
         if not candidates:
             return None
-        admitting = [name for name in candidates if self.evaluator.worker_saturation(name) < 1.0]
-        return min(admitting or candidates, key=self.evaluator.worker_load)
+        best = self.pick_best_fit(0.0, exclude=drained)
+        return best if best is not None else min(candidates, key=self.evaluator.worker_load)
 
     # ------------------------------------------------------------------
     # Recycling — replacing a worker whose live memory is heading for the limit
     # ------------------------------------------------------------------
 
-    def recycle_candidate(self) -> str | None:
-        """The active worker closest to its memory limit, if any is close enough.
-
-        The reading is ``worker_time_to_limit`` — hours until the live-memory
-        floor meets the limit — and the smallest one strictly under
-        ``recycle_horizon_hours`` is the candidate. A worker whose T is None is
-        not close to anything: its floor is flat, falling or not yet readable,
-        and a pool with no ``memory_limit_mb`` reads None everywhere, so the
-        whole force disarms by itself.
-
-        The in-process worker of the single role is never a candidate: it IS
-        the commander's own process, so a successor cannot shed its leak and
-        the retire would have no process to end.
-
-        No candidate at all while a succession is already open (an
-        ``evacuating`` worker exists — one manoeuvre at a time), or while the
-        pool cannot regenerate and the last probe of that condition is younger
-        than ``RECYCLE_RETRY_SECONDS`` — re-picking then would fork one
-        stillborn per beat toward a world that has not been repaired.
-        """
-        if any(entry["status"] == "evacuating" for entry in self.worker_roster.values()):
-            return None
-        failed = self.regeneration_failed_at
-        if failed is not None and time.monotonic() - failed < RECYCLE_RETRY_SECONDS:
-            return None
-        readings = []
-        for name in self.active_workers:
-            if self.worker is not None and name == self.worker.name:
-                continue
-            hours = self.evaluator.worker_time_to_limit(name)
-            if hours is not None and hours < self.recycle_horizon_hours:
-                readings.append((hours, name))
-        if not readings:
-            return None
-        return min(readings)[1]
-
-    async def recycle_pass(self) -> None:
-        """Succeed ONE worker per pass: the nearest to its limit, and no more.
-
-        A recycling costs a spawn and a whole worker's users moved, so the pass
-        takes the single worst candidate and ends; the next beat reads the pool
-        as it is then and decides again.
-        """
-        try:
-            candidate = self.recycle_candidate()
-            if candidate is None:
-                return
-            await self.recycle_worker(candidate)
-        finally:
-            self.recycling = False
-
     def advance_evacuations(self) -> None:
-        """Close the books of the open evacuations — cheap, synchronous, per beat.
+        """Close the books of the open evacuations — cheap, synchronous, per tick.
 
         The moves do not live here: the idle users travel with the opening
         pass, and everyone else self-delivers the instant their last call
         closes (``close_request`` → ``evacuate_user``). What is left for the
-        beat is bookkeeping — retire a worker that stands empty, and report
+        tick is bookkeeping — retire a worker that stands empty, and report
         one that the pool's own clocks should have freed by now. Neither holds
         a flag, so a lingering evacuation never starves the other forces.
         """
@@ -3045,14 +3969,15 @@ class UserStickyCommander:
         """Move whoever is ready to leave ``worker``; retire it the moment it empties.
 
         Only the users with nothing pending move NOW — a straggler mid-call is
-        skipped without waiting, and a later beat catches it once its call has
+        skipped without waiting, and a later planner tick — one
+        ``decision_interval`` away, 300s by default — catches it once its call has
         closed or the pool's own inactivity clocks have cassated it. One failed
-        move ends the step (the pool changed under it); the next beat resumes.
+        move ends the step (the pool changed under it); the next tick resumes.
         A worker that stops being ``evacuating`` mid-step — it died, and the
         row belongs to ``channel_lost`` — ends the step too, touching nothing.
 
         A straggler still aboard when the step ends is not this pass's
-        problem: a later beat re-reads the row, and a stall past the pool's own
+        problem: a later tick re-reads the row, and a stall past the pool's own
         clocks is what ``warn_stalled_evacuation`` reports.
         """
         entry = self.worker_roster[worker]
@@ -3073,8 +3998,11 @@ class UserStickyCommander:
     def warn_stalled_evacuation(self, worker: str) -> None:
         """Report an evacuation the pool's own clocks should have freed by now.
 
-        Throttled to one report per ``RECYCLE_RETRY_SECONDS``: the condition
-        does not change per beat, and the report is for a human, not a log
+        The stall itself is measured against ``CONNECTION_MAX_AGE`` — the
+        inactivity clock that should have freed the worker — while the repeat is
+        throttled to one report per ``EVACUATION_WARN_INTERVAL``: the condition
+        does not change from one tick to the next, and the report is for a
+        human, not a log
         flood. Destination when the server grows its anomaly channel: that
         channel; the WARNING is its stand-in.
         """
@@ -3084,7 +4012,7 @@ class UserStickyCommander:
         if since is None or now - since < CONNECTION_MAX_AGE:
             return
         warned = entry["evacuation_warned_at"]
-        if warned is not None and now - warned < RECYCLE_RETRY_SECONDS:
+        if warned is not None and now - warned < EVACUATION_WARN_INTERVAL:
             return
         entry["evacuation_warned_at"] = now
         self.logger.warning(
@@ -3094,8 +4022,13 @@ class UserStickyCommander:
             sorted(self.users_on(worker)),
         )
 
-    async def recycle_worker(self, name: str) -> bool:
+    async def recycle_worker(self, name: str, spawn: bool = True) -> bool:
         """Replace one worker: fresh process up, users carried over, source out.
+
+        Two branches, and they differ on the target: with ``spawn=True`` the
+        target stays as it is (the replacement covers the source one for one),
+        with ``spawn=False`` the target follows the source out and the pool
+        narrows by one. Both are detailed below.
 
         A leaking worker is not killed and mourned, it is SUCCEEDED — the
         replacement is spawned and awaited active BEFORE anything moves, so the
@@ -3105,55 +4038,173 @@ class UserStickyCommander:
         reception, while the forwards of the users still resident keep reaching
         it — routing reads ``user_worker_map``, which only the move machinery
         rewrites. Spawning goes through ``spawn_worker`` and the retire through
-        ``retire_worker``: the TARGET is never touched — the replacement covers
-        the flagged source, one for one, until the retire closes the books.
+        ``retire_worker``: on this branch the TARGET stays as it is — the
+        replacement covers the flagged source, one for one, until the retire
+        closes the books.
 
         THE SICK WORKER IS FLAGGED ONLY AFTER ITS SUCCESSOR HAS REGISTERED — so
         a replacement that never comes leaves it untouched, with nothing to
         roll back, by construction. That failure is not the recycling's to
         manage: the pool cannot regenerate, which is a health condition — the
         recycling closes its own stillborn (who opens a manoeuvre closes it),
-        stamps ``regeneration_failed_at`` (new entries get 503, the residents
-        keep being served, any successful REGISTER clears it), and ends.
+        says so loudly in the log, and ends. Nothing is stamped: the failure
+        leaves no state behind, and the next planner pass re-reads the world and
+        decides again.
 
         Past the flag there is no way back: an evacuation is a state that
         CONVERGES, not an attempt that can fail. The first pass runs here; the
-        stragglers are the beat's business (``advance_evacuations``), and each
+        stragglers are the planner tick's business (``advance_evacuations``,
+        once per ``decision_interval``), and each
         of them either finishes its call and moves, or stops generating traffic
         and is cassated by the pool's own inactivity clocks — the worker
         retires itself the moment it stands empty. Every write to the row
         re-reads it first: a row ``channel_lost`` stamped ``dead`` is its.
+
+        ``spawn=False`` is the branch the weight gate (R4) opens when the rest of
+        the pool already takes this worker's users with margin: no new process at
+        all, the source is condemned and evacuated, and the POOL NARROWS BY ONE —
+        the target follows the worker out, or the reconcile would spawn back the
+        very process the gate said was not needed. Nothing is awaited before the
+        flag here because there is nothing to wait for: a pool that can absorb
+        the users cannot fail to regenerate.
         """
         entry = self.worker_roster.get(name)
         if entry is None:
             raise KeyError(f"no such worker to recycle: {name!r}")
         if self.worker is not None and name == self.worker.name:
             raise ValueError(f"worker {name!r} is the in-process worker: not recyclable")
-        if entry["status"] != "active":
+        if entry["status"] not in ("active", "retiring"):
             raise ValueError(f"worker {name!r} is {entry['status']}: not recyclable")
-        replacement = self.spawn_worker()
-        try:
-            await self.wait_worker_ready(replacement)
-        except TimeoutError:
-            if self.worker_roster[replacement]["status"] != "dead":
-                self.retire_worker(replacement)
-            self.regeneration_failed_at = time.monotonic()
-            self.logger.error(
-                "Recycling of %s not opened: replacement %s never registered — "
-                "the pool cannot regenerate, refusing new entries",
+        if spawn:
+            replacement = self.spawn_worker()
+            try:
+                await self.wait_worker_ready(replacement)
+            except TimeoutError:
+                if self.worker_roster[replacement]["status"] != "dead":
+                    self.retire_worker(replacement)
+                self.logger.error(
+                    "Recycling of %s not opened: replacement %s never registered — "
+                    "the pool cannot regenerate right now",
+                    name,
+                    replacement,
+                )
+                return False
+            if entry["status"] not in ("active", "retiring"):
+                self.logger.warning(
+                    "Recycling of %s overtaken by its own death (%s)", name, entry["death"]
+                )
+                return False
+            self.logger.info("Worker %s evacuating: succeeded by %s", name, replacement)
+        else:
+            self.target = max(0, self.target - 1)
+            self.logger.info(
+                "Worker %s condemned without a replacement: the pool absorbs its "
+                "users, target is %s",
                 name,
-                replacement,
+                self.target,
             )
-            return False
-        if entry["status"] != "active":
-            self.logger.warning(
-                "Recycling of %s overtaken by its own death (%s)", name, entry["death"]
-            )
-            return False
         entry["status"] = "evacuating"
         entry["evacuating_since"] = time.monotonic()
-        self.logger.info("Worker %s evacuating: succeeded by %s", name, replacement)
         await self.evacuation_pass(name)
+        return True
+
+    async def hard_restart(self, name: str) -> bool:
+        """Park the users, kill the worker, put a fresh one in its place.
+
+        The escalation of a replace whose soft succession did not happen: the
+        pool had 30 seconds (``READY_TIMEOUT``) to raise a second process beside
+        the sick one and could not, which is what a leak that has eaten the
+        machine looks like. So the order is inverted — THE SICK PROCESS DIES
+        FIRST, and the fresh one is born in the space its death frees. This is
+        the DECLARED EXCEPTION to «alive and registered first, condemned after»:
+        the guarantee governs the soft path, and this door opens only once that
+        path has proved itself impossible.
+
+        Nothing is lost by dying: every user of the worker goes to the freezer
+        first, one parcel per user, and a parked user is as safe as it gets —
+        the file outlives the whole pool. The refill is LAZY: nobody is woken
+        back here. A parked user comes out of its file on its own next request,
+        through ``resolve_worker``'s ordinary wake, placed by the ordinary
+        rules — a millisecond it would have spent waiting for this loop anyway,
+        and no second party racing the client for the same parcel.
+
+        The parking follows ``resolve_worker``'s discipline — await the user's
+        hold, re-read the map, then freeze — and a user that still cannot be
+        parked (an identity the freezer does not apply to, a hold that does not
+        clear) is SKIPPED with a WARNING: its slice dies with the process and
+        it comes back at its next login. An accepted, loud loss.
+
+        Returns whether the pool regenerated. False leaves the users parked in
+        their files — nothing lost, and their next request wakes them the moment
+        a worker exists — and the caller ends the plan on it. A worker that is
+        no longer active at all needs no restart: it is already out, the
+        reconcile owes the pool its replacement, and the step has nothing to
+        fail at.
+
+        The freezer is what makes the parking possible, so a pool with no
+        ``frozen_users_dir`` has no hard restart: killing a worker there would
+        throw its users' slices away, and this says so instead.
+
+        The seat of the dying worker is HELD across the kill — the target goes
+        down with it and back up before the fresh spawn — or the reconcile,
+        which reads a shortfall every half second, would put a second process
+        up beside the one this restart is about to start itself. A fresh child
+        that never registers leaves the target where it is on purpose: the
+        reconcile takes over the retrying, and the first REGISTER that lands
+        lifts the restriction.
+        """
+        entry = self.worker_roster[name]
+        if entry["status"] not in ("active", "retiring"):
+            self.logger.warning(
+                "Hard restart of %s: it is %s already, nothing left to restart",
+                name,
+                entry["status"],
+            )
+            return True
+        if self.frozen_users_dir is None:
+            self.logger.error(
+                "Hard restart of %s impossible: the freezer is disarmed, so its users "
+                "have nowhere to be parked",
+                name,
+            )
+            return False
+        parked = 0
+        for user in sorted(self.users_on(name)):
+            await self.await_move(user)
+            if self.user_worker_map.get(user) != name:
+                continue
+            if await self.freeze_user(user):
+                parked += 1
+            else:
+                self.logger.warning(
+                    "Hard restart of %s: %s did not park; its slice dies with the process",
+                    name,
+                    user,
+                )
+        self.logger.warning(
+            "Hard restart of %s: %s users parked in the freezer, killing the process",
+            name,
+            parked,
+        )
+        self.target = max(0, self.target - 1)
+        self.retire_worker(name)
+        await self.wait_workers_end([name])
+        self.target += 1
+        fresh = self.spawn_worker()
+        try:
+            await self.wait_worker_ready(fresh)
+        except TimeoutError:
+            if self.worker_roster[fresh]["status"] != "dead":
+                self.retire_worker(fresh)  # who opens a manoeuvre closes it
+            self.logger.error(
+                "Hard restart of %s: the fresh worker %s never registered either — "
+                "%s users stay parked in the freezer",
+                name,
+                fresh,
+                parked,
+            )
+            return False
+        self.logger.info("Hard restart of %s done: %s took its place", name, fresh)
         return True
 
     async def wait_worker_ready(self, name: str) -> None:

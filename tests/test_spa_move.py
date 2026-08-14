@@ -42,6 +42,7 @@ import logging
 import os
 import signal
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -55,10 +56,17 @@ from genro_tytx import from_tytx, to_tytx
 from genro_asgi.channel.local import LocalChannel
 from genro_asgi.exceptions import HTTPException
 from genro_asgi.spa.commander import (
-    RECYCLE_RETRY_SECONDS,
+    COMPACTION_MARGIN,
+    EVACUATION_WARN_INTERVAL,
+    FREEZE_IDLE_AFTER,
+    FROZEN,
+    FROZEN_GUEST_LIFETIME,
+    FROZEN_USER_LIFETIME,
+    SPAWN_MARGIN,
     TOMBSTONE_SECONDS,
     UserStickyCommander,
 )
+from genro_asgi.spa.register_registry import GUEST_PREFIX
 from genro_asgi.spa.worker import CONNECTION_MAX_AGE
 from genro_asgi.spa.worker import UserStickyWorker
 
@@ -271,7 +279,13 @@ def test_a_user_whose_worker_died_falls_back_to_the_reception(
     assert commander.worker_for("alice") == "W:w-1"
 
 
-def test_with_no_active_worker_there_is_nowhere_to_go(commander: UserStickyCommander) -> None:
+def test_with_no_active_worker_a_ready_pool_says_so_loudly(
+    commander: UserStickyCommander,
+) -> None:
+    """A pool that answers requests always has a worker to answer them with, so
+    a ``ready`` pool with no receiver is an impossible state and raises. The 503
+    belongs to the one condition where the emptiness is expected — a
+    ``restricted`` pool, which the test below drives."""
     enroll(commander, "W:w-1", status="nascent")
     with pytest.raises(RuntimeError, match="no worker available"):
         commander.worker_for("alice")
@@ -1622,62 +1636,123 @@ def test_the_excess_is_read_against_each_worker_s_own_threshold(
     ]
 
 
-async def test_excess_sends_the_beat_to_the_rebalance_and_nowhere_else(
+async def test_excess_puts_the_rebalance_first_in_the_plan(
     commander: UserStickyCommander,
 ) -> None:
     enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
     load(commander, "W:w-1", 0.9)
-    commander.pool_beat()
-    assert (commander.rebalancing, commander.compacting) == (True, False)
-    await asyncio.sleep(0)
+    assert commander.build_plan()[0] == {"op": "rebalance"}
 
 
-async def test_a_pool_with_nothing_to_shed_is_offered_to_the_compaction(
+async def test_a_pool_with_nothing_to_shed_plans_no_rebalance(tmp_path: Any) -> None:
+    roomy = UserStickyCommander(
+        workers=0, path=str(tmp_path / "hub.sock"), compaction_margin=0.4, spawn_margin=0.2
+    )
+    for name in ("W:w-1", "W:w-2", "W:w-3"):
+        enroll(roomy, name)
+    load(roomy, "W:w-1", 0.4)
+    plan = roomy.build_plan()
+    assert plan  # the compaction has something to do
+    assert not [step for step in plan if step["op"] == "rebalance"]
+
+
+async def test_a_plan_in_flight_builds_no_second_plan(
     commander: UserStickyCommander,
 ) -> None:
+    """The three flags collapsed into one state: a tick landing mid-plan does
+    nothing, whatever the pool reads."""
     enroll(commander, "W:w-1")
-    load(commander, "W:w-1", 0.4)
-    commander.pool_beat()
-    assert (commander.rebalancing, commander.compacting) == (False, True)
-    await asyncio.sleep(0)
+    load(commander, "W:w-1", 0.9)  # excess is there: a free build would shed
+    commander.active_plan = [{"op": "rebalance"}]
+    assert commander.build_plan() == []
 
 
-async def test_a_compaction_in_flight_holds_the_beat_off_the_rebalance(
+async def test_the_planner_tick_runs_the_plan_it_builds(
     commander: UserStickyCommander,
 ) -> None:
+    """The task IS the executor: the plan its reading calls for is awaited here."""
+    executed: list[list[dict[str, Any]]] = []
+
+    async def record(plan: list[dict[str, Any]]) -> None:
+        executed.append(plan)
+
+    commander.execute_plan = record  # type: ignore[method-assign]
+    commander.decision_interval = 0.01
     enroll(commander, "W:w-1")
-    load(commander, "W:w-1", 0.9)  # excess is there: a free beat would shed
-    commander.compacting = True
-    commander.pool_beat()
-    assert commander.rebalancing is False
+    enroll(commander, "W:w-2")
+    load(commander, "W:w-1", 0.9)
+    ticking = asyncio.create_task(commander.planner())
+    try:
+        await asyncio.sleep(0.05)
+    finally:
+        ticking.cancel()
+    assert executed == [[{"op": "rebalance"}]]
 
 
-async def test_a_rebalance_in_flight_holds_the_beat_off_the_compaction(
-    commander: UserStickyCommander,
+async def test_a_tick_that_falls_over_leaves_the_clock_running(
+    commander: UserStickyCommander, caplog: Any
 ) -> None:
+    """A pool whose shape stopped being decided at all would go unnoticed: the
+    failure is logged and the next tick reads the world again."""
+    attempts: list[str] = []
+
+    async def falling_over(plan: list[dict[str, Any]]) -> None:
+        attempts.append("tick")
+        commander.active_plan = None
+        raise RuntimeError("the step fell over")
+
+    commander.execute_plan = falling_over  # type: ignore[method-assign]
+    commander.decision_interval = 0.01
     enroll(commander, "W:w-1")
-    load(commander, "W:w-1", 0.4)  # nothing to shed: a free beat would compact
-    commander.rebalancing = True
-    commander.pool_beat()
-    assert commander.compacting is False
+    enroll(commander, "W:w-2")
+    load(commander, "W:w-1", 0.9)
+    with caplog.at_level("ERROR"):
+        ticking = asyncio.create_task(commander.planner())
+        try:
+            await asyncio.sleep(0.05)
+        finally:
+            ticking.cancel()
+    assert len(attempts) > 1
+    assert "the step fell over" in caplog.text
 
 
-async def test_the_probe_return_is_what_sets_the_beat_going() -> None:
-    """The beat's attachment point: a returned probe, not a clock of its own."""
+async def test_the_probe_return_decides_no_shape() -> None:
+    """Health only (R1): the probe archives its numbers and pulls no move behind
+    itself — the pool is read whole by the planner, on its own clock."""
     running = LocalPool()
     await running.start(1)
     try:
         commander = running.commander
         name = running.names[0]
-        assert (commander.rebalancing, commander.compacting) == (False, False)
+        built: list[list[dict[str, Any]]] = []
+        original = commander.build_plan
+
+        def record() -> list[dict[str, Any]]:
+            plan = original()
+            built.append(plan)
+            return plan
+
+        commander.build_plan = record  # type: ignore[method-assign]
         await commander.probe_worker(name)
-        # The archived row is fresh knowledge about the pool, and the pass that
-        # reads it was dispatched by the return itself.
         assert commander.worker_roster[name]["occupancy"][-1]["report"]["worker"] == name
-        assert (commander.rebalancing, commander.compacting) == (False, True)
-        await asyncio.sleep(0)
+        assert built == []
+        assert commander.active_plan is None
     finally:
         await running.stop()
+
+
+async def test_the_planner_lives_and_dies_with_the_commander() -> None:
+    """Started in start(), cancelled in stop(): the same discipline as the reconcile."""
+    running = LocalPool(decision_interval=0.01)
+    await running.start(1)
+    try:
+        task = running.commander._planner_task
+        assert task is not None and not task.done()
+    finally:
+        await running.stop()
+    assert task.cancelled()
+    assert running.commander._planner_task is None
 
 
 async def test_a_worker_sitting_on_a_handover_beyond_the_cycles_is_killed() -> None:
@@ -1815,23 +1890,16 @@ async def test_a_queued_delivery_reads_the_destinations_current_status() -> None
         await running.stop()
 
 
-async def test_a_rebalance_already_in_flight_is_never_doubled(
+async def test_two_builds_in_the_same_breath_yield_one_plan(
     commander: UserStickyCommander,
 ) -> None:
-    spawned = []
-    original = commander.spawn_pool_pass
-
-    def record(pass_coroutine: Any) -> Any:
-        spawned.append(pass_coroutine)
-        return original(pass_coroutine)
-
-    commander.spawn_pool_pass = record  # type: ignore[method-assign]
+    """The claim is taken by the build itself, in the same synchronous breath as
+    the reading: whoever reads the pool second finds it already committed."""
     enroll(commander, "W:w-1")
-    commander.trigger_rebalance()
-    commander.trigger_rebalance()
-    assert len(spawned) == 1
-    await asyncio.sleep(0)
-    assert commander.rebalancing is False
+    enroll(commander, "W:w-2")
+    load(commander, "W:w-1", 0.9)
+    assert commander.build_plan() == [{"op": "rebalance"}]
+    assert commander.build_plan() == []
 
 
 async def test_a_pool_pass_that_raises_leaves_its_error_on_the_log(
@@ -1850,27 +1918,59 @@ async def test_a_pool_pass_that_raises_leaves_its_error_on_the_log(
     assert "the pass fell over" in caplog.text
 
 
-async def test_a_compaction_already_in_flight_is_never_doubled(
+async def test_the_plan_releases_its_claim_even_when_a_step_falls_over(
     commander: UserStickyCommander,
 ) -> None:
-    spawned = []
-    original = commander.spawn_pool_pass
+    """A step that raises ends the whole plan — and must not leave the pool
+    committed forever: the next tick has to be able to decide again."""
 
-    def record(pass_coroutine: Any) -> Any:
-        spawned.append(pass_coroutine)
-        return original(pass_coroutine)
+    async def failing_rebalance(now: float | None = None) -> None:
+        raise RuntimeError("the step fell over")
 
-    commander.spawn_pool_pass = record  # type: ignore[method-assign]
-    enroll(commander, "W:w-1")
-    commander.trigger_compaction()
-    commander.trigger_compaction()
-    assert len(spawned) == 1
-    await asyncio.sleep(0)
-    assert commander.compacting is False
+    commander.rebalance_pass = failing_rebalance  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError):
+        await commander.execute_plan([{"op": "rebalance"}])
+    assert commander.active_plan is None
+
+
+async def test_a_condemnation_without_a_replacement_narrows_the_pool(tmp_path: Any) -> None:
+    """The ``spawn=False`` branch, executed: no new process, the users leave, and
+    the target follows the worker out — or the reconcile would spawn back the
+    very process the weight gate said was not needed."""
+    commander = leaking_commander(tmp_path, compaction_margin=0.4, spawn_margin=0.2)
+    for name in ("W:w-1", "W:w-2", "W:w-3"):
+        enroll(commander, name)
+    commander.target = 3
+    commander.assign_user("alice", "W:w-2")
+    spawned: list[str] = []
+
+    def never_spawn() -> str:
+        spawned.append("W:unwanted")
+        return "W:unwanted"
+
+    commander.spawn_worker = never_spawn  # type: ignore[method-assign]
+
+    async def record(user: str, target: str) -> bool:
+        commander.assign_user(user, target)
+        return True
+
+    commander.move_user = record  # type: ignore[method-assign]
+    await commander.execute_plan([{"op": "replace", "worker": "W:w-2", "spawn": False}])
+    assert spawned == []
+    assert commander.target == 2
+    assert commander.user_worker_map["alice"] != "W:w-2"
+    # Emptied by its own evacuation, the source retired itself.
+    assert commander.worker_roster["W:w-2"]["status"] == "draining"
+
+
+async def fold(commander: UserStickyCommander) -> None:
+    """Run only the compaction steps of the plan the pool now calls for."""
+    plan = commander.build_plan()
+    await commander.execute_plan([step for step in plan if step["op"] == "compact"])
 
 
 async def test_the_compaction_folds_an_idle_pool_onto_its_reception() -> None:
-    running = LocalPool(compaction_margin=0.4)
+    running = LocalPool(compaction_margin=0.4, spawn_margin=0.2)
     await running.start(3)
     commander = running.commander
     reception = str(commander.reception)
@@ -1884,7 +1984,7 @@ async def test_the_compaction_folds_an_idle_pool_onto_its_reception() -> None:
     )
     load(commander, reception, 0.0)  # the tilt did its job: the ledger reads an idle pool
     try:
-        await commander.compact_pass()
+        await fold(commander)
         # Down to the floor, and the reception is the survivor: never a candidate.
         assert commander.active_workers == [reception]
         assert commander.user_worker_map["alice"] == reception
@@ -1893,41 +1993,51 @@ async def test_the_compaction_folds_an_idle_pool_onto_its_reception() -> None:
         await running.stop()
 
 
-async def test_the_compaction_never_folds_below_the_floor() -> None:
-    running = LocalPool(compaction_margin=0.4, min_workers=2)
+async def test_the_compaction_stops_where_the_capacity_rule_says() -> None:
+    running = LocalPool(compaction_margin=0.6, spawn_margin=0.2)
     await running.start(3)
     commander = running.commander
     for name in commander.active_workers:
         load(commander, name, 0.0)
     try:
-        await commander.compact_pass()
-        # The ledger would fold the pool onto its reception; min_workers is what
-        # stops it, one retire in.
+        await fold(commander)
+        # Three idle workers hold 2.5 of capacity: the first fold leaves 1.5, the
+        # second would leave 0.5 — under the margin, so it never happens.
         assert len(commander.active_workers) == 2
-        assert commander.capacity_headroom() > commander.compaction_margin
+        survivor = commander.active_workers[1]
+        assert commander.capacity_headroom(exclude=survivor) < commander.compaction_margin
     finally:
         await running.stop()
 
 
-async def test_a_worker_that_does_not_drain_is_not_retired() -> None:
-    running = LocalPool(compaction_margin=0.4, move_quiesce_timeout=0.1)
-    await running.start(2)
-    commander = running.commander
-    reception = str(commander.reception)
-    tilt_away(commander, reception)
-    await commander.forward_call("sess-1", "/op/new_connection")
-    await commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
-    host = str(commander.user_worker_map["alice"])
-    load(commander, reception, 0.0)
-    # One call that never closes: alice cannot be taken anywhere, so the worker
-    # holding her cannot be emptied — and a worker holding state is never retired.
-    commander.open_request(host, "alice", "/op/page_ping")
-    try:
-        await commander.compact_pass()
-        assert host in commander.active_workers
-        assert commander.user_worker_map["alice"] == host
-    finally:
-        await running.stop()
+async def test_a_worker_that_does_not_drain_is_not_retired(tmp_path: Any, caplog: Any) -> None:
+    """The fold NAMES the worker holding the user, and the drain refuses to carry
+    her: the fold is skipped and reported, the worker keeps its resident, and the
+    steps after it still run. The plan is built here, not hand-written, so the
+    step really is the one the pool asked for."""
+    commander = UserStickyCommander(
+        workers=0, path=str(tmp_path / "hub.sock"), compaction_margin=0.3, spawn_margin=0.2
+    )
+    for name in ("W:w-1", "W:w-2", "W:w-3"):
+        enroll(commander, name)
+    commander.target = 3
+    commander.assign_user("alice", "W:w-2")
+
+    async def refuse(user: str, target: str) -> bool:
+        return False  # alice is held: nobody can take her anywhere
+
+    commander.move_user = refuse  # type: ignore[method-assign]
+    plan = commander.build_plan()
+    folding = [step["worker"] for step in plan if step["op"] == "compact"]
+    assert folding == ["W:w-3", "W:w-2"]  # the empty one first, then alice's host
+    with caplog.at_level(logging.WARNING):
+        await commander.execute_plan(plan)
+    assert "worker W:w-2 did not drain" in caplog.text
+    assert "W:w-2" in commander.active_workers
+    assert commander.user_worker_map["alice"] == "W:w-2"
+    # The empty worker ahead of it folded all the same: a refused drain is a fact
+    # about ONE worker, not the end of the plan.
+    assert "W:w-3" not in commander.active_workers
 
 
 # ----------------------------------------------------------------------
@@ -2036,6 +2146,21 @@ def test_an_idle_user_is_never_shed_onto_a_loaded_target(
     assert commander.pick_rebalance_users("W:w-2", 0.5, target_empty=False) == ["alice"]
     # The floor is the loaded target's rule alone — an empty one takes whatever comes.
     assert commander.pick_rebalance_users("W:w-2", 1.0, target_empty=True) == ["alice", "dozer"]
+
+
+def test_a_user_already_being_carried_is_never_picked_to_shed(
+    commander: UserStickyCommander,
+) -> None:
+    """A hold up means somebody else is moving that user: picking it would buy a
+    refused move and end the pass, so the next-heaviest goes instead."""
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    load(commander, "W:w-2", 1.0)
+    seed_shed(commander, "W:w-2", {"alice": 5.0, "bob": 3.0, "carol": 2.0})
+    commander.moving["alice"] = asyncio.Event()
+    assert commander.pick_rebalance_users("W:w-2", 0.6, target_empty=True) == ["bob", "carol"]
+    # And the drain's own selection leaves it out for the same reason.
+    assert commander.drain_order("W:w-2") == ["bob", "carol"]
 
 
 def test_a_worker_whose_users_served_nothing_recently_weighs_nothing(
@@ -2194,7 +2319,7 @@ async def test_the_recycled_worker_hands_its_users_to_its_replacement() -> None:
         await running.stop()
 
 
-async def test_a_replacement_that_never_registers_declares_the_pool_sick() -> None:
+async def test_a_replacement_that_never_registers_leaves_no_state_behind() -> None:
     running = RecyclingPool(stillborn=True)
     await running.start(1)
     commander = running.commander
@@ -2207,14 +2332,10 @@ async def test_a_replacement_that_never_registers_declares_the_pool_sick() -> No
         assert await commander.recycle_worker(source) is False
         assert commander.worker_roster[source]["status"] == "active"
         assert commander.user_worker_map["alice"] == source
-        assert commander.regeneration_failed_at is not None
-        # New entries get the signal the infrastructure watches...
-        with pytest.raises(HTTPException) as refused:
-            commander.worker_for("guest-2")
-        assert refused.value.status == 503
-        # ...the residents keep being served, and the candidate stays silent.
+        # The failure poisons nothing: the pool still has a worker that can
+        # receive, so the next entry — new or resident — is served as before.
+        assert commander.worker_for("guest-2") == commander.reception
         assert commander.worker_for("alice") == source
-        assert commander.recycle_candidate() is None
     finally:
         await running.stop()
 
@@ -2315,7 +2436,7 @@ def test_reconcile_spawns_nothing_while_an_evacuation_is_under_way(
 
 
 # ----------------------------------------------------------------------
-# The recycling trigger: the third force in the beat
+# The condemnations: what the plan replaces, and whether it spawns
 # ----------------------------------------------------------------------
 
 MB = 1024 * 1024
@@ -2328,141 +2449,381 @@ def leaking_commander(tmp_path: Any, **kwargs: Any) -> UserStickyCommander:
     )
 
 
-def leak(commander: UserStickyCommander, name: str, hours: float | None) -> None:
-    """Seed the worker's floor series so its time to limit reads ``hours``.
-
-    Eight floors an hour apart on a straight line: the recent half carries the
-    same slope as the whole, so the acceleration corrective changes nothing and
-    the reading is the arithmetic below. ``hours=None`` seeds a FLAT series —
-    a floor going nowhere, which reads as infinite time.
-    """
-    velocity = 10 * MB
+def floor_at(commander: UserStickyCommander, name: str, fraction: float) -> None:
+    """Seed the worker's floor series so its last floor is ``fraction`` of the limit."""
     series = commander.worker_roster[name]["floors"]
     series.clear()
-    limit = commander.memory_limit_mb or 0
-    last = limit * MB - (hours or 0) * velocity
-    for step in range(8):
-        floor = last if hours is None else last - (7 - step) * velocity
-        series.append({"ts": 3600.0 * step, "floor": floor})
+    series.append({"ts": 0.0, "floor": (commander.memory_limit_mb or 0) * MB * fraction})
 
 
-def test_the_candidate_is_the_worker_closest_to_its_limit(tmp_path: Any) -> None:
+def wasteful(commander: UserStickyCommander, name: str, ratio: float) -> None:
+    """Seed the worker's window so its last report holds ``ratio`` of its floor unused."""
+    floor = 100 * MB
+    reusable = ratio * floor
+    commander.worker_roster[name]["occupancy"].clear()
+    commander.record_occupancy(
+        name,
+        {
+            "cpu": 0.0,
+            "rss": floor + reusable,
+            "reusable": reusable,
+            "executor": {"busy": 0, "total": 0},
+        },
+    )
+
+
+def test_the_plan_condemns_necessity_before_convenience(tmp_path: Any) -> None:
+    """R5's own order inside a plan: the floors that reached their budget first,
+    then the wasteful ones from the worst down."""
+    commander = leaking_commander(tmp_path)
+    for name in ("W:w-1", "W:w-2", "W:w-3", "W:w-4"):
+        enroll(commander, name)
+    floor_at(commander, "W:w-4", 0.9)  # necessity: the floor has spent its budget
+    wasteful(commander, "W:w-2", 1.0)
+    wasteful(commander, "W:w-3", 3.0)  # the most wasteful of the two
+    assert commander.condemned_workers() == ["W:w-4", "W:w-3", "W:w-2"]
+
+
+def test_a_worker_condemned_on_both_counts_is_named_once(tmp_path: Any) -> None:
     commander = leaking_commander(tmp_path)
     enroll(commander, "W:w-1")
     enroll(commander, "W:w-2")
-    enroll(commander, "W:w-3")
-    leak(commander, "W:w-1", 8.0)
-    leak(commander, "W:w-2", 3.0)
-    leak(commander, "W:w-3", None)  # flat: not heading anywhere
-    assert commander.evaluator.worker_time_to_limit("W:w-3") is None
-    assert commander.recycle_candidate() == "W:w-2"
+    floor_at(commander, "W:w-2", 0.9)
+    wasteful(commander, "W:w-2", 3.0)
+    assert commander.condemned_workers() == ["W:w-2"]
 
 
-def test_a_worker_beyond_the_horizon_is_nobody_s_candidate(tmp_path: Any) -> None:
+def test_a_healthy_pool_condemns_nobody(tmp_path: Any) -> None:
     commander = leaking_commander(tmp_path)
     enroll(commander, "W:w-1")
-    leak(commander, "W:w-1", 13.0)
-    assert commander.recycle_candidate() is None
-    wider = leaking_commander(tmp_path, recycle_horizon_hours=24.0)
-    enroll(wider, "W:w-1")
-    leak(wider, "W:w-1", 13.0)
-    assert wider.recycle_candidate() == "W:w-1"
+    enroll(commander, "W:w-2")
+    floor_at(commander, "W:w-2", 0.1)
+    wasteful(commander, "W:w-2", 0.1)
+    assert commander.condemned_workers() == []
 
 
-def test_a_pool_with_no_memory_limit_never_has_a_candidate(
+def test_the_rebalance_comes_before_the_condemnations(tmp_path: Any) -> None:
+    commander = leaking_commander(tmp_path)
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    load(commander, "W:w-1", 0.9)  # hot AND sick: the latency comes first
+    floor_at(commander, "W:w-1", 0.9)
+    plan = commander.build_plan()
+    assert plan[0] == {"op": "rebalance"}
+    assert plan[1]["op"] == "replace"
+    assert plan[1]["worker"] == "W:w-1"
+
+
+def test_the_condemnations_come_before_the_compaction(tmp_path: Any) -> None:
+    commander = leaking_commander(tmp_path, compaction_margin=0.4, spawn_margin=0.2)
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    enroll(commander, "W:w-3")
+    floor_at(commander, "W:w-2", 0.9)
+    plan = commander.build_plan()
+    assert [step["op"] for step in plan] == ["replace", "compact"]
+    # And the condemned worker is not ALSO folded: its replacement step already
+    # takes it out, so a fold aimed at it would find nothing left to retire.
+    assert plan[1]["worker"] == "W:w-3"
+
+
+def test_a_condemnation_the_pool_absorbs_asks_for_no_new_process(tmp_path: Any) -> None:
+    """R4's gate, read at build time: the room is already there, so the worker is
+    condemned and evacuated without a replacement."""
+    commander = leaking_commander(tmp_path, compaction_margin=0.4, spawn_margin=0.2)
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    enroll(commander, "W:w-3")
+    commander.assign_user("alice", "W:w-2")
+    floor_at(commander, "W:w-2", 0.9)
+    assert commander.pool_absorbs("W:w-2") is True
+    replace = [step for step in commander.build_plan() if step["op"] == "replace"]
+    assert replace == [{"op": "replace", "worker": "W:w-2", "spawn": False}]
+
+
+def test_a_condemnation_the_pool_cannot_absorb_spawns(tmp_path: Any) -> None:
+    commander = leaking_commander(tmp_path)
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    load(commander, "W:w-1", 0.5)  # the reception is full to its own threshold
+    floor_at(commander, "W:w-2", 0.9)
+    assert commander.pool_absorbs("W:w-2") is False
+    replace = [step for step in commander.build_plan() if step["op"] == "replace"]
+    assert replace == [{"op": "replace", "worker": "W:w-2", "spawn": True}]
+
+
+def test_condemning_the_reception_always_spawns(tmp_path: Any) -> None:
+    """R3's statute: the reception's replacement is role continuity, never
+    capacity — the weight gate is not even consulted."""
+    commander = leaking_commander(tmp_path, compaction_margin=0.4, spawn_margin=0.2)
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    enroll(commander, "W:w-3")
+    assert commander.reception == "W:w-1"
+    assert commander.pool_absorbs("W:w-1") is True  # the room is there, and irrelevant
+    floor_at(commander, "W:w-1", 0.9)
+    replace = [step for step in commander.build_plan() if step["op"] == "replace"]
+    assert replace == [{"op": "replace", "worker": "W:w-1", "spawn": True}]
+
+
+def test_the_compaction_takes_the_empty_workers_first(tmp_path: Any) -> None:
+    """Emptiest first is literal: a worker with nobody aboard costs no move at
+    all, so it is folded before the loaded ones the drain has to empty."""
+    roomy = UserStickyCommander(
+        workers=0, path=str(tmp_path / "hub.sock"), compaction_margin=0.4, spawn_margin=0.2
+    )
+    for name in ("W:w-1", "W:w-2", "W:w-3", "W:w-4"):
+        enroll(roomy, name)
+    roomy.assign_user("alice", "W:w-2")
+    load(roomy, "W:w-2", 0.1)
+    load(roomy, "W:w-3", 0.4)
+    load(roomy, "W:w-4", 0.2)
+    assert roomy.compaction_order() == ["W:w-3", "W:w-4", "W:w-2"]
+
+
+def test_the_compaction_stops_at_the_capacity_rule_of_the_planned_pool(tmp_path: Any) -> None:
+    """Each fold is judged on the pool as this plan would leave it, not on the
+    one it started from: three idle workers hold 2.5, so the first fold leaves
+    1.5, the second 0.5 — under the 0.6 margin, and never planned."""
+    tight = UserStickyCommander(
+        workers=0, path=str(tmp_path / "hub.sock"), compaction_margin=0.6
+    )
+    for name in ("W:w-1", "W:w-2", "W:w-3"):
+        enroll(tight, name)
+    assert len(tight.compaction_order()) == 1
+
+
+# ----------------------------------------------------------------------
+# The condemnation stamp: a plan never sheds onto what it takes out
+# ----------------------------------------------------------------------
+
+
+def shedding_world(occupancy_world: Any, **kwargs: Any) -> UserStickyCommander:
+    """The panel's repro pool: a hot reception over three empty workers.
+
+    The world seeds the readings; the two residents also get the recent service
+    time a shed is weighed on, which no occupancy picture carries.
+    """
+    commander = occupancy_world("shedding_pool", **kwargs)
+    for user in ("alice", "bob"):
+        commander.count_user_consumption(user, 1.0)
+    return commander
+
+
+@pytest.mark.parametrize(
+    ("compaction_margin", "spawn_margin"),
+    [(0.3, 0.2), (COMPACTION_MARGIN, SPAWN_MARGIN)],
+    ids=["panel margins", "stock margins"],
+)
+def test_a_plan_never_sheds_onto_a_worker_a_later_step_takes_out(
+    occupancy_world: Any, compaction_margin: float, spawn_margin: float
+) -> None:
+    """The confirmed critical: the rebalance used to pick the emptiest worker,
+    which is exactly the one the compaction that follows folds away — the users
+    landed there only to be drained straight back. Naming a worker in a step now
+    stamps it ``retiring`` in the same breath, and a retiring worker is nobody's
+    destination."""
+    commander = shedding_world(
+        occupancy_world, compaction_margin=compaction_margin, spawn_margin=spawn_margin
+    )
+    plan = commander.build_plan()
+    assert plan[0] == {"op": "rebalance"}
+    leaving = {step["worker"] for step in plan if step["op"] in ("compact", "replace")}
+    assert leaving
+    assert all(commander.worker_roster[name]["status"] == "retiring" for name in leaving)
+    excess = commander.rebalance_excess()
+    target = commander.pick_rebalance_target(sum(value for _, value in excess))
+    assert target is not None
+    assert target not in leaving
+
+
+async def test_a_mixed_plan_sheds_and_folds_in_one_run(occupancy_world: Any) -> None:
+    """Rebalance and compaction in the same plan, executed end to end: the shed
+    lands on the ONE worker no fold names, and both folds still run."""
+    commander = shedding_world(occupancy_world, compaction_margin=0.3, spawn_margin=0.2)
+    commander.target = 4
+    moves: list[tuple[str, str]] = []
+
+    async def record(user: str, target: str) -> bool:
+        moves.append((user, target))
+        commander.assign_user(user, target)
+        return True
+
+    commander.move_user = record  # type: ignore[method-assign]
+    plan = commander.build_plan()
+    assert [step["op"] for step in plan] == ["rebalance", "compact", "compact"]
+    folded = [step["worker"] for step in plan if step["op"] == "compact"]
+    assert folded == ["W:w-2", "W:w-3"]
+    await commander.execute_plan(plan)
+    assert moves
+    assert {target for _, target in moves} == {"W:w-4"}
+    assert all(commander.worker_roster[name]["status"] == "draining" for name in folded)
+    assert commander.target == 2
+    assert commander.active_plan is None
+
+
+def test_releasing_a_plan_hands_back_what_it_never_took_out(occupancy_world: Any) -> None:
+    """A plan built and then dropped must not leave the pool short of workers:
+    the rows it stamped and never moved on go back to being ordinary members."""
+    commander = shedding_world(occupancy_world, compaction_margin=0.3, spawn_margin=0.2)
+    stamped = [step["worker"] for step in commander.build_plan() if step["op"] == "compact"]
+    assert stamped == ["W:w-2", "W:w-3"]
+    commander.release_plan()
+    assert commander.active_plan is None
+    assert all(commander.worker_roster[name]["status"] == "active" for name in stamped)
+    assert commander.pick_rebalance_target(0.4) == "W:w-2"
+
+
+def test_a_retiring_worker_still_serves_who_it_holds(commander: UserStickyCommander) -> None:
+    """It is out of every picker, not out of the pool: its residents keep being
+    served where their state actually is, and it still counts toward the target
+    so the reconcile does not spawn a second worker beside it."""
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    commander.assign_user("alice", "W:w-2")
+    commander.worker_roster["W:w-2"]["status"] = "retiring"
+    assert commander.worker_for("alice") == "W:w-2"
+    assert commander.living_workers == ["W:w-1", "W:w-2"]
+    assert commander.active_workers == ["W:w-1", "W:w-2"]
+
+
+def test_a_retiring_worker_is_never_where_a_login_is_placed(
     commander: UserStickyCommander,
 ) -> None:
     enroll(commander, "W:w-1")
-    commander.worker_roster["W:w-1"]["floors"].extend(
-        {"ts": 3600.0 * step, "floor": step * MB} for step in range(8)
-    )
-    assert commander.recycle_candidate() is None
+    enroll(commander, "W:w-2")
+    enroll(commander, "W:w-3")
+    load(commander, "W:w-1", 0.9)  # the reception passes the login on
+    commander.worker_roster["W:w-2"]["status"] = "retiring"
+    assert commander.pick_placement(commander.active_workers) == "W:w-3"
 
 
-async def test_excess_outranks_a_leak_in_the_beat(tmp_path: Any) -> None:
-    commander = leaking_commander(tmp_path)
+def test_a_retiring_worker_is_not_room_the_capacity_check_counts_on(
+    commander: UserStickyCommander,
+) -> None:
     enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    commander.target = 2
     load(commander, "W:w-1", 0.9)
-    leak(commander, "W:w-1", 1.0)  # dying of both: the latency comes first
-    commander.pool_beat()
-    assert (commander.rebalancing, commander.recycling, commander.compacting) == (
-        True,
-        False,
-        False,
-    )
-    await asyncio.sleep(0)
+    commander.worker_roster["W:w-2"]["status"] = "retiring"
+    commander.check_capacity()
+    assert commander.target == 3
 
 
-async def test_a_leak_outranks_the_compaction_in_the_beat(tmp_path: Any) -> None:
-    commander = leaking_commander(tmp_path)
-    enroll(commander, "W:w-1")
-    load(commander, "W:w-1", 0.4)  # nothing to shed: a leakless beat would compact
-    leak(commander, "W:w-1", 3.0)
-    recycled: list[str] = []
-
-    async def fake_recycle(name: str) -> bool:
-        recycled.append(name)
-        return True
-
-    commander.recycle_worker = fake_recycle  # type: ignore[method-assign]
-    commander.pool_beat()
-    assert (commander.rebalancing, commander.recycling, commander.compacting) == (
-        False,
-        True,
-        False,
-    )
-    await asyncio.sleep(0)
-    # One worker per pass, and the flag comes down with it.
-    assert recycled == ["W:w-1"]
-    assert commander.recycling is False
-
-
-async def test_a_pool_with_no_leak_is_still_offered_to_the_compaction(
-    tmp_path: Any,
+def test_a_retiring_worker_never_takes_a_condemned_worker_s_users(
+    commander: UserStickyCommander,
 ) -> None:
-    commander = leaking_commander(tmp_path)
+    """The receiver half of the condemnation gate: room sitting on a worker this
+    same plan is taking out is not room the next condemnation may count on."""
     enroll(commander, "W:w-1")
-    load(commander, "W:w-1", 0.4)
-    leak(commander, "W:w-1", None)
-    commander.pool_beat()
-    assert (commander.rebalancing, commander.recycling, commander.compacting) == (
-        False,
-        False,
-        True,
-    )
-    await asyncio.sleep(0)
+    enroll(commander, "W:w-2")
+    enroll(commander, "W:w-3")
+    commander.assign_user("alice", "W:w-2")
+    load(commander, "W:w-3", 0.5)  # the fullest that still admits: R4's own answer
+    assert commander.pick_best_fit(0.0, exclude="W:w-2") == "W:w-3"
+    commander.worker_roster["W:w-3"]["status"] = "retiring"
+    assert commander.pick_best_fit(0.0, exclude="W:w-2") == "W:w-1"
 
 
-async def test_a_recycling_in_flight_holds_the_whole_beat_off(tmp_path: Any) -> None:
-    commander = leaking_commander(tmp_path)
+def test_a_salvage_never_lands_on_a_retiring_worker(commander: UserStickyCommander) -> None:
+    """The rescue path of a move that lost its room picked the emptiest worker of
+    all — which during a plan is exactly the one about to be folded away, so the
+    salvaged user would be drained straight back."""
     enroll(commander, "W:w-1")
-    load(commander, "W:w-1", 0.9)  # excess is there: a free beat would shed
-    commander.recycling = True
-    commander.pool_beat()
-    assert (commander.rebalancing, commander.compacting) == (False, False)
+    enroll(commander, "W:w-2")
+    enroll(commander, "W:w-3")
+    load(commander, "W:w-3", 0.4)
+    assert commander.salvage_target({"W:w-1"}) == "W:w-2"  # the emptiest of the rest
+    commander.worker_roster["W:w-2"]["status"] = "retiring"
+    assert commander.salvage_target({"W:w-1"}) == "W:w-3"
 
 
-async def test_a_pass_that_finds_no_candidate_left_recycles_nothing(
-    tmp_path: Any,
+def test_a_salvage_with_every_worker_out_reports_no_room(commander: UserStickyCommander) -> None:
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    commander.worker_roster["W:w-2"]["status"] = "retiring"
+    assert commander.salvage_target({"W:w-1"}) is None
+
+
+def test_the_fold_fallback_never_returns_a_retiring_worker(
+    commander: UserStickyCommander,
 ) -> None:
+    """With every gate closed the drain hands the user to the least loaded worker
+    anyway — but a worker the same plan is taking out is not a landing either."""
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    enroll(commander, "W:w-3")
+    enroll(commander, "W:w-4")
+    load(commander, "W:w-1", 1.3)  # the reception, and the fullest of all
+    load(commander, "W:w-3", 1.1)
+    load(commander, "W:w-4", 1.2)
+    assert commander.pick_best_fit(0.0, exclude="W:w-2") is None  # nobody admits
+    assert commander.pick_compaction_target("W:w-2") == "W:w-3"
+    commander.worker_roster["W:w-3"]["status"] = "retiring"
+    assert commander.pick_compaction_target("W:w-2") == "W:w-4"
+
+
+def test_the_gate_of_a_condemnation_nets_out_what_the_plan_already_takes(tmp_path: Any) -> None:
+    """The aggregate half of the gate, read on the pool as this plan would leave
+    it: a worker already condemned without a successor is room going away."""
+    commander = leaking_commander(tmp_path, compaction_margin=2.0, spawn_margin=0.2)
+    for name in ("W:w-1", "W:w-2", "W:w-3", "W:w-4"):
+        enroll(commander, name)
+    commander.assign_user("alice", "W:w-3")
+    assert commander.pool_absorbs("W:w-3") is True
+    assert commander.pool_absorbs("W:w-3", leaving=["W:w-2"]) is False
+
+
+def test_the_second_condemnation_of_a_tick_is_refused_the_first_s_room(tmp_path: Any) -> None:
+    """Two convenience candidates in one plan: the first is absorbed, and the
+    second is judged against a pool the first has already left — so it spawns
+    instead of counting a gate that is on its way out."""
+    commander = leaking_commander(tmp_path, compaction_margin=2.0, spawn_margin=0.2)
+    for name in ("W:w-1", "W:w-2", "W:w-3", "W:w-4"):
+        enroll(commander, name)
+    wasteful(commander, "W:w-2", 1.0)
+    wasteful(commander, "W:w-3", 3.0)  # the worst, condemned first
+    assert commander.condemned_workers() == ["W:w-3", "W:w-2"]
+    replace = [step for step in commander.build_plan() if step["op"] == "replace"]
+    assert replace == [
+        {"op": "replace", "worker": "W:w-3", "spawn": False},
+        {"op": "replace", "worker": "W:w-2", "spawn": True},
+    ]
+
+
+def test_two_condemnations_a_wide_pool_really_absorbs_both_spawn_nothing(tmp_path: Any) -> None:
+    """The other half of the netting: room enough for both gates leaves both
+    condemnations replacement-free."""
+    commander = leaking_commander(tmp_path, compaction_margin=0.3, spawn_margin=0.2)
+    for name in ("W:w-1", "W:w-2", "W:w-3", "W:w-4"):
+        enroll(commander, name)
+    wasteful(commander, "W:w-2", 1.0)
+    wasteful(commander, "W:w-3", 3.0)
+    replace = [step for step in commander.build_plan() if step["op"] == "replace"]
+    assert replace == [
+        {"op": "replace", "worker": "W:w-3", "spawn": False},
+        {"op": "replace", "worker": "W:w-2", "spawn": False},
+    ]
+
+
+async def test_a_pool_with_nothing_wrong_plans_nothing(tmp_path: Any) -> None:
     commander = leaking_commander(tmp_path)
     enroll(commander, "W:w-1")
-    commander.recycling = True
-    await commander.recycle_pass()
-    assert commander.recycling is False
+    assert commander.build_plan() == []
+    assert commander.active_plan is None
 
 
-async def test_the_in_process_worker_is_never_recycled(tmp_path: Any) -> None:
+async def test_the_in_process_worker_is_never_condemned(tmp_path: Any) -> None:
     """The single role's worker IS the commander's process: no successor sheds
-    its leak, no retire has a process to end — the candidate skips it and a
-    direct recycle refuses it."""
+    its leak, no retire has a process to end — the plan skips it and a direct
+    recycle refuses it."""
     commander = leaking_commander(tmp_path)
     local = enroll(commander, "W:w-1")
     enroll(commander, "W:w-2")
     commander.worker = SimpleNamespace(name=local)  # type: ignore[assignment]
-    leak(commander, "W:w-1", 2.0)  # the worst leak of the pool, and still skipped
-    leak(commander, "W:w-2", 5.0)
-    assert commander.recycle_candidate() == "W:w-2"
+    floor_at(commander, "W:w-1", 0.9)  # the sickest of the pool, and still skipped
+    floor_at(commander, "W:w-2", 0.9)
+    assert commander.condemned_workers() == ["W:w-2"]
     with pytest.raises(ValueError, match="in-process"):
         await commander.recycle_worker(local)
 
@@ -2558,28 +2919,17 @@ async def test_the_wait_aborts_at_once_on_a_replacement_already_dead(
     assert time.monotonic() - started < 1.0
 
 
-async def test_an_open_evacuation_silences_the_candidate(tmp_path: Any) -> None:
-    """One succession at a time: while a worker is evacuating, no new
-    recycling opens, however sick another worker reads."""
+async def test_a_worker_already_evacuating_is_never_condemned_twice(tmp_path: Any) -> None:
+    """Several successions may be open at once (R2: possibly several, sequential),
+    but never two on the same worker: the flag takes it out of every reading the
+    plan is built on."""
     commander = leaking_commander(tmp_path)
     enroll(commander, "W:w-1")
-    leak(commander, "W:w-1", 2.0)
-    assert commander.recycle_candidate() == "W:w-1"
-    enroll(commander, "W:evac", status="evacuating")
-    assert commander.recycle_candidate() is None
-
-
-async def test_a_sick_pool_pauses_between_regeneration_probes(tmp_path: Any) -> None:
-    """While the pool cannot regenerate, the candidate stays silent — probing
-    a broken world every beat would fork one stillborn per beat."""
-    commander = leaking_commander(tmp_path)
-    enroll(commander, "W:w-1")
-    leak(commander, "W:w-1", 2.0)
-    commander.regeneration_failed_at = time.monotonic()
-    assert commander.recycle_candidate() is None
-    # The pause expires: the recycling may probe the world again.
-    commander.regeneration_failed_at = time.monotonic() - RECYCLE_RETRY_SECONDS - 1
-    assert commander.recycle_candidate() == "W:w-1"
+    enroll(commander, "W:evac")
+    floor_at(commander, "W:evac", 0.9)
+    assert commander.condemned_workers() == ["W:evac"]
+    commander.worker_roster["W:evac"]["status"] = "evacuating"
+    assert commander.condemned_workers() == []
 
 
 async def test_the_users_own_calls_carry_a_lingering_evacuation_to_its_end(
@@ -2602,10 +2952,10 @@ async def test_the_users_own_calls_carry_a_lingering_evacuation_to_its_end(
         return True
 
     commander.move_user = record  # type: ignore[method-assign]
-    commander.pool_beat()
+    commander.advance_evacuations()
     await asyncio.sleep(0)
     await asyncio.sleep(0)
-    # Mid-call: nothing moved, and the beat's other forces stayed free.
+    # Mid-call: nothing moved, and the pool's other forces stayed free.
     assert moved == []
     assert commander.worker_roster["W:w-1"]["status"] == "evacuating"
     # His call closes: the move launches THERE, on the spot.
@@ -2613,8 +2963,8 @@ async def test_the_users_own_calls_carry_a_lingering_evacuation_to_its_end(
     await asyncio.sleep(0)
     await asyncio.sleep(0)
     assert moved == ["alice"]
-    # The next beat closes the books on the emptied worker.
-    commander.pool_beat()
+    # The next tick closes the books on the emptied worker.
+    commander.advance_evacuations()
     assert commander.worker_roster["W:w-1"]["status"] == "draining"
 
 
@@ -2677,7 +3027,6 @@ async def test_a_stillborn_already_buried_keeps_its_obituary(tmp_path: Any) -> N
     assert await commander.recycle_worker("W:w-1") is False
     assert commander.worker_roster["W:repl"]["status"] == "dead"
     assert commander.worker_roster["W:w-1"]["status"] == "active"
-    assert commander.regeneration_failed_at is not None
 
 
 async def test_a_vanished_user_is_nobody_s_move(
@@ -2687,16 +3036,18 @@ async def test_a_vanished_user_is_nobody_s_move(
     assert await commander.move_user("ghost", "W:w-1") is False
 
 
-def test_the_503_covers_one_window_and_lapses(tmp_path: Any) -> None:
-    """The 503 is the answer of the moment, not a quarantine: Mario turned
-    away comes back five minutes later and finds the door open."""
+def test_a_restricted_pool_with_no_receiver_answers_503(tmp_path: Any) -> None:
+    """The refusal is gated by the POOL's state, not by the request: a pool that
+    could not regenerate turns the stranger away with the honest signal the
+    infrastructure already watches, and the door opens the instant a worker can
+    receive again."""
     commander = leaking_commander(tmp_path)
-    enroll(commander, "W:w-1")
-    commander.regeneration_failed_at = time.monotonic()
+    commander.pool_status = "restricted"
     with pytest.raises(HTTPException) as refused:
         commander.worker_for("guest")
     assert refused.value.status == 503
-    commander.regeneration_failed_at = time.monotonic() - RECYCLE_RETRY_SECONDS - 1
+    enroll(commander, "W:w-1")
+    commander.pool_status = "ready"
     assert commander.worker_for("guest") == "W:w-1"
 
 
@@ -2715,6 +3066,60 @@ def test_a_stalled_evacuation_is_reported(
     assert any("stalled" in record.getMessage() for record in caplog.records)
 
 
+def test_the_stall_report_repeats_on_the_sysop_cadence(
+    commander: UserStickyCommander, caplog: Any
+) -> None:
+    """One report per ``EVACUATION_WARN_INTERVAL``, not one per tick: the
+    condition does not change between beats and the reader is a human."""
+    enroll(commander, "W:w-1", status="evacuating")
+    commander.assign_user("alice", "W:w-1")
+    commander.open_request("W:w-1", "alice", "/op/page_ping")
+    row = commander.worker_roster["W:w-1"]
+    row["evacuating_since"] = time.monotonic() - CONNECTION_MAX_AGE - 10
+
+    def stall_reports() -> int:
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            commander.warn_stalled_evacuation("W:w-1")
+        return sum("stalled" in record.getMessage() for record in caplog.records)
+
+    assert stall_reports() == 1
+    assert stall_reports() == 0  # inside the interval: silent
+    row["evacuation_warned_at"] = time.monotonic() - EVACUATION_WARN_INTERVAL - 1
+    assert stall_reports() == 1  # the interval has passed: reported again
+
+
+def test_a_rebalance_sheds_onto_the_fullest_worker_that_still_takes_it(
+    commander: UserStickyCommander,
+) -> None:
+    """Consolidate, do not spread: the excess goes to the worker already
+    carrying its share, so the emptier rows stay foldable."""
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    enroll(commander, "W:w-3")
+    load(commander, "W:w-2", 0.6)
+    load(commander, "W:w-3", 0.2)
+    # Both are eligible for a 0.2 excess (the ceiling is 0.9): the fuller wins.
+    assert commander.pick_rebalance_target(0.2) == "W:w-2"
+
+
+def test_no_receiver_is_filled_past_its_own_threshold(
+    commander: UserStickyCommander,
+) -> None:
+    """The reception is judged at ``reception_threshold``, so a placement may
+    not push it past that gate just because it is the fullest fit."""
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    reception = commander.reception
+    assert reception == "W:w-1"
+    load(commander, reception, 0.4)
+    load(commander, "W:w-2", 0.1)
+    ceiling = commander.worker_threshold(reception)
+    assert 0.4 + 0.2 > ceiling  # the reception is the fullest, and out of reach
+    assert commander.pick_best_fit(0.2) == "W:w-2"
+    assert commander.pick_best_fit(0.05) == reception  # under its own gate: it fits
+
+
 async def test_the_compaction_narrows_the_target_it_folds(
     commander: UserStickyCommander,
 ) -> None:
@@ -2723,28 +3128,12 @@ async def test_the_compaction_narrows_the_target_it_folds(
     enroll(commander, "W:w-1")
     enroll(commander, "W:w-2")
     enroll(commander, "W:w-3")
-    commander.target = 3
-    commander.compacting = True
-    await commander.compact_pass()
+    enroll(commander, "W:w-4")
+    commander.target = 4
+    await fold(commander)
     # One fold happened (the margin stops the second): target followed it.
-    assert commander.target == 2
-    assert len(commander.living_workers) == 2
-
-
-async def test_a_registered_worker_clears_the_regeneration_condition(
-    commander: UserStickyCommander,
-) -> None:
-    """Any successful REGISTER is the proof the pool regenerates again: the
-    condition clears and the new entries are admitted once more."""
-
-    async def no_replica(worker: str) -> None:
-        return None
-
-    commander.bootstrap_replica = no_replica  # type: ignore[method-assign]
-    commander.regeneration_failed_at = time.monotonic()
-    enroll(commander, "W:w-1", status="nascent")
-    await commander.member_joined(FakeMember("W:w-1"))
-    assert commander.regeneration_failed_at is None
+    assert commander.target == 3
+    assert len(commander.living_workers) == 3
 
 
 # ----------------------------------------------------------------------
@@ -2775,3 +3164,932 @@ async def test_the_login_survives_real_children_over_uds() -> None:
         assert dropped["tag"] == "carried"
     finally:
         await running.stop()
+
+
+# ----------------------------------------------------------------------
+# The weight gate: can the rest of the pool take them, and who takes each
+# ----------------------------------------------------------------------
+
+
+def test_the_best_fit_is_the_fullest_worker_that_still_takes_the_weight(
+    commander: UserStickyCommander,
+) -> None:
+    for name in ("W:w-1", "W:w-2", "W:w-3", "W:w-4"):
+        enroll(commander, name)
+    load(commander, "W:w-2", 0.6)  # 0.9 with the weight: fits, and fullest of those that do
+    load(commander, "W:w-3", 0.8)  # 1.1 with the weight: past the admission ceiling
+    load(commander, "W:w-4", 0.1)
+    assert commander.pick_best_fit(0.3) == "W:w-2"
+
+
+def test_the_best_fit_skips_the_condemned_and_whoever_is_not_active(
+    commander: UserStickyCommander,
+) -> None:
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    enroll(commander, "W:w-3", status="draining")
+    load(commander, "W:w-1", 0.9)
+    load(commander, "W:w-2", 0.4)
+    assert commander.pick_best_fit(0.3) == "W:w-2"
+    # Without w-2 there is nobody left: w-1 is over the ceiling, w-3 is not active.
+    assert commander.pick_best_fit(0.3, exclude="W:w-2") is None
+
+
+def test_the_pool_absorbs_a_condemned_worker_with_room_to_spare(
+    commander: UserStickyCommander,
+) -> None:
+    for name in ("W:w-1", "W:w-2", "W:w-3", "W:w-4"):
+        enroll(commander, name)
+    load(commander, "W:w-2", 0.4)
+    seed_shed(commander, "W:w-2", {"alice": 1.0, "bob": 1.0})
+    assert commander.capacity_headroom(exclude="W:w-2") == pytest.approx(2.5)
+    assert commander.pool_absorbs("W:w-2") is True
+
+
+def test_the_absorption_keeps_the_whole_compaction_margin(
+    commander: UserStickyCommander,
+) -> None:
+    for name in ("W:w-1", "W:w-2", "W:w-3", "W:w-4"):
+        enroll(commander, name)
+    load(commander, "W:w-2", 0.3)
+    seed_shed(commander, "W:w-2", {"alice": 1.0})
+    assert commander.capacity_headroom(exclude="W:w-2") == pytest.approx(2.5)
+    assert commander.pool_absorbs("W:w-2") is True
+    load(commander, "W:w-4", 1.0)  # 1.5 left without w-2: exactly the margin
+    assert commander.capacity_headroom(exclude="W:w-2") == pytest.approx(1.5)
+    # A margin means a margin: landing ON it is not keeping it. alice still has
+    # a home, so the ledger is what refuses here.
+    assert commander.pick_best_fit(0.3, exclude="W:w-2") is not None
+    assert commander.pool_absorbs("W:w-2") is False
+
+
+def test_one_unplaceable_user_refuses_the_absorption(commander: UserStickyCommander) -> None:
+    for name in ("W:w-1", "W:w-2", "W:w-3", "W:w-4", "W:w-5", "W:w-6"):
+        enroll(commander, name)
+    for name in ("W:w-1", "W:w-3", "W:w-4", "W:w-5", "W:w-6"):
+        load(commander, name, 0.3)
+    load(commander, "W:w-2", 1.0)
+    seed_shed(commander, "W:w-2", {"alice": 3.0, "bob": 1.0})
+    # Room to spare in the aggregate, and bob is placeable — but alice's three
+    # quarters of a whole worker fit nowhere: 0.3 + 0.75 is past the ceiling.
+    assert commander.capacity_headroom(exclude="W:w-2") == pytest.approx(3.0)
+    assert commander.rebalance_weights("W:w-2") == {
+        "alice": pytest.approx(0.75),
+        "bob": pytest.approx(0.25),
+    }
+    assert commander.pick_best_fit(0.25, exclude="W:w-2") is not None
+    assert commander.pool_absorbs("W:w-2") is False
+
+
+# ----------------------------------------------------------------------
+# The ladder: the five rungs in order, the spawn of spare, the reaper
+# ----------------------------------------------------------------------
+
+
+def ladder_world(occupancy_world: Any, freezer: Path, **kwargs: Any) -> UserStickyCommander:
+    """The pool that calls for EVERY rung at once, with the freezer armed.
+
+    A hot reception holding a long-idle user, a worker whose floor has spent its
+    budget, an empty worker to fold and a loaded one to keep. The margins are
+    chosen so the ledger authorizes exactly one fold, and so that the pool the
+    plan would LEAVE — not the one it reads — falls under the spawn margin.
+    """
+    kwargs.setdefault("compaction_margin", 0.6)
+    kwargs.setdefault("spawn_margin", 0.3)
+    return occupancy_world(
+        "ladder_pool", freeze_idle_after=FREEZE_IDLE_AFTER, frozen_users_dir=freezer, **kwargs
+    )
+
+
+def age_parcel(freezer: Path, name: str, age: float) -> Path:
+    """Write one parcel into the freezer and back-date its mtime by ``age`` seconds."""
+    freezer.mkdir(parents=True, exist_ok=True)
+    path = freezer / name
+    path.write_text("parcel")
+    stamp = time.time() - age
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+def test_the_plan_climbs_the_ladder_rung_by_rung(occupancy_world: Any, tmp_path: Any) -> None:
+    """The ratified order on a world that triggers all five rungs: the idle user
+    goes to disk first, then the excess is shed, then the worker whose floor has
+    spent its budget is replaced, then the pool is widened for the shape the plan
+    LEAVES — and the fold, which only costs memory, comes last."""
+    commander = ladder_world(occupancy_world, tmp_path / "frozen")
+    plan = commander.build_plan()
+    assert [step["op"] for step in plan] == ["freeze", "rebalance", "replace", "spawn", "compact"]
+    assert plan[0] == {"op": "freeze", "user": "alice", "worker": "W:w-1"}
+    assert plan[2] == {"op": "replace", "worker": "W:w-2", "spawn": False}
+    assert plan[4] == {"op": "compact", "worker": "W:w-3"}
+    # A freeze step names a USER, so it stamps nothing: the reception stays a
+    # full member of the pool, while the two workers the plan takes out are
+    # retiring from the build itself.
+    assert commander.worker_roster["W:w-1"]["status"] == "active"
+    assert commander.worker_roster["W:w-2"]["status"] == "retiring"
+    assert commander.worker_roster["W:w-3"]["status"] == "retiring"
+
+
+def test_the_freeze_rung_sends_the_longest_idle_first(
+    occupancy_world: Any, tmp_path: Any
+) -> None:
+    """The rung is the valve's own order: whoever has been idle longest goes
+    first, whatever worker holds it."""
+    commander = occupancy_world(
+        "loaded_pool", freeze_idle_after=FREEZE_IDLE_AFTER, frozen_users_dir=tmp_path / "frozen"
+    )
+    # bob's worker sits at 0.95 of its budget, so its valve is down to the floor:
+    # past it at five thousand seconds, and longer idle than alice's 3600.
+    commander.worker_roster["W:w-2"]["users"]["bob"]["last_activity_ts"] = time.time() - 5000.0
+    plan = commander.build_plan()
+    assert [(step["user"], step["worker"]) for step in plan if step["op"] == "freeze"] == [
+        ("bob", "W:w-2"),
+        ("alice", "W:w-1"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("spawn_margin", "spawns"),
+    [(0.3, True), (0.1, False)],
+    ids=["short of the margin", "comfortable"],
+)
+def test_the_spawn_rung_reads_the_pool_the_plan_would_leave(
+    occupancy_world: Any, tmp_path: Any, spawn_margin: float, spawns: bool
+) -> None:
+    """R5's create half: the pool as it reads NOW has room to spare, and would
+    still be asked for nothing. It is what this plan takes out of it — one
+    condemnation the weight gate absorbs, plus one fold — that leaves it short."""
+    commander = ladder_world(occupancy_world, tmp_path / "frozen", spawn_margin=spawn_margin)
+    assert commander.capacity_headroom() == pytest.approx(1.95)
+    assert commander.needs_spare_capacity() is False
+    assert commander.needs_spare_capacity(["W:w-2", "W:w-3"]) is spawns
+    plan = commander.build_plan()
+    assert bool([step for step in plan if step["op"] == "spawn"]) is spawns
+
+
+def test_a_worker_replaced_one_for_one_leaves_the_ledger_alone(
+    occupancy_world: Any, tmp_path: Any
+) -> None:
+    """Only the workers going out WITHOUT a successor are read as leaving: a
+    replacement covers its source one for one, and its users land on it."""
+    commander = ladder_world(occupancy_world, tmp_path / "frozen")
+    assert commander.needs_spare_capacity(["W:w-2", "W:w-3"]) is True
+    assert commander.needs_spare_capacity(["W:w-3"]) is False
+
+
+def test_the_plan_never_spawns_past_max_workers(
+    occupancy_world: Any, tmp_path: Any, caplog: Any
+) -> None:
+    """The configured ceiling is a hard one wherever a spawn is decided: the rung
+    is not climbed, and the refusal is a log line for the sysop."""
+    commander = ladder_world(occupancy_world, tmp_path / "frozen", max_workers=4)
+    commander.target = 4
+    with caplog.at_level(logging.WARNING):
+        plan = commander.build_plan()
+    assert not [step for step in plan if step["op"] == "spawn"]
+    assert "max_workers=4" in caplog.text
+    # The rungs around it are unaffected: the plan is the same minus the spawn.
+    assert [step["op"] for step in plan] == ["freeze", "rebalance", "replace", "compact"]
+
+
+async def test_the_executor_runs_the_freeze_and_the_spawn_steps(
+    commander: UserStickyCommander,
+) -> None:
+    """The two new rungs, executed: the freezer is asked for the user the step
+    names, and the spawn raises the target BEFORE it waits for its child, so the
+    reconcile never reads the fresh process as a surplus."""
+    enroll(commander, "W:w-1")
+    commander.target = 1
+    frozen: list[str] = []
+
+    async def record_freeze(user: str) -> bool:
+        frozen.append(user)
+        return True
+
+    def record_spawn() -> str:
+        assert commander.target == 2
+        return enroll(commander, "W:w-2")
+
+    commander.freeze_user = record_freeze  # type: ignore[method-assign]
+    commander.spawn_worker = record_spawn  # type: ignore[method-assign]
+    await commander.execute_plan(
+        [{"op": "freeze", "user": "alice", "worker": "W:w-1"}, {"op": "spawn"}]
+    )
+    assert frozen == ["alice"]
+    assert commander.target == 2
+    assert commander.worker_roster["W:w-2"]["status"] == "active"
+    assert commander.active_plan is None
+
+
+def test_the_reaper_takes_the_expired_parcels_and_only_those(tmp_path: Any) -> None:
+    """Housekeeping on the freezer's disk, and nothing else: a parcel past its own
+    class lifetime goes, one still inside it is left exactly where it is. The
+    guest's day and the user's week are read off the file name."""
+    freezer = tmp_path / "frozen"
+    commander = UserStickyCommander(
+        workers=0,
+        path=str(tmp_path / "hub.sock"),
+        freeze_idle_after=FREEZE_IDLE_AFTER,
+        frozen_users_dir=freezer,
+    )
+    age_parcel(freezer, "alice", 60.0)
+    age_parcel(freezer, "bob", FROZEN_USER_LIFETIME + 60.0)
+    age_parcel(freezer, f"{GUEST_PREFIX}s1", FROZEN_GUEST_LIFETIME - 60.0)
+    age_parcel(freezer, f"{GUEST_PREFIX}s2", FROZEN_GUEST_LIFETIME + 60.0)
+    # A guest a day and a half old is expired; a USER of the very same age is not.
+    age_parcel(freezer, "dave", FROZEN_GUEST_LIFETIME + 60.0)
+    commander.reap_frozen_files()
+    assert sorted(path.name for path in freezer.iterdir()) == [
+        "alice",
+        "dave",
+        f"{GUEST_PREFIX}s1",
+    ]
+
+
+def test_the_reaper_has_nothing_to_sweep_before_the_first_parcel(tmp_path: Any) -> None:
+    """Both silent cases: the freezer disarmed altogether, and armed on a
+    directory no freeze has created yet."""
+    disarmed = UserStickyCommander(workers=0, path=str(tmp_path / "hub.sock"))
+    assert disarmed.frozen_users_dir is None
+    disarmed.reap_frozen_files()
+    freezer = tmp_path / "frozen"
+    armed = UserStickyCommander(
+        workers=0,
+        path=str(tmp_path / "hub2.sock"),
+        freeze_idle_after=FREEZE_IDLE_AFTER,
+        frozen_users_dir=freezer,
+    )
+    armed.reap_frozen_files()
+    assert not freezer.exists()
+
+
+# ----------------------------------------------------------------------
+# Failure semantics: the plan aborts, the pool restricts, the hard restart
+# ----------------------------------------------------------------------
+
+
+async def test_a_replace_the_pool_cannot_regenerate_aborts_the_plan(
+    commander: UserStickyCommander, caplog: Any
+) -> None:
+    """A step that REPORTS its failure ends the plan exactly like one that
+    raises: what failed is the pool's ability to put a process up, so every step
+    below it was decided against a world that no longer holds. The escalation
+    goes first — and with no freezer there is no hard restart to escalate to,
+    since killing a worker would throw its users' slices away."""
+    for name in ("W:w-1", "W:w-2", "W:w-3"):
+        enroll(commander, name)
+    commander.target = 3
+    drained: list[str] = []
+
+    async def never_succeeds(name: str, spawn: bool = True) -> bool:
+        return False
+
+    async def record_drain(name: str) -> bool:
+        drained.append(name)
+        return True
+
+    commander.recycle_worker = never_succeeds  # type: ignore[method-assign]
+    commander.drain_worker = record_drain  # type: ignore[method-assign]
+    plan = [
+        {"op": "replace", "worker": "W:w-2", "spawn": True},
+        {"op": "compact", "worker": "W:w-3"},
+    ]
+    commander.active_plan = plan
+    commander.worker_roster["W:w-3"]["status"] = "retiring"
+    with caplog.at_level(logging.ERROR):
+        await commander.execute_plan(plan)
+    assert "plan aborted: replace step failed on W:w-2" in caplog.text
+    assert drained == []
+    assert commander.pool_status == "restricted"
+    assert commander.active_plan is None
+    # The fold that never ran gets its worker back, like any released plan.
+    assert commander.worker_roster["W:w-3"]["status"] == "active"
+
+
+async def test_a_spawn_whose_child_never_registers_aborts_the_plan(
+    commander: UserStickyCommander, caplog: Any
+) -> None:
+    """The widening half: the child is given its 30 seconds and never presents
+    itself, so the manoeuvre closes its own stillborn, gives the target back and
+    ends the plan — the next tick reads the world and decides again."""
+    enroll(commander, "W:w-1")
+    commander.target = 1
+    commander.READY_TIMEOUT = 0.05
+    rebalanced: list[float] = []
+    born: list[str] = []
+
+    def stillborn() -> str:
+        name = commander.next_worker_name()
+        commander.worker_roster[name] = commander.new_roster_row(0, None)
+        born.append(name)
+        return name
+
+    async def record_rebalance(now: float | None = None) -> None:
+        rebalanced.append(0.0)
+
+    commander.spawn_worker = stillborn  # type: ignore[method-assign]
+    commander.rebalance_pass = record_rebalance  # type: ignore[method-assign]
+    with caplog.at_level(logging.ERROR):
+        await commander.execute_plan([{"op": "spawn"}, {"op": "rebalance"}])
+    assert f"plan aborted: spawn step failed on {born[0]}" in caplog.text
+    assert rebalanced == []
+    assert commander.target == 1
+    assert commander.worker_roster[born[0]]["status"] == "dead"
+    assert commander.pool_status == "restricted"
+    assert commander.active_plan is None
+
+
+def test_a_restricted_pool_turns_strangers_away_and_serves_its_own(tmp_path: Any) -> None:
+    """Who is inside is served exactly as ever — placed or hibernating — and only
+    a stranger, whom the pool holds nothing of, is refused. The refusal carries
+    the one honest answer to "when should I come back": the interval at which the
+    pool decides its own shape."""
+    freezer = tmp_path / "frozen"
+    freezer.mkdir()
+    (freezer / "bob").write_text("parcel")
+    commander = UserStickyCommander(
+        workers=0,
+        path=str(tmp_path / "hub.sock"),
+        freeze_idle_after=FREEZE_IDLE_AFTER,
+        frozen_users_dir=freezer,
+    )
+    enroll(commander, "W:w-1")
+    commander.assign_user("alice", "W:w-1")
+    commander.pool_status = "restricted"
+    assert commander.worker_for("alice") == "W:w-1"
+    assert commander.worker_for("bob") == "W:w-1"
+    with pytest.raises(HTTPException) as refused:
+        commander.worker_for("stranger")
+    assert refused.value.status == 503
+    assert refused.value.headers == [
+        (b"retry-after", str(int(commander.decision_interval)).encode())
+    ]
+
+
+async def test_the_first_register_lifts_the_restriction() -> None:
+    """The one POSITIVE proof that the pool can regenerate is a child presenting
+    itself: whatever refused to start when the plan aborted, the door opens
+    again the moment one does."""
+    running = LocalPool()
+    await running.start(1)
+    try:
+        running.commander.pool_status = "restricted"
+        await running.add_worker()
+        assert running.commander.pool_status == "ready"
+    finally:
+        await running.stop()
+
+
+async def test_stopping_the_pool_lifts_the_restriction() -> None:
+    """The restriction described a pool that could not regenerate; a pool that
+    is closing has nothing left to restrict."""
+    running = LocalPool()
+    await running.start(1)
+    running.commander.pool_status = "restricted"
+    await running.stop()
+    assert running.commander.pool_status == "ready"
+
+
+def spawn_into(running: LocalPool) -> Any:
+    """A ``spawn_worker`` that raises a real in-process worker instead of a child.
+
+    The roster row is written synchronously — the caller gets a name it can wait
+    on at once — and the channel attach, which is what makes the REGISTER, rides
+    a task the wait's own polling lets through.
+    """
+    commander = running.commander
+
+    def spawn() -> str:
+        name = commander.next_worker_name()
+        commander.worker_roster[name] = commander.new_roster_row(os.getpid(), None)
+        asyncio.get_running_loop().create_task(running.add_worker(name))
+        return name
+
+    return spawn
+
+
+async def a_user_on_a_second_worker(running: LocalPool) -> str:
+    """Seed one live user with a page and move it off the reception.
+
+    The target is stated too — the pool was populated by hand — because a hard
+    restart holds the dying worker's seat, and a seat is a number.
+    """
+    commander = running.commander
+    commander.target = len(running.names)
+    sick = running.names[1]
+    await seed_live_guest(running, str(commander.reception))
+    await commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
+    await settled_at(commander, "alice", str(commander.reception))
+    assert await commander.move_user("alice", sick)
+    return sick
+
+
+async def test_a_hard_restart_parks_its_users_kills_and_leaves_them_to_wake(
+    tmp_path: Any,
+) -> None:
+    """The escalation, end to end: the soft succession is impossible, so the sick
+    process dies FIRST and the fresh one is born in the space its death frees.
+    Nothing is lost by dying — every user goes to the freezer before the kill —
+    and the refill is LAZY: the restart wakes nobody, and alice comes out of her
+    file on her own next request, with her page alive again."""
+    freezer = tmp_path / "frozen"
+    running = LocalPool(
+        worker_class=PageWorker,
+        freeze_idle_after=FREEZE_IDLE_AFTER,
+        frozen_users_dir=freezer,
+    )
+    await running.start(2)
+    commander = running.commander
+    try:
+        sick = await a_user_on_a_second_worker(running)
+        commander.spawn_worker = spawn_into(running)  # type: ignore[method-assign]
+        assert await commander.hard_restart(sick) is True
+        assert commander.worker_roster[sick]["status"] == "draining"
+        # The seat was held across the kill: one worker out, one worker in.
+        assert commander.target == 2
+        assert len(running.names) == 3
+        # Nobody was woken back: the user is still in her file when it returns.
+        assert commander.user_worker_map["alice"] == FROZEN
+        assert (freezer / "alice").exists()
+        envelope = await commander.forward_envelope("alice", "/op/page_ping", {"page_id": "p1"})
+        assert envelope["result"]["page_id"] == "p1"
+        destination = commander.user_worker_map["alice"]
+        assert destination != sick
+        assert not (freezer / "alice").exists()
+    finally:
+        await running.stop()
+
+
+async def test_a_hard_restart_skips_a_user_it_cannot_park(tmp_path: Any, caplog: Any) -> None:
+    """The park loop awaits each user's hold and re-reads the map, exactly as
+    ``resolve_worker`` does — and a user that still refuses to go to disk is
+    SKIPPED with a WARNING rather than holding the restart: its slice dies with
+    the process and it comes back at its next login. Loud, and accepted."""
+    freezer = tmp_path / "frozen"
+    running = LocalPool(
+        worker_class=PageWorker,
+        freeze_idle_after=FREEZE_IDLE_AFTER,
+        frozen_users_dir=freezer,
+    )
+    await running.start(2)
+    commander = running.commander
+    try:
+        sick = await a_user_on_a_second_worker(running)
+        commander.spawn_worker = spawn_into(running)  # type: ignore[method-assign]
+
+        async def never_parks(user: str) -> bool:
+            return False
+
+        commander.freeze_user = never_parks  # type: ignore[method-assign]
+        with caplog.at_level(logging.WARNING):
+            assert await commander.hard_restart(sick) is True
+        assert "alice did not park" in caplog.text
+        assert not (freezer / "alice").exists()
+    finally:
+        await running.stop()
+
+
+async def test_a_hard_restart_that_fails_too_leaves_everybody_parked(
+    tmp_path: Any, caplog: Any
+) -> None:
+    """The worst case, and why the parking comes first: not even the fresh child
+    registers. Nothing is lost — the users wait in their files, which outlive the
+    whole pool — the plan ends, and the pool stops taking strangers in until a
+    worker proves it can be born."""
+    freezer = tmp_path / "frozen"
+    running = LocalPool(
+        worker_class=PageWorker,
+        freeze_idle_after=FREEZE_IDLE_AFTER,
+        frozen_users_dir=freezer,
+    )
+    await running.start(2)
+    commander = running.commander
+    try:
+        sick = await a_user_on_a_second_worker(running)
+        commander.READY_TIMEOUT = 0.05
+
+        def stillborn() -> str:
+            name = commander.next_worker_name()
+            commander.worker_roster[name] = commander.new_roster_row(0, None)
+            return name
+
+        async def never_succeeds(name: str, spawn: bool = True) -> bool:
+            return False
+
+        commander.spawn_worker = stillborn  # type: ignore[method-assign]
+        commander.recycle_worker = never_succeeds  # type: ignore[method-assign]
+        plan = [{"op": "replace", "worker": sick, "spawn": True}]
+        commander.active_plan = plan
+        with caplog.at_level(logging.ERROR):
+            await commander.execute_plan(plan)
+        assert f"plan aborted: replace step failed on {sick}" in caplog.text
+        assert commander.pool_status == "restricted"
+        assert commander.user_worker_map["alice"] == FROZEN
+        assert (freezer / "alice").exists()
+        # A REGISTER is the proof the pool was waiting for: the door opens and
+        # the parked user comes back out of its file on its next request.
+        commander.spawn_worker = spawn_into(running)  # type: ignore[method-assign]
+        await running.add_worker()
+        assert commander.pool_status == "ready"
+        envelope = await commander.forward_envelope("alice", "/op/page_ping", {"page_id": "p1"})
+        assert envelope["result"]["page_id"] == "p1"
+    finally:
+        await running.stop()
+
+
+# ----------------------------------------------------------------------
+# What the suite was not saying: the claim's ordinary round trip, the tick's
+# own bookkeeping, the execute-time guards, the two tuning knobs, the order
+# ----------------------------------------------------------------------
+
+
+async def test_a_plan_that_finishes_hands_its_claim_back(commander: UserStickyCommander) -> None:
+    """The whole lifecycle of the claim, on the path a pool actually takes: a plan
+    that RUNS must unclaim too, or the shape of the pool is frozen for the life of
+    the process and every later tick answers with nothing."""
+    ran: list[str] = []
+
+    async def quiet_rebalance(now: float | None = None) -> None:
+        ran.append("rebalance")
+
+    commander.rebalance_pass = quiet_rebalance  # type: ignore[method-assign]
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    load(commander, "W:w-1", 0.9)
+    plan = commander.build_plan()
+    assert plan == [{"op": "rebalance"}]
+    assert commander.active_plan == plan
+    await commander.execute_plan(plan)
+    assert ran == ["rebalance"]
+    assert commander.active_plan is None
+    # And the proof that the release is what the next tick needed: the same pool
+    # still calls for the same plan, and is free to build it again.
+    assert commander.build_plan() == plan
+
+
+async def test_every_tick_closes_the_open_evacuations_first(
+    commander: UserStickyCommander,
+) -> None:
+    """The bookkeeping of the evacuations has ONE caller in the whole of ``src``:
+    this line of the tick. Nothing else would notice if it stopped running."""
+    closed: list[str] = []
+
+    def record() -> None:
+        closed.append("advance")
+
+    commander.advance_evacuations = record  # type: ignore[method-assign]
+    commander.decision_interval = 0.01
+    enroll(commander, "W:w-1")
+    ticking = asyncio.create_task(commander.planner())
+    try:
+        await asyncio.sleep(0.05)
+    finally:
+        ticking.cancel()
+    assert closed  # the tick closed the books before deciding anything
+
+
+def spy_on_drains(commander: UserStickyCommander) -> list[str]:
+    """Record every drain the executor asks for, and refuse them all."""
+    drained: list[str] = []
+
+    async def refuse(worker: str) -> bool:
+        drained.append(worker)
+        return False
+
+    commander.drain_worker = refuse  # type: ignore[method-assign]
+    return drained
+
+
+async def test_a_fold_of_a_worker_that_left_the_pool_is_skipped(
+    commander: UserStickyCommander,
+) -> None:
+    """The plan was ordered against a pool the steps before it have since changed:
+    a row a replacement took out is not drained on top of that — ``retire`` would
+    raise on it and abort every step left."""
+    for name in ("W:w-1", "W:w-2", "W:w-3"):
+        enroll(commander, name)
+    drained = spy_on_drains(commander)
+    commander.worker_roster["W:w-2"]["status"] = "evacuating"  # a replace step got there first
+    await commander.execute_plan([{"op": "compact", "worker": "W:w-2"}])
+    assert drained == []
+
+
+async def test_a_fold_of_the_worker_that_became_the_reception_is_skipped(
+    commander: UserStickyCommander,
+) -> None:
+    """The reception is never folded away, and a replacement ahead of this step
+    can hand the role to exactly the worker the fold names."""
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    drained = spy_on_drains(commander)
+    commander.worker_roster["W:w-1"]["status"] = "evacuating"  # w-2 inherits the role
+    assert commander.reception == "W:w-2"
+    await commander.execute_plan([{"op": "compact", "worker": "W:w-2"}])
+    assert drained == []
+
+
+async def test_a_fold_the_ledger_no_longer_authorizes_is_skipped(
+    commander: UserStickyCommander,
+) -> None:
+    """The second guard: the room the fold was planned against is gone, so it is
+    skipped rather than paid for — a whole ``move_user`` per resident."""
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    drained = spy_on_drains(commander)
+    # Two workers hold 1.5 of capacity: without w-2 the headroom is 0.5, under the
+    # stock 1.5 margin. No plan would ask for this fold now.
+    assert commander.capacity_headroom(exclude="W:w-2") <= commander.compaction_margin
+    await commander.execute_plan([{"op": "compact", "worker": "W:w-2"}])
+    assert drained == []
+
+
+async def test_a_freeze_of_a_user_already_moving_is_skipped(
+    commander: UserStickyCommander,
+) -> None:
+    """The freezer's contract is that a user whose barrier is already up answers
+    False and the plan carries on; the executor honours it instead of walking
+    into the raise that guards its direct callers."""
+    enroll(commander, "W:w-1")
+    commander.assign_user("alice", "W:w-1")
+    frozen: list[str] = []
+
+    async def record_freeze(user: str) -> bool:
+        frozen.append(user)
+        return True
+
+    commander.freeze_user = record_freeze  # type: ignore[method-assign]
+    commander.moving["alice"] = asyncio.Event()  # a move got there first
+    await commander.execute_plan(
+        [{"op": "freeze", "user": "alice", "worker": "W:w-1"}, {"op": "rebalance"}]
+    )
+    assert frozen == []
+    assert commander.active_plan is None
+
+
+async def test_a_spawn_against_a_full_pool_is_skipped(
+    commander: UserStickyCommander, caplog: Any
+) -> None:
+    """The ceiling is re-asked at execute time: the pool may have reached
+    ``max_workers`` since the plan was built, and a skip is not a failure — the
+    rungs below it still run."""
+    enroll(commander, "W:w-1")
+    commander.target = 1
+    commander.max_workers = 1
+    born: list[str] = []
+    rebalanced: list[str] = []
+
+    def record_spawn() -> str:
+        born.append("child")
+        return enroll(commander, "W:w-2")
+
+    async def record_rebalance(now: float | None = None) -> None:
+        rebalanced.append("rebalance")
+
+    commander.spawn_worker = record_spawn  # type: ignore[method-assign]
+    commander.rebalance_pass = record_rebalance  # type: ignore[method-assign]
+    with caplog.at_level(logging.WARNING):
+        await commander.execute_plan([{"op": "spawn"}, {"op": "rebalance"}])
+    assert born == []
+    assert "max_workers=1" in caplog.text
+    assert commander.target == 1
+    assert rebalanced == ["rebalance"]
+
+
+async def test_a_spawn_with_a_child_already_on_its_way_is_skipped(
+    commander: UserStickyCommander,
+) -> None:
+    """``rebalance_spawn``'s other guard, applied to the plan's own step: a
+    worker already being born is waited for, never stacked on."""
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2", status="nascent")
+    commander.target = 2
+    born: list[str] = []
+
+    def record_spawn() -> str:
+        born.append("child")
+        return enroll(commander, "W:w-3")
+
+    commander.spawn_worker = record_spawn  # type: ignore[method-assign]
+    await commander.execute_plan([{"op": "spawn"}])
+    assert born == []
+    assert commander.target == 2
+
+
+def test_a_restricted_pool_carries_a_probe_spawn_whatever_the_ledger_says(
+    commander: UserStickyCommander,
+) -> None:
+    """The latch is lifted by positive proof, so the planner has to keep asking
+    for it: a pool whose triggers have all lapsed would otherwise build nothing
+    for ever and stay restricted for the life of the process."""
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    assert commander.build_plan() == []  # no trigger left anywhere
+    commander.pool_status = "restricted"
+    plan = commander.build_plan()
+    assert plan == [{"op": "spawn", "probe": True}]
+    assert commander.active_plan == plan
+
+
+def test_the_probe_is_the_plan_s_only_spawn(occupancy_world: Any, tmp_path: Any) -> None:
+    """A ladder that already climbs its own spawn rung needs no probe beside it:
+    that spawn IS the proof the restriction is waiting for, and two children for
+    one tick is a pool widened twice."""
+    commander = ladder_world(occupancy_world, tmp_path / "frozen")
+    commander.pool_status = "restricted"
+    plan = commander.build_plan()
+    assert [step["op"] for step in plan] == ["freeze", "rebalance", "replace", "spawn", "compact"]
+
+
+def test_a_replace_that_spawns_is_proof_enough_and_suppresses_the_probe(
+    commander: UserStickyCommander, tmp_path: Any
+) -> None:
+    """A replace carrying ``spawn`` raises a process of its own, so it answers the
+    restriction's one question as well as a bare spawn rung does — and the probe
+    that would ride behind it is a second child for the same tick."""
+    leaking = leaking_commander(tmp_path)
+    enroll(leaking, "W:w-1")
+    floor_at(leaking, "W:w-1", 0.9)
+    leaking.target = 1
+    leaking.pool_status = "restricted"
+    plan = leaking.build_plan()
+    assert [(step["op"], step.get("spawn")) for step in plan] == [("replace", True)]
+
+
+async def test_a_probe_skips_when_the_restriction_has_meanwhile_lifted(
+    commander: UserStickyCommander,
+) -> None:
+    """The probe exists to lift the latch, so a latch somebody else lifted between
+    the build and the step — a REGISTER landing on the very tick — leaves it
+    nothing to prove, and the pool is not widened for nothing."""
+    enroll(commander, "W:w-1")
+    commander.target = 1
+    born: list[str] = []
+    commander.spawn_worker = lambda: born.append("child") or "W:w-9"  # type: ignore[method-assign]
+    commander.pool_status = "ready"
+    await commander.execute_plan([{"op": "spawn", "probe": True}])
+    assert born == []
+    assert commander.target == 1
+
+
+async def test_the_probe_rides_the_tail_so_a_failed_one_costs_the_ladder_nothing(
+    occupancy_world: Any, tmp_path: Any, caplog: Any
+) -> None:
+    """The probe is a retry, not a prerequisite: nothing below it reads the
+    widening, so it goes LAST. A restricted pool therefore still freezes, sheds,
+    replaces and folds on the tick whose probe dies — the rungs the ledger asked
+    for run before the abort, instead of being suppressed for as long as the
+    restriction lasts."""
+    commander = ladder_world(occupancy_world, tmp_path / "frozen", spawn_margin=0.0)
+    commander.pool_status = "restricted"
+    commander.READY_TIMEOUT = 0.05
+    ran: list[str] = []
+    born: list[str] = []
+
+    async def record_freeze(user: str) -> bool:
+        ran.append(f"freeze:{user}")
+        return True
+
+    async def record_rebalance(now: float | None = None) -> None:
+        ran.append("rebalance")
+
+    async def record_recycle(name: str, spawn: bool = True) -> bool:
+        ran.append(f"replace:{name}")
+        return True
+
+    async def record_drain(name: str) -> bool:
+        ran.append(f"compact:{name}")
+        return True
+
+    def stillborn() -> str:
+        name = commander.next_worker_name()
+        commander.worker_roster[name] = commander.new_roster_row(0, None)
+        born.append(name)
+        return name
+
+    commander.freeze_user = record_freeze  # type: ignore[method-assign]
+    commander.rebalance_pass = record_rebalance  # type: ignore[method-assign]
+    commander.recycle_worker = record_recycle  # type: ignore[method-assign]
+    commander.drain_worker = record_drain  # type: ignore[method-assign]
+    commander.spawn_worker = stillborn  # type: ignore[method-assign]
+    plan = commander.build_plan()
+    assert [step["op"] for step in plan] == ["freeze", "rebalance", "replace", "compact", "spawn"]
+    with caplog.at_level(logging.ERROR):
+        await commander.execute_plan(plan)
+    assert ran == ["freeze:alice", "rebalance", "replace:W:w-2", "compact:W:w-3"]
+    assert f"plan aborted: spawn step failed on {born[0]}" in caplog.text
+    assert commander.pool_status == "restricted"
+    assert commander.active_plan is None
+
+
+async def test_a_probe_spawn_that_registers_lifts_the_restriction() -> None:
+    """The retry closing the loop: the pool that could not regenerate builds its
+    probe, the child presents itself, and the REGISTER opens the door — no
+    trigger of the original abort has to still hold."""
+    running = LocalPool()
+    await running.start(1)
+    commander = running.commander
+    try:
+        commander.pool_status = "restricted"
+        commander.spawn_worker = spawn_into(running)  # type: ignore[method-assign]
+        widened = commander.target + 1
+        plan = commander.build_plan()
+        assert plan == [{"op": "spawn", "probe": True}]
+        await commander.execute_plan(plan)
+        assert commander.pool_status == "ready"
+        assert commander.target == widened
+    finally:
+        await running.stop()
+
+
+def test_the_floor_limit_ratio_the_commander_was_given_is_the_one_that_condemns(
+    tmp_path: Any,
+) -> None:
+    """The knob is plumbed, not only arithmetically right: a commander configured
+    to condemn later must not condemn at the default budget, and one configured to
+    condemn earlier must."""
+    stock = leaking_commander(tmp_path)  # FLOOR_LIMIT_RATIO, 0.8 of the limit
+    enroll(stock, "W:w-1")
+    floor_at(stock, "W:w-1", 0.6)
+    assert stock.necessity_candidates() == []
+
+    early = leaking_commander(tmp_path, floor_limit_ratio=0.5)
+    enroll(early, "W:w-1")
+    floor_at(early, "W:w-1", 0.6)
+    assert early.necessity_candidates() == ["W:w-1"]
+
+    late = leaking_commander(tmp_path, floor_limit_ratio=0.95)
+    enroll(late, "W:w-1")
+    floor_at(late, "W:w-1", 0.9)  # the stock budget would condemn this floor
+    assert late.necessity_candidates() == []
+
+
+def test_the_waste_ratio_the_commander_was_given_is_the_one_that_condemns(
+    tmp_path: Any,
+) -> None:
+    """The same for the convenience trigger: an operator raising the tolerance
+    stops the churn, one lowering it starts it."""
+    stock = leaking_commander(tmp_path)  # WASTE_RATIO, half the floor
+    enroll(stock, "W:w-1")
+    wasteful(stock, "W:w-1", 0.3)
+    assert stock.convenience_candidates() == []
+
+    fussy = leaking_commander(tmp_path, waste_ratio=0.2)
+    enroll(fussy, "W:w-1")
+    wasteful(fussy, "W:w-1", 0.3)
+    assert fussy.convenience_candidates() == ["W:w-1"]
+
+    tolerant = leaking_commander(tmp_path, waste_ratio=1.0)
+    enroll(tolerant, "W:w-1")
+    wasteful(tolerant, "W:w-1", 0.7)  # the stock tolerance would condemn this waste
+    assert tolerant.convenience_candidates() == []
+
+
+def test_the_loaded_workers_are_folded_by_ascending_load(tmp_path: Any) -> None:
+    """The second half of emptiest-first, with three loaded workers so the sort has
+    something to say: the lightest goes first, because the compaction is ACTIVE and
+    pays a move for every user it finds aboard."""
+    roomy = UserStickyCommander(
+        workers=0, path=str(tmp_path / "hub.sock"), compaction_margin=0.3, spawn_margin=0.2
+    )
+    for name in ("W:w-1", "W:w-2", "W:w-3", "W:w-4"):
+        enroll(roomy, name)
+    for worker, user, saturation in (
+        ("W:w-2", "alice", 0.4),
+        ("W:w-3", "bob", 0.1),
+        ("W:w-4", "carol", 0.25),
+    ):
+        roomy.assign_user(user, worker)
+        load(roomy, worker, saturation)
+    assert not roomy.empty_workers()  # nothing is free: the sort decides alone
+    assert roomy.compaction_order() == ["W:w-3", "W:w-4", "W:w-2"]
+
+
+def test_a_candidate_landing_exactly_on_its_ceiling_is_refused(
+    commander: UserStickyCommander,
+) -> None:
+    """The admission ceiling is strict, and the edge is asserted ON it: a worker
+    that would land exactly at its own threshold takes nobody."""
+    enroll(commander, "W:w-1")
+    enroll(commander, "W:w-2")
+    load(commander, "W:w-1", 0.9)  # the reception is far past its own lower gate
+    load(commander, "W:w-2", 0.75)
+    saturation = commander.evaluator.worker_saturation("W:w-2")
+    weight = 1.0 - saturation
+    assert saturation + weight == 1.0  # the edge is exact, not straddled
+    assert commander.pick_best_fit(weight) is None
+    assert commander.pick_best_fit(weight - 0.01) == "W:w-2"
+
+
+def test_the_reception_is_never_filled_past_its_own_ceiling(
+    commander: UserStickyCommander,
+) -> None:
+    """The Phase 3 ceiling at its edge: the gate the reception is judged at, not
+    the flat 1.0 — a weight the whole worker would take is refused by the role."""
+    enroll(commander, "W:w-1")
+    load(commander, "W:w-1", 0.25)
+    saturation = commander.evaluator.worker_saturation("W:w-1")
+    weight = commander.reception_threshold - saturation
+    assert saturation + weight == commander.reception_threshold
+    assert weight < 1.0  # a flat ceiling would have admitted it
+    assert commander.pick_best_fit(weight) is None
+    assert commander.pick_best_fit(weight - 0.01) == "W:w-1"

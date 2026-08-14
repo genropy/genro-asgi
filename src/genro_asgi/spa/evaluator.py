@@ -59,8 +59,8 @@ A worker with no rows (just born) reads 0.0 on both — it admits.
 
 Beside the judgment there is one pure GAUGE: ``window_floor`` reads the lowest
 live memory of the whole window in raw bytes — no target, no clamp. It is what
-the commander samples into a worker's long floor series, the evidence the
-recycling policy reads a leak off (issue #8). Off that series two more readings
+the commander samples into a worker's long floor series (issue #8), where a leak
+shows itself. Off that series two more readings
 are fitted: ``worker_floor_velocity``, how fast the floor climbs in bytes/hour,
 and ``worker_time_to_limit``, the hours left before it meets the memory limit —
 None on both meaning "no leak measurable, this worker lives forever".
@@ -302,8 +302,10 @@ class OccupancyEvaluator:
         """HOURS before this worker's floor meets the memory limit (issue #8).
 
         ``(memory_limit_mb * 1MB - last_floor) / velocity`` on the velocity
-        above — the evidence the recycling policy triggers on. None means
-        INFINITE, "never recycle this worker": no configured
+        above. An OBSERVATION reading: the replacement decides on current
+        measures (R5), never on this projection, and the monitor's photograph is
+        its only reader. None means
+        INFINITE, "no limit in sight for this worker": no configured
         ``memory_limit_mb``, fewer than six floor samples, or a velocity of
         zero or less (a flat or falling floor is not a leak). A floor already
         past the limit while still climbing reads 0.0 — overdue, not healthy.

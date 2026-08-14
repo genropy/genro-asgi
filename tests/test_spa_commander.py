@@ -24,6 +24,7 @@ kills them.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import signal
 import time
@@ -31,6 +32,7 @@ from typing import Any
 
 import pytest
 
+from tests.conftest import OCCUPANCY_WORLDS
 from genro_asgi.channel.hub import ChannelCallError
 from genro_asgi.spa.commander import (
     CONSUMPTION_BUCKET_SECONDS,
@@ -938,3 +940,156 @@ def test_a_default_commander_samples_floors_at_the_module_depth(
     for _ in range(METRICS_WINDOW):
         commander.record_occupancy("W:w-1", memory_report(4096))
     assert [row["floor"] for row in commander.worker_floors("W:w-1")] == [4096]
+
+
+# ----------------------------------------------------------------------
+# The pool-shape triggers: necessity, convenience, emptiness, capacity
+# ----------------------------------------------------------------------
+
+
+def waste_report(rss: int, reusable: int) -> dict[str, Any]:
+    """A raw reading whose live floor is ``rss - reusable``."""
+    return {"rss": rss, "reusable": reusable}
+
+
+def test_a_floor_at_the_limit_share_is_a_necessity(tmp_path: Any) -> None:
+    running = UserStickyCommander(workers=0, path=str(tmp_path / "hub.sock"), memory_limit_mb=100)
+    for name in ("W:w-1", "W:w-2"):
+        running.worker_roster[name] = running.new_roster_row(0, None)
+        running.worker_roster[name]["status"] = "active"
+    budget = int(100 * 1024 * 1024 * running.floor_limit_ratio)
+    running.worker_roster["W:w-1"]["floors"].append({"ts": time.time(), "floor": budget})
+    running.worker_roster["W:w-2"]["floors"].append({"ts": time.time(), "floor": budget - 1})
+    assert running.necessity_candidates() == ["W:w-1"]
+
+
+def test_a_worker_with_no_closed_window_has_no_necessity(tmp_path: Any) -> None:
+    running = UserStickyCommander(workers=0, path=str(tmp_path / "hub.sock"), memory_limit_mb=100)
+    running.worker_roster["W:w-1"] = running.new_roster_row(0, None)
+    running.worker_roster["W:w-1"]["status"] = "active"
+    assert running.necessity_candidates() == []
+
+
+def test_without_a_memory_limit_nothing_is_a_necessity(commander: UserStickyCommander) -> None:
+    commander.worker_roster["W:w-1"]["floors"].append({"ts": time.time(), "floor": 10**12})
+    assert commander.memory_limit_mb is None
+    assert commander.necessity_candidates() == []
+
+
+def test_the_convenience_candidates_come_worst_first(commander: UserStickyCommander) -> None:
+    # w-1 wastes 100% of its floor, w-2 60% — both over the 0.5 default.
+    commander.record_occupancy("W:w-1", waste_report(200, 100))
+    commander.record_occupancy("W:w-2", waste_report(160, 60))
+    assert commander.convenience_candidates() == ["W:w-1", "W:w-2"]
+
+
+def test_a_worker_wasting_under_the_ratio_is_no_candidate(
+    commander: UserStickyCommander,
+) -> None:
+    commander.record_occupancy("W:w-1", waste_report(150, 50))  # exactly 0.5: not over
+    commander.record_occupancy("W:w-2", waste_report(100, 0))
+    assert commander.convenience_candidates() == []
+
+
+def test_a_reading_without_rss_never_qualifies(commander: UserStickyCommander) -> None:
+    commander.record_occupancy("W:w-1", {"users": 3})
+    assert commander.convenience_candidates() == []
+
+
+def test_the_empty_workers_exclude_the_reception(commander: UserStickyCommander) -> None:
+    assert commander.reception == "W:w-1"
+    assert commander.empty_workers() == ["W:w-2"]
+    commander.assign_user("alice", "W:w-2")
+    assert commander.empty_workers() == []
+
+
+def test_a_tight_pool_needs_spare_capacity(commander: UserStickyCommander) -> None:
+    # Two idle workers: 0.5 + 1.0 of capacity, nothing held.
+    assert commander.capacity_headroom() == pytest.approx(1.5)
+    assert commander.needs_spare_capacity() is False
+    commander.spawn_margin = 1.5
+    assert commander.needs_spare_capacity() is False  # the margin is a floor, not a gate
+    commander.spawn_margin = 1.6
+    assert commander.needs_spare_capacity() is True
+
+
+def test_the_headroom_can_be_read_without_one_worker(commander: UserStickyCommander) -> None:
+    assert commander.capacity_headroom(exclude="W:w-2") == pytest.approx(0.5)
+    assert commander.capacity_headroom(exclude="W:w-1") == pytest.approx(0.5)
+
+
+def test_a_spawn_margin_over_the_compaction_margin_is_refused(tmp_path: Any) -> None:
+    with pytest.raises(ValueError, match="spawn_margin"):
+        UserStickyCommander(
+            workers=0,
+            path=str(tmp_path / "hub.sock"),
+            compaction_margin=0.5,
+            spawn_margin=0.5,
+        )
+
+
+# ----------------------------------------------------------------------
+# pool_occupancy: the single reading the planner reasons on
+# ----------------------------------------------------------------------
+
+
+def test_the_pool_occupancy_of_an_empty_pool_reads_zero(tmp_path: Any) -> None:
+    empty = UserStickyCommander(workers=0, path=str(tmp_path / "hub.sock"))
+    assert empty.pool_occupancy == {
+        "capacity": 0.0,
+        "load": 0.0,
+        "headroom": 0.0,
+        "workers": {},
+    }
+
+
+def test_the_pool_occupancy_reports_every_active_worker(commander: UserStickyCommander) -> None:
+    """Two idle workers, one holding a user: the shape, and only the actives."""
+    commander.worker_roster["W:w-3"] = commander.new_roster_row(0, None)  # nascent
+    commander.assign_user("alice", "W:w-2")
+    picture = commander.pool_occupancy
+    assert set(picture) == {"capacity", "load", "headroom", "workers"}
+    assert list(picture["workers"]) == ["W:w-1", "W:w-2"]
+    assert picture["capacity"] == pytest.approx(1.5)
+    assert picture["load"] == pytest.approx(0.0)
+    assert picture["headroom"] == pytest.approx(1.5)
+    row = picture["workers"]["W:w-2"]
+    assert set(row) == {"status", "saturation", "load", "memory_pressure", "idle_users"}
+    assert row["status"] == "active"
+    assert row["memory_pressure"] == 0.0
+    assert list(row["idle_users"]) == ["alice"]
+    assert row["idle_users"]["alice"] == pytest.approx(0.0, abs=5.0)
+
+
+def test_the_pool_occupancy_leaves_a_busy_user_out_of_the_idle(
+    commander: UserStickyCommander,
+) -> None:
+    commander.assign_user("alice", "W:w-1")
+    commander.assign_user("bob", "W:w-1")
+    commander.worker_roster["W:w-1"]["users"]["bob"]["pending"]["r1"] = {"path": "/x", "ts": 0.0}
+    assert list(commander.pool_occupancy["workers"]["W:w-1"]["idle_users"]) == ["alice"]
+
+
+@pytest.mark.parametrize("world", ["quiet_pool", "loaded_pool"])
+def test_the_pool_occupancy_matches_the_world_it_was_built_from(
+    occupancy_world: Any, world: str
+) -> None:
+    """The fixture loader and the reading agree: every seeded number comes back."""
+    expected = json.loads((OCCUPANCY_WORLDS / f"{world}.json").read_text())
+    picture = occupancy_world(world).pool_occupancy
+    for total in ("capacity", "load", "headroom"):
+        assert picture[total] == pytest.approx(expected[total]), total
+    assert list(picture["workers"]) == list(expected["workers"])
+    for name, row in expected["workers"].items():
+        seen = picture["workers"][name]
+        assert seen["status"] == row["status"]
+        for reading in ("saturation", "load", "memory_pressure"):
+            assert seen[reading] == pytest.approx(row[reading]), f"{name}.{reading}"
+        assert set(seen["idle_users"]) == set(row["idle_users"])
+        for user, age in row["idle_users"].items():
+            assert seen["idle_users"][user] == pytest.approx(age, abs=5.0)
+
+
+def test_an_unreachable_world_load_is_refused(occupancy_world: Any) -> None:
+    with pytest.raises(ValueError, match="unreachable"):
+        occupancy_world("broken_pool")
