@@ -348,14 +348,11 @@ async def test_a_write_that_fails_after_the_seal_drops_the_user_loudly(
     assert commander.worker_for("alice") == source
 
 
-@pytest.mark.parametrize("identity", ["tenant/alice", "../escapee", "."])
-async def test_an_identity_that_cannot_be_a_filename_is_never_frozen(
-    tmp_path: Path, identity: str
-) -> None:
-    """A name carrying a separator or a ``..``, or naming the directory itself,
-    would park the parcel somewhere other than under its own name: the freezer
-    does not apply to that user at all — never a candidate, never a parcel, and
-    the disk is never even looked at."""
+@pytest.mark.parametrize("identity", ["tenant/alice", "../escapee", "rossi\\mario"])
+async def test_any_identity_freezes_under_its_userkey(tmp_path: Path, identity: str) -> None:
+    """An identity carrying separators is nobody's exemption: ``user_to_userkey``
+    flattens it into a plain filename INSIDE the freezer directory, so the user
+    is a candidate like any other and its parcel is found where it was filed."""
     armed = UserStickyCommander(
         workers=0,
         path=str(tmp_path / "hub.sock"),
@@ -365,12 +362,14 @@ async def test_an_identity_that_cannot_be_a_filename_is_never_frozen(
     enroll(armed, "W:w-1")
     armed.assign_user(identity, "W:w-1")
     armed.worker_roster["W:w-1"]["users"][identity]["last_activity_ts"] = 0.0
-    assert armed.freeze_candidates == []
+    assert (identity, "W:w-1") in armed.freeze_candidates
+    userkey = armed.user_to_userkey(identity)
+    assert "/" not in userkey and "\\" not in userkey and userkey not in ("", ".", "..")
     assert not armed.has_frozen_parcel(identity)
-    with pytest.raises(ValueError, match="cannot name a file"):
-        await armed.freeze_user(identity)
-    assert not (tmp_path / "frozen").exists()
-    assert not armed.has_freezable_name("")  # a name that is no name at all
+    armed.frozen_users_dir.mkdir(parents=True)
+    (armed.frozen_users_dir / userkey).write_text("a parcel")
+    assert armed.has_frozen_parcel(identity)
+    assert [p.name for p in armed.frozen_users_dir.iterdir()] == [userkey]
 
 
 # ----------------------------------------------------------------------

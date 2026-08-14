@@ -282,6 +282,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.parse
 import uuid
 from collections import deque
 from collections.abc import Coroutine, Sequence
@@ -2949,8 +2950,7 @@ class UserStickyCommander:
         brought under ``freeze_idle_floor`` — the fuller the memory, the sooner
         an idle user goes to disk. Read off the ONE ``pool_occupancy`` picture,
         whose ``idle_users`` already leaves out everybody with work in flight:
-        a user mid-call is never a candidate. An identity that cannot be a
-        filename is exempt — see ``has_freezable_name``.
+        a user mid-call is never a candidate.
         """
         if self.freeze_idle_after is None:
             return []
@@ -2962,46 +2962,35 @@ class UserStickyCommander:
             for user, idle_age in row["idle_users"].items():
                 if idle_age <= effective:
                     continue
-                if not self.has_freezable_name(user):
-                    self.logger.debug(
-                        "Freeze of %s skipped: its identity cannot be a filename", user
-                    )
-                    continue
                 due.append((idle_age, user, worker))
         due.sort(reverse=True)
         return [(user, worker) for _, user, worker in due]
 
-    def has_freezable_name(self, user: str) -> bool:
-        """Whether ``user`` can name a file in the freezer directory at all.
+    def user_to_userkey(self, user: str) -> str:
+        """The filename every file of ``user`` goes by: its identity, percent-encoded.
 
-        PATH SAFETY ONLY: an identity carrying a separator or a ``..`` segment
-        would put the parcel somewhere other than ``frozen_users_dir``, and an
-        empty name or a bare ``.`` names the directory itself. The freezer
-        simply does NOT apply to such a user: it is never a candidate and it
-        never has a parcel. No encoding scheme — inventing one is a design
-        decision about identities, and such a user is perfectly well served
-        where it already lives, on a worker.
+        ONE WAY by design: every reader starts from the user and computes the
+        key forward — nothing ever derives a user back from a filename (the
+        reaper walks the placements it already knows; orphan files die by age
+        alone). ``quote`` with nothing declared safe keeps every separator out
+        of the name, so no identity can step outside the directory it is filed
+        under, and ``GUEST_PREFIX`` comes through untouched, so the class is
+        still read off the file itself. A bare ``.`` or ``..`` survives quoting
+        and fails LOUDLY at the write — it names a directory — the accepted end
+        of an identity no login mints.
         """
-        return (
-            user not in ("", ".")
-            and "/" not in user
-            and "\\" not in user
-            and ".." not in user
-        )
+        return urllib.parse.quote(user, safe="")
 
     def has_frozen_parcel(self, user: str) -> bool:
         """Whether a parcel of ``user`` is waiting in the freezer.
 
-        False with the freezer disarmed, and False for an identity the freezer
-        does not apply to — asked BEFORE the disk, so an unsafe name never
-        builds a path. The one question the login asks: the
+        False with the freezer disarmed. The one question the login asks: the
         files are the truth about who is hibernating, so a commander that has
         forgotten everything still finds them.
         """
         return (
             self.frozen_users_dir is not None
-            and self.has_freezable_name(user)
-            and (self.frozen_users_dir / user).exists()
+            and (self.frozen_users_dir / self.user_to_userkey(user)).exists()
         )
 
     async def freeze_user(self, user: str) -> bool:
@@ -3011,8 +3000,8 @@ class UserStickyCommander:
         machinery, and it raises the SAME per-user barrier, so every forward of
         this user parks while the slice leaves. The worker seals and spends its
         copy answering (off its loop, see ``UserStickyWorker.freeze_user``), and
-        the commander writes the parcel under ``frozen_users_dir / <user>``,
-        DIRECTLY: a parcel is 2–45 KB, and the half-write window a temp file
+        the commander writes the parcel under ``frozen_users_dir /
+        user_to_userkey(user)``, DIRECTLY: a parcel is 2–45 KB, and the half-write window a temp file
         would retire is narrower than the cost of the discipline. A truncated
         parcel is not silent — it fails to unpickle at the wake, which treats
         it exactly as an expired one.
@@ -3043,8 +3032,6 @@ class UserStickyCommander:
             return False
         if self.frozen_users_dir is None:
             raise ValueError(f"freeze of {user}: the freezer has no directory to write to")
-        if not self.has_freezable_name(user):
-            raise ValueError(f"freeze of {user!r}: this identity cannot name a file")
         if user in self.moving:
             raise RuntimeError(f"move of {user} is already in flight")
         self.moving[user] = asyncio.Event()
@@ -3082,7 +3069,7 @@ class UserStickyCommander:
                     "Freeze of %s: swept mid-seal (its worker died), parcel discarded", user
                 )
                 return False
-            parcel = self.frozen_users_dir / user
+            parcel = self.frozen_users_dir / self.user_to_userkey(user)
             try:
                 parcel.write_text(encoded)
             except OSError as exc:
@@ -3159,7 +3146,7 @@ class UserStickyCommander:
             self.moving[user] = asyncio.Event()
         try:
             assert self.frozen_users_dir is not None  # has_frozen_parcel answered True
-            parcel = self.frozen_users_dir / user
+            parcel = self.frozen_users_dir / self.user_to_userkey(user)
             try:
                 encoded = parcel.read_text()
                 pickle.loads(base64.b64decode(encoded))

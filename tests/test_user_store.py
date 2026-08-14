@@ -194,16 +194,3 @@ class TestFileUserStore:
         store = FileUserStore(site_storage(tmp_path))
         with pytest.raises(StorageError):
             store.save(_record(store, "erin"))
-
-    def test_save_with_traversal_identity_raises(self, tmp_path) -> None:
-        """An identity climbing out of the users prefix is denied by the storage guard."""
-        key = Fernet.generate_key().decode()
-        store = FileUserStore(_encrypted_storage(tmp_path, key))
-        with pytest.raises(ValueError, match="traversal"):
-            store.save(_record(store, "../intruder"))
-
-    def test_get_with_traversal_identity_raises(self, tmp_path) -> None:
-        key = Fernet.generate_key().decode()
-        store = FileUserStore(_encrypted_storage(tmp_path, key))
-        with pytest.raises(ValueError, match="traversal"):
-            store.get("../intruder")

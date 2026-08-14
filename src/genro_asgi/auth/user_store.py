@@ -31,7 +31,7 @@ Contract (clients depend on this, never on files or SQL — a future
         verify(identity, password) -> dict | None   # full record on success, None otherwise
 
 ``FileUserStore`` is the filesystem backend: one JSON file per user at
-``<mount>:<prefix>/<identity>.json`` over genro-storage nodes, defaulting to
+``<mount>:<prefix>/<userkey>.json`` over genro-storage nodes, defaulting to
 ``site:users``. Every record is written ``encrypted=True``: credentials are
 ciphertext at rest, and without installed key material the write hard-fails
 (D5 — no plain-text fallback). All I/O is synchronous (core 1b ratified: async
@@ -69,6 +69,7 @@ import hashlib
 import hmac
 import json
 import os
+import urllib.parse
 from typing import Any
 
 from genro_storage import StorageManager, StorageNode
@@ -159,8 +160,10 @@ class FileUserStore(UserStore):
 
     It holds the shared ``StorageManager`` (dual relationship) and never raw
     paths. Records live at
-    ``<mount>:<prefix>/<identity>.json`` and are always written
-    ``encrypted=True`` — the write site declares it, not the mount.
+    ``<mount>:<prefix>/<userkey>.json`` — the userkey is the identity
+    percent-encoded by ``user_to_userkey``, so any identity names a file inside
+    the prefix — and are always written ``encrypted=True`` — the write site
+    declares it, not the mount.
     """
 
     __slots__ = ("_storage", "_mount", "_prefix")
@@ -182,9 +185,20 @@ class FileUserStore(UserStore):
         """The ``<mount>:<prefix>`` directory node."""
         return self._storage.node(f"{self._mount}:{self._prefix}")
 
+    def user_to_userkey(self, user: str) -> str:
+        """The filename ``user``'s record goes by: its identity, percent-encoded.
+
+        ONE WAY: readers compute the key forward from the identity, nothing
+        derives an identity back from a filename (``load_all`` reads it from
+        the record body). ``quote`` with nothing declared safe keeps every
+        separator out of the name, so no identity escapes the prefix.
+        """
+        return urllib.parse.quote(user, safe="")
+
     def _record_node(self, identity: str) -> StorageNode:
         """The node for one user's JSON file on the configured mount."""
-        return self._storage.node(f"{self._mount}:{self._prefix}/{identity}.json")
+        key = self.user_to_userkey(identity)
+        return self._storage.node(f"{self._mount}:{self._prefix}/{key}.json")
 
     # ── UserStore contract ─────────────────────────────────────────────
 
