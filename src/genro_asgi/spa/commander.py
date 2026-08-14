@@ -2312,7 +2312,7 @@ class UserStickyCommander:
         while self.is_held(identity):
             await self.await_move(identity)
         if self.user_worker_map.get(identity) == FROZEN:
-            await self.wake_user(identity)
+            await self.unfreeze_user(identity)
         return self.worker_for(identity)
 
     def is_held(self, identity: str) -> bool:
@@ -2626,7 +2626,7 @@ class UserStickyCommander:
                 )
             else:
                 self.moving[user] = asyncio.Event()
-                self.spawn_settlement(self.wake_user(user, worker), name=f"login-wake:{user}")
+                self.spawn_settlement(self.unfreeze_user(user, worker), name=f"login-wake:{user}")
         elif prior is None:
             chosen = self.decide_worker()
             if chosen != worker:
@@ -2835,7 +2835,7 @@ class UserStickyCommander:
 
         ``parcel_wins`` decides who is the truth if the destination already has
         this user: normally the RESIDENT is, and the parcel joins it. The wake
-        of a hibernated user is the one exception — see ``wake_user`` — and it
+        of a hibernated user is the one exception — see ``unfreeze_user`` — and it
         passes True, so the carried store takes the resident's place.
 
         The single door of the ``add_user`` handover — the move's custody and
@@ -3005,7 +3005,7 @@ class UserStickyCommander:
         it exactly as an expired one.
 
         The rows below the user STAY: a frozen user still owns its connections
-        and its pages, and they answer a worker again the moment ``wake_user``
+        and its pages, and they answer a worker again the moment ``unfreeze_user``
         re-points the map. What goes is its half-row on the worker — there is no
         worker holding it any more.
 
@@ -3081,7 +3081,7 @@ class UserStickyCommander:
         finally:
             self.release_move(user)
 
-    async def wake_user(self, user: str, worker: str | None = None) -> bool:
+    async def unfreeze_user(self, user: str, worker: str | None = None) -> bool:
         """Bring a frozen user back out of its file, onto a living worker.
 
         The install goes through the ORDINARY placement — ``decide_worker``,
@@ -3181,11 +3181,11 @@ class UserStickyCommander:
         A parcel is kept until it outlives its class: ``FROZEN_GUEST_LIFETIME``
         for a guest — the name carries ``GUEST_PREFIX``, so the class is read
         off the file itself — ``FROZEN_USER_LIFETIME`` for a logged user. A
-        spent parcel is not its business either: ``wake_user`` deletes the file
+        spent parcel is not its business either: ``unfreeze_user`` deletes the file
         it installed.
 
         The ``FROZEN`` placement of a user whose parcel is reaped here is left
-        exactly where it is, and that is deliberate: ``wake_user`` already
+        exactly where it is, and that is deliberate: ``unfreeze_user`` already
         answers a missing parcel by clearing the placement and restarting the
         user as a stranger, so the expiry needs no second implementation on the
         housekeeping side.
