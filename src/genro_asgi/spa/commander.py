@@ -2347,15 +2347,19 @@ class UserStickyCommander:
                 raise RuntimeError(f"{identity} is frozen: wake it before routing it")
             if self.worker_roster[worker]["status"] in ("active", "evacuating", "retiring"):
                 return worker
-        stranger = identity not in self.user_worker_map and not self.has_frozen_parcel(identity)
         reception = self.reception
-        if self.pool_status == "restricted" and (stranger or reception is None):
-            # One of the two declared emitters of the anomaly channel (issue #19):
-            # a pool that turned somebody away is a fact the sysop must see.
-            # Retry-After is one decision interval: when the pool will have
-            # re-read itself and decided again, so nobody has to guess.
-            retry_after = str(int(self.decision_interval)).encode()
-            raise HTTPException(503, "server busy", [(b"retry-after", retry_after)])
+        if self.pool_status == "restricted":
+            stranger = identity not in self.user_worker_map and not (
+                self.frozen_users_dir is not None
+                and (self.frozen_users_dir / self.user_to_userkey(identity)).exists()
+            )
+            if stranger or reception is None:
+                # One of the two declared emitters of the anomaly channel (issue #19):
+                # a pool that turned somebody away is a fact the sysop must see.
+                # Retry-After is one decision interval: when the pool will have
+                # re-read itself and decided again, so nobody has to guess.
+                retry_after = str(int(self.decision_interval)).encode()
+                raise HTTPException(503, "server busy", [(b"retry-after", retry_after)])
         if reception is None:
             raise RuntimeError("no worker available to serve the request")
         self.check_capacity()
@@ -2981,18 +2985,6 @@ class UserStickyCommander:
         """
         return urllib.parse.quote(user, safe="")
 
-    def has_frozen_parcel(self, user: str) -> bool:
-        """Whether a parcel of ``user`` is waiting in the freezer.
-
-        False with the freezer disarmed. The one question the login asks: the
-        files are the truth about who is hibernating, so a commander that has
-        forgotten everything still finds them.
-        """
-        return (
-            self.frozen_users_dir is not None
-            and (self.frozen_users_dir / self.user_to_userkey(user)).exists()
-        )
-
     async def freeze_user(self, user: str) -> bool:
         """Park one user's whole slice in a file and mark its placement ``FROZEN``.
 
@@ -3120,14 +3112,16 @@ class UserStickyCommander:
         The file is DELETED once the install has answered: the parcel is spent,
         and a spent parcel is nobody's.
 
-        Returns whether the user came back. A parcel that is missing has
-        EXPIRED — the reaper outlived its class, or the file went by hand — and
-        one that will not unpickle is truncated, the loud end of writing a
-        parcel straight to its name. Neither is an impossible state: the
-        placement and the rows under it are cleared (``remove_user`` already
-        handles a ``FROZEN`` row), the answer is False, and ``resolve_worker``
-        falls through to ``worker_for`` so the user restarts as a stranger. A
-        permanent 500 on every future request is the alternative this refuses.
+        Returns whether the user came back — asked by TRYING: the parcel is
+        read, never asked about first. A parcel that is missing has EXPIRED —
+        the reaper outlived its class, or the file went by hand — one that
+        will not unpickle is truncated, and a freezer disarmed since the
+        placement froze holds nothing at all. None of these is an impossible
+        state: the placement and the rows under it are cleared (``remove_user``
+        already handles a ``FROZEN`` row), the answer is False, and
+        ``resolve_worker`` falls through to ``worker_for`` so the user restarts
+        as a stranger. A permanent 500 on every future request is the
+        alternative this refuses.
 
         The per-user barrier may already be up when this is called: the login
         path raises it synchronously in ``settle_login`` and hands it over, so a
@@ -3135,9 +3129,9 @@ class UserStickyCommander:
         No other hold can be up — a FROZEN placement is on no roster, so no move
         of this user can be in flight.
         """
-        if not self.has_frozen_parcel(user):
+        if self.frozen_users_dir is None:
+            self.logger.warning("wake of %s: the freezer is disarmed; treating as new", user)
             if self.user_worker_map.get(user) == FROZEN:
-                self.logger.warning("frozen parcel of %s expired; treating as new", user)
                 self.remove_user(user)
             if user in self.moving:
                 self.release_move(user)
@@ -3145,14 +3139,13 @@ class UserStickyCommander:
         if user not in self.moving:
             self.moving[user] = asyncio.Event()
         try:
-            assert self.frozen_users_dir is not None  # has_frozen_parcel answered True
             parcel = self.frozen_users_dir / self.user_to_userkey(user)
             try:
                 encoded = parcel.read_text()
                 pickle.loads(base64.b64decode(encoded))
             except Exception as exc:
                 self.logger.warning(
-                    "frozen parcel of %s is unreadable (%s: %s); treating as new",
+                    "frozen parcel of %s is missing or unreadable (%s: %s); treating as new",
                     user,
                     type(exc).__name__,
                     exc,

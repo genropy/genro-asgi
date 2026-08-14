@@ -284,7 +284,7 @@ async def test_a_parcel_that_will_not_unpickle_wakes_its_user_as_a_stranger(
     parcel.write_text(parcel.read_text()[: len(parcel.read_text()) // 2])
     with caplog.at_level(logging.WARNING):
         assert await commander.resolve_worker("alice") == commander.reception
-    assert any("is unreadable" in record.getMessage() for record in caplog.records)
+    assert any("is missing or unreadable" in record.getMessage() for record in caplog.records)
     assert not parcel.exists()
     assert "alice" not in commander.user_worker_map
     assert "p1" not in commander.page_connection
@@ -365,10 +365,8 @@ async def test_any_identity_freezes_under_its_userkey(tmp_path: Path, identity: 
     assert (identity, "W:w-1") in armed.freeze_candidates
     userkey = armed.user_to_userkey(identity)
     assert "/" not in userkey and "\\" not in userkey and userkey not in ("", ".", "..")
-    assert not armed.has_frozen_parcel(identity)
     armed.frozen_users_dir.mkdir(parents=True)
     (armed.frozen_users_dir / userkey).write_text("a parcel")
-    assert armed.has_frozen_parcel(identity)
     assert [p.name for p in armed.frozen_users_dir.iterdir()] == [userkey]
 
 
