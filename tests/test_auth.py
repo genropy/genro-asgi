@@ -451,7 +451,9 @@ class TestBootstrapAdmin:
         server = AsgiServer(applications=[BaseApplication(mount="")], users=store, admin_password="pw")
         record = server.user_store.get("admin")
         assert record is not None
-        assert record["tags"] == ["SUPERADMIN"]
+        # administration AND observation: the identity that configures the
+        # server also reaches its monitor on a fresh install
+        assert record["tags"] == ["SUPERADMIN", "SERVER_ADMIN"]
         assert record["enabled"] is True
         assert server.user_store.verify("admin", "pw") is not None
 
@@ -468,7 +470,7 @@ class TestBootstrapAdmin:
         server = AsgiServer(applications=[BaseApplication(mount="")], users=store, admin_password="fresh")
         record = server.user_store.get("admin")
         assert record["enabled"] is True
-        assert record["tags"] == ["SUPERADMIN"]
+        assert record["tags"] == ["SUPERADMIN", "SERVER_ADMIN"]
         assert server.user_store.verify("admin", "fresh") is not None
 
 

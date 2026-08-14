@@ -149,6 +149,28 @@ class BaseApplication:
             return handler(full_path)
         return handler(full_path, default=default)
 
+    @property
+    def app_snapshot(self) -> dict[str, Any]:
+        """This app as the monitor sees it, at the instant it is read.
+
+        The monitor aggregates one entry per mounted application by reading
+        this on each. Subclasses extend it with their own panel data
+        (registers, pool, gauges) on top of these identity facts.
+        """
+        return {"class": type(self).__name__, "code": self.code, "mount": self.mount}
+
+    @property
+    def app_panel(self) -> dict[str, Any]:
+        """Which panel renders this app on the monitor shell: a class constant.
+
+        The presentation complement of ``app_snapshot``: the snapshot carries
+        the data (polled), this says who draws it (fetched once). ``panel``
+        names a renderer in the shell's registry and an unknown name falls
+        back to the generic one; ``src`` — when a subclass declares it — is
+        the module URL the shell imports to learn that renderer.
+        """
+        return {"panel": "generic"}
+
     def on_startup(self) -> None:
         """Lifecycle hook run at server startup. Override as sync or async."""
 

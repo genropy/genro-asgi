@@ -57,7 +57,11 @@ from .user_store import FileUserStore, UserStore
 __all__ = ["AuthMixin"]
 
 ADMIN_IDENTITY = "admin"
-ADMIN_TAGS = ["SUPERADMIN"]
+#: The bootstrap admin answers for the whole server, so it carries both the
+#: administration tag and the one gating the monitor: a freshly installed
+#: server is observable by the identity that configures it. The UPSERT at boot
+#: applies this list to an existing record too, so no store needs migrating.
+ADMIN_TAGS = ["SUPERADMIN", "SERVER_ADMIN"]
 
 
 class AuthMixin:

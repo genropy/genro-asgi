@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>genro-asgi monitor</title>
+<!--
+  The server monitor SHELL.
+
+  One page composes one panel per mounted application. The app declares WHICH
+  panel through its ``app_panel`` (fetched once from ./panels); the DATA is the
+  polled ./snapshot. The shell owns the tabs, the polling loop and the component
+  vocabulary (tiles, key/value grids, tables, pills, occupancy bars,
+  sparklines); the PANELS registry maps a descriptor's panel name to a renderer:
+
+      generic   raw snapshot as key/values and tables (the fallback)
+
+  Escape hatch: a descriptor {panel: "<name>", src: "<module url>"} whose name
+  the registry does not know is imported once as an ES module; its default
+  export must be {render(target, mount, appSnapshot), cardFacts(appSnapshot),
+  badge(appSnapshot)}. Until (or unless) the import succeeds, the app renders
+  with the generic panel. The vocabulary is published on window.monitor so an
+  imported panel builds with the same components as the shell.
+-->
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0f18;
+    --surface: rgba(255, 255, 255, 0.028);
+    --surface-2: rgba(255, 255, 255, 0.06);
+    --border: rgba(148, 170, 210, 0.16);
+    --border-soft: rgba(148, 170, 210, 0.09);
+    --ink: #e9eef7;
+    --muted: #8d99b2;
+    --faint: #5c6880;
+    --accent: #45b8f5;
+    --accent-2: #8b7cf6;
+    --accent-dim: rgba(69, 184, 245, 0.14);
+    --good: #3ecf8e;   --good-dim: rgba(62, 207, 142, 0.13);
+    --warn: #f5b942;   --warn-dim: rgba(245, 185, 66, 0.13);
+    --crit: #f4726f;   --crit-dim: rgba(244, 114, 111, 0.13);
+    --neutral: #6b7891; --neutral-dim: rgba(107, 120, 145, 0.15);
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  /* A surveillance tool is looked at for hours: the page stays quiet — one flat
+     ground, one surface, hairline borders, no shadows and no glow. Colour is
+     reserved for what is worth noticing (a state, a threshold crossed);
+     everything else is ink on grey. */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { background: var(--bg); }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 14px;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 22px 26px 56px; }
+
+  /* ---------- header ---------- */
+  header { display: flex; align-items: baseline; gap: 20px; flex-wrap: wrap; padding: 6px 2px 18px; }
+  .wordmark { font-family: var(--mono); font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; }
+  .wordmark b { color: var(--accent); }
+  .server-facts { display: flex; gap: 18px; flex-wrap: wrap; font-family: var(--mono); font-size: 0.76rem; color: var(--faint); }
+  .server-facts .v { color: var(--muted); }
+  .tick { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 0.74rem; color: var(--muted); }
+  .tick .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--good); box-shadow: 0 0 8px var(--good); }
+  .tick .pulse.err { background: var(--crit); box-shadow: 0 0 8px var(--crit); }
+  .tick .errmsg { color: var(--crit); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+  @media (prefers-reduced-motion: no-preference) { .tick .pulse { animation: pulse 2s infinite; } }
+
+  /* ---------- app tabs ---------- */
+  nav.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border-soft); margin-bottom: 22px; overflow-x: auto; }
+  .tab-btn {
+    appearance: none; background: none; border: none; position: relative;
+    color: var(--muted); font-family: var(--mono); font-size: 0.86rem; padding: 10px 16px;
+    cursor: pointer; display: flex; align-items: center; gap: 9px; white-space: nowrap;
+    transition: color 0.15s;
+  }
+  .tab-btn:hover { color: var(--ink); }
+  .tab-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px; }
+  .tab-btn.active { color: var(--ink); }
+  .tab-btn.active::after {
+    content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px;
+    background: var(--accent); border-radius: 2px;
+  }
+  .badge {
+    font-size: 0.62rem; font-family: var(--sans); font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase; padding: 2px 8px; border-radius: 9px;
+    background: var(--surface-2); color: var(--muted); border: 1px solid var(--border-soft);
+  }
+  .tab-btn.active .badge, .subtab.active .badge { background: var(--accent-dim); color: var(--accent); border-color: transparent; }
+
+  /* ---------- shared vocabulary ---------- */
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px 18px;
+  }
+  .section-label {
+    font-size: 0.67rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--faint); margin: 28px 0 12px; display: flex; align-items: center; gap: 10px;
+  }
+  .section-label::after { content: ""; flex: 1; height: 1px; background: var(--border-soft); }
+  .section-label:first-child { margin-top: 0; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 12px; }
+  .tile {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px 16px;
+    text-align: left; font-family: var(--sans); color: var(--ink);
+  }
+  button.tile { cursor: pointer; transition: border-color 0.15s; }
+  button.tile:hover { border-color: rgba(69, 184, 245, 0.45); }
+  button.tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .tile .n { font-family: var(--mono); font-size: 1.65rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+  .tile .l { font-size: 0.7rem; color: var(--muted); margin-top: 3px; letter-spacing: 0.04em; text-transform: uppercase; }
+  .tile .zoom-hint { font-size: 0.66rem; color: var(--accent); margin-top: 6px; }
+
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 5px 20px; font-size: 0.85rem; }
+  .kv .k { color: var(--muted); }
+  .kv .v { font-family: var(--mono); font-size: 0.82rem; overflow-wrap: anywhere; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 7px 16px 7px 0; border-bottom: 1px solid var(--border-soft); }
+  th { color: var(--faint); font-weight: 600; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; }
+  tr:hover td { background: rgba(255,255,255,0.015); }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  td.mono { font-family: var(--mono); font-size: 0.78rem; }
+  .table-scroll { overflow-x: auto; }
+  .empty { color: var(--faint); font-style: italic; font-size: 0.82rem; padding: 8px 0; }
+  .note { color: var(--muted); font-size: 0.8rem; padding: 6px 0; }
+  .warnline { color: var(--warn); font-size: 0.78rem; padding: 4px 0 10px; }
+
+  /* status + activity pills: dot + text, never colour alone */
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 0.72rem; padding: 2px 9px; border-radius: 10px; white-space: nowrap; }
+  .pill .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .st-running { background: var(--good-dim); color: var(--good); }    .st-running .dot { background: var(--good); }
+  .st-retiring { background: var(--warn-dim); color: var(--warn); }   .st-retiring .dot { background: var(--warn); }
+  .st-error { background: var(--crit-dim); color: var(--crit); }      .st-error .dot { background: var(--crit); }
+  .act-active { background: var(--good-dim); color: var(--good); }    .act-active .dot { background: var(--good); }
+  .act-recent { background: var(--warn-dim); color: var(--warn); }    .act-recent .dot { background: var(--warn); }
+  .act-idle { background: var(--crit-dim); color: var(--crit); }      .act-idle .dot { background: var(--crit); }
+  .act-never { background: var(--neutral-dim); color: var(--neutral); } .act-never .dot { background: var(--neutral); }
+
+  /* occupancy bar — colour thresholds: green < 60, yellow < 80, red at/above */
+  .occ { display: flex; align-items: center; gap: 12px; }
+  .occ .bar { flex: 1; height: 9px; border-radius: 5px; background: rgba(255,255,255,0.06); overflow: hidden; }
+  .occ .fill { height: 100%; border-radius: 5px; transition: width 0.5s ease; }
+  .occ .pct { font-family: var(--mono); font-size: 0.8rem; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 40px; text-align: right; }
+  .fill.low { background: var(--good); }
+  .fill.mid { background: var(--warn); }
+  .fill.high { background: var(--crit); }
+
+  /* ---------- app cards (the server tab) ---------- */
+  .app-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+  .app-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 15px 17px; cursor: pointer; transition: border-color 0.15s;
+  }
+  .app-card:hover { border-color: rgba(69, 184, 245, 0.45); }
+  .app-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .app-card .mount { font-family: var(--mono); font-size: 1.02rem; font-weight: 700; }
+  .app-card .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+  .app-card .facts { display: flex; gap: 18px; flex-wrap: wrap; }
+  .app-card .facts .n { font-family: var(--mono); font-size: 1.12rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .app-card .facts .l { font-size: 0.66rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .app-card .open { margin-top: 10px; font-size: 0.74rem; color: var(--accent); }
+
+  /* ---------- sub-tabs (offered to panels) ---------- */
+  .subtabs { display: flex; gap: 7px; margin-bottom: 18px; flex-wrap: wrap; }
+  .subtab {
+    appearance: none; background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+    border-radius: 16px; padding: 5px 15px; font-size: 0.78rem; font-family: var(--sans); cursor: pointer;
+    display: inline-flex; align-items: center; gap: 7px; transition: border-color 0.15s, color 0.15s;
+  }
+  .subtab:hover { color: var(--ink); border-color: rgba(69,184,245,0.4); }
+  .subtab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .subtab.active {
+    background: var(--accent-dim); border-color: rgba(69,184,245,0.45); color: var(--ink);
+  }
+
+  /* ---------- breadcrumb + tree (offered to panels) ---------- */
+  .crumbs { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; font-family: var(--mono); font-size: 0.85rem; flex-wrap: wrap; }
+  .crumbs .back {
+    appearance: none; background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+    border-radius: 16px; padding: 4px 14px; font-size: 0.76rem; cursor: pointer; font-family: var(--sans);
+  }
+  .crumbs .back:hover { color: var(--ink); border-color: rgba(69,184,245,0.4); }
+  .crumbs .path { color: var(--faint); }
+  .crumbs .path b { color: var(--ink); font-weight: 600; }
+  .crumbs .src { margin-left: auto; font-size: 0.7rem; color: var(--faint); }
+
+  .tree {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 4px 16px;
+  }
+  .tree-row { display: flex; align-items: center; gap: 11px; padding: 8px 0; border-bottom: 1px solid var(--border-soft); font-size: 0.82rem; }
+  .tree-row:last-child { border-bottom: none; }
+  .tree-row.clickable { cursor: pointer; }
+  .tree-row.clickable:hover .tree-main { color: var(--accent); }
+  .caret { appearance: none; background: none; border: none; color: var(--accent); width: 18px; cursor: pointer; font-size: 0.8rem; padding: 0; text-align: left; }
+  .caret:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .caret-spacer { display: inline-block; width: 18px; }
+  .tree-main { font-family: var(--mono); font-size: 0.8rem; transition: color 0.12s; }
+  .tree-facts { display: flex; gap: 15px; margin-left: auto; color: var(--muted); font-size: 0.74rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tree-children { margin-left: 27px; border-left: 1px solid var(--border-soft); padding-left: 11px; }
+
+  /* ---------- worker cards (offered to panels) ---------- */
+  .workers-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); gap: 14px; }
+  .worker-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 15px 17px; cursor: pointer; transition: border-color 0.15s;
+  }
+  .worker-card:hover { border-color: rgba(69, 184, 245, 0.45); }
+  .worker-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .worker-card .head { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+  .worker-card .wid { font-family: var(--mono); font-weight: 700; font-size: 0.92rem; }
+  .worker-card .head .pill { margin-left: auto; }
+  .worker-card .addr { font-family: var(--mono); font-size: 0.71rem; color: var(--faint); margin-bottom: 11px; }
+  .worker-card .spark { margin: 9px 0 2px; display: block; }
+  .worker-card .meta { font-size: 0.74rem; color: var(--muted); margin-top: 7px; font-variant-numeric: tabular-nums; }
+  .worker-card .meta b { color: var(--ink); font-weight: 600; }
+  .worker-card .zoom { margin-top: 9px; font-size: 0.72rem; color: var(--accent); }
+
+  /* ---------- a reading and what it means, under it ---------- */
+  .reading .value { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .reading .gloss { font-size: 0.72rem; color: var(--faint); margin-top: 3px; line-height: 1.35; }
+  .reading .gloss.warn { color: var(--warn); }
+  .reading .gloss.crit { color: var(--crit); }
+
+  /* ---------- what the machine is doing, in words ---------- */
+  .doing {
+    background: var(--surface); border: 1px solid var(--border-soft);
+    border-radius: 10px; padding: 13px 16px; margin-top: 18px;
+  }
+  .doing .l {
+    font-size: 0.63rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--faint); margin-bottom: 6px;
+  }
+  .doing .t { font-size: 0.82rem; color: var(--muted); line-height: 1.5; }
+
+  footer { margin-top: 44px; font-size: 0.72rem; color: var(--faint); border-top: 1px solid var(--border-soft); padding-top: 14px; line-height: 1.6; }
+  footer code { font-family: var(--mono); color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="wordmark">genro<b>-asgi</b> monitor</span>
+    <span class="server-facts" id="server-facts"></span>
+    <span class="tick"><span class="pulse" id="pulse"></span><span id="tick-label">loading…</span><span class="errmsg" id="tick-error"></span></span>
+  </header>
+  <nav class="tabs" id="tabs"></nav>
+  <main id="panel"><p class="note">loading…</p></main>
+  <footer>
+    panels are declared per app through <code>app_panel</code> and rendered by this shell;
+    data is the polled <code>app_snapshot</code>. Apps with no declared panel render generically.
+  </footer>
+</div>
+
+<script>
+/* =========================================================================
+   FETCH LAYER — descriptors once, snapshot polled
+   ========================================================================= */
+/* both endpoints are siblings of this page, whether or not the address the
+   browser landed on carries the trailing slash */
+const baseUrl = window.location.pathname.replace(/\/$/, "");
+const snapshotUrl = baseUrl + "/snapshot";
+const panelsUrl = baseUrl + "/panels";
+
+const cache = {
+  snapshot: null,   // the polled ./snapshot payload
+  panels: {},       // {mount: descriptor}, fetched once
+  extra: {},        // {mount: {name: {data, error}}}, what panels asked for
+};
+
+async function fetchJson(url) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error("HTTP " + response.status + " on " + url);
+  return response.json();
+}
+
+function descriptorOf(mount) { return cache.panels[mount] || {}; }
+
+/* An app's own endpoints are relative to ITS mount, not to this page: the
+   panel names "population", the app answers at /<mount>/population. */
+function appUrl(mount, relative) {
+  return (mount ? "/" + mount : "") + "/" + relative;
+}
+
+/* =========================================================================
+   THE PANEL CONTRACT — what the shell hands a panel, and asks of it
+
+   A panel is an object with:
+
+     render(target, context)   draw into target (already emptied)
+     badge(snapshot)           the word on the tab and on the server card
+     cardFacts(snapshot)       [[value, label], ...] on the server card
+     extras(context)           OPTIONAL {name: "app/relative/url"} — what this
+                               view needs beyond the snapshot, RIGHT NOW: the
+                               shell fetches those and hands them back under
+                               context.extra, re-asking on every tick and after
+                               every navigation, so a panel that needs nothing
+                               in one view costs nothing in it.
+
+   The context carries:
+
+     mount      the app's mount, "" for the site root
+     snapshot   this app's entry of the polled snapshot
+     state      the panel's OWN scratch space, kept across renders and ticks
+     extra      {name: {data, error}} — what extras() asked for last round
+     navigate   navigate(fn): mutate state inside fn, the shell redraws
+   ========================================================================= */
+function panelState(mount) {
+  return (ui.state[mount] = ui.state[mount] || {});
+}
+
+function panelContext(mount) {
+  return {
+    mount,
+    snapshot: (cache.snapshot && cache.snapshot.apps[mount]) || {},
+    state: panelState(mount),
+    extra: cache.extra[mount] || {},
+    navigate,
+  };
+}
+
+/* what the CURRENT view needs beyond the snapshot: only the open tab's panel
+   is asked — a panel nobody is looking at fetches nothing */
+async function refreshExtras() {
+  const mount = ui.tab;
+  if (mount === "server" || !cache.snapshot || !cache.snapshot.apps[mount]) return;
+  const panel = panelFor(mount);
+  const wanted = panel.extras ? panel.extras(panelContext(mount)) || {} : {};
+  const slot = cache.extra[mount] = cache.extra[mount] || {};
+  await Promise.all(Object.entries(wanted).map(async ([name, relative]) => {
+    const entry = slot[name] = slot[name] || {};
+    try { entry.data = await fetchJson(appUrl(mount, relative)); entry.error = null; }
+    catch (exc) { entry.error = exc.message; }
+  }));
+}
+
+/* navigation: apply the change, draw what we already have, then fill the gaps */
+function navigate(change) {
+  change();
+  renderAll();
+  refreshExtras().then(renderAll);
+}
+
+async function tick() {
+  const pulse = document.getElementById("pulse");
+  try {
+    cache.snapshot = await fetchJson(snapshotUrl);
+    document.getElementById("tick-error").textContent = "";
+    document.getElementById("tick-label").textContent = "last tick " + new Date().toLocaleTimeString();
+    pulse.classList.remove("err");
+  } catch (exc) {
+    document.getElementById("tick-error").textContent = " — " + exc.message;
+    pulse.classList.add("err");
+  }
+  await refreshExtras();
+  renderAll();
+}
+
+/* =========================================================================
+   UI STATE + COMPONENT VOCABULARY
+   ========================================================================= */
+/* ``tab`` is the shell's business; ``state`` is one scratch space per panel,
+   handed back to it on every render and never read by the shell */
+const ui = { tab: "server", state: {} };
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function occClass(pct) { return pct < 60 ? "low" : pct < 80 ? "mid" : "high"; }
+
+function occBar(pct) {
+  const box = el("div", "occ");
+  const bar = el("div", "bar");
+  const fill = el("div", "fill " + occClass(pct));
+  fill.style.width = Math.min(pct, 100) + "%";
+  bar.appendChild(fill);
+  box.appendChild(bar);
+  box.appendChild(el("span", "pct", pct + "%"));
+  return box;
+}
+
+function sparkline(history, height) {
+  const w = 4, gap = 2, h = height || 26;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "spark");
+  svg.setAttribute("width", history.length * (w + gap));
+  svg.setAttribute("height", h);
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "history");
+  history.forEach((pct, i) => {
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    const bh = Math.max(2, Math.round((Math.min(pct, 100) / 100) * h));
+    rect.setAttribute("x", i * (w + gap)); rect.setAttribute("y", h - bh);
+    rect.setAttribute("width", w); rect.setAttribute("height", bh);
+    rect.setAttribute("rx", 1.5);
+    rect.setAttribute("fill", i === history.length - 1 ? "var(--accent-2)" : "var(--accent)");
+    rect.setAttribute("opacity", i === history.length - 1 ? "1" : "0.4");
+    svg.appendChild(rect);
+  });
+  return svg;
+}
+
+function pillSpan(kind, text) {
+  const span = el("span", "pill " + kind);
+  span.appendChild(el("span", "dot"));
+  span.appendChild(document.createTextNode(text));
+  return span;
+}
+const activitySpan = (level) => pillSpan("act-" + level, level);
+const statusSpan = (status) => pillSpan(
+  "st-" + (status === "running" ? "running" : status === "retiring" ? "retiring" : "error"), status);
+
+function sectionLabel(target, text) {
+  target.appendChild(el("div", "section-label", text));
+}
+
+/* one row of pills; ``current`` is highlighted, picking one calls onPick */
+function subTabs(target, names, current, onPick) {
+  const bar = el("div", "subtabs");
+  for (const name of names) {
+    const button = el("button", "subtab" + (name === current ? " active" : ""), name);
+    button.onclick = () => onPick(name);
+    bar.appendChild(button);
+  }
+  target.appendChild(bar);
+  return bar;
+}
+
+/* a back button and a path: where the reader is inside a panel */
+function crumbs(target, parts, onBack, source) {
+  const box = el("div", "crumbs");
+  if (onBack) {
+    const back = el("button", "back", "‹ back");
+    back.onclick = onBack;
+    box.appendChild(back);
+  }
+  const path = el("span", "path");
+  parts.forEach((part, i) => {
+    if (i === parts.length - 1) path.appendChild(Object.assign(el("b"), { textContent: part }));
+    else path.appendChild(document.createTextNode(part + " / "));
+  });
+  box.appendChild(path);
+  if (source) box.appendChild(el("span", "src", source));
+  target.appendChild(box);
+  return box;
+}
+
+/* the expandable tree: a box, then rows built with treeRow */
+function treeBox(target) {
+  const box = el("div", "tree");
+  target.appendChild(box);
+  return box;
+}
+
+/* one tree row: caret when it has children, a main label, facts on the right */
+function treeRow(opts) {
+  const row = el("div", "tree-row");
+  if (opts.hasChildren) {
+    const caret = el("button", "caret", opts.open ? "▾" : "▸");
+    caret.setAttribute("aria-expanded", String(!!opts.open));
+    caret.onclick = (event) => { event.stopPropagation(); opts.onToggle(); };
+    row.appendChild(caret);
+    row.classList.add("clickable");
+    row.onclick = opts.onToggle;
+  } else {
+    row.appendChild(el("span", "caret-spacer"));
+  }
+  row.appendChild(el("span", "tree-main", opts.main));
+  const facts = el("span", "tree-facts");
+  for (const fact of opts.facts || []) if (fact) facts.appendChild(el("span", "", fact));
+  row.appendChild(facts);
+  if (opts.activity) row.appendChild(activitySpan(opts.activity));
+  return row;
+}
+
+/* A reading with its explanation under it: the number the eye lands on, then
+   in small type what it is made of or where it is heading — the mockups' way
+   of saying "0.64" and "memoria 0.64 · thread 0.31 · attese 0.12" without
+   three competing bars. ``tone`` colours the gloss alone ("warn" / "crit"). */
+function reading(value, gloss, tone) {
+  const box = el("div", "reading");
+  const line = el("div", "value");
+  line.appendChild(typeof value === "string" || typeof value === "number"
+    ? document.createTextNode(String(value)) : value);
+  box.appendChild(line);
+  if (gloss) box.appendChild(el("div", "gloss" + (tone ? " " + tone : ""), gloss));
+  return box;
+}
+
+/* What the machine is DOING, stated in words under the table it concerns.
+   Not a chart: a sentence — "w-8 past its memory threshold → 14 people to
+   w-9, heaviest first". Costs nothing to render and says what no gauge can. */
+function doing(target, label, text) {
+  const box = el("div", "doing");
+  box.appendChild(el("div", "l", label));
+  box.appendChild(el("div", "t", text));
+  target.appendChild(box);
+  return box;
+}
+
+function treeChildren(parent) {
+  const box = el("div", "tree-children");
+  parent.appendChild(box);
+  return box;
+}
+
+/* a tile with an onClick is a BUTTON: it zooms to a full focused panel */
+function tiles(target, entries) {
+  const grid = el("div", "tiles");
+  for (const [label, value, onClick] of entries) {
+    const tile = el(onClick ? "button" : "div", "tile");
+    tile.appendChild(el("div", "n", String(value)));
+    tile.appendChild(el("div", "l", label));
+    if (onClick) {
+      tile.appendChild(el("div", "zoom-hint", "zoom →"));
+      tile.onclick = onClick;
+    }
+    grid.appendChild(tile);
+  }
+  target.appendChild(grid);
+}
+
+function kvGrid(target, obj) {
+  const grid = el("div", "kv");
+  for (const [key, value] of Object.entries(obj)) {
+    grid.appendChild(el("span", "k", key));
+    grid.appendChild(el("span", "v", Array.isArray(value) ? value.join(", ") : String(value)));
+  }
+  target.appendChild(grid);
+}
+
+function dataTable(target, rows, cols) {
+  if (!rows || !rows.length) { target.appendChild(el("p", "empty", "empty")); return; }
+  const scroll = el("div", "table-scroll");
+  const table = el("table");
+  const head = table.insertRow();
+  cols.forEach(c => head.appendChild(Object.assign(el("th"), { textContent: c.label })));
+  rows.forEach(row => {
+    const tr = table.insertRow();
+    cols.forEach(c => {
+      const td = tr.insertCell();
+      if (c.kind === "activity") { td.appendChild(activitySpan(row[c.key] || "never")); return; }
+      if (c.kind === "num") td.className = "num";
+      if (c.kind === "mono") td.className = "mono";
+      const value = c.render ? c.render(row) : row[c.key];
+      td.appendChild(document.createTextNode(value === null || value === undefined ? "—" : String(value)));
+    });
+  });
+  scroll.appendChild(table);
+  target.appendChild(scroll);
+}
+
+/* =========================================================================
+   GENERIC PANEL — any snapshot, no knowledge of the app
+   ========================================================================= */
+function renderGenericSection(target, obj) {
+  const scalars = {};
+  const nested = [];
+  for (const [key, value] of Object.entries(obj)) {
+    if (Array.isArray(value) && value.length && typeof value[0] === "object") {
+      nested.push([key, value, "table"]);
+    } else if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+      nested.push([key, value, "kv"]);
+    } else {
+      scalars[key] = value;
+    }
+  }
+  if (Object.keys(scalars).length) kvGrid(target, scalars);
+  for (const [key, value, kind] of nested) {
+    target.appendChild(el("div", "section-label", key));
+    if (kind === "table") {
+      const cols = Object.keys(value[0]).map(c => ({
+        key: c, label: c,
+        render: row => {
+          const cell = row[c];
+          return cell !== null && typeof cell === "object" ? JSON.stringify(cell) : cell;
+        },
+      }));
+      dataTable(target, value, cols);
+    } else {
+      kvGrid(target, value);
+    }
+  }
+}
+
+function renderGenericPanel(target, context) {
+  sectionLabel(target, "Snapshot");
+  const card = el("div", "card");
+  renderGenericSection(card, context.snapshot);
+  target.appendChild(card);
+}
+
+/* =========================================================================
+   PANELS REGISTRY — descriptor.panel -> renderer (+ server-tab card facts)
+   ========================================================================= */
+const PANELS = {
+  "generic": {
+    render: renderGenericPanel,
+    badge: (appSnapshot) => appSnapshot.class || "app",
+    cardFacts: (appSnapshot) => [[appSnapshot.code || "?", "code"]],
+  },
+};
+
+function panelFor(mount) {
+  const descriptor = descriptorOf(mount);
+  return PANELS[descriptor.panel] || PANELS.generic;
+}
+
+/* An app whose panel this shell does not know ships it itself: the descriptor
+   carries ``src``, the module is imported once and registered under its panel
+   name. Its default export is the panel object of the contract above. A module
+   that fails to load costs its app nothing but the generic panel. */
+async function loadModulePanels() {
+  for (const descriptor of Object.values(cache.panels)) {
+    if (descriptor && descriptor.panel && !PANELS[descriptor.panel] && descriptor.src) {
+      try {
+        const module = await import(descriptor.src);
+        if (module.default && module.default.render) PANELS[descriptor.panel] = module.default;
+      } catch (exc) {
+        console.warn("monitor: panel module failed, falling back to generic:", descriptor.src, exc);
+      }
+    }
+  }
+}
+
+/* The vocabulary an imported panel builds with: the same components the shell
+   uses, so a panel looks like the rest of the page without shipping any CSS. */
+window.monitor = {
+  el, sectionLabel, tiles, kvGrid, dataTable,
+  pillSpan, statusSpan, activitySpan, occBar, occClass, sparkline,
+  subTabs, crumbs, treeBox, treeRow, treeChildren, reading, doing,
+  renderGenericSection, PANELS,
+};
+
+/* =========================================================================
+   SERVER PANEL + SHELL
+   ========================================================================= */
+function renderServerPanel(target) {
+  const snapshot = cache.snapshot;
+  target.appendChild(el("div", "section-label", "Server"));
+  const card = el("div", "card");
+  kvGrid(card, snapshot.server || {});
+  target.appendChild(card);
+
+  target.appendChild(el("div", "section-label", "Mounted apps"));
+  const grid = el("div", "app-cards");
+  for (const [mount, appSnapshot] of Object.entries(snapshot.apps || {})) {
+    const panel = panelFor(mount);
+    const card = el("div", "app-card");
+    card.tabIndex = 0;
+    const head = el("div", "head");
+    head.appendChild(el("span", "mount", "/" + mount));
+    head.appendChild(el("span", "badge", panel.badge(appSnapshot)));
+    card.appendChild(head);
+    const facts = el("div", "facts");
+    for (const [value, label] of panel.cardFacts(appSnapshot)) {
+      const fact = el("div", "f");
+      fact.appendChild(el("div", "n", String(value)));
+      fact.appendChild(el("div", "l", label));
+      facts.appendChild(fact);
+    }
+    card.appendChild(facts);
+    card.appendChild(el("div", "open", "open panel →"));
+    const go = () => navigate(() => { ui.tab = mount; });
+    card.onclick = go;
+    card.onkeydown = (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); go(); } };
+    grid.appendChild(card);
+  }
+  target.appendChild(grid);
+}
+
+function renderHeader() {
+  const facts = document.getElementById("server-facts");
+  facts.textContent = "";
+  const server = (cache.snapshot && cache.snapshot.server) || {};
+  const pairs = [];
+  /* a server built without a configured listener has nothing to show here:
+     the reader is looking at it through the real address anyway */
+  if (server.host) pairs.push(["host", `${server.host}:${server.port}`]);
+  if (server.pid !== undefined) pairs.push(["pid", server.pid]);
+  for (const [key, value] of pairs) {
+    const span = el("span");
+    span.appendChild(document.createTextNode(key + " "));
+    span.appendChild(el("span", "v", String(value)));
+    facts.appendChild(span);
+  }
+}
+
+function renderTabs() {
+  const nav = document.getElementById("tabs");
+  nav.textContent = "";
+  const mk = (id, label, badge) => {
+    const button = el("button", "tab-btn" + (ui.tab === id ? " active" : ""));
+    button.appendChild(document.createTextNode(label));
+    if (badge) button.appendChild(el("span", "badge", badge));
+    button.onclick = () => navigate(() => { ui.tab = id; });
+    nav.appendChild(button);
+  };
+  mk("server", "server");
+  for (const [mount, appSnapshot] of Object.entries((cache.snapshot && cache.snapshot.apps) || {})) {
+    mk(mount, "/" + mount, panelFor(mount).badge(appSnapshot));
+  }
+}
+
+function renderPanel() {
+  const panel = document.getElementById("panel");
+  panel.textContent = "";
+  if (!cache.snapshot) { panel.appendChild(el("p", "note", "loading…")); return; }
+  if (ui.tab === "server") { renderServerPanel(panel); return; }
+  const appSnapshot = cache.snapshot.apps[ui.tab];
+  if (!appSnapshot) { ui.tab = "server"; renderServerPanel(panel); return; }
+  panelFor(ui.tab).render(panel, panelContext(ui.tab));
+}
+
+function renderAll() { renderHeader(); renderTabs(); renderPanel(); }
+
+/* boot: descriptors once (plus any module panel), then the polling loop */
+(async function boot() {
+  try {
+    cache.panels = await fetchJson(panelsUrl);
+    await loadModulePanels();
+  } catch (exc) {
+    console.warn("monitor: panels unavailable, every app renders generic:", exc);
+  }
+  await tick();
+  setInterval(tick, 2000);
+})();
+</script>
+</body>
+</html>
