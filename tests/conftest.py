@@ -36,10 +36,17 @@ from pathlib import Path
 from typing import Any, Callable
 
 import pytest
+from genro_toolbox.smartasync import set_sync
 
 from genro_asgi.config import HOME_ENV
 from genro_asgi.spa.commander import UserStickyCommander
 from genro_asgi.types import Message, Scope
+
+# D22 (core 1b): the server's storage API is SYNCHRONOUS — StorageMixin pins
+# ``set_sync()`` at construction and every task inherits it. The suite runs
+# under the same dispatch the server runs under, so a storage node answers
+# with a VALUE here exactly as it does in production.
+set_sync()
 
 OCCUPANCY_WORLDS = Path(__file__).parent / "fixtures" / "occupancy"
 WORLD_MEMORY_LIMIT_MB = 1024

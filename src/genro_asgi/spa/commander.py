@@ -289,6 +289,7 @@ from collections.abc import Coroutine, Sequence
 from pathlib import Path
 from typing import Any
 
+from genro_storage import StorageNode
 from genro_tytx import from_tytx, to_tytx
 
 from ..channel.frame import Frame
@@ -548,7 +549,7 @@ class UserStickyCommander:
         waste_ratio: float = WASTE_RATIO,
         freeze_idle_after: float | None = None,
         freeze_idle_floor: float = FREEZE_IDLE_FLOOR,
-        frozen_users_dir: str | Path | None = None,
+        frozen_users_dir: StorageNode | None = None,
     ) -> None:
         """Args:
         workers: how many children to keep alive.
@@ -605,9 +606,11 @@ class UserStickyCommander:
             is the provisional value to arm it with). None disarms the freezer.
         freeze_idle_floor: the shortest wait the memory valve may bring that
             number down to.
-        frozen_users_dir: where the freezer writes its parcels, one file per user.
-            Required whenever ``freeze_idle_after`` is set: no instance name
-            reaches this layer, so a directory cannot be derived without one.
+        frozen_users_dir: where the freezer writes its parcels, one file per
+            user — a storage node (e.g. ``storage.node("GENROASGI:frozen_users")``),
+            so the destination is a logical mount, never a raw path. Required
+            whenever ``freeze_idle_after`` is set: no instance name reaches
+            this layer, so a directory cannot be derived without one.
         """
         if spawn_margin >= compaction_margin:
             raise ValueError(
@@ -645,7 +648,7 @@ class UserStickyCommander:
                 "no instance name reaches the commander to derive one from: two "
                 "instances sharing a directory would wake each other's users"
             )
-        self.frozen_users_dir = Path(frozen_users_dir) if frozen_users_dir is not None else None
+        self.frozen_users_dir = frozen_users_dir
         # The judge of the occupancy windows this commander archives.
         self.evaluator = OccupancyEvaluator(
             self,
@@ -2351,7 +2354,7 @@ class UserStickyCommander:
         if self.pool_status == "restricted":
             stranger = identity not in self.user_worker_map and not (
                 self.frozen_users_dir is not None
-                and (self.frozen_users_dir / self.user_to_userkey(identity)).exists()
+                and self.frozen_users_dir.child(self.user_to_userkey(identity)).exists()
             )
             if stranger or reception is None:
                 # One of the two declared emitters of the anomaly channel (issue #19):
@@ -3007,11 +3010,11 @@ class UserStickyCommander:
         already frozen, one whose calls do not drain inside the quiesce budget,
         and one whose worker died mid-seal all stay exactly as they were.
 
-        Everything that can refuse the freeze is asked BEFORE the seal, the
-        directory included: past the seal the slice exists nowhere but in this
-        call, so a refusal there would destroy it. The directory is made and
-        asked whether it takes writes at all — the ordinary case of a freezer
-        pointed at somewhere unwritable.
+        Everything that can be asked before the seal is asked there: past the
+        seal the slice exists nowhere but in this call. The directory is made
+        before it; whether it takes writes at all is a question a storage node
+        cannot answer in advance, so a freezer pointed at somewhere unwritable
+        is discovered AT the write and takes the loud road below.
 
         A disk that fills BETWEEN that question and the write is an operations
         concern, not this code's: the write is logged as an ERROR naming the
@@ -3029,13 +3032,6 @@ class UserStickyCommander:
         self.moving[user] = asyncio.Event()
         try:
             self.frozen_users_dir.mkdir(parents=True, exist_ok=True)
-            if not os.access(self.frozen_users_dir, os.W_OK):
-                self.logger.warning(
-                    "Freeze of %s skipped: %s does not take writes",
-                    user,
-                    self.frozen_users_dir,
-                )
-                return False
             if not await self.quiesce_user(user, worker):
                 self.logger.warning(
                     "Freeze of %s skipped: its calls did not drain in %ss",
@@ -3061,10 +3057,10 @@ class UserStickyCommander:
                     "Freeze of %s: swept mid-seal (its worker died), parcel discarded", user
                 )
                 return False
-            parcel = self.frozen_users_dir / self.user_to_userkey(user)
+            parcel = self.frozen_users_dir.child(self.user_to_userkey(user))
             try:
                 parcel.write_text(encoded)
-            except OSError as exc:
+            except Exception as exc:
                 self.logger.error(
                     "Freeze of %s: the parcel could not be written to %s (%s: %s); "
                     "the user is dropped and comes back as a stranger",
@@ -3139,7 +3135,7 @@ class UserStickyCommander:
         if user not in self.moving:
             self.moving[user] = asyncio.Event()
         try:
-            parcel = self.frozen_users_dir / self.user_to_userkey(user)
+            parcel = self.frozen_users_dir.child(self.user_to_userkey(user))
             try:
                 encoded = parcel.read_text()
                 pickle.loads(base64.b64decode(encoded))
@@ -3150,7 +3146,8 @@ class UserStickyCommander:
                     type(exc).__name__,
                     exc,
                 )
-                parcel.unlink(missing_ok=True)
+                if parcel.exists():
+                    parcel.delete()
                 if self.user_worker_map.get(user) == FROZEN:
                     self.remove_user(user)
                 return False
@@ -3165,7 +3162,7 @@ class UserStickyCommander:
                 )
             self.assign_user(user, destination)
             self.adopt_slice(user, destination, encoded)
-            parcel.unlink()
+            parcel.delete()
             self.logger.info("Woke %s onto %s", user, destination)
             return True
         finally:
@@ -3193,15 +3190,17 @@ class UserStickyCommander:
         if self.frozen_users_dir is None or not self.frozen_users_dir.exists():
             return
         now = time.time()
-        for path in sorted(self.frozen_users_dir.iterdir()):
+        for node in sorted(self.frozen_users_dir.children(), key=lambda c: c.basename):
             lifetime = (
                 FROZEN_GUEST_LIFETIME
-                if path.name.startswith(GUEST_PREFIX)
+                if node.basename.startswith(GUEST_PREFIX)
                 else FROZEN_USER_LIFETIME
             )
-            if now - path.stat().st_mtime > lifetime:
-                path.unlink()
-                self.logger.info("Reaped the expired parcel %s (over %ss old)", path.name, lifetime)
+            if now - node.mtime() > lifetime:
+                node.delete()
+                self.logger.info(
+                    "Reaped the expired parcel %s (over %ss old)", node.basename, lifetime
+                )
 
     # ------------------------------------------------------------------
     # The planner: one PLAN per tick, built from one reading of the pool

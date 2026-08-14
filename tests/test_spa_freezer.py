@@ -36,10 +36,18 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from genro_storage import StorageNode
 
 from genro_asgi.spa.commander import FROZEN, UserStickyCommander
 
-from .test_spa_move import LocalPool, PageWorker, enroll, seed_live_guest, settled_at
+from .test_spa_move import (
+    LocalPool,
+    PageWorker,
+    enroll,
+    frozen_node,
+    seed_live_guest,
+    settled_at,
+)
 
 
 @pytest.fixture
@@ -48,7 +56,7 @@ async def freezing(tmp_path: Path) -> Any:
     running = LocalPool(
         worker_class=PageWorker,
         freeze_idle_after=1800.0,
-        frozen_users_dir=tmp_path / "frozen",
+        frozen_users_dir=frozen_node(tmp_path / "frozen"),
     )
     await running.start(2)
     try:
@@ -57,13 +65,13 @@ async def freezing(tmp_path: Path) -> Any:
         await running.stop()
 
 
-async def a_frozen_alice(pool: Any) -> Path:
-    """Seed a live user with one page, freeze it, and return its parcel."""
+async def a_frozen_alice(pool: Any) -> Any:
+    """Seed a live user with one page, freeze it, and return its parcel node."""
     await seed_live_guest(pool, pool.commander.reception)
     await pool.commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
     await settled_at(pool.commander, "alice", pool.commander.reception)
     assert await pool.commander.freeze_user("alice")
-    return pool.commander.frozen_users_dir / "alice"
+    return pool.commander.frozen_users_dir.child("alice")
 
 
 # ----------------------------------------------------------------------
@@ -86,7 +94,7 @@ async def test_a_frozen_user_leaves_a_parcel_and_a_frozen_placement(freezing: An
     assert commander.connection_user["sess-1"] == "alice"
     assert commander.page_connection["p1"] == "sess-1"
     # And no half-written parcel is ever left in the directory.
-    assert [path.name for path in sorted(parcel.parent.iterdir())] == ["alice"]
+    assert sorted(node.basename for node in parcel.parent.children()) == ["alice"]
 
 
 async def test_a_user_nobody_holds_is_not_frozen(freezing: Any) -> None:
@@ -125,7 +133,7 @@ async def test_the_next_request_of_a_frozen_user_wakes_it_and_serves_it(freezing
     assert destination in freezing.workers
     assert freezing.workers[destination].page_items.get("p1") is not None
     assert not parcel.exists()
-    assert list(parcel.parent.iterdir()) == []
+    assert parcel.parent.children() == []
 
 
 async def test_two_requests_arriving_together_wake_the_parcel_once(freezing: Any) -> None:
@@ -152,7 +160,7 @@ async def test_a_login_carries_the_parcel_to_the_worker_it_arrived_on(freezing: 
     # The page that went into the freezer with the old connection is alive again
     # on the worker the new one is open on, joined to what the login just made.
     assert freezing.workers[target].page_items.get("p1") is not None
-    assert not (commander.frozen_users_dir / "alice").exists()
+    assert not commander.frozen_users_dir.child("alice").exists()
 
 
 async def test_a_login_never_wakes_a_parcel_the_map_has_no_placement_for(
@@ -178,7 +186,7 @@ async def test_a_login_never_wakes_a_parcel_the_map_has_no_placement_for(
         # A fresh slice, with nothing of the hibernation in it — and the orphan
         # parcel still on disk, waiting for nothing but the reaper.
         assert commander.page_connection.get("p1") is None
-        assert (commander.frozen_users_dir / "alice").exists()
+        assert commander.frozen_users_dir.child("alice").exists()
     finally:
         await reborn.stop()
 
@@ -209,7 +217,7 @@ async def test_a_request_in_the_login_wake_window_parks_instead_of_waking_twice(
     commander.settle_login(target, "alice", "sess-9", None)
     assert await commander.resolve_worker("alice") == target
     assert commander.user_worker_map["alice"] == target
-    assert not (commander.frozen_users_dir / "alice").exists()
+    assert not commander.frozen_users_dir.child("alice").exists()
 
 
 async def test_a_login_landing_mid_wake_leaves_the_barrier_to_its_owner(
@@ -239,7 +247,7 @@ async def test_a_login_landing_mid_wake_leaves_the_barrier_to_its_owner(
     assert any("found a hold already up" in record.getMessage() for record in caplog.records)
     assert commander.user_worker_map["alice"] == target
     assert not commander.is_held("alice")
-    assert not (commander.frozen_users_dir / "alice").exists()
+    assert not commander.frozen_users_dir.child("alice").exists()
 
 
 async def test_a_user_whose_parcel_expired_comes_back_as_a_stranger(freezing: Any) -> None:
@@ -249,21 +257,23 @@ async def test_a_user_whose_parcel_expired_comes_back_as_a_stranger(freezing: An
     reception instead of failing for as long as the commander lives."""
     commander = freezing.commander
     parcel = await a_frozen_alice(freezing)
-    parcel.unlink()
+    parcel.delete()
     assert await commander.resolve_worker("alice") == commander.reception
     assert "alice" not in commander.user_worker_map
     assert "sess-1" not in commander.connection_user
     assert "p1" not in commander.page_connection
 
 
-async def test_the_reaper_deletes_the_parcel_and_touches_no_placement(freezing: Any) -> None:
+async def test_the_reaper_deletes_the_parcel_and_touches_no_placement(
+    freezing: Any, tmp_path: Path
+) -> None:
     """The reaper is pure housekeeping: the expired file goes, the FROZEN entry
     pointing at it stays exactly where it is, and the wake's own expired branch —
     the one implementation of expiry there is — clears it at the next request,
     which is served."""
     commander = freezing.commander
     parcel = await a_frozen_alice(freezing)
-    os.utime(parcel, (0.0, 0.0))
+    os.utime(tmp_path / "frozen" / "alice", (0.0, 0.0))
     commander.reap_frozen_files()
     assert not parcel.exists()
     assert commander.user_worker_map["alice"] == FROZEN
@@ -281,7 +291,8 @@ async def test_a_parcel_that_will_not_unpickle_wakes_its_user_as_a_stranger(
     served as the stranger it now is, and the unusable file off the disk."""
     commander = freezing.commander
     parcel = await a_frozen_alice(freezing)
-    parcel.write_text(parcel.read_text()[: len(parcel.read_text()) // 2])
+    whole = parcel.read_text()
+    parcel.write_text(whole[: len(whole) // 2])
     with caplog.at_level(logging.WARNING):
         assert await commander.resolve_worker("alice") == commander.reception
     assert any("is missing or unreadable" in record.getMessage() for record in caplog.records)
@@ -295,27 +306,29 @@ async def test_a_parcel_that_will_not_unpickle_wakes_its_user_as_a_stranger(
 # ----------------------------------------------------------------------
 
 
-async def test_a_directory_that_refuses_writes_stops_the_freeze_before_the_seal(
-    freezing: Any,
+async def test_a_directory_that_refuses_writes_drops_the_user_loudly(
+    freezing: Any, tmp_path: Path, caplog: Any
 ) -> None:
-    """The whole reason the probe comes first: past the seal the slice is in the
-    call and nowhere else, so a directory that exists and refuses writes has to
-    say no while the user is still whole on its worker — and it stays served."""
+    """A freezer pointed at somewhere unwritable is an operations mistake, and a
+    storage node carries no writability question to ask in advance: it is
+    discovered AT the write, past the seal, so the freeze ends on the loud road
+    — ERROR, the user off the surface, the next contact starting it clean."""
     commander = freezing.commander
     source = commander.reception
     await seed_live_guest(freezing, source)
     await commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
     await settled_at(commander, "alice", source)
-    commander.frozen_users_dir.mkdir(parents=True, exist_ok=True)
-    commander.frozen_users_dir.chmod(0o500)
+    real_dir = tmp_path / "frozen"
+    real_dir.mkdir(parents=True, exist_ok=True)
+    real_dir.chmod(0o500)
     try:
-        assert not await commander.freeze_user("alice")
+        with caplog.at_level(logging.ERROR):
+            assert not await commander.freeze_user("alice")
     finally:
-        commander.frozen_users_dir.chmod(0o700)
-    assert commander.user_worker_map["alice"] == source
-    assert freezing.workers[source].user_items.get("alice") is not None
-    envelope = await commander.forward_envelope("alice", "/op/page_ping", {"page_id": "p1"})
-    assert envelope["result"]["page_id"] == "p1"
+        real_dir.chmod(0o700)
+    assert any("comes back as a stranger" in record.getMessage() for record in caplog.records)
+    assert "alice" not in commander.user_worker_map
+    assert "p1" not in commander.page_connection
 
 
 async def test_a_write_that_fails_after_the_seal_drops_the_user_loudly(
@@ -331,14 +344,14 @@ async def test_a_write_that_fails_after_the_seal_drops_the_user_loudly(
     await seed_live_guest(freezing, source)
     await commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
     await settled_at(commander, "alice", source)
-    original_write = Path.write_text
+    original_write = StorageNode.write_text
 
-    def the_disk_fills_between(self: Path, *args: Any, **kwargs: Any) -> int:
-        if self.name == "alice":
+    def the_disk_fills_between(self: Any, *args: Any, **kwargs: Any) -> Any:
+        if self.basename == "alice":
             raise OSError(28, "No space left on device")
         return original_write(self, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "write_text", the_disk_fills_between)
+    monkeypatch.setattr(StorageNode, "write_text", the_disk_fills_between)
     with caplog.at_level(logging.ERROR):
         assert not await commander.freeze_user("alice")
     monkeypatch.undo()
@@ -357,7 +370,7 @@ async def test_any_identity_freezes_under_its_userkey(tmp_path: Path, identity: 
         workers=0,
         path=str(tmp_path / "hub.sock"),
         freeze_idle_after=1.0,
-        frozen_users_dir=tmp_path / "frozen",
+        frozen_users_dir=frozen_node(tmp_path / "frozen"),
     )
     enroll(armed, "W:w-1")
     armed.assign_user(identity, "W:w-1")
@@ -366,8 +379,8 @@ async def test_any_identity_freezes_under_its_userkey(tmp_path: Path, identity: 
     userkey = armed.user_to_userkey(identity)
     assert "/" not in userkey and "\\" not in userkey and userkey not in ("", ".", "..")
     armed.frozen_users_dir.mkdir(parents=True)
-    (armed.frozen_users_dir / userkey).write_text("a parcel")
-    assert [p.name for p in armed.frozen_users_dir.iterdir()] == [userkey]
+    armed.frozen_users_dir.child(userkey).write_text("a parcel")
+    assert [node.basename for node in armed.frozen_users_dir.children()] == [userkey]
 
 
 # ----------------------------------------------------------------------
@@ -429,7 +442,7 @@ def test_the_candidates_are_the_users_past_the_effective_idle(
     idle 900s) and is due; bob idles 120s on a worker at 0.95 (effective idle is
     the 300s floor) and is not."""
     commander = occupancy_world(
-        "loaded_pool", freeze_idle_after=1800.0, frozen_users_dir=tmp_path / "frozen"
+        "loaded_pool", freeze_idle_after=1800.0, frozen_users_dir=frozen_node(tmp_path / "frozen")
     )
     assert commander.freeze_candidates == [("alice", "W:w-1")]
 
@@ -445,7 +458,7 @@ def test_the_valve_shortens_the_wait_as_the_memory_fills(
         "loaded_pool",
         freeze_idle_after=2000.0,
         freeze_idle_floor=10.0,
-        frozen_users_dir=tmp_path / "frozen",
+        frozen_users_dir=frozen_node(tmp_path / "frozen"),
     )
     # alice: 2000 × 0.5 = 1000s, and she has idled 3600. bob: 2000 × 0.05 = 100s
     # against his 120. Longest idle first.
@@ -461,7 +474,7 @@ def test_the_floor_keeps_a_barely_idle_user_out_of_the_freezer(
         "loaded_pool",
         freeze_idle_after=2000.0,
         freeze_idle_floor=300.0,
-        frozen_users_dir=tmp_path / "frozen",
+        frozen_users_dir=frozen_node(tmp_path / "frozen"),
     )
     assert [user for user, _ in commander.freeze_candidates] == ["alice"]
 
@@ -481,7 +494,7 @@ def test_a_user_with_work_in_flight_is_never_a_candidate(tmp_path: Path) -> None
         workers=0,
         path=str(tmp_path / "hub.sock"),
         freeze_idle_after=1.0,
-        frozen_users_dir=tmp_path / "frozen",
+        frozen_users_dir=frozen_node(tmp_path / "frozen"),
     )
     enroll(armed, "W:w-1")
     armed.assign_user("alice", "W:w-1")

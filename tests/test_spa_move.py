@@ -67,6 +67,7 @@ from genro_asgi.spa.commander import (
     UserStickyCommander,
 )
 from genro_asgi.spa.register_registry import GUEST_PREFIX
+from tests.storage_support import site_storage
 from genro_asgi.spa.worker import CONNECTION_MAX_AGE
 from genro_asgi.spa.worker import UserStickyWorker
 
@@ -3246,6 +3247,15 @@ def test_one_unplaceable_user_refuses_the_absorption(commander: UserStickyComman
 # ----------------------------------------------------------------------
 
 
+def frozen_node(freezer: Path) -> Any:
+    """``freezer`` as a storage node: a ``site:`` mount over its parent directory.
+
+    The commander speaks storage nodes only; the tests keep the raw ``Path``
+    for arranging and asserting what is really on the disk.
+    """
+    return site_storage(freezer.parent).node(f"site:{freezer.name}")
+
+
 def ladder_world(occupancy_world: Any, freezer: Path, **kwargs: Any) -> UserStickyCommander:
     """The pool that calls for EVERY rung at once, with the freezer armed.
 
@@ -3257,7 +3267,10 @@ def ladder_world(occupancy_world: Any, freezer: Path, **kwargs: Any) -> UserStic
     kwargs.setdefault("compaction_margin", 0.6)
     kwargs.setdefault("spawn_margin", 0.3)
     return occupancy_world(
-        "ladder_pool", freeze_idle_after=FREEZE_IDLE_AFTER, frozen_users_dir=freezer, **kwargs
+        "ladder_pool",
+        freeze_idle_after=FREEZE_IDLE_AFTER,
+        frozen_users_dir=frozen_node(freezer),
+        **kwargs,
     )
 
 
@@ -3296,7 +3309,9 @@ def test_the_freeze_rung_sends_the_longest_idle_first(
     """The rung is the valve's own order: whoever has been idle longest goes
     first, whatever worker holds it."""
     commander = occupancy_world(
-        "loaded_pool", freeze_idle_after=FREEZE_IDLE_AFTER, frozen_users_dir=tmp_path / "frozen"
+        "loaded_pool",
+        freeze_idle_after=FREEZE_IDLE_AFTER,
+        frozen_users_dir=frozen_node(tmp_path / "frozen"),
     )
     # bob's worker sits at 0.95 of its budget, so its valve is down to the floor:
     # past it at five thousand seconds, and longer idle than alice's 3600.
@@ -3390,7 +3405,7 @@ def test_the_reaper_takes_the_expired_parcels_and_only_those(tmp_path: Any) -> N
         workers=0,
         path=str(tmp_path / "hub.sock"),
         freeze_idle_after=FREEZE_IDLE_AFTER,
-        frozen_users_dir=freezer,
+        frozen_users_dir=frozen_node(freezer),
     )
     age_parcel(freezer, "alice", 60.0)
     age_parcel(freezer, "bob", FROZEN_USER_LIFETIME + 60.0)
@@ -3417,7 +3432,7 @@ def test_the_reaper_has_nothing_to_sweep_before_the_first_parcel(tmp_path: Any) 
         workers=0,
         path=str(tmp_path / "hub2.sock"),
         freeze_idle_after=FREEZE_IDLE_AFTER,
-        frozen_users_dir=freezer,
+        frozen_users_dir=frozen_node(freezer),
     )
     armed.reap_frozen_files()
     assert not freezer.exists()
@@ -3511,7 +3526,7 @@ def test_a_restricted_pool_turns_strangers_away_and_serves_its_own(tmp_path: Any
         workers=0,
         path=str(tmp_path / "hub.sock"),
         freeze_idle_after=FREEZE_IDLE_AFTER,
-        frozen_users_dir=freezer,
+        frozen_users_dir=frozen_node(freezer),
     )
     enroll(commander, "W:w-1")
     commander.assign_user("alice", "W:w-1")
@@ -3596,7 +3611,7 @@ async def test_a_hard_restart_parks_its_users_kills_and_leaves_them_to_wake(
     running = LocalPool(
         worker_class=PageWorker,
         freeze_idle_after=FREEZE_IDLE_AFTER,
-        frozen_users_dir=freezer,
+        frozen_users_dir=frozen_node(freezer),
     )
     await running.start(2)
     commander = running.commander
@@ -3629,7 +3644,7 @@ async def test_a_hard_restart_skips_a_user_it_cannot_park(tmp_path: Any, caplog:
     running = LocalPool(
         worker_class=PageWorker,
         freeze_idle_after=FREEZE_IDLE_AFTER,
-        frozen_users_dir=freezer,
+        frozen_users_dir=frozen_node(freezer),
     )
     await running.start(2)
     commander = running.commander
@@ -3660,7 +3675,7 @@ async def test_a_hard_restart_that_fails_too_leaves_everybody_parked(
     running = LocalPool(
         worker_class=PageWorker,
         freeze_idle_after=FREEZE_IDLE_AFTER,
-        frozen_users_dir=freezer,
+        frozen_users_dir=frozen_node(freezer),
     )
     await running.start(2)
     commander = running.commander
