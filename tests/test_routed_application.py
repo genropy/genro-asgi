@@ -284,10 +284,11 @@ class TestArgumentErrors:
 
 
 class TestAuth:
-    async def test_anonymous_is_403_on_ruled_entry(self, http_request, response_status) -> None:
+    async def test_anonymous_is_401_on_ruled_entry(self, http_request, response_status) -> None:
+        """No identity presented: the server asks who is calling, it does not refuse."""
         server = auth_server(DemoApp(mount=""), avatar=None)
         sent = await http_request(server, "/restricted")
-        assert response_status(sent) == 403
+        assert response_status(sent) == 401
 
     async def test_wrong_tags_are_403(self, http_request, response_status) -> None:
         server = auth_server(DemoApp(mount=""), avatar=Avatar("bob", ["viewer"]))
@@ -310,9 +311,10 @@ class TestAuth:
     async def test_ruled_entry_denied_without_middleware(
         self, http_request, response_status
     ) -> None:
+        """Default-deny with no auth chain at all: nobody was presented, so 401."""
         server = AsgiServer(applications=[DemoApp(mount="")])
         sent = await http_request(server, "/restricted")
-        assert response_status(sent) == 403
+        assert response_status(sent) == 401
 
 
 class TestSubTrees:

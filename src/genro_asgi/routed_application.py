@@ -38,8 +38,9 @@ bind kwargs, execute (async handlers stay on the loop, sync handlers go
 through ``server.run_sync`` — the Macro 1 pool protocol), then answer via
 ``request.response.set_result(value, metadata)``. Resolution failures raise
 core exceptions (``ROUTER_ERRORS``: unknown or unavailable path →
-``HTTPNotFound``; a ruled entry denied, for missing or mismatched tags →
-``HTTPForbidden``) that propagate to the server's ``ErrorMiddleware``.
+``HTTPNotFound``; a ruled entry denied with no identity → ``HTTPUnauthorized``,
+with an identity whose tags do not match → ``HTTPForbidden``) that propagate to
+the server's ``ErrorMiddleware``.
 Invalid handler arguments become ``HTTPBadRequest`` (400) — never a 500:
 genro-routes channels every bad-argument error (a ``pydantic.ValidationError``
 and an unbindable-argument ``TypeError`` alike) through the node's single
@@ -69,7 +70,7 @@ from typing import TYPE_CHECKING, Any
 from genro_routes import RoutingClass, is_result_wrapper
 
 from .application import BaseApplication
-from .exceptions import HTTPBadRequest, HTTPForbidden, HTTPNotFound
+from .exceptions import HTTPBadRequest, HTTPForbidden, HTTPNotFound, HTTPUnauthorized
 from .request import Request
 
 if TYPE_CHECKING:
@@ -100,15 +101,19 @@ class RoutedApplication(BaseApplication, RoutingClass):
     ``BaseApplication``).
     """
 
-    # genro-routes resolution error codes mapped to core HTTP exceptions
-    # (the node.error string-code contract): an unknown or unavailable path
-    # answers 404; a ruled entry denied — whether no tags were presented or the
-    # presented tags do not match — answers 403.
+    # genro-routes resolution error codes mapped to core HTTP exceptions (the
+    # node.error string-code contract): an unknown or unavailable path answers
+    # 404; a ruled entry denied answers on the HTTP distinction the router
+    # already draws — 401 "I do not know who you are" when no identity was
+    # presented, 403 "I know, and it is not enough" when the presented tags do
+    # not match. The 401 is what ``ErrorMiddleware`` negotiates into a login
+    # challenge, so a browser reaching a protected route lands on the login
+    # page instead of a dead end.
     ROUTER_ERRORS: dict[str, type[Exception]] = {
         "not_found": HTTPNotFound,
         "not_available": HTTPNotFound,
         "not_authorized": HTTPForbidden,
-        "not_authenticated": HTTPForbidden,
+        "not_authenticated": HTTPUnauthorized,
     }
 
     def __init__(self, **kwargs: Any) -> None:

@@ -18,8 +18,9 @@ Requests drive a REAL ``AsgiServer`` at the ASGI level: the ``_server`` app is
 auto-mounted, so the section lives at ``/_server/users/...``. A test middleware
 (order 500, after the real AuthMiddleware) stamps a fixed identity on the scope
 so a SUPERADMIN avatar reaches the ruled routes; the user store is wired with
-``users=``. Every route is ``auth_rule="SUPERADMIN"``: anonymous or wrong-tag
-requests answer 403, and a server with no store answers the ``{"error": ...}``
+``users=``. Every route is ``auth_rule="SUPERADMIN"``: an anonymous request
+answers 401 and a wrong-tag one 403, and a server with no store answers the
+``{"error": ...}``
 shape.
 """
 
@@ -129,9 +130,9 @@ def payload(sent: list[Message]) -> Any:
 
 
 class TestAuthGate:
-    async def test_anonymous_is_forbidden(self) -> None:
+    async def test_anonymous_is_challenged(self) -> None:
         sent = await drive(make_server(None), "/_server/users/list")
-        assert status(sent) == 403
+        assert status(sent) == 401
 
     async def test_wrong_tags_are_forbidden(self) -> None:
         sent = await drive(make_server(Avatar("bob", ["staff"])), "/_server/users/list")

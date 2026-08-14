@@ -18,8 +18,9 @@ Requests drive a REAL ``AsgiServer`` at the ASGI level: the ``_server`` app is
 auto-mounted, so the section lives at ``/_server/tokens/...``. A test middleware
 (order 500) stamps a SUPERADMIN identity so the ruled routes are reachable; the
 api-key store is wired with ``tokens=`` and a symmetric JWT verifier via
-``auth=``. Every route is ``auth_rule="SUPERADMIN"``: anonymous/wrong-tag
-requests answer 403, and a server with no store answers ``{"error": ...}``.
+``auth=``. Every route is ``auth_rule="SUPERADMIN"``: an anonymous request
+answers 401 and a wrong-tag one 403, and a server with no store answers
+``{"error": ...}``.
 """
 
 from __future__ import annotations
@@ -130,8 +131,8 @@ def payload(sent: list[Message]) -> Any:
 
 
 class TestAuthGate:
-    async def test_anonymous_is_forbidden(self) -> None:
-        assert status(await drive(make_server(avatar=None), "/_server/tokens/list")) == 403
+    async def test_anonymous_is_challenged(self) -> None:
+        assert status(await drive(make_server(avatar=None), "/_server/tokens/list")) == 401
 
     async def test_wrong_tags_are_forbidden(self) -> None:
         sent = await drive(make_server(avatar=Avatar("bob", ["staff"])), "/_server/tokens/list")

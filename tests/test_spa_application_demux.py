@@ -194,12 +194,12 @@ class TestDemux:
         assert response_status(sent) == 200
         assert response_body(sent) == b'{"collected":["x","y"]}'
 
-    async def test_an_existing_but_denied_route_answers_403_natively(
+    async def test_an_existing_but_denied_route_answers_401_natively(
         self, http_request, response_status
     ) -> None:
         spa = make_spa()
         sent = await http_request(spa_server(spa, avatar=None), "/secret")
-        assert response_status(sent) == 403
+        assert response_status(sent) == 401
         assert spa.forwarded == []
 
     async def test_the_denied_route_answers_natively_for_a_wrong_tag_too(

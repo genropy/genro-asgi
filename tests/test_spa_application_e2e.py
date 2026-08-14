@@ -164,11 +164,11 @@ async def test_a_native_route_answers_locally(
     assert site.commander.worker.served == []
 
 
-async def test_a_gated_native_route_answers_403_natively(
+async def test_a_gated_native_route_answers_401_natively(
     site: SiteSpa, http_request, response_status
 ) -> None:
     sent = await http_request(site.server, "/secret")
-    assert response_status(sent) == 403
+    assert response_status(sent) == 401
     assert site.commander.worker.served == []
 
 

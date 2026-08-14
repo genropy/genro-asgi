@@ -119,11 +119,11 @@ def stage(server: AsgiServer, task_id: str, owner: str = "alice") -> None:
 
 
 class TestAuthGate:
-    """SUPERADMIN passes; anonymous and plain users are 403."""
+    """SUPERADMIN passes; an anonymous caller is 401, a plain user 403."""
 
-    async def test_anonymous_is_403(self, tmp_path: Path) -> None:
+    async def test_anonymous_is_401(self, tmp_path: Path) -> None:
         sent = await drive(make_server(tmp_path, avatar=None), "/_server/tasks/list")
-        assert status(sent) == 403
+        assert status(sent) == 401
 
     async def test_plain_user_is_403(self, tmp_path: Path) -> None:
         server = make_server(tmp_path, avatar=Avatar("bob", ["staff"]))
