@@ -252,9 +252,12 @@ it stays over ``compaction_margin``. The step drains it with ``move_user`` and
 retires it; a drain that does not empty retires nothing, because a worker still
 holding state is never retired.
 A replacement spawns a fresh worker only when the rest of the pool cannot
-absorb the condemned one's users with margin (``pool_absorbs``): with the room
-already there the worker is condemned and evacuated without a new process, and
-the pool narrows by one. Condemning the reception always spawns — that is role
+absorb the condemned one's users with margin — the condemnation in
+``build_plan`` reads the two criteria in the open: the margin left on the
+ledger once the condemned and the other leavers are out
+(``workers_occupancy_metric``), and every user individually placeable
+(``pick_best_fit``). With the room already there the worker is condemned and
+evacuated without a new process, and the pool narrows by one. Condemning the reception always spawns — that is role
 continuity, not capacity.
 
 The rebalance works in SATURATION instead: what it relieves is the binding
@@ -3304,15 +3307,29 @@ class UserStickyCommander:
             steps.append({"op": "rebalance"})
         reception = self.reception
         condemned = self.condemned_workers()
-        leaving: list[str] = []
+        leaving_workers: list[str] = []
         for worker in condemned:
-            spawn = worker == reception or not self.pool_absorbs(worker, leaving=leaving)
+            if worker == reception:
+                spawn = True  # role continuity, never capacity
+            else:
+                occupancy, reserve = self.workers_occupancy_metric([worker, *leaving_workers])
+                margin_left = (
+                    self.capacity_headroom() + occupancy - reserve - self.compaction_margin
+                )
+                users_fit = all(
+                    self.pick_best_fit(weight, exclude=worker) is not None
+                    for weight in self.rebalance_weights(worker).values()
+                )
+                spawn = margin_left <= 0 or not users_fit
             steps.append({"op": "replace", "worker": worker, "spawn": spawn})
             self.worker_roster[worker]["status"] = "retiring"
             if not spawn:
-                leaving.append(worker)
+                leaving_workers.append(worker)
         folding = self.compaction_order(condemned)
-        if self.needs_spare_capacity(leaving + folding):
+        # The pool as this plan would leave it: the load of the workers going
+        # out comes back on the ledger, their reserve goes with them.
+        occupancy, reserve = self.workers_occupancy_metric(leaving_workers + folding)
+        if self.capacity_headroom() + occupancy - reserve < self.spawn_margin:
             if self.max_workers is not None and self.target >= self.max_workers:
                 self.logger.warning(
                     "Pool full at max_workers=%s; the plan cannot spawn", self.max_workers
@@ -3718,23 +3735,17 @@ class UserStickyCommander:
         occupied = sum(self.evaluator.worker_load(name) for name in active)
         return capacity - occupied
 
-    def needs_spare_capacity(self, leaving: Sequence[str] = ()) -> bool:
-        """Whether the pool is due a spawn on the ledger alone, hot worker or not.
-
-        True while the headroom sits under ``spawn_margin``: a pool this tight
-        has nowhere to put the next login even though nobody is over threshold.
-
-        ``leaving`` names the workers that are on their way out WITHOUT a
-        successor — the condemnations the weight gate absorbs and the folds — and
-        the answer is then read on the pool as it would stand once they are gone:
-        each of them gives back what it holds and takes a whole gate of capacity
-        with it, the compaction's own arithmetic. A worker being REPLACED one for
-        one is not leaving: its users land on its successor.
+    def workers_occupancy_metric(self, workers: Sequence[str]) -> tuple[float, float]:
+        """``workers``: worker names. Returns ``(occupancy, reserve)``: the load
+        they carry and the capacity they contribute — ``reception_threshold``
+        for the reception, 1.0 for any other worker. Modifies nothing.
         """
-        headroom = self.capacity_headroom()
-        for name in leaving:
-            headroom += self.evaluator.worker_load(name) - 1.0
-        return headroom < self.spawn_margin
+        reception = self.reception
+        occupancy = sum(self.evaluator.worker_load(name) for name in workers)
+        reserve = sum(
+            self.reception_threshold if name == reception else 1.0 for name in workers
+        )
+        return occupancy, reserve
 
     def necessity_candidates(self) -> list[str]:
         """The active workers whose live-memory floor has reached its budget.
@@ -3824,37 +3835,6 @@ class UserStickyCommander:
         if not fitting:
             return None
         return max(fitting, key=saturation)
-
-    def pool_absorbs(self, worker: str, leaving: Sequence[str] = ()) -> bool:
-        """Whether the rest of the pool takes ``worker``'s users WITH MARGIN.
-
-        The gate a condemnation asks before it decides to replace without
-        spawning. Two answers must agree: the ledger read WITHOUT the condemned
-        worker still stands OVER ``compaction_margin`` — the same margin a
-        retirement demands, no second knob — and every user leaving is
-        INDIVIDUALLY placeable by ``pick_best_fit``. The aggregate is not
-        enough: room spread over three workers takes nobody if no single one of
-        them fits the user carrying it. The weights are the ones
-        ``rebalance_weights`` already computes — one weighing vocabulary.
-
-        ``leaving`` names the workers THIS SAME PLAN already condemns without a
-        successor, and the aggregate is read on the pool as it would stand once
-        they are gone: each gives back what it holds and takes a whole gate with
-        it, the same arithmetic ``needs_spare_capacity`` uses. Without it the
-        second condemnation of a tick would count room the first one is
-        about to take away. The receivers half needs no such netting: a
-        condemned worker is stamped ``retiring`` in the same breath, and
-        ``pick_best_fit`` already refuses those.
-        """
-        headroom = self.capacity_headroom(exclude=worker)
-        for name in leaving:
-            headroom += self.evaluator.worker_load(name) - 1.0
-        if headroom <= self.compaction_margin:
-            return False
-        weights = self.rebalance_weights(worker)
-        return all(
-            self.pick_best_fit(weight, exclude=worker) is not None for weight in weights.values()
-        )
 
     async def drain_worker(self, worker: str) -> bool:
         """Move every user off ``worker``; returns whether it ended up empty.

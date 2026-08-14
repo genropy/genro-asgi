@@ -2537,7 +2537,6 @@ def test_a_condemnation_the_pool_absorbs_asks_for_no_new_process(tmp_path: Any) 
     enroll(commander, "W:w-3")
     commander.assign_user("alice", "W:w-2")
     floor_at(commander, "W:w-2", 0.9)
-    assert commander.pool_absorbs("W:w-2") is True
     replace = [step for step in commander.build_plan() if step["op"] == "replace"]
     assert replace == [{"op": "replace", "worker": "W:w-2", "spawn": False}]
 
@@ -2548,7 +2547,6 @@ def test_a_condemnation_the_pool_cannot_absorb_spawns(tmp_path: Any) -> None:
     enroll(commander, "W:w-2")
     load(commander, "W:w-1", 0.5)  # the reception is full to its own threshold
     floor_at(commander, "W:w-2", 0.9)
-    assert commander.pool_absorbs("W:w-2") is False
     replace = [step for step in commander.build_plan() if step["op"] == "replace"]
     assert replace == [{"op": "replace", "worker": "W:w-2", "spawn": True}]
 
@@ -2561,8 +2559,7 @@ def test_condemning_the_reception_always_spawns(tmp_path: Any) -> None:
     enroll(commander, "W:w-2")
     enroll(commander, "W:w-3")
     assert commander.reception == "W:w-1"
-    assert commander.pool_absorbs("W:w-1") is True  # the room is there, and irrelevant
-    floor_at(commander, "W:w-1", 0.9)
+    floor_at(commander, "W:w-1", 0.9)  # the room is there, and irrelevant
     replace = [step for step in commander.build_plan() if step["op"] == "replace"]
     assert replace == [{"op": "replace", "worker": "W:w-1", "spawn": True}]
 
@@ -2771,8 +2768,10 @@ def test_the_gate_of_a_condemnation_nets_out_what_the_plan_already_takes(tmp_pat
     for name in ("W:w-1", "W:w-2", "W:w-3", "W:w-4"):
         enroll(commander, name)
     commander.assign_user("alice", "W:w-3")
-    assert commander.pool_absorbs("W:w-3") is True
-    assert commander.pool_absorbs("W:w-3", leaving=["W:w-2"]) is False
+    occupancy, reserve = commander.workers_occupancy_metric(["W:w-3"])
+    assert commander.capacity_headroom() + occupancy - reserve > commander.compaction_margin
+    occupancy, reserve = commander.workers_occupancy_metric(["W:w-3", "W:w-2"])
+    assert commander.capacity_headroom() + occupancy - reserve <= commander.compaction_margin
 
 
 def test_the_second_condemnation_of_a_tick_is_refused_the_first_s_room(tmp_path: Any) -> None:
@@ -3203,25 +3202,32 @@ def test_the_pool_absorbs_a_condemned_worker_with_room_to_spare(
         enroll(commander, name)
     load(commander, "W:w-2", 0.4)
     seed_shed(commander, "W:w-2", {"alice": 1.0, "bob": 1.0})
-    assert commander.capacity_headroom(exclude="W:w-2") == pytest.approx(2.5)
-    assert commander.pool_absorbs("W:w-2") is True
+    # Both halves of the condemnation's question, in the open: the ledger
+    # without w-2 keeps the margin, and every user has a receiver of its own.
+    occupancy, reserve = commander.workers_occupancy_metric(["W:w-2"])
+    assert commander.capacity_headroom() + occupancy - reserve == pytest.approx(2.5)
+    assert commander.capacity_headroom() + occupancy - reserve > commander.compaction_margin
+    assert all(
+        commander.pick_best_fit(weight, exclude="W:w-2") is not None
+        for weight in commander.rebalance_weights("W:w-2").values()
+    )
 
 
-def test_the_absorption_keeps_the_whole_compaction_margin(
-    commander: UserStickyCommander,
-) -> None:
-    for name in ("W:w-1", "W:w-2", "W:w-3", "W:w-4"):
-        enroll(commander, name)
-    load(commander, "W:w-2", 0.3)
-    seed_shed(commander, "W:w-2", {"alice": 1.0})
-    assert commander.capacity_headroom(exclude="W:w-2") == pytest.approx(2.5)
-    assert commander.pool_absorbs("W:w-2") is True
-    load(commander, "W:w-4", 1.0)  # 1.5 left without w-2: exactly the margin
-    assert commander.capacity_headroom(exclude="W:w-2") == pytest.approx(1.5)
-    # A margin means a margin: landing ON it is not keeping it. alice still has
-    # a home, so the ledger is what refuses here.
-    assert commander.pick_best_fit(0.3, exclude="W:w-2") is not None
-    assert commander.pool_absorbs("W:w-2") is False
+def test_the_absorption_keeps_the_whole_compaction_margin(tmp_path: Any) -> None:
+    """A margin means a margin: a condemnation that would leave EXACTLY
+    ``compaction_margin`` of room is not absorbed — the plan spawns."""
+    generous = leaking_commander(tmp_path, compaction_margin=1.4, spawn_margin=0.2)
+    for name in ("W:w-1", "W:w-2", "W:w-3"):
+        enroll(generous, name)
+    floor_at(generous, "W:w-2", 0.9)
+    replace = [step for step in generous.build_plan() if step["op"] == "replace"]
+    assert replace == [{"op": "replace", "worker": "W:w-2", "spawn": False}]
+    exact = leaking_commander(tmp_path, compaction_margin=1.5, spawn_margin=0.2)
+    for name in ("W:w-1", "W:w-2", "W:w-3"):
+        enroll(exact, name)
+    floor_at(exact, "W:w-2", 0.9)  # 1.5 left without w-2: exactly the margin
+    replace = [step for step in exact.build_plan() if step["op"] == "replace"]
+    assert replace == [{"op": "replace", "worker": "W:w-2", "spawn": True}]
 
 
 def test_one_unplaceable_user_refuses_the_absorption(commander: UserStickyCommander) -> None:
@@ -3239,7 +3245,7 @@ def test_one_unplaceable_user_refuses_the_absorption(commander: UserStickyComman
         "bob": pytest.approx(0.25),
     }
     assert commander.pick_best_fit(0.25, exclude="W:w-2") is not None
-    assert commander.pool_absorbs("W:w-2") is False
+    assert commander.pick_best_fit(0.75, exclude="W:w-2") is None
 
 
 # ----------------------------------------------------------------------
@@ -3336,8 +3342,6 @@ def test_the_spawn_rung_reads_the_pool_the_plan_would_leave(
     condemnation the weight gate absorbs, plus one fold — that leaves it short."""
     commander = ladder_world(occupancy_world, tmp_path / "frozen", spawn_margin=spawn_margin)
     assert commander.capacity_headroom() == pytest.approx(1.95)
-    assert commander.needs_spare_capacity() is False
-    assert commander.needs_spare_capacity(["W:w-2", "W:w-3"]) is spawns
     plan = commander.build_plan()
     assert bool([step for step in plan if step["op"] == "spawn"]) is spawns
 
@@ -3348,8 +3352,10 @@ def test_a_worker_replaced_one_for_one_leaves_the_ledger_alone(
     """Only the workers going out WITHOUT a successor are read as leaving: a
     replacement covers its source one for one, and its users land on it."""
     commander = ladder_world(occupancy_world, tmp_path / "frozen")
-    assert commander.needs_spare_capacity(["W:w-2", "W:w-3"]) is True
-    assert commander.needs_spare_capacity(["W:w-3"]) is False
+    occupancy, reserve = commander.workers_occupancy_metric(["W:w-2", "W:w-3"])
+    assert commander.capacity_headroom() + occupancy - reserve < commander.spawn_margin
+    occupancy, reserve = commander.workers_occupancy_metric(["W:w-3"])
+    assert commander.capacity_headroom() + occupancy - reserve >= commander.spawn_margin
 
 
 def test_the_plan_never_spawns_past_max_workers(

@@ -1003,14 +1003,15 @@ def test_the_empty_workers_exclude_the_reception(commander: UserStickyCommander)
     assert commander.empty_workers() == []
 
 
-def test_a_tight_pool_needs_spare_capacity(commander: UserStickyCommander) -> None:
-    # Two idle workers: 0.5 + 1.0 of capacity, nothing held.
+def test_workers_occupancy_metric_reads_load_and_reserve(
+    commander: UserStickyCommander,
+) -> None:
+    # Two idle workers: the reception contributes its own threshold (0.5),
+    # every other worker a whole gate (1.0); nothing is held yet.
+    assert commander.workers_occupancy_metric(["W:w-1"]) == (0.0, 0.5)
+    assert commander.workers_occupancy_metric(["W:w-2"]) == (0.0, 1.0)
+    assert commander.workers_occupancy_metric(["W:w-1", "W:w-2"]) == (0.0, 1.5)
     assert commander.capacity_headroom() == pytest.approx(1.5)
-    assert commander.needs_spare_capacity() is False
-    commander.spawn_margin = 1.5
-    assert commander.needs_spare_capacity() is False  # the margin is a floor, not a gate
-    commander.spawn_margin = 1.6
-    assert commander.needs_spare_capacity() is True
 
 
 def test_the_headroom_can_be_read_without_one_worker(commander: UserStickyCommander) -> None:
