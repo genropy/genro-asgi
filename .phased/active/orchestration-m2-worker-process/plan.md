@@ -20,7 +20,37 @@ the owner on 2026-08-16 during Macro 2 planning — the executor invents
 none of them and asks nobody.
 
 ## Work Plan
-- [ ] **Phase 1**: Align the M1 foundations to the F40 ratifications
+- [x] **Phase 1**: Align the M1 foundations to the F40 ratifications
+  > Done: the three ratified retrofits, no behaviour change. (1) Deposit
+  > vocabulary: parcels are now `user_register_item.pickle` and
+  > `connection_register_item_<cid>.pickle`, the six FreezeHandler verbs
+  > carry the `register_item` word (`write_/read_/drop_` × user/connection)
+  > and the two module constants naming those files follow them
+  > (`USER_REGISTER_ITEM_NAME`, `CONNECTION_REGISTER_ITEM_PREFIX`); the
+  > folder-drop and lock surface (`drop_user_folder`, `take_lock`,
+  > `release_lock`, `lock_holder`, `get_item_header`, `user_folders`) is
+  > untouched, docstrings updated to the new file names. (2) The beat op is
+  > `/op/ping` under `PING_OP_PATH`, and the constant's comment no longer
+  > claims the photo rides the beat. (3) `LocalWorkerHandler` removed —
+  > class (33 lines), its module-docstring paragraph, the subpackage export
+  > and `__all__` entry, its two tests and their `_local_handler` builder;
+  > no reference to it survives anywhere in the repo. 47 renamed references
+  > across 6 files, 2 tests removed (1738 → 1736).
+  > Files: src/genro_asgi/spa/orchestration/freeze_handler.py,
+  > src/genro_asgi/spa/orchestration/worker_handler.py,
+  > src/genro_asgi/spa/orchestration/__init__.py,
+  > tests/orchestration/test_orchestration_freeze_handler.py,
+  > tests/orchestration/test_orchestration_worker_handler.py,
+  > tests/orchestration/test_orchestration_foundations_e2e.py,
+  > tests/orchestration/child_stub.py,
+  > .phased/active/orchestration-m2-worker-process/notes.md
+  > (`worker_connector.py` needed no change: it names neither the deposit
+  > items nor the beat.)
+  > Verified: `pytest tests/ -q` 1736 passed, 2 skipped (baseline 1738/2,
+  > the delta is exactly the two removed LocalWorkerHandler tests);
+  > `ruff check src/ tests/` clean;
+  > `grep -rn "user_item.pickle\|connection_item_\|occupancy\|LocalWorkerHandler" src/genro_asgi/spa/orchestration/ tests/orchestration/`
+  > returns nothing.
   - Run: opus / low
   - Pattern: the M1 modules themselves (`spa/orchestration/*.py`) — this
     phase renames and removes, it invents nothing.

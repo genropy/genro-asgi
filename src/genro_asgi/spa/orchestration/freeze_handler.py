@@ -17,8 +17,8 @@
 A user who leaves memory leaves it here. One DIRECTORY per user — named by
 ``user_to_userkey``, which goes ONE WAY: every reader starts from the identity
 and computes the name forward, nothing ever derives an identity back from a
-directory name. Inside: ``user_item.pickle`` for the user's own store, one
-``connection_item_<cid>.pickle`` per connection, carrying that connection AND
+directory name. Inside: ``user_register_item.pickle`` for the user's own store, one
+``connection_register_item_<cid>.pickle`` per connection, carrying that connection AND
 its pages. Beside them the semaphore, ``.lock``.
 
 **The deposit only via the deposit node.** The house rule says the filesystem
@@ -67,10 +67,10 @@ from pathlib import Path
 from typing import Any
 
 LOCK_NAME = ".lock"
-USER_ITEM_NAME = "user_item.pickle"
-CONNECTION_ITEM_PREFIX = "connection_item_"
+USER_REGISTER_ITEM_NAME = "user_register_item.pickle"
+CONNECTION_REGISTER_ITEM_PREFIX = "connection_register_item_"
 
-__all__ = ["CONNECTION_ITEM_PREFIX", "LOCK_NAME", "USER_ITEM_NAME", "FreezeHandler"]
+__all__ = ["CONNECTION_REGISTER_ITEM_PREFIX", "LOCK_NAME", "USER_REGISTER_ITEM_NAME", "FreezeHandler"]
 
 
 class FreezeHandler:
@@ -164,7 +164,7 @@ class FreezeHandler:
         except FileNotFoundError:
             return None
 
-    def write_user_item(
+    def write_user_register_item(
         self, user: str, payload: Any, *, writer: str, cause: str, group: str
     ) -> None:
         """Write the user's own store, directly over whatever was there.
@@ -178,9 +178,9 @@ class FreezeHandler:
 
         Writes the file. The caller holds the semaphore.
         """
-        self._write_item(self._user_folder(user) / USER_ITEM_NAME, payload, writer, cause, group)
+        self._write_item(self._user_folder(user) / USER_REGISTER_ITEM_NAME, payload, writer, cause, group)
 
-    def write_connection_item(
+    def write_connection_register_item(
         self, user: str, cid: str, payload: Any, *, writer: str, cause: str, group: str
     ) -> None:
         """Write one connection of ``user`` — the connection and its pages.
@@ -199,7 +199,7 @@ class FreezeHandler:
             self._connection_path(user, cid), payload, writer, cause, group
         )
 
-    def read_user_item(self, user: str) -> Any:
+    def read_user_register_item(self, user: str) -> Any:
         """Read back the user's own store.
 
         Args:
@@ -208,10 +208,10 @@ class FreezeHandler:
         Returns:
             The payload as it was written, or None if there is no such file.
         """
-        envelope = self._read_envelope(self._user_folder(user) / USER_ITEM_NAME)
+        envelope = self._read_envelope(self._user_folder(user) / USER_REGISTER_ITEM_NAME)
         return None if envelope is None else envelope["payload"]
 
-    def read_connection_item(self, user: str, cid: str) -> Any:
+    def read_connection_register_item(self, user: str, cid: str) -> Any:
         """Read back one connection of ``user`` with its pages.
 
         Args:
@@ -236,13 +236,13 @@ class FreezeHandler:
             file. Never a ground for a decision.
         """
         path = (
-            self._user_folder(user) / USER_ITEM_NAME if cid is None
+            self._user_folder(user) / USER_REGISTER_ITEM_NAME if cid is None
             else self._connection_path(user, cid)
         )
         envelope = self._read_envelope(path)
         return None if envelope is None else envelope["header"]
 
-    def drop_user_item(self, user: str) -> None:
+    def drop_user_register_item(self, user: str) -> None:
         """Discard the user's own store, adopted or spent.
 
         Args:
@@ -251,9 +251,9 @@ class FreezeHandler:
         Removes the file if it is there — an absence is the same outcome, not an
         error. The folder stays until the semaphore is released.
         """
-        (self._user_folder(user) / USER_ITEM_NAME).unlink(missing_ok=True)
+        (self._user_folder(user) / USER_REGISTER_ITEM_NAME).unlink(missing_ok=True)
 
-    def drop_connection_item(self, user: str, cid: str) -> None:
+    def drop_connection_register_item(self, user: str, cid: str) -> None:
         """Discard one connection of ``user``, adopted or spent.
 
         Args:
@@ -285,7 +285,7 @@ class FreezeHandler:
         return self.root_path / self.user_to_userkey(user)
 
     def _connection_path(self, user: str, cid: str) -> Path:
-        name = f"{CONNECTION_ITEM_PREFIX}{self.user_to_userkey(cid)}.pickle"
+        name = f"{CONNECTION_REGISTER_ITEM_PREFIX}{self.user_to_userkey(cid)}.pickle"
         return self._user_folder(user) / name
 
     def _write_item(self, path: Path, payload: Any, writer: str, cause: str, group: str) -> None:

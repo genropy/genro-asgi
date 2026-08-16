@@ -60,10 +60,6 @@ handler for good.
 Every order and every wild death leaves its line here through the module
 logger; the dedicated ``orchestration.log`` file, with its path, size and
 rotation, is grammar and is not built yet.
-
-``LocalWorkerHandler`` is the handler of the in-process worker: the same handler, no
-process to govern. Its health IS the server's, so it refuses every process
-order rather than pretending to obey one.
 """
 
 from __future__ import annotations
@@ -84,10 +80,11 @@ from .worker_connector import WorkerConnector
 #: The environment variable the spawn payload travels in, as today.
 WORKER_ENV_VAR = "GENRO_ASGI_WORKER"
 
-#: The routing key of the health beat: the ratified occupancy op, which is also
-#: the photo the silent ones are measured by. Redefined here with its ratified
-#: value rather than imported: the legacy machine dies at the cutover.
-OCCUPANCY_OP_PATH = "/op/occupancy"
+#: The routing key of the health beat, and nothing else: it asks whether the
+#: process is alive, it does not ask for the photo, which rides every envelope
+#: on its own. Redefined here with its ratified value rather than imported: the
+#: legacy machine dies at the cutover.
+PING_OP_PATH = "/op/ping"
 
 #: Seconds between two beats of the same process — the cadence, not a clock.
 PROCESS_PING_INTERVAL = 5.0
@@ -101,11 +98,10 @@ PROCESS_PING_TIMEOUT = 10.0
 WAIT_POLL_INTERVAL = 0.05
 
 __all__ = [
-    "OCCUPANCY_OP_PATH",
+    "PING_OP_PATH",
     "PROCESS_PING_INTERVAL",
     "PROCESS_PING_TIMEOUT",
     "WORKER_ENV_VAR",
-    "LocalWorkerHandler",
     "WorkerHandler",
 ]
 
@@ -301,7 +297,7 @@ class WorkerHandler:
         """
         for beat in (1, 2):
             try:
-                await self.connector.call(OCCUPANCY_OP_PATH, timeout=self.process_ping_timeout)
+                await self.connector.call(PING_OP_PATH, timeout=self.process_ping_timeout)
             except TimeoutError:
                 self._logger.warning(
                     "Worker %s: beat %s of 2 unanswered after %.1fs",
@@ -372,37 +368,3 @@ class WorkerHandler:
                 )
             await asyncio.sleep(WAIT_POLL_INTERVAL)
 
-
-class LocalWorkerHandler(WorkerHandler):
-    """The handler of the in-process worker: everything of a handler, no process to govern.
-
-    The single role (``workers=0, local_worker=True``) runs its worker inside
-    the server, so there is nothing to probe, nothing to kill and nothing to
-    relaunch: its health IS the server's and its death IS the server's crash.
-    Every process order is refused rather than obeyed halfway — the group never
-    issues one to this handler, so an order arriving here is a bug and says so.
-    Everything else is the handler as inherited: the users, the photo, the store
-    for the presentation, the announcements.
-    """
-
-    async def launch_process(self) -> None:
-        """Refused: a local handler forks nothing — see ``_refuse_process_order``."""
-        self._refuse_process_order("launch")
-
-    async def terminate_process(self) -> None:
-        """Refused: a local handler kills nothing — see ``_refuse_process_order``."""
-        self._refuse_process_order("terminate")
-
-    async def restart_process(self) -> None:
-        """Refused: a local handler relaunches nothing — see ``_refuse_process_order``."""
-        self._refuse_process_order("restart")
-
-    async def ping_process(self) -> None:
-        """Refused: a local handler probes nothing — see ``_refuse_process_order``."""
-        self._refuse_process_order("ping")
-
-    def _refuse_process_order(self, order: str) -> None:
-        """Say why the order cannot be obeyed, naming it."""
-        raise RuntimeError(
-            f"LocalWorkerHandler {self.name}: no process to {order} — its health is the server's"
-        )

@@ -42,8 +42,8 @@ import pytest
 
 from genro_asgi.channel.frame import Frame
 from genro_asgi.spa.orchestration.worker_connector import WORKER_SNAPSHOT_KEY
-from genro_asgi.spa.orchestration import LocalWorkerHandler, WorkerHandler
-from genro_asgi.spa.orchestration.worker_handler import OCCUPANCY_OP_PATH, WORKER_ENV_VAR
+from genro_asgi.spa.orchestration import WorkerHandler
+from genro_asgi.spa.orchestration.worker_handler import PING_OP_PATH, WORKER_ENV_VAR
 
 CHILD_SCRIPT = '''
 """A scripted worker process: presents itself, answers with a photo, nothing else."""
@@ -204,10 +204,10 @@ async def test_the_photo_arrives_with_the_presentation_and_every_envelope_after(
 
     assert handler.worker_snapshot == {
         "pid": handler.process.pid,
-        "asked_on": "/op/occupancy",
+        "asked_on": "/op/ping",
         "rss_mb": 42,
     }
-    assert OCCUPANCY_OP_PATH == "/op/occupancy"
+    assert PING_OP_PATH == "/op/ping"
 
 
 async def test_a_mute_process_is_killed_after_one_repeated_beat(make_handler, group, caplog):
@@ -322,41 +322,3 @@ async def test_an_event_from_the_process_is_logged_and_consumed_by_nobody(make_h
 
     assert "/lock_taken" in caplog.text
     assert "not consumed yet" in caplog.text
-
-
-async def test_the_local_handler_refuses_every_process_order(instance_root, group):
-    handler = _local_handler(instance_root, group)
-
-    for order in (
-        handler.launch_process(),
-        handler.terminate_process(),
-        handler.restart_process(),
-        handler.ping_process(),
-    ):
-        with pytest.raises(RuntimeError, match="its health is the server"):
-            await order
-
-    assert handler.process is None
-
-
-async def test_the_local_handler_is_a_handler_in_everything_else(instance_root, group):
-    handler = _local_handler(instance_root, group)
-
-    handler.hosted_users.add("mario")
-
-    assert isinstance(handler, WorkerHandler)
-    assert handler.global_register_item_tytx == "not yet ready --- wait next phase"
-    assert handler.worker_snapshot is None
-    assert handler.spawn_payload["name"] == "single_0001"
-    assert handler.hosted_users == {"mario"}
-
-
-def _local_handler(instance_root: Path, group: GroupStub) -> LocalWorkerHandler:
-    """The in-process handler, built the way its group would build it."""
-    return LocalWorkerHandler(
-        group,
-        "single_0001",
-        instance_dir=instance_root / "i",
-        frozen_users_path=instance_root / "frozen_users",
-        entry_module=CHILD_MODULE,
-    )

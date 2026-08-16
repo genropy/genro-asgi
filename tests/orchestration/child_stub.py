@@ -41,7 +41,7 @@ foundations does.
 
 The routing keys below are this stub's own: the parent side of the protocol is
 Macro 2's and its names are baptised there. The one exception is the beat, which
-travels on the ratified occupancy path the handler already uses.
+travels on the ratified ping path the handler already uses.
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ from genro_asgi.spa.orchestration.worker_connector import (
     REPLY_METHOD,
     WORKER_SNAPSHOT_KEY,
 )
-from genro_asgi.spa.orchestration.worker_handler import OCCUPANCY_OP_PATH, WORKER_ENV_VAR
+from genro_asgi.spa.orchestration.worker_handler import PING_OP_PATH, WORKER_ENV_VAR
 
 #: A test instrument, not a protocol: the parent asks for one EVENT back, so
 #: that the road carrying an EVENT from the child up to ``on_child_message`` is
@@ -74,7 +74,7 @@ GO_MUTE_EVENT = "/go_mute"
 
 #: The three deposit orders the parent drives the child through.
 TAKE_LOCK_OP = "/take_deposit_lock"
-WRITE_CONNECTION_ITEM_OP = "/write_connection_item"
+WRITE_CONNECTION_REGISTER_ITEM_OP = "/write_connection_register_item"
 RELEASE_LOCK_OP = "/release_deposit_lock"
 
 __all__ = [
@@ -83,7 +83,7 @@ __all__ = [
     "RELEASE_LOCK_OP",
     "STUB_EVENT",
     "TAKE_LOCK_OP",
-    "WRITE_CONNECTION_ITEM_OP",
+    "WRITE_CONNECTION_REGISTER_ITEM_OP",
     "ChildStub",
 ]
 
@@ -100,9 +100,9 @@ class ChildStub:
         self.answering = True
         self.stream: FrameStream | None = None
         self.operations = {
-            OCCUPANCY_OP_PATH: self.answer_occupancy,
+            PING_OP_PATH: self.answer_ping,
             TAKE_LOCK_OP: self.take_deposit_lock,
-            WRITE_CONNECTION_ITEM_OP: self.write_connection_item,
+            WRITE_CONNECTION_REGISTER_ITEM_OP: self.write_connection_register_item,
             RELEASE_LOCK_OP: self.release_deposit_lock,
             EMIT_EVENT_OP: self.emit_one_event,
         }
@@ -174,7 +174,7 @@ class ChildStub:
                 )
             )
 
-    async def answer_occupancy(self, data: Any) -> dict[str, Any]:
+    async def answer_ping(self, data: Any) -> dict[str, Any]:
         """The health beat: an answer is the whole point of it.
 
         Args:
@@ -200,7 +200,7 @@ class ChildStub:
         """
         return {"taken": self.freeze_handler.take_lock(data["user"], self.name)}
 
-    async def write_connection_item(self, data: Any) -> dict[str, Any]:
+    async def write_connection_register_item(self, data: Any) -> dict[str, Any]:
         """Write one connection parcel under the semaphore this process holds.
 
         Args:
@@ -211,7 +211,7 @@ class ChildStub:
 
         Writes the parcel in the deposit.
         """
-        self.freeze_handler.write_connection_item(
+        self.freeze_handler.write_connection_register_item(
             data["user"],
             data["cid"],
             data["payload"],
