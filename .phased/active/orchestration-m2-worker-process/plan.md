@@ -86,7 +86,46 @@ none of them and asks nobody.
     removed LocalWorkerHandler tests); `ruff check src/ tests/` clean;
     `grep -rn "user_item.pickle\|connection_item_\|occupancy\|LocalWorkerHandler" src/genro_asgi/spa/orchestration/ tests/orchestration/`
     returns nothing.
-- [ ] **Phase 2**: SpaWorker — the registers and the unified row
+- [x] **Phase 2**: SpaWorker — the registers and the unified row
+  > Done: `SpaWorker` born in the subpackage with its three registers and the
+  > unified row, in-process, no wire and no pools. Public surface: the class
+  > (`name`, `freeze_handler`, `deposit_lock_retry_interval`), the read
+  > properties `user_register`/`connection_register`/`page_register`/`events`,
+  > the queue `offer_event(op, **payload)`, the birth mutators
+  > `new_user`/`new_connection`/`new_page`, the removals
+  > `drop_page`/`drop_connection`/`drop_user` (idempotent — a thing already
+  > gone is the same outcome, and nothing is announced), the clock climb
+  > `refresh_chain(page_id, *clocks)` and the two adoptions
+  > `adopt_user(user)` / `adopt_connection(user, cid)`. The tree lives in the
+  > items (user `connections`, connection `pages`, page `connection_id`), both
+  > directions written by one mutator under the single `dispatch_lock`; the
+  > user row carries `state` `active`/`frozen`/`unfreezing` and every item the
+  > three clocks. `adopt_user` adds the unknown as `frozen`, marks
+  > `unfreezing` before it reads and the sisters of a burst await that
+  > transition — ONE disk trip, proven by neutralization (removing the wait
+  > makes the burst read five times). Adoption reads, deletes the parcel, lets
+  > the folder go with the last of them (F35) and announces `user_adopted`; a
+  > connection announces the natural `new_connection`/`new_page` and nothing of
+  > its own. Cascades speak the plural (`drop_pages`, `drop_connections`).
+  > Files: src/genro_asgi/spa/orchestration/spa_worker.py (new, 512 lines),
+  > src/genro_asgi/spa/orchestration/__init__.py,
+  > tests/orchestration/test_orchestration_spa_worker.py (new, 25 tests),
+  > .phased/active/orchestration-m2-worker-process/notes.md
+  > Verified: `pytest tests/orchestration -q` 67 passed;
+  > `pytest tests/ -q` 1761 passed, 2 skipped (baseline 1736/2, +25 new);
+  > `ruff check src/ tests/` clean; the new module at 100% line coverage;
+  > two assertions proven by neutralization (the burst's single trip, the
+  > parcel deleted on adoption); `spa_worker.py` imports only `genro_bag` and
+  > its own `freeze_handler`, and no legacy spa module names it.
+  > Review: `adopt_connection` had to take the USER as well as the cid — the
+  > plan writes `adopt_connection(cid)`, but the deposit is keyed by user
+  > folder (`read_connection_register_item(user, cid)`), so the parcel cannot
+  > be found from the cid alone. Signature landed as
+  > `adopt_connection(user, cid)`, argument order matching FreezeHandler's own.
+  > Two shapes the executor had to fix because no register carries them: the
+  > connection parcel payload (`{"connection": {...}, "pages": {page_id: {...}}}`)
+  > and the plural announcement keys (`page_ids`, `session_ids`) — both
+  > detailed in notes.md and both open to a different ruling.
   - Run: opus / high
   - Pattern: `src/genro_asgi/spa/worker.py` (the legacy registers, rows
     and clock stamping being rethought — deep rethink, never verbatim
