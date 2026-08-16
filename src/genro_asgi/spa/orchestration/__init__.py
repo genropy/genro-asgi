@@ -20,10 +20,12 @@ cutover happens later, in one declared step; until then the two coexist.
 
 Its foundations, in the order they are built: ``FreezeHandler``, the deposit on
 disk and the only place in the project that talks to the filesystem directly;
-the per-worker wire; the handler that owns one worker process and its death.
+``WorkerConnector``, the wire of one worker; ``WorkerHandler`` and its
+in-process variant ``LocalWorkerHandler``, which own one process and its death.
 """
 
 from .freeze_handler import FreezeHandler
 from .worker_connector import WorkerConnector
+from .worker_handler import LocalWorkerHandler, WorkerHandler
 
-__all__ = ["FreezeHandler", "WorkerConnector"]
+__all__ = ["FreezeHandler", "LocalWorkerHandler", "WorkerConnector", "WorkerHandler"]

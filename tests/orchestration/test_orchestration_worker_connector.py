@@ -37,12 +37,12 @@ from typing import Any
 import pytest
 
 from genro_asgi.channel.frame import REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
+from genro_asgi.spa.orchestration import WorkerConnector
 from genro_asgi.spa.orchestration.worker_connector import (
     CALL_METHOD,
     EVENT_METHOD,
     GLOBAL_STORE_KEY,
     REPLY_METHOD,
-    WorkerConnector,
 )
 
 

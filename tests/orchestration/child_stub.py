@@ -22,8 +22,11 @@ configuration is the very ``GENRO_ASGI_WORKER`` payload the handler writes.
 
 Its life: connect to the socket it was given, present itself with its pid and
 the configuration it received, and keep the whole global store that comes back
-in the answer. Then serve the parent — the health beat with its photo, the three
-deposit orders, and the one EVENT that makes it go mute.
+in the answer. Its presentation already carries its first photo, and so does
+every reply after it: the photo rides the envelope, in the
+``worker_snapshot`` slot beside the payload. Then serve the parent — the health beat with its photo, the three
+deposit orders, the instrument that emits one EVENT upward, and the one EVENT
+that makes it go mute.
 
 **It reaches the deposit on its own side.** Nothing hands it a FreezeHandler:
 it builds one over ``frozen_users_path``, exactly as a worker in another process
@@ -55,11 +58,16 @@ from genro_asgi.spa.orchestration.worker_connector import (
     EVENT_METHOD,
     GLOBAL_STORE_KEY,
     REPLY_METHOD,
+    WORKER_SNAPSHOT_KEY,
 )
 from genro_asgi.spa.orchestration.worker_handler import OCCUPANCY_OP_PATH, WORKER_ENV_VAR
 
-#: The child announces upward that it has taken a user's semaphore.
-LOCK_TAKEN_EVENT = "/lock_taken"
+#: A test instrument, not a protocol: the parent asks for one EVENT back, so
+#: that the road carrying an EVENT from the child up to ``on_child_message`` is
+#: exercised at least once. Nothing a worker does is announced upward: what the
+#: vertex must know it knows from the suspension it granted (owner, 2026-08-16).
+EMIT_EVENT_OP = "/emit_one_event"
+STUB_EVENT = "/stub_event"
 
 #: The parent tells the child to stop answering: the mute worker of the drill.
 GO_MUTE_EVENT = "/go_mute"
@@ -70,9 +78,10 @@ WRITE_CONNECTION_ITEM_OP = "/write_connection_item"
 RELEASE_LOCK_OP = "/release_deposit_lock"
 
 __all__ = [
+    "EMIT_EVENT_OP",
     "GO_MUTE_EVENT",
-    "LOCK_TAKEN_EVENT",
     "RELEASE_LOCK_OP",
+    "STUB_EVENT",
     "TAKE_LOCK_OP",
     "WRITE_CONNECTION_ITEM_OP",
     "ChildStub",
@@ -95,6 +104,7 @@ class ChildStub:
             TAKE_LOCK_OP: self.take_deposit_lock,
             WRITE_CONNECTION_ITEM_OP: self.write_connection_item,
             RELEASE_LOCK_OP: self.release_deposit_lock,
+            EMIT_EVENT_OP: self.emit_one_event,
         }
 
     @property
@@ -132,7 +142,11 @@ class ChildStub:
             Frame(
                 method=REGISTER_METHOD,
                 path=REGISTER_PATH,
-                data={"pid": os.getpid(), "config": self.config},
+                data={
+                    "pid": os.getpid(),
+                    "config": self.config,
+                    WORKER_SNAPSHOT_KEY: self.photo,
+                },
             )
         )
         reply = await self.stream.read()
@@ -152,22 +166,27 @@ class ChildStub:
         elif frame.method == CALL_METHOD and self.answering:
             result = await self.operations[frame.path](frame.data)
             await self.stream.write(
-                Frame(id=frame.id, method=REPLY_METHOD, path=frame.path, data={"result": result})
+                Frame(
+                    id=frame.id,
+                    method=REPLY_METHOD,
+                    path=frame.path,
+                    data={"result": result, WORKER_SNAPSHOT_KEY: self.photo},
+                )
             )
 
     async def answer_occupancy(self, data: Any) -> dict[str, Any]:
-        """The health beat.
+        """The health beat: an answer is the whole point of it.
 
         Args:
             data: whatever the beat carried; the beat carries nothing.
 
         Returns:
-            The photo of this process.
+            Nothing of substance — the photo rides the envelope, not the result.
         """
-        return self.photo
+        return {}
 
     async def take_deposit_lock(self, data: Any) -> dict[str, Any]:
-        """Take the semaphore of a user and announce it upward.
+        """Take the semaphore of a user.
 
         Args:
             data: the user whose folder is being entered.
@@ -175,18 +194,11 @@ class ChildStub:
         Returns:
             Whether the semaphore is now this process's.
 
-        Writes the lock in the deposit and sends the announcement EVENT.
+        Writes the lock in the deposit. Nothing is announced upward: the lock is
+        the deposit's own mechanism, and what the vertex must know it knows from
+        the suspension it granted before any of this.
         """
-        user = data["user"]
-        taken = self.freeze_handler.take_lock(user, self.name)
-        await self.stream.write(
-            Frame(
-                method=EVENT_METHOD,
-                path=LOCK_TAKEN_EVENT,
-                data={"user": user, "holder": self.name},
-            )
-        )
-        return {"taken": taken}
+        return {"taken": self.freeze_handler.take_lock(data["user"], self.name)}
 
     async def write_connection_item(self, data: Any) -> dict[str, Any]:
         """Write one connection parcel under the semaphore this process holds.
@@ -223,6 +235,20 @@ class ChildStub:
         user = data["user"]
         self.freeze_handler.release_lock(user, self.name)
         return {"released": user}
+
+    async def emit_one_event(self, data: Any) -> dict[str, Any]:
+        """Send one EVENT upward — the instrument that exercises that road.
+
+        Args:
+            data: what to put in the event, echoed as it comes.
+
+        Returns:
+            The path the event was sent on.
+
+        Writes one EVENT frame on the wire.
+        """
+        await self.stream.write(Frame(method=EVENT_METHOD, path=STUB_EVENT, data=data))
+        return {"emitted": STUB_EVENT}
 
 
 if __name__ == "__main__":

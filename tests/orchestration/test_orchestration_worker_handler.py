@@ -41,12 +41,9 @@ from typing import Any
 import pytest
 
 from genro_asgi.channel.frame import Frame
-from genro_asgi.spa.orchestration.worker_handler import (
-    OCCUPANCY_OP_PATH,
-    WORKER_ENV_VAR,
-    LocalWorkerHandler,
-    WorkerHandler,
-)
+from genro_asgi.spa.orchestration.worker_connector import WORKER_SNAPSHOT_KEY
+from genro_asgi.spa.orchestration import LocalWorkerHandler, WorkerHandler
+from genro_asgi.spa.orchestration.worker_handler import OCCUPANCY_OP_PATH, WORKER_ENV_VAR
 
 CHILD_SCRIPT = '''
 """A scripted worker process: presents itself, answers with a photo, nothing else."""
@@ -56,6 +53,10 @@ import json
 import os
 
 from genro_asgi.channel.frame import REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
+
+
+def photo_of(payload):
+    return {{"pid": os.getpid(), "asked_on": "presentation", "rss_mb": 42}}
 
 
 async def live() -> None:
@@ -70,7 +71,7 @@ async def live() -> None:
         Frame(
             method=REGISTER_METHOD,
             path=REGISTER_PATH,
-            data={{"pid": os.getpid(), "config": payload}},
+            data={{"pid": os.getpid(), "config": payload, "{snapshot_key}": photo_of(payload)}},
         )
     )
     await stream.read()
@@ -81,12 +82,17 @@ async def live() -> None:
         if frame.method == "CALL" and behaviour == "answer":
             photo = {{"pid": os.getpid(), "asked_on": frame.path, "rss_mb": 42}}
             await stream.write(
-                Frame(id=frame.id, method="REPLY", path=frame.path, data={{"result": photo}})
+                Frame(
+                    id=frame.id,
+                    method="REPLY",
+                    path=frame.path,
+                    data={{"result": {{}}, "{snapshot_key}": photo}},
+                )
             )
 
 
 asyncio.run(live())
-'''.format(env_var=WORKER_ENV_VAR)
+'''.format(env_var=WORKER_ENV_VAR, snapshot_key=WORKER_SNAPSHOT_KEY)
 
 CHILD_MODULE = "scripted_child"
 
@@ -184,11 +190,16 @@ async def test_a_launched_process_presents_itself_on_the_handlers_socket(make_ha
     assert handler.connector.socket_path.exists()
 
 
-async def test_the_beat_records_the_photo_and_asks_for_the_occupancy(make_handler):
+async def test_the_photo_arrives_with_the_presentation_and_every_envelope_after(make_handler):
     handler = make_handler()
     await handler.launch_process()
 
-    assert handler.worker_snapshot is None
+    assert handler.worker_snapshot == {
+        "pid": handler.process.pid,
+        "asked_on": "presentation",
+        "rss_mb": 42,
+    }
+
     await handler.ping_process()
 
     assert handler.worker_snapshot == {
@@ -211,7 +222,7 @@ async def test_a_mute_process_is_killed_after_one_repeated_beat(make_handler, gr
     assert "beat 2 of 2 unanswered" in caplog.text
     assert process.poll() is not None
     assert handler.process is None
-    assert handler.worker_snapshot is None
+    assert handler.worker_snapshot["pid"] == process.pid
     await wait_for(lambda: group.aborted == [handler])
 
 

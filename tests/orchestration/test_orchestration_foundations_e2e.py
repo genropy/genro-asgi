@@ -20,8 +20,9 @@ disk. Nothing here is doubled except the level above — ``GroupStub``, because
 the GroupHandler is Macro 2's — and the test reads the deposit from the parent
 side through a FreezeHandler of its own, over the same root the child was given.
 
-The story: the handler launches its process, which presents itself and is
-answered with the whole global store; the beat brings back the photo; the child
+The story: the handler launches its process, which presents itself — carrying
+its first photo — and is answered with the whole global store; the beat asks
+whether it is alive; the child
 takes a user's semaphore, announces it, parks that user's connection under it
 and gives the semaphore back; it takes it again, and while it holds it the
 process goes mute and the surveillance kills it.
@@ -51,13 +52,13 @@ from typing import Any
 
 import pytest
 
-from genro_asgi.spa.orchestration import FreezeHandler
-from genro_asgi.spa.orchestration.worker_handler import WorkerHandler
+from genro_asgi.spa.orchestration import FreezeHandler, WorkerHandler
 
 from .child_stub import (
+    EMIT_EVENT_OP,
     GO_MUTE_EVENT,
-    LOCK_TAKEN_EVENT,
     RELEASE_LOCK_OP,
+    STUB_EVENT,
     TAKE_LOCK_OP,
     WRITE_CONNECTION_ITEM_OP,
 )
@@ -141,15 +142,20 @@ async def test_a_worker_is_born_works_dies_wild_and_leaves_its_traces_behind(
     caplog.set_level(logging.INFO)
     handler.hosted_users.update({"mario", "anna"})
 
-    # It is born: the process presents itself on its handler's own socket.
+    # It is born: the process presents itself on its handler's own socket, and
+    # the presentation already carries its first photo — a live process is never
+    # without one. That photo cannot know the global store yet: the store comes
+    # back in the answer the child is still waiting for.
     await handler.launch_process()
     assert handler.connector.connected is True
-    presentation = next((line for line in caplog.messages if "presented itself" in line), "")
-    assert f"'pid': {handler.process.pid}" in presentation
-    assert f"'name': '{handler.name}'" in presentation
+    assert handler.worker_snapshot == {
+        "pid": handler.process.pid,
+        "name": "standard_0001",
+        "global_store": None,
+    }
 
-    # It is alive: the beat brings back its photo, with the whole global store
-    # it was handed in the answer to that presentation.
+    # It is alive: the beat asks that and nothing else, and the photo riding the
+    # answer is the first one that knows the store it was handed.
     await handler.ping_process()
     assert handler.worker_snapshot == {
         "pid": handler.process.pid,
@@ -157,11 +163,16 @@ async def test_a_worker_is_born_works_dies_wild_and_leaves_its_traces_behind(
         "global_store": handler.global_register_item_tytx,
     }
 
-    # It takes the semaphore of one of its users, and announces it upward.
+    # It takes the semaphore of one of its users. Nothing is announced upward:
+    # the lock is the deposit's own mechanism, and the vertex already knows —
+    # it suspended mario before any of this.
     assert await order(handler, TAKE_LOCK_OP, {"user": "mario"}) == {"taken": True}
     assert deposit.lock_holder("mario") == "standard_0001"
     assert deposit.read_connection_item("mario", "c-1") is None
-    await wait_for(lambda: LOCK_TAKEN_EVENT in caplog.text)
+
+    # An EVENT of its own reaches the handler: the road exists and is walked.
+    assert await order(handler, EMIT_EVENT_OP, {"any": "payload"}) == {"emitted": STUB_EVENT}
+    await wait_for(lambda: STUB_EVENT in caplog.text)
 
     # It parks that user's connection under the semaphore it holds, and the
     # parent reads back from the deposit exactly what the child wrote.

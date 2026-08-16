@@ -171,6 +171,50 @@ with the owner):
    a beat against a wire already down is not the beat's business, the death
    is already travelling by its own road.
 
+## Whole-diff review at finalize (owner + foreman, 2026-08-16)
+Six findings on the four phases read as one diff for the first time. What the
+owner ruled changed the machine twice, beyond the fixes.
+
+1. **The announcement of a semaphore is DEAD.** The stub announced its lock
+   takes upward (`/lock_taken`), in the wrong order and even on a failed take.
+   Chasing the order led to the real answer: before anyone touches mario's
+   folder, mario is SUSPENDED at the Commander — stopped, calls parked — so the
+   vertex already knows who is working on him, and the worker telling it is
+   telling it its own news. And at a death nobody chases a list of semaphores:
+   the dead worker's users go WHOLE, folder and lock together. So the deposit
+   lock goes back to being what it is — internal mechanics: mutual exclusion
+   between writers, and the trace of an interrupted write. Design v3 amended in
+   five places (§8.3, the freeze cycle, the dead holder's semaphore, the
+   Commander's register of announced semaphores — deleted — and rejection 21,
+   which stands on its other leg). The stub now takes the lock and says
+   nothing; a declared test instrument keeps the EVENT road exercised.
+2. **The photo rides EVERY envelope.** Two tests documented opposite contracts
+   for `worker_snapshot` after a death, and the real gap was the restart
+   window: between the kill and the newborn's first beat, the judge could read
+   the dead process's memory and load — the per-connection rows defend
+   themselves (the reader crosses them with its indexes; the truth is the mark,
+   never the measure) but the process aggregates have no index to cross with.
+   The owner's answer was not to clear the photo but to remove the window: a
+   `worker_snapshot` slot that any envelope may carry, filed by the wire before
+   it even looks at the frame type. The presentation carries the first one, so
+   a live process has a photo from birth; in Macro 2 every user entering or
+   leaving sends one, because those are the moments the picture changes. The
+   beat kept only the question its name asks. Design v3 §7 (E2/F25) amended.
+   Side effect: the e2e no longer verifies the presentation by grepping a log
+   line — pid and name arrive inside the photo, which is state.
+3. The subpackage exported two of its four classes; all four are exported now
+   and the tests take classes from the package, protocol constants from the
+   modules.
+4. `stop()` leaves `_closing` and the handler's `_listening` set forever, so a
+   relaunch after a burial would spawn a child against an unbound socket. It
+   cannot happen today: nothing in `src/` calls `stop()` — the burial verb of
+   §7.4 does not exist yet. Declared FINAL in the docstring instead of guessing
+   a state machine; whoever writes that verb decides what "closed" means.
+5. Dissolved by finding 2 (see above).
+6. `GroupStub` and `wait_for` are duplicated across two test modules and have
+   diverged. Left as they are: both die with the stub when Macro 2 brings the
+   real GroupHandler.
+
 ## Baptism round for Phase 3 (owner, 2026-08-16)
 Held BEFORE launching the phase, the lesson of Phase 2 applied: every public
 name Phase 3 needs was decided by the owner first, so the executor asks

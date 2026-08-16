@@ -46,6 +46,13 @@ handler never runs two processes at once, so the newcomer is the anomaly and
 the resident is the real one. The address survives the relaunch: the killed
 child's successor presents itself on the same socket and the wire lives again.
 
+**Every envelope may carry the photo.** Whatever the child sends — its
+presentation, a reply, an event — can bring a ``worker_snapshot`` slot beside
+its own payload, and the wire hands it to the handler before doing anything
+else with the frame. So the photo has ONE road instead of three, a live process
+has a photo from birth, and the beat is left with the only question its name
+asks: are you alive.
+
 **Three envelopes, the ratified division of labour.** A REPLY hands its payload
 to the parked caller inline — O(1), it stays in the receive loop. An EVENT runs
 a consumer, so it goes on its own task and the loop returns to the wire; per-
@@ -73,12 +80,14 @@ CALL_METHOD = "CALL"
 REPLY_METHOD = "REPLY"
 EVENT_METHOD = "EVENT"
 GLOBAL_STORE_KEY = "global_register_item_tytx"
+WORKER_SNAPSHOT_KEY = "worker_snapshot"
 
 __all__ = [
     "CALL_METHOD",
     "EVENT_METHOD",
     "GLOBAL_STORE_KEY",
     "REPLY_METHOD",
+    "WORKER_SNAPSHOT_KEY",
     "WorkerConnector",
 ]
 
@@ -137,10 +146,12 @@ class WorkerConnector:
         self._logger.info("Wire listening on %s", self.socket_path)
 
     async def stop(self) -> None:
-        """Close the wire and take the socket away — an ordered end, announced to nobody.
+        """Close the wire for good and take the socket away — announced to nobody.
 
         Closes the child's stream and the listening socket, fails the pending
-        CALLs and unlinks the socket file.
+        CALLs and unlinks the socket file. FINAL: this connector does not reopen.
+        The death it causes is not denounced, which is the whole point — a wire
+        closed on purpose must not look like a worker dying on its own.
         """
         self._closing = True
         if self._stream is not None:
@@ -252,6 +263,7 @@ class WorkerConnector:
                 REGISTER_METHOD,
             )
             return False
+        self._take_snapshot(frame)
         await stream.write(
             Frame(
                 id=frame.id,
@@ -276,7 +288,13 @@ class WorkerConnector:
                 return
             if frame is None:
                 return
+            self._take_snapshot(frame)
             self._dispatch(frame)
+
+    def _take_snapshot(self, frame: Frame) -> None:
+        """Hand the handler the photo this frame carried, if it carried one."""
+        if isinstance(frame.data, dict) and WORKER_SNAPSHOT_KEY in frame.data:
+            self.worker_handler.worker_snapshot = frame.data[WORKER_SNAPSHOT_KEY]
 
     def _dispatch(self, frame: Frame) -> None:
         """Route one inbound frame: resolve a REPLY inline, serve an EVENT on a task."""

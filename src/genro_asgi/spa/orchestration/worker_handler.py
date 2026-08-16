@@ -45,7 +45,9 @@ removes the semaphores the dead one had announced. Which is why nothing in this
 module touches the deposit.
 
 **No counters here.** The handler holds ``worker_snapshot``, the last photo its
-process sent: the gauges the judge reads are all in there. Counters are
+process sent — written by the wire from whatever envelope carried it, so a live
+process has one from its very presentation: the gauges the judge reads are all
+in there. Counters are
 aggregate and belong to the Commander, which is also the one that decides the
 orders worth counting.
 
@@ -158,10 +160,12 @@ class WorkerHandler:
         self.process_ping_interval = process_ping_interval
         self.process_ping_timeout = process_ping_timeout
         self.process: subprocess.Popen[bytes] | None = None
+        #: The last photo the process sent, on whatever envelope carried it:
+        #: memory, load, counts, per-connection clocks. Written by the wire.
+        self.worker_snapshot: dict[str, Any] | None = None
         self.connector = WorkerConnector(self, self.instance_dir / f"{name}.sock")
         self._logger = logging.getLogger(__name__)
         self._hosted_users: set[str] = set()
-        self._worker_snapshot: dict[str, Any] | None = None
         self._governed_death = False
         self._listening = False
 
@@ -185,16 +189,6 @@ class WorkerHandler:
             Its single writer is the fold, one level up.
         """
         return self._hosted_users
-
-    @property
-    def worker_snapshot(self) -> dict[str, Any] | None:
-        """The last photo the process sent: memory, load, counts, clocks.
-
-        Returns:
-            The photo as the child measured it, or None while none has arrived.
-            Every per-handler gauge the judge reads comes from here.
-        """
-        return self._worker_snapshot
 
     @property
     def spawn_payload(self) -> dict[str, Any]:
@@ -297,17 +291,17 @@ class WorkerHandler:
         await self.launch_process()
 
     async def ping_process(self) -> None:
-        """One health beat: ask the process for its photo, kill it if it stays mute.
+        """One health beat: are you alive? Kill the process if it stays mute.
 
-        Records the answer in ``worker_snapshot``. A missed beat is repeated
-        ONCE past the timeout, against a lost packet; a process mute to both is
-        killed, and the wire that dies with it denounces the death as wild.
+        The photo is not asked for here — it rides whatever envelope the child
+        sends, ``worker_snapshot`` slot, and the wire files it. A missed beat is
+        repeated ONCE past the timeout, against a lost packet; a process mute to
+        both is killed, and the wire that dies with it denounces the death as
+        wild.
         """
         for beat in (1, 2):
             try:
-                payload = await self.connector.call(
-                    OCCUPANCY_OP_PATH, timeout=self.process_ping_timeout
-                )
+                await self.connector.call(OCCUPANCY_OP_PATH, timeout=self.process_ping_timeout)
             except TimeoutError:
                 self._logger.warning(
                     "Worker %s: beat %s of 2 unanswered after %.1fs",
@@ -316,7 +310,6 @@ class WorkerHandler:
                     self.process_ping_timeout,
                 )
             else:
-                self._worker_snapshot = payload.get("result")
                 return
         self._logger.warning("Worker %s: mute to both beats — killing its process", self.name)
         await self.terminate_process()
