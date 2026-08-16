@@ -15,8 +15,21 @@ Decision log (authority): `temp/interview_handler_2026-08-15.md`
 (F39 carries the baptisms and the two amendments used here).
 
 ## Work Plan
-- [>] **Phase 1**: FreezeHandler — the deposit class
-  > In execution since 2026-08-16T11:52:00
+- [x] **Phase 1**: FreezeHandler — the deposit class
+  > Done: new `spa/orchestration/` subpackage with FreezeHandler — one folder
+  > per user under a 0700 root, direct writes under the `.lock` semaphore
+  > (no temp, no rename), bare-payload reads with `get_item_header` beside
+  > them, deletes that never touch the lock, and `release_lock` as the single
+  > point that removes both the lock and a folder left with the lock alone.
+  > 14 tests green, full suite 1708 passed, ruff clean, no legacy import in
+  > either direction.
+  > Files: src/genro_asgi/spa/orchestration/__init__.py,
+  > src/genro_asgi/spa/orchestration/freeze_handler.py,
+  > tests/orchestration/__init__.py,
+  > tests/orchestration/test_orchestration_freeze_handler.py,
+  > .phased/active/orchestration-m1-foundations/notes.md
+  > Verified: `pytest tests/orchestration -q` 14 passed;
+  > `pytest tests/ -q` 1708 passed, 2 skipped; `ruff check src/ tests/` clean.
   - Run: opus / medium
   - Pattern: `src/genro_asgi/spa/commander.py` (`user_to_userkey`, the
     one-way key; `freeze_user` parcel writing as the behaviour being
