@@ -40,7 +40,7 @@ yes or no. Whoever finds it taken retries as a coroutine — never holding a
 thread of the service pool, which exists for real disk work and would starve
 itself waiting for the operation meant to release the lock.
 
-**The lock owns the empty folder.** Deleting items never touches the lock: a
+**The lock owns the empty folder.** Dropping items never touches the lock: a
 folder is alive while an operation runs, whatever it has left inside. It is
 ``release_lock`` — the end of that operation — that removes the folder when
 nothing but the lock remains, so the root holds the frozen and nothing else.
@@ -237,7 +237,7 @@ class FreezeHandler:
         envelope = self._read_envelope(path)
         return None if envelope is None else envelope["header"]
 
-    def delete_user_item(self, user: str) -> None:
+    def drop_user_item(self, user: str) -> None:
         """Discard the user's own store, adopted or spent.
 
         Args:
@@ -247,7 +247,7 @@ class FreezeHandler:
         """
         os.remove(self._user_folder(user) / USER_ITEM_NAME)
 
-    def delete_connection_item(self, user: str, cid: str) -> None:
+    def drop_connection_item(self, user: str, cid: str) -> None:
         """Discard one connection of ``user``, adopted or spent.
 
         Args:
@@ -258,7 +258,7 @@ class FreezeHandler:
         """
         os.remove(self._connection_path(user, cid))
 
-    def delete_user_folder(self, user: str) -> None:
+    def drop_user_folder(self, user: str) -> None:
         """Discard everything ``user`` has in the deposit, semaphore included.
 
         Args:

@@ -19,7 +19,7 @@ Decision log (authority): `temp/interview_handler_2026-08-15.md`
   > Done: new `spa/orchestration/` subpackage with FreezeHandler — one folder
   > per user under a 0700 root, direct writes under the `.lock` semaphore
   > (no temp, no rename), bare-payload reads with `get_item_header` beside
-  > them, deletes that never touch the lock, and `release_lock` as the single
+  > them, drops that never touch the lock, and `release_lock` as the single
   > point that removes both the lock and a folder left with the lock alone.
   > 14 tests green, full suite 1708 passed, ruff clean, no legacy import in
   > either direction.
@@ -49,7 +49,7 @@ Decision log (authority): `temp/interview_handler_2026-08-15.md`
     via the deposit node" — every caller goes through this surface);
     every pickle payload wrapped with a diagnostic header (writer, ts,
     cause, group) — never used to decide adoption;
-    deleting the last file of a folder removes the folder (F35);
+    dropping the last file of a folder removes the folder (F35);
     folder listing returns a set (the 4-step sweeper of F34 consumes it);
     the async retry-wait for a busy lock belongs to CALLERS on their
     event loop (F27) — this class exposes non-blocking try-acquire plus
@@ -58,7 +58,7 @@ Decision log (authority): `temp/interview_handler_2026-08-15.md`
     diagnostic header is read via a separate `get_item_header(...)`
     (rule 11: pure reading with args wears the get_ prefix); no new
     wrapper type;
-    delete_* methods NEVER touch the lock: `release_lock` is the single
+    drop_* methods NEVER touch the lock: `release_lock` is the single
     point that removes it, and if the folder is then reduced to the
     lock alone it removes the folder too — one invariant: a folder
     exists iff it has items OR an operation is in progress (F35 is
@@ -66,7 +66,7 @@ Decision log (authority): `temp/interview_handler_2026-08-15.md`
   - Details: class FreezeHandler(root_path); methods (verb-first for
     mutations, per naming rules): write_user_item / write_connection_item
     (direct write under held lock), read_user_item / read_connection_item,
-    delete_connection_item / delete_user_folder (with verification),
+    drop_connection_item / drop_user_folder (with verification),
     user_folders (set, for the sweeper), take_lock(user, holder) →
     bool, release_lock(user, holder), lock_holder(user) → str|None.
     Tests first: mutual exclusion of the lock; simultaneous writers on

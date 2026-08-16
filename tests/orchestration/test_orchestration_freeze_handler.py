@@ -111,8 +111,8 @@ def test_the_release_takes_away_the_folder_left_with_the_lock_alone(deposit):
     )
     assert deposit.user_folders == {deposit.user_to_userkey("mario")}
 
-    deposit.delete_connection_item("mario", "cid-a")
-    deposit.delete_user_item("mario")
+    deposit.drop_connection_item("mario", "cid-a")
+    deposit.drop_user_item("mario")
     assert deposit.lock_holder("mario") == "standard_0001"
     assert deposit.user_folders == {deposit.user_to_userkey("mario")}
 
@@ -140,13 +140,13 @@ def test_the_whole_folder_goes_with_its_user(deposit):
         "mario", "cid-a", {"pages": []}, writer="standard_0001", cause="freeze", group="standard"
     )
 
-    deposit.delete_user_folder("mario")
+    deposit.drop_user_folder("mario")
     assert deposit.user_folders == set()
     assert deposit.lock_holder("mario") is None
 
 
-def test_deleting_a_folder_nobody_wrote_is_no_work(deposit):
-    deposit.delete_user_folder("mario")
+def test_dropping_a_folder_nobody_wrote_is_no_work(deposit):
+    deposit.drop_user_folder("mario")
     assert deposit.user_folders == set()
 
 
@@ -194,7 +194,7 @@ def test_two_connections_of_one_user_are_two_files(deposit):
     assert deposit.read_connection_item("mario", "cid-b") == {"pages": ["b"]}
 
     deposit.take_lock("mario", "standard_0001")
-    deposit.delete_connection_item("mario", "cid-a")
+    deposit.drop_connection_item("mario", "cid-a")
     deposit.release_lock("mario", "standard_0001")
 
     assert deposit.read_connection_item("mario", "cid-a") is None
