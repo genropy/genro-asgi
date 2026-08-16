@@ -256,16 +256,24 @@ Decision log (authority): `temp/interview_handler_2026-08-15.md`
   - Files: tests/orchestration/child_stub.py,
     tests/orchestration/test_orchestration_foundations_e2e.py
   - Decisions: the stub is TEST-ONLY (the real worker process is
-    Macro 2); it must exercise every foundation: connect + handshake
-    (receives global store), answer probes, announce a lock take (EVENT
-    frame), write a `connection_item` under the lock into the
-    FreezeHandler root, release, then be killed via the WorkerHandler
-    chain; after the wild kill the bonifica discards the user folder
-    and any leftover lock.
+    Macro 2); it must exercise every foundation: connect + present
+    itself (receives the whole global store), answer the beat with a
+    photo, announce a lock take (EVENT frame), write a
+    `connection_item` under the lock into the deposit it was given in
+    `frozen_users_path`, release, then be killed via the WorkerHandler
+    chain. AMENDED 2026-08-16 (the owner moved the cleanup to the
+    Commander): after the wild kill the handler DENOUNCES and nothing
+    else — `on_worker_abort` reaches the group stub carrying the
+    handler and its `hosted_users`, and the deposit is left EXACTLY as
+    the dead process left it. That untouched parcel and that orphan
+    lock are the picture Macro 3 inherits: asserting they survive is
+    asserting that Macro 1 cleans nothing.
   - Details: one e2e test telling the full foundations story on a real
-    subprocess + real UDS in a tmp dir; assertions on: handshake
-    payload, probe liveness, deposit contents at each step, kill chain
-    timing (bounded), folder state after bonifica.
+    subprocess + real UDS in a tmp dir; assertions on: the presentation
+    payload, the photo landing in `worker_snapshot`, deposit contents at
+    each step (written under the lock, readable through FreezeHandler
+    from the parent side), kill chain timing (bounded), the denunciation
+    that arrives, and the deposit still holding parcel and lock after it.
   - Done: `pytest tests/orchestration -q` green AND full suite
     `pytest tests/ -q` still green (legacy untouched);
     `ruff check src/ tests/` clean.
