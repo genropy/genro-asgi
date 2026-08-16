@@ -1,5 +1,57 @@
 # Notes — orchestration-m2-worker-process
 
+## Phase 5
+
+No source module was touched. The choices below are all test-side, and the first
+one is the finding the phase came back with.
+
+- **The two orders are the test's own, because the wire has none.** `quit()` and
+  `freeze_idle_users()` are verbs of `SpaWorker` that nothing routes to:
+  `answer_call` knows the beat and the http form, and `WorkerEntry` ticks no
+  valve. In a real child both are therefore unreachable from the parent. Rather
+  than teach the protocol an op the design has not decided, or patch src from a
+  test phase, the e2e's worker is `DrivenWorker` — a `SpaWorker` heir living in
+  the test package, which is the place a consumer already extends the worker
+  (the genropy-asgi bridge assigns `wsgi_app` there) — and it answers
+  `/op/freeze_idle_users` and `/op/quit`, both declared in its own docstring as
+  routing keys of this test and not of the protocol. The precedent is the M1
+  `child_stub`, whose deposit orders are its own in exactly the same sense. The
+  real callers are M3's: the group orders the departure, the metronome drives the
+  valve.
+- **The quit order is started before its reply is composed.** The owner's shot
+  logic says the departure decision lives inside the photo, and the photo is
+  taken while the reply envelope is built. So the order handler creates the
+  `quit()` task, gives it its one turn (`await asyncio.sleep(0)` — enough,
+  because `plan_transfers` is synchronous and `execute_transfers` parks on the
+  gate) and only then replies: the flags are on the photo that answers the order.
+  Proven by neutralization — without that turn the photo carries `None` for
+  everybody.
+- **The child's global store is read back through the site.** Nothing on the
+  parent side can look inside the child, so the tiny site answers an
+  `X-Global-Store` header with what the process holds; the assertion compares it
+  with the handler's own `global_register_item_tytx`, which is what the
+  presentation was answered with.
+- **The photo ttl is 0 in this story.** Every envelope then carries a photo, so
+  the story reads what the photo SAYS with no timing race; the throttle itself is
+  Phase 4's test and is not re-proven here. The two grammars that ARE timings are
+  shrunk through the spawn kwargs — `user_idle_freeze_delay` 0.5 s and
+  `transfer_start_delay` 0.5 s (from the module's 2.0) — and every wait is
+  bounded by a multiple, never by a measure.
+- **The freeze announcements of `quit()` are lost with the wire.** Each parked
+  user queues a `user_frozen` with placement `None`, and the worker closes the
+  wire on its way out before any envelope carries them. Nothing is lost in
+  substance — the flagged photo that answered the order already named everybody
+  leaving — and the test asserts what survives instead: the parcels in the
+  deposit, the folders, the free semaphores. Worth M3's eye when the fold decides
+  what it reads.
+- **Two users, on purpose.** One goes silent and is parked by the valve, the
+  other speaks just before the order and is left alone: a valve that froze
+  everybody would pass a one-user story.
+- **The wild denunciation is asserted twice** — the group told
+  (`on_worker_abort` with the handler and the users on board) and the WILD line
+  in the handler's log — because that seam is the whole point of the chapter and
+  the M3 change will have to move both.
+
 ## Phase 4
 
 Names the phase needed and F40 does not carry. All of them are either inherited

@@ -388,7 +388,57 @@ none of them and asks nobody.
     the entry pattern.
   - Done: `pytest tests/orchestration -q` green; full suite green;
     `ruff check src/ tests/` clean.
-- [ ] **Phase 5**: Macro 2 end-to-end — the worker lives, departs, dies
+- [x] **Phase 5**: Macro 2 end-to-end — the worker lives, departs, dies
+  > Done: one story, one test, on a real child of the real `WorkerHandler` over a
+  > real UDS and a real deposit. Seven chapters in order: BORN (presentation
+  > photo carrying pid/name/group and an empty population), SERVES (the tiny site
+  > on `wsgi_app` answers status/headers/body whole — among the headers the whole
+  > global store the presentation was answered with, which is how the parent
+  > reads what the child holds — `new_user`/`new_connection` announced, the
+  > per-connection clocks stamped in the photo), FREEZES BY THE VALVE (the silent
+  > user parked in place: `user_frozen` with placement = the worker's own name,
+  > both parcels readable from the parent side, the photo showing his row frozen
+  > and his connection gone while the user who had just spoken stays active),
+  > WAKES BY VERDICT (`user_frozen: true` → `user_adopted` + the natural
+  > `new_connection`, parcels gone, folder gone with the last of them — F35, the
+  > reply served normally), QUITS ON ORDER (the reply to the order carries the
+  > flagged photo, all 'T'; past the shrunk gate everybody is in the deposit and
+  > the process EXITS BY ITSELF, code 0, nothing killed it), THE DECLARED SEAM
+  > (the quit death still reaches the group as `on_worker_abort` carrying the
+  > handler and the users on board, plus the WILD line in the log — asserted as
+  > the seam, with the M3 governed mark named in the comment), RELAUNCH (the same
+  > handler on the same name and socket brings a successor presenting a fresh
+  > photo of its own pid, over a deposit nothing has swept).
+  > Files: tests/orchestration/test_orchestration_m2_e2e.py (new, 1 test),
+  > .phased/active/orchestration-m2-worker-process/notes.md
+  > Verified: `pytest tests/orchestration -q` 118 passed;
+  > `pytest tests/ -q` 1812 passed, 2 skipped (baseline 1811/2, +1);
+  > `ruff check src/ tests/` clean; the e2e run three times in a row, 2.2 s each,
+  > no stray child (`pgrep -f worker_entry` empty after every run). No source
+  > module touched. Three neutralizations run and restored: killing the child
+  > instead of awaiting its own exit fails the exit-code assertion (-9 == 0);
+  > a sweep of the parcels added to `on_worker_abort` fails the deposit-survival
+  > assertions; removing the turn the departure is given before the reply is
+  > composed fails the flagged-photo assertion (`None` instead of `'T'`) — the
+  > proof that the decision really rides the shot it was taken in.
+  > Review: **no wire op routes to `quit()` or to `freeze_idle_users()`** — a
+  > driver in another process cannot order a departure nor drive the valve;
+  > `answer_call` routes the beat and the http form and nothing else, and no task
+  > in `WorkerEntry` ticks the valve. Both verbs exist and are tested in-process
+  > (Phase 3), so this is the missing CALLER, expected in M3 with the group and
+  > the metronome — recorded, not worked around: the e2e's own worker subclass
+  > (`DrivenWorker`, a test-package `SpaWorker` heir, the place a consumer already
+  > extends the worker as the genropy-asgi bridge does) answers two routing keys
+  > declared in its docstring as the TEST's own. Second observation: at `quit()`
+  > the per-user `user_frozen` announcements (placement `None`) are queued and die
+  > with the wire the worker closes behind itself — the flagged photo already
+  > named who was leaving, so nothing is lost, but M3 should confirm the fold acts
+  > on the flags and not on those announcements.
+  > Verify: read top to bottom as the story of Macro 2 — the chapters are in
+  > order, the names read as spoken (SpaWorker, the registers, freeze_user,
+  > adopt_user, transfer_flag, the photo, the valve, the gate, the deposit), no
+  > coined jargon; the only vocabulary the test adds is its own two order paths
+  > and the `DrivenWorker` that answers them, both declared as the test's.
   - Run: opus / high
   - Pattern: `tests/orchestration/test_orchestration_foundations_e2e.py`
     (the M1 story test — same narrative style, real child, real UDS,
