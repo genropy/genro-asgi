@@ -81,7 +81,29 @@ Decision log (authority): `temp/interview_handler_2026-08-15.md`
     (no reverse function exists).
   - Done: `pytest tests/orchestration -q` green; `ruff check src/ tests/`
     clean; no import of FreezeHandler from legacy spa modules.
-- [ ] **Phase 2**: WorkerConnector — the per-WorkerHandler wire
+- [x] **Phase 2**: WorkerConnector — the per-WorkerHandler wire
+  > Done: `WorkerConnector` — one UDS per WorkerHandler, unlink-before-bind
+  > always, socket directory 0700, the presentation answered with the WHOLE
+  > global store, CALL parked on the frame id, EVENT served on its own task,
+  > REPLY resolved inline, an inbound CALL logged as unexpected; EOF or a
+  > protocol violation fails every pending CALL and tells the handler
+  > `on_child_lost`, while a deliberate `stop()` announces nothing. The address
+  > survives the relaunch: the successor presents itself on the same socket and
+  > gets the store as it is at THAT moment. No callbacks are handed in at
+  > construction — the wire asks the handler it already holds. 13 tests green on
+  > a real loopback UDS, full suite green, ruff clean, no legacy import in
+  > either direction (only `channel/frame.py`).
+  > Files: src/genro_asgi/spa/orchestration/worker_connector.py,
+  > tests/orchestration/test_orchestration_worker_connector.py,
+  > .phased/active/orchestration-m1-foundations/notes.md
+  > Review: `WorkerConnector` is NOT exported from
+  > `spa/orchestration/__init__.py` — that file is outside this phase's Files
+  > list, so the tests import the module path. The child's presentation payload
+  > (pid, config echo) now reaches the log only: nothing consumes it, and if
+  > Phase 3 wants it, it is one reading on the connector to baptise then.
+  > Verified: `pytest tests/orchestration -q --no-cov` 28 passed (13 new);
+  > `pytest tests/ -q --no-cov` 1709 + 13 green;
+  > `ruff check src/ tests/` clean.
   - Run: opus / medium
   - Pattern: `src/genro_asgi/channel/client.py:ChannelClient` (framing
     use), `src/genro_asgi/channel/frame.py:FrameStream`,
@@ -92,19 +114,27 @@ Decision log (authority): `temp/interview_handler_2026-08-15.md`
   - Decisions: one UDS socket PER WorkerHandler, path
     `<instance_dir>/<worker_name>.sock`, unlink-before-bind ALWAYS,
     0700 on the socket directory; whoever connects IS the process of
-    that WorkerHandler (identity by construction); handshake: child
-    sends {pid, config echo} → reply carries {global_store, version}
-    (F31: the store travels in the handshake, no disk); CALL/REPLY/EVENT
-    framing reused from channel/frame.py — the hub
-    (`channel/hub.py`) is NOT touched here (it dies in Macro 6);
-    EOF/error on the stream = a LOCAL event surfaced to the owner via
-    callback (burial on event, E13); the ChannelHub multi-member logic
-    is not replicated: one connector, one stream.
+    that WorkerHandler (identity by construction); presentation: child
+    sends {pid, config echo} → the reply carries the WHOLE global store
+    (F31: the store travels in the presentation, no disk; owner
+    2026-08-16: whole replacement, NO delta and NO version number —
+    the store is kilobytes and changes about once every three hours,
+    so the newborn is not a special case and nothing arrives out of
+    order); CALL/REPLY/EVENT framing reused from channel/frame.py — the
+    hub (`channel/hub.py`) is NOT touched here (it dies in Macro 6);
+    EOF/error on the stream = a LOCAL event told to the handler
+    (burial on event, E13); the ChannelHub multi-member logic
+    is not replicated: one connector, one stream;
+    NO callbacks in the constructor (owner 2026-08-16): the connector
+    holds `self.worker_handler` already, so it asks it —
+    `global_register_item_tytx` (the whole store, TYTX-encoded, the same
+    string used as the key of the reply payload), `on_child_message(frame)`
+    for an inbound EVENT, `on_child_lost()` when the wire dies on its own.
   - Details: class WorkerConnector owned by the WorkerHandler
     (attribute `worker_handler.connector`): accept-side endpoint,
-    handshake, call()/send_event()/reply routing, on_closed callback.
-    Tests on a loopback UDS in a tmp dir: handshake payloads, call/reply
-    round-trip, event delivery, EOF detection, stale-socket
+    presentation, call()/send_event()/reply routing, the two tellings
+    above. Tests on a loopback UDS in a tmp dir: presentation payload,
+    call/reply round-trip, event delivery, EOF detection, stale-socket
     unlink-before-bind.
   - Done: `pytest tests/orchestration -q` green; `ruff check src/ tests/`
     clean.
@@ -116,7 +146,14 @@ Decision log (authority): `temp/interview_handler_2026-08-15.md`
     `src/genro_asgi/config/` existing builders
   - Files: src/genro_asgi/spa/orchestration/worker_handler.py,
     tests/orchestration/test_orchestration_worker_handler.py
-  - Decisions: name = `<group_name>_<counter>` (`standard_0001`),
+  - Decisions: the three surfaces the wire asks of its handler, baptised by
+    the owner on 2026-08-16 and already called by Phase 2 —
+    `global_register_item_tytx` (property, the whole global store TYTX-encoded;
+    born here with the PLACEHOLDER value `'not yet ready --- wait next phase'`
+    and filled for real in Macro 3, when the commander that holds the master
+    exists), `on_child_message(frame)` (an EVENT arrived from the child),
+    `on_child_lost()` (the wire died on its own — where the burial starts);
+    name = `<group_name>_<counter>` (`standard_0001`),
     counter resets at server restart (F39); spawn payload carries: the
     WorkerHandler name, the socket path, the DEPOSIT ADDRESS (never an
     object, E19), pool sizes, worker grammar; surveillance = LOW
