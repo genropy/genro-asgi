@@ -45,6 +45,11 @@ folder is alive while an operation runs, whatever it has left inside. It is
 ``release_lock`` — the end of that operation — that removes the folder when
 nothing but the lock remains, so the root holds the frozen and nothing else.
 
+**A drop asks for absence.** Every ``drop_*`` says what must no longer be
+there, and a thing already gone is that same outcome: no error. The cleanup
+after a dead worker is the ordinary caller, and it walks over parcels the dead
+one may or may not have written — it must not have to ask first.
+
 **The header is diagnostic and only that.** Every payload goes to disk wrapped
 with who wrote it, when, for which cause and from which group. It is read for
 counting and for the sysop; no decision is ever taken on it — what is true
@@ -243,9 +248,10 @@ class FreezeHandler:
         Args:
             user: the user the store belongs to.
 
-        Removes the file. The folder stays until the semaphore is released.
+        Removes the file if it is there — an absence is the same outcome, not an
+        error. The folder stays until the semaphore is released.
         """
-        os.remove(self._user_folder(user) / USER_ITEM_NAME)
+        (self._user_folder(user) / USER_ITEM_NAME).unlink(missing_ok=True)
 
     def drop_connection_item(self, user: str, cid: str) -> None:
         """Discard one connection of ``user``, adopted or spent.
@@ -254,9 +260,10 @@ class FreezeHandler:
             user: the user the connection belongs to.
             cid: the connection identity.
 
-        Removes the file. The folder stays until the semaphore is released.
+        Removes the file if it is there — an absence is the same outcome, not an
+        error. The folder stays until the semaphore is released.
         """
-        os.remove(self._connection_path(user, cid))
+        self._connection_path(user, cid).unlink(missing_ok=True)
 
     def drop_user_folder(self, user: str) -> None:
         """Discard everything ``user`` has in the deposit, semaphore included.

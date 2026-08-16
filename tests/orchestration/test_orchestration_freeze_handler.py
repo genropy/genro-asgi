@@ -150,6 +150,17 @@ def test_dropping_a_folder_nobody_wrote_is_no_work(deposit):
     assert deposit.user_folders == set()
 
 
+def test_dropping_items_nobody_wrote_is_no_work(deposit):
+    deposit.take_lock("mario", "standard_0001")
+
+    deposit.drop_user_item("mario")
+    deposit.drop_connection_item("mario", "cid-a")
+
+    assert deposit.lock_holder("mario") == "standard_0001"
+    deposit.release_lock("mario", "standard_0001")
+    assert deposit.user_folders == set()
+
+
 def test_the_folders_of_every_user_come_as_one_set(deposit):
     for user in ("mario", "guest_abc", "anna@example.com"):
         deposit.take_lock(user, "standard_0001")

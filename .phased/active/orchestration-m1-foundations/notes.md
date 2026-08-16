@@ -19,14 +19,19 @@ Choices made during execution that the plan did not settle:
   `spa/commander.py`: the new subpackage must not depend on the machine that
   dies at the cutover. Same implementation (`quote(safe="")`), same one-way
   contract; the duplication disappears with the legacy commander.
+- The three removals were born as `delete_*`, the only ones in `src/`: the
+  owner named `drop_` the house verb (2026-08-16) and they were renamed —
+  `drop_user_item`, `drop_connection_item`, `drop_user_folder`.
 - `drop_user_item` added beside the two drops the plan listed: adoption
   reads then drops BOTH item kinds, and a user store that could only be
   removed by wiping the whole folder would have forced callers to reach for
   `drop_user_folder` while the connections still matter.
-- The item drops raise `FileNotFoundError` on a missing file instead of
-  passing in silence — a drop is issued for something just read, so an
-  absence is a real anomaly. `drop_user_folder` is the exception: its goal
-  is absence, so it is idempotent and verifies the result.
+- The item drops were written raising `FileNotFoundError` on a missing file;
+  the owner OVERRULED it (2026-08-16): a drop asks for absence, and a thing
+  already gone is that same outcome. All three drops are now idempotent —
+  `drop_user_folder` additionally verifies the result. The reason that
+  settled it: the cleanup after a dead worker is the ordinary caller, and it
+  walks over parcels the dead one may or may not have written.
 - The connection filename quotes the cid with the same one-way key as the
   user: a cid comes from a cookie, and no value of it may name a file outside
   its folder.

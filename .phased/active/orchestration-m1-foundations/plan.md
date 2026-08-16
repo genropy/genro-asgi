@@ -62,11 +62,17 @@ Decision log (authority): `temp/interview_handler_2026-08-15.md`
     point that removes it, and if the folder is then reduced to the
     lock alone it removes the folder too — one invariant: a folder
     exists iff it has items OR an operation is in progress (F35 is
-    satisfied at the release of the same operation).
+    satisfied at the release of the same operation);
+    the removal verb is `drop_` — the house verb everywhere in `spa/`
+    (owner, 2026-08-16), and every drop is IDEMPOTENT: it asks for
+    absence, and a thing already gone is that same outcome (same
+    ratification) — the cleanup after a dead worker walks over parcels
+    the dead one may or may not have written.
   - Details: class FreezeHandler(root_path); methods (verb-first for
     mutations, per naming rules): write_user_item / write_connection_item
     (direct write under held lock), read_user_item / read_connection_item,
-    drop_connection_item / drop_user_folder (with verification),
+    drop_user_item / drop_connection_item / drop_user_folder (the last
+    one verifying the result),
     user_folders (set, for the sweeper), take_lock(user, holder) →
     bool, release_lock(user, holder), lock_holder(user) → str|None.
     Tests first: mutual exclusion of the lock; simultaneous writers on
