@@ -60,7 +60,7 @@ from .child_stub import (
     RELEASE_LOCK_OP,
     STUB_EVENT,
     TAKE_LOCK_OP,
-    WRITE_CONNECTION_ITEM_OP,
+    WRITE_CONNECTION_REGISTER_ITEM_OP,
 )
 
 CHILD_MODULE = "tests.orchestration.child_stub"
@@ -168,7 +168,7 @@ async def test_a_worker_is_born_works_dies_wild_and_leaves_its_traces_behind(
     # it suspended mario before any of this.
     assert await order(handler, TAKE_LOCK_OP, {"user": "mario"}) == {"taken": True}
     assert deposit.lock_holder("mario") == "standard_0001"
-    assert deposit.read_connection_item("mario", "c-1") is None
+    assert deposit.read_connection_register_item("mario", "c-1") is None
 
     # An EVENT of its own reaches the handler: the road exists and is walked.
     assert await order(handler, EMIT_EVENT_OP, {"any": "payload"}) == {"emitted": STUB_EVENT}
@@ -178,11 +178,11 @@ async def test_a_worker_is_born_works_dies_wild_and_leaves_its_traces_behind(
     # parent reads back from the deposit exactly what the child wrote.
     written = await order(
         handler,
-        WRITE_CONNECTION_ITEM_OP,
+        WRITE_CONNECTION_REGISTER_ITEM_OP,
         {"user": "mario", "cid": "c-1", "payload": PARKED_CONNECTION},
     )
     assert written == {"written": "c-1"}
-    assert deposit.read_connection_item("mario", "c-1") == PARKED_CONNECTION
+    assert deposit.read_connection_register_item("mario", "c-1") == PARKED_CONNECTION
     assert deposit.get_item_header("mario", "c-1") == {
         "writer": "standard_0001",
         "ts": pytest.approx(time.time(), abs=60),
@@ -193,7 +193,7 @@ async def test_a_worker_is_born_works_dies_wild_and_leaves_its_traces_behind(
     # It gives the semaphore back: the operation is over, the parcel stays.
     assert await order(handler, RELEASE_LOCK_OP, {"user": "mario"}) == {"released": "mario"}
     assert deposit.lock_holder("mario") is None
-    assert deposit.read_connection_item("mario", "c-1") == PARKED_CONNECTION
+    assert deposit.read_connection_register_item("mario", "c-1") == PARKED_CONNECTION
 
     # It takes the semaphore again — this is the operation the death interrupts.
     assert await order(handler, TAKE_LOCK_OP, {"user": "mario"}) == {"taken": True}
@@ -222,5 +222,5 @@ async def test_a_worker_is_born_works_dies_wild_and_leaves_its_traces_behind(
     # parked, and the semaphore of the operation it never finished. Macro 1
     # cleans nothing — the traces are the Commander's to sweep.
     assert deposit.user_folders == {deposit.user_to_userkey("mario")}
-    assert deposit.read_connection_item("mario", "c-1") == PARKED_CONNECTION
+    assert deposit.read_connection_register_item("mario", "c-1") == PARKED_CONNECTION
     assert deposit.lock_holder("mario") == "standard_0001"
