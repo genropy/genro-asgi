@@ -316,3 +316,18 @@ to the cemetery): the methods are now **`plan_transfers`** /
 delle partenze»); the code family speaks transfer. §14's dead
 `build_plan`/`execute_plan` are the Commander's ladder — different
 object, no collision. Renamed by the foreman in its own commit.
+
+## Phase 4 — the shot logic, dictated (owner, 2026-08-16)
+On a reply the worker checks whether more than `worker_snapshot_ttl`
+(~500 ms) passed since the last shot — if so it takes the photo and
+sends it, and THE DEPARTURE DECISION LIVES INSIDE THE SHOT. Departures
+are never decided in a vacuum: the flagged photo is born inside an
+outgoing envelope and leaves with it, so the announcement is immediate
+by construction; a worker with no traffic still shoots on the beat
+reply (5 s cadence > TTL). Consequence: no dedicated EVENT push is
+needed and the 2-second gate always starts from an announcement already
+sent. Wiring rule for M3 (and the Phase 5 e2e where applicable):
+`plan_transfers` is invoked by the point that composes a due photo for
+an outgoing envelope; the gate timer starts at that send. In M2 the
+tests call `plan_transfers` directly, which is why the gap seemed to
+exist. Design §7.1 amended with the dictation.
