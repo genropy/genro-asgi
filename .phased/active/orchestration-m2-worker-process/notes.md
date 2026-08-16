@@ -110,3 +110,92 @@ deserve a ruling; the rest are consequences.
   (`_page_user` returning `Any` out of a schemaless item dict), the same
   category as the three it already reports on `worker_handler.py`. Nothing was
   silenced in code and `pyproject.toml` was outside the phase's file list.
+
+## Phase 3
+
+The names F40 does not carry, and why these. Every one of them is either
+composed of words the register already uses in this exact sense or inherited
+verbatim from an existing class; none is a coinage, and all five are open to a
+different ruling.
+
+- **`decide_departures` / `execute_departures`.** F40 baptises the SCHEME («lo
+  schema delle partenze») and the flag, not the two methods. The register writes
+  «il worker, allo scatto della foto, DECIDE LE PARTENZE», and `decide_*` is
+  already a house verb (`decide_worker`); the pair decide/execute mirrors the
+  Commander's own `build_plan`/`execute_plan`. `decide_departures` mutates (it
+  remembers the flags and starts the gate clock), so it leads with the verb.
+- **`open_request` / `close_request`.** Not new: they are `commander.py`'s own
+  pair, where `close_request` ALREADY carries the behaviour this phase needs —
+  the last live call of a user closing is what launches his move. Same meaning
+  in both classes, which is what makes the homonymy legitimate rather than the
+  transcription trap. The worker's pair drops the arguments it does not need
+  (`worker`, `path`) and the bookkeeping is a plain count per user: minimal,
+  and no id is asked of anybody in this phase.
+- **`freeze_idle_users`.** The §7.5 valve had a Italian description and no verb.
+  Composed of the phase's own words; a plain periodic check the tests call
+  directly, since Phase 4 owns the task wiring.
+- **`exit_process`.** Mirror of the ratified `WorkerHandler.launch_process`, and
+  the transitive-verb rule wants the object in the name (the worker does not
+  exit itself, it exits its process). The base only records the point was
+  reached (`exited`); the shell of Phase 4 makes it real. No `os._exit` in
+  library code.
+- **`freeze_failures`.** B1 says the failed departure is «logged and counted»
+  and nothing named the count. Read property over the private counter.
+
+Shapes and signatures the plan did not spell:
+
+- **`decide_departures(*, transfer_users=(), expiry_delay=math.inf)`.** The
+  worker has no measures of its own yet, so the choice of whom to cede is handed
+  in by the caller — the plan's «memory → fattest, load → costliest, preferring
+  no in-flight calls» is documented on the parameter and is what Phase 4+ will
+  compute. `expiry_delay` is likewise the caller's (grammar); `math.inf` as the
+  default means «nobody is expired» without inventing a duration, and the same
+  trick gives `user_idle_freeze_delay` a default that never fires — no `None`
+  and no dead guard once the grammar feeds them.
+- **The photo pairs are `{user: (item, flag)}`** — every user row, kept ones
+  included, since F40 says the photo carries the pair per user. The flag is NOT
+  written into the register item (F40: «il register item non lo porta»): it
+  lives in a worker-side map that only `decide_departures` fills.
+- **`group` is a constructor kwarg.** The deposit header asks for writer, cause
+  and group; the worker knew the first two and nothing could supply the third.
+  Default `""`, fed from above with the rest of the grammar in Phase 4; the
+  header is diagnostic only, so an empty value is a poor label, never a wrong
+  decision. `cause="freeze"` is the FreezeHandler docstring's own example.
+- **`freeze_user` returns a bool** — went / stayed. The cycle needs to tell the
+  two apart (a busy user is come back for, a refused write is not retried), and
+  the hook needs it too.
+
+Behaviour the texts imply and the code had to settle:
+
+- **The gate is a clock, not a flag.** `decide_departures` records
+  `now + transfer_start_delay`; `execute_departures` sleeps out the remainder
+  and the end-of-call hook refuses to act before that instant. Without it a call
+  closing INSIDE the gate window would park its user before the fold had parked
+  him — exactly the race C1 closes. One derived truth instead of an oracle
+  boolean somebody has to flip.
+- **A freeze announces `user_frozen` and nothing else.** The rows leave memory
+  with no `drop_*`: the fold's single mutator writes map + mark on the freeze
+  announcement, and a `drop_user` beside it would say he is gone for good. The
+  wake re-announces the births (Phase 2's adoption), so no announcement is lost.
+- **The valve leaves the row behind, a departure does not.** With placement =
+  the worker's own name the user row stays `frozen` with an emptied store (the
+  memory is the whole point) and wakes in place; with placement `None` the row
+  goes entirely — he is the vertex's to place now.
+- **`quit()` reaches its freezes through the flagged cycle**, not through
+  `freeze_all_users()`: at quit everybody IS flagged, so the two are the same
+  set, and one code path is better than two. `freeze_all_users()` stays as the
+  plain B2 mass cycle the plan asks for — its other caller is the D8 self-defense
+  of Phase 4 (dead wire → freeze all, exit).
+- **`quit()` waits for the stragglers.** A user with a call in flight is parked
+  by the end of that call, so quit awaits the departure of the last flagged user
+  before reaching the exit (an `asyncio.Event` set when the flag map empties):
+  leaving earlier would truncate a response, which D10 forbids.
+- **Frozen rows are never flagged**, quit included: F40 gives the active to the
+  worker and the frozen to the vertex, and a frozen user's parcel is adoptable
+  by whoever the vertex places him on.
+- **A refused write leaves what it managed to write.** No cleanup was added: the
+  user stays `active` and unannounced, so nobody will ever adopt that residue,
+  and the sweep is what the deposit's own docstring points at.
+- **mypy** now reports two advisory findings on the module, the second being
+  `_last_real_activity` returning `Any` out of a schemaless item dict — the same
+  category as the first. Nothing silenced in code.

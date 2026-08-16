@@ -179,7 +179,57 @@ none of them and asks nobody.
   - Done: `pytest tests/orchestration -q` green; full suite green;
     `ruff check src/ tests/` clean; no import between `spa_worker.py`
     and the legacy `spa/worker.py` in either direction.
-- [ ] **Phase 3**: The departures — freeze cycle, transfer flags, quit
+- [x] **Phase 3**: The departures — freeze cycle, transfer flags, quit
+  > Done: the whole departure lives on `SpaWorker`, still in-process.
+  > `freeze_user(user, *, placement=None)` writes the exact mirror of what the
+  > adoption reads — the store under the user, one
+  > `{"connection": {...}, "pages": {...}}` parcel per connection — DIRECT under
+  > the folder semaphore, announces `user_frozen` with the placement (the
+  > worker's own `name` when he wakes here, `None` when it is to be assigned)
+  > and only then takes his rows out of memory, saying nothing else: the freeze
+  > announcement is the whole story and the wake tells it back through the
+  > ordinary births. A refused write aborts the departure whole (B1): semaphore
+  > back, user alive and `active`, no announcement, `logger.exception` and
+  > `freeze_failures` + 1. `freeze_all_users()` is the B2 mass cycle (one at a
+  > time, `asyncio.sleep(0)` between two — proven by a watcher task counting the
+  > turns it got). `decide_departures(*, transfer_users, expiry_delay)` pairs
+  > EVERY user row with its `transfer_flag` (`None`/`'T'`/`'X'`), judging expiry
+  > on the real clocks and only on ACTIVE rows, remembers the non-`None` ones
+  > and starts the gate clock; `execute_departures()` waits out
+  > `TRANSFER_START_DELAY` (module constant, mirrored by the
+  > `transfer_start_delay` constructor kwarg the tests shrink), then drops the
+  > expired with their announcements and parks the ceded one at a time.
+  > `open_request`/`close_request` carry the pendings, and the close is the
+  > D10/E9 hook: last call of a user with a flag past the gate → the departure
+  > happens now. `freeze_idle_users()` is the §7.5 valve (real clocks, placement
+  > = own name, row left `frozen` with an emptied store, wake in place).
+  > `quit(*, expiry_delay=inf)` flags everybody, waits the gate, parks them as
+  > their last calls end and reaches `exit_process()` — the seam Phase 4/5 makes
+  > real, observable as `exited`.
+  > Files: src/genro_asgi/spa/orchestration/spa_worker.py (+364 lines),
+  > tests/orchestration/test_orchestration_spa_worker_departures.py (new,
+  > 21 tests),
+  > .phased/active/orchestration-m2-worker-process/notes.md
+  > Verified: `pytest tests/orchestration -q` 88 passed;
+  > `pytest tests/ -q` 1782 passed, 2 skipped (baseline 1761/2, +21 new);
+  > `ruff check src/ tests/` clean; `spa_worker.py` back to 100% line coverage;
+  > two neutralizations run and restored — removing the gate sleep fails 3 tests
+  > (the gate, and both deferred-departure stories), letting the refused write
+  > fall through instead of aborting fails both B1 tests.
+  > Review: five public names this phase needed and F40 does not carry —
+  > `decide_departures` / `execute_departures` (built on the register's own
+  > «decide le partenze» and on the `build_plan`/`execute_plan` precedent),
+  > `freeze_idle_users` (the §7.5 valve, driven by hand until Phase 4 wires a
+  > task), `open_request`/`close_request` (INHERITED verbatim from
+  > `commander.py`, where `close_request` already carries «the last call close
+  > launches the move» — homonymy across classes, same meaning), `exit_process`
+  > (mirror of the ratified `WorkerHandler.launch_process`) and the counter
+  > `freeze_failures` (B1 says «counted», nothing named the count). Three
+  > signature/shape choices the plan did not spell: `transfer_users` and
+  > `expiry_delay` as arguments of `decide_departures` (the worker has no
+  > measures yet and the expiry is grammar the caller holds), `group` as a
+  > constructor kwarg (the deposit header asks for it and nothing else could
+  > supply it), and the photo pairs returned as `{user: (item, flag)}`.
   - Run: opus / high
   - Pattern: `spa_worker.py` as Phase 2 left it;
     `src/genro_asgi/spa/orchestration/freeze_handler.py` (lock + direct
