@@ -222,3 +222,64 @@ what the round changed beyond naming.
   the flesh anyway — the tests bind under a short `mkdtemp` root, because
   pytest's `tmp_path` alone is already past the ~100 character cap. That IS
   the reason worker names are short (E17), and the test module says so.
+
+## Phase 4
+No source module was touched: the phase is the scripted child and the story
+that drives it. What the plan did not settle, and how it was settled.
+
+**The stub is a module of the test package, not a script written at test time.**
+Phase 3 wrote its child into a temp directory; here the stub is a real file
+(`tests/orchestration/child_stub.py`) started as
+`python -m tests.orchestration.child_stub`, with the repository root put on
+`PYTHONPATH` by the fixture — the cwd of a pytest run is not guaranteed. The
+gain is that the test and the child share the same constants instead of
+repeating strings on both sides of the wire.
+
+**The stub's routing keys are its own, and they are NOT baptisms**:
+`/take_deposit_lock`, `/write_connection_item`, `/release_deposit_lock`,
+`/lock_taken`, `/go_mute`. The parent side of the worker protocol is Macro 2's
+and its names are decided there; the one ratified key used is
+`OCCUPANCY_OP_PATH` for the beat. Precedent: `/probe`, `/freeze_everybody` and
+`/lock_taken` already live in the tests of phases 2 and 3.
+
+- **The parent drives the deposit one CALL at a time** instead of letting the
+  child run a script of its own: each REPLY is the proof that the step is over,
+  so the parent reads the deposit between steps with no sleep and no race.
+- **Two lock takes, not one.** The first is completed and released — the parcel
+  stays behind, the folder with it; the second is still held when the SIGKILL
+  lands. That is how the picture Macro 3 inherits carries BOTH the parcel and
+  the orphan lock the amendment asks to see.
+- **The group travels in `worker_kwargs`** (`{"group": "standard"}`): the header
+  of a written item wants the writer's group, and the spawn payload has no group
+  key. Splitting the name would have been a convention the payload does not
+  declare.
+- **The photo carries only what the stub really knows** — pid, name, and the
+  global store it was handed. No invented memory figure: the store echo is what
+  proves the presentation reply arrived, and a real photo's gauges are Macro 2's.
+- **The presentation payload is asserted through the connector's log line.**
+  Phase 2 ruled that nothing consumes that payload, so the log is where it
+  lands; the reverse direction — the whole store reaching the child — is
+  asserted through the photo.
+- **The mute switch travels as an EVENT from the parent** (`/go_mute`), which
+  also exercises `send_event` in the parent-to-child direction. Frames are
+  ordered on the one stream, so the child is already mute when the beat arrives.
+- **The kill chain is bounded, not measured**: `elapsed < 4 x
+  process_ping_timeout`, with the timeout at 1s. A tighter bound would fail on a
+  loaded machine, and no bound at all would let a hung chain pass as green.
+
+**What the independent verification caught.** One MECHANICAL finding, fixed
+here: the presentation line was pulled out of the captured log with a `next()`
+carrying no default. In an `async def` test a `StopIteration` escaping the
+coroutine is converted by Python into `RuntimeError: coroutine raised
+StopIteration`, so the day the child stops presenting itself the test would have
+reported an unrelated crash instead of the assertion that exists to catch
+exactly that. The generator now has a default and the failure is an
+AssertionError — proven by searching for a line that is never logged. The three
+judgment points it raised are on the phase as `> Review:`.
+
+**Neutralization.** Two probes were run against a temporarily patched source,
+restored immediately (the phase leaves `src/` untouched): removing the
+denunciation from `on_child_lost` fails the test, and adding a cleanup of the
+dead one's users to `on_child_lost` fails it on the surviving folder. The
+survival assertions are load-bearing — the day any level starts cleaning here,
+this test says so.

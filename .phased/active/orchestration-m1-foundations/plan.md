@@ -249,7 +249,61 @@ Decision log (authority): `temp/interview_handler_2026-08-15.md`
     nothing, LocalWorkerHandler exemptions.
   - Done: `pytest tests/orchestration -q` green; `ruff check src/ tests/`
     clean.
-- [ ] **Phase 4**: Foundations end-to-end
+- [x] **Phase 4**: Foundations end-to-end
+  > Done: one test telling the whole story of the foundations on a real child
+  > process and a real UDS — born, working, dead wild, and what the death leaves
+  > behind. The child (`child_stub.py`) is a module of the test package started
+  > by the handler itself as `python -m tests.orchestration.child_stub`: it
+  > presents itself and keeps the whole global store that answers, hands back a
+  > photo on the ratified occupancy beat, and reaches the deposit through a
+  > FreezeHandler IT builds over the `frozen_users_path` it was given. The
+  > parent drives it one CALL at a time — take the semaphore (announced upward
+  > as an EVENT), park a connection under it, give the semaphore back, take it
+  > again — then makes it go mute with an EVENT and lets the surveillance kill
+  > it: two unanswered beats, SIGKILL, the OS death awaited, all inside four
+  > times the timeout. The handler denounces the wild death to its group
+  > carrying itself and its two users on board, and stops there: the parcel is
+  > still readable from the parent side and the semaphore of the interrupted
+  > operation is still held by a process that no longer exists. Macro 1 cleans
+  > nothing, and this test is the picture Macro 3 inherits. No source module was
+  > touched.
+  > Files: tests/orchestration/child_stub.py,
+  > tests/orchestration/test_orchestration_foundations_e2e.py,
+  > .phased/active/orchestration-m1-foundations/notes.md
+  > Review: three points the independent verification left to the owner.
+  > 1. The kill chain is bounded only from above (`elapsed < 4 x
+  > process_ping_timeout`): an implementation that killed on the FIRST
+  > unanswered beat would still pass here — the retry is pinned by the Phase 3
+  > test that reads "beat 1 of 2"/"beat 2 of 2" in the log. Either the e2e
+  > carries the lower bound too, or the retry count stays delegated.
+  > 2. The stub announces `/lock_taken` even when `take_lock` answered False —
+  > the drill never contends, so nothing catches it. Either the stub models
+  > contention (announce only when taken), or it is declaredly single-holder
+  > and says so.
+  > 3. `GroupStub`, the `group` fixture and `wait_for` now live in two test
+  > modules and have already diverged (only this one records the users on
+  > board). Macro 2 brings the real GroupHandler and will touch both: either a
+  > `tests/orchestration/conftest.py` owns the group double, or the two modules
+  > stay independent photographs on purpose.
+  > The one MECHANICAL finding was fixed inside the phase: the presentation line
+  > was fetched with a `next()` that had no default, so a missing line would
+  > have surfaced as `RuntimeError: coroutine raised StopIteration` instead of
+  > the failed assertion — the regression it exists to catch would have been
+  > reported as an unrelated crash. Proven by neutralization: searching for a
+  > line that is never logged now fails as an AssertionError.
+  > Verified: `pytest tests/orchestration -q` 44 passed (1 new);
+  > `pytest tests/ -q` 1738 passed, 2 skipped; `ruff check src/ tests/` clean;
+  > the e2e run three times in a row at 2.34s with no leftover child process;
+  > two behaviours proven by neutralization on a temporarily patched source,
+  > restored at once — mute the denunciation and the test fails, add a cleanup
+  > of the dead one's users to `on_child_lost` and it fails on the surviving
+  > folder.
+  > Verify: now — read the e2e test top to bottom as the story of the
+  > foundations: every name reads as spoken (FreezeHandler, WorkerConnector,
+  > WorkerHandler verbs), no coined jargon. The stub's own routing keys
+  > (`/take_deposit_lock`, `/write_connection_item`, `/release_deposit_lock`,
+  > `/lock_taken`, `/go_mute`) are test-local and are NOT baptisms: the worker
+  > protocol is named in Macro 2.
   - Run: opus / high
   - Pattern: `src/genro_asgi/spa/worker_entry.py` (today's child
     bootstrap — orphan detection, entry wiring)
