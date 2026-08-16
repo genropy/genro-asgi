@@ -1,5 +1,14 @@
 # Notes — orchestration-m2-worker-process
 
+## Phase 2 — post-land rename (owner, 2026-08-16)
+The birth methods had been named after the announcements they emit
+(`new_user`/`new_connection`/`new_page`). The owner ruled for naming
+rule 11: a mutation opens with the verb — the methods are now
+`add_user`/`add_connection`/`add_page` (the legacy daemon's own verb,
+whose `add_user` announces `new_user`). The WIRE names stay `new_*` as
+ratified in F40; only the methods changed. Renamed by the foreman in
+its own commit, tests updated, announcements untouched.
+
 ## Phase 1
 
 Three executor choices the plan did not spell out, all inside the ratified

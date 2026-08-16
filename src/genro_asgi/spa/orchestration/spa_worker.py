@@ -195,7 +195,7 @@ class SpaWorker:
         self._events.append(event)
         return event
 
-    def new_user(self, user: str, **fields: Any) -> dict[str, Any]:
+    def add_user(self, user: str, **fields: Any) -> dict[str, Any]:
         """Bring a user into being on this worker and announce it.
 
         Args:
@@ -212,7 +212,7 @@ class SpaWorker:
             self.offer_event("new_user", user=user)
             return item
 
-    def new_connection(self, cid: str, user: str | None = None, **fields: Any) -> dict[str, Any]:
+    def add_connection(self, cid: str, user: str | None = None, **fields: Any) -> dict[str, Any]:
         """Bring a connection into being, born guest unless it is given a user.
 
         Args:
@@ -230,12 +230,12 @@ class SpaWorker:
         with self.dispatch_lock:
             user = user or GUEST_PREFIX + cid
             if user not in self._user_register:
-                self.new_user(user)
+                self.add_user(user)
             item = self._add_connection_item(cid, user, **fields)
             self.offer_event("new_connection", user=user, session_id=cid)
             return item
 
-    def new_page(
+    def add_page(
         self, page_id: str, cid: str, user: str | None = None, **fields: Any
     ) -> dict[str, Any]:
         """Bring a page into being under its connection and announce it.
@@ -255,7 +255,7 @@ class SpaWorker:
         """
         with self.dispatch_lock:
             if cid not in self._connection_register:
-                self.new_connection(cid, user)
+                self.add_connection(cid, user)
             item = self._add_page_item(page_id, cid, **fields)
             self.offer_event(
                 "new_page", user=self._page_user(page_id), page_id=page_id, session_id=cid
@@ -447,9 +447,9 @@ class SpaWorker:
         with self.dispatch_lock:
             item = self._connection_register.get(cid)
             if item is None:
-                item = self.new_connection(cid, user, **parcel.get("connection", {}))
+                item = self.add_connection(cid, user, **parcel.get("connection", {}))
                 for page_id, fields in parcel.get("pages", {}).items():
-                    self.new_page(page_id, cid, user, **fields)
+                    self.add_page(page_id, cid, user, **fields)
             return item
 
     def _add_user_item(self, user: str, **fields: Any) -> dict[str, Any]:
