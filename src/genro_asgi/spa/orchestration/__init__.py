@@ -24,5 +24,6 @@ the per-worker wire; the handler that owns one worker process and its death.
 """
 
 from .freeze_handler import FreezeHandler
+from .worker_connector import WorkerConnector
 
-__all__ = ["FreezeHandler"]
+__all__ = ["FreezeHandler", "WorkerConnector"]
