@@ -139,7 +139,48 @@ Decision log (authority): `temp/interview_handler_2026-08-15.md`
     unlink-before-bind.
   - Done: `pytest tests/orchestration -q` green; `ruff check src/ tests/`
     clean.
-- [ ] **Phase 3**: WorkerHandler + LocalWorkerHandler
+- [x] **Phase 3**: WorkerHandler + LocalWorkerHandler
+  > Done: the handler and its process. Four orders, each verb carrying its object —
+  > `launch_process` (bind once, spawn, wait for the presentation, kill and raise
+  > on a child that never shows up), `terminate_process` (SIGKILL to the process
+  > group, await the OS death, no escalation and no grace), `restart_process`
+  > (the same name and socket, marking the death GOVERNED so the wire's end
+  > announces nothing) and `ping_process` (one beat, ONE repeat past the timeout,
+  > then the kill). A wild death is the handler's only denunciation:
+  > `on_worker_abort(self)` on `self.group_handler`, with `hosted_users` on
+  > board — no cleanup, no deposit, no FreezeHandler anywhere in the module.
+  > `worker_snapshot` holds the photo the beat brings back, no counters beside
+  > it; `global_register_item_tytx` answers the placeholder until the Commander
+  > owns the master; the 7-key spawn payload travels as JSON in
+  > `GENRO_ASGI_WORKER`. `LocalWorkerHandler` is the subclass that refuses every
+  > process order because its health is the server's. 15 tests on real child
+  > processes and real sockets, full suite 1737 passed, ruff clean, no legacy
+  > import in either direction.
+  > Files: src/genro_asgi/spa/orchestration/worker_handler.py,
+  > tests/orchestration/test_orchestration_worker_handler.py,
+  > .phased/active/orchestration-m1-foundations/notes.md
+  > Review: eight points the executor refused to decide, all in notes.md
+  > § Phase 3 — the naming ones first: `entry_module`/`executable` are
+  > constructor parameters outside the baptised set (the child the handler starts);
+  > the handshake deadline reuses `process_ping_timeout`; the beat's routing key
+  > reuses the ratified `/op/occupancy`; the handler has no burial verb (callers
+  > reach `connector.stop()`, and `_listening` survives it); nobody drives the
+  > beat and `process_ping_interval` is therefore read by no one; a bare
+  > `terminate_process()` outside a restart is denounced as WILD (the literal
+  > reading of the plan — the handler-closure verb of Macro 2 will need the mark);
+  > a beat on an already-dead wire raises `ConnectionError` where the legacy
+  > probe absorbed it; an error sub-envelope counts as an answered beat with no
+  > photo. Also: `LocalWorkerHandler` inherits the socket connector and answers
+  > `spawn_payload` with a `uds_url` that will never be bound; `hosted_users`
+  > returns the live set and is the only way to write it; mypy reports 4
+  > advisory `union-attr` on `self.process` (the deliberate absence of guards).
+  > Verified: `pytest tests/orchestration -q --no-cov` 43 passed (15 new);
+  > `pytest tests/ -q --no-cov` 1737 passed, 2 skipped; `ruff check src/ tests/`
+  > clean; three behaviours proven by neutralization (drop the governed mark →
+  > the restart test fails; one beat instead of two → the mute test fails; mute
+  > the denunciation → four death tests fail), and the two defects the
+  > verification found were fixed with a regression test each, itself
+  > neutralization-proven.
   - Run: opus / high
   - Pattern: `src/genro_asgi/spa/commander.py` spawn/kill machinery
     (`start_new_session=True`, `os.killpg`, the SIGTERM→SIGKILL
