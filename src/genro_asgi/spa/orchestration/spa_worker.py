@@ -105,7 +105,7 @@ for it happens — one mechanism, whether the worker is being emptied or a singl
 user is being ceded.
 
 **The departures are the worker's own initiative.** At photo time
-``decide_departures`` pairs every user row with a ``transfer_flag``: ``None``
+``plan_transfers`` pairs every user row with a ``transfer_flag``: ``None``
 kept, ``'T'`` ceded, ``'X'`` expired. Expiry is judged on the REAL clocks and
 only for ACTIVE rows — a frozen user is the vertex's business — while the choice
 of whom to cede belongs to whoever holds the measures (the fattest by memory, the
@@ -205,9 +205,9 @@ class SpaWorker:
         self._unfreeze_waits: dict[str, asyncio.Event] = {}
         self._pendings: dict[str, int] = {}
         self._transfer_flags: dict[str, str] = {}
-        self._departures_start_ts = 0.0
-        self._departures_done = asyncio.Event()
-        self._departures_done.set()
+        self._transfers_start_ts = 0.0
+        self._transfers_done = asyncio.Event()
+        self._transfers_done.set()
         self._freeze_failures = 0
         self._exited = False
         self._logger = logging.getLogger(__name__)
@@ -570,8 +570,8 @@ class SpaWorker:
                 return
             del self._pendings[user]
             flag = self._transfer_flags.get(user)
-        if flag is not None and self._departures_open:
-            await self._execute_departure(user, flag)
+        if flag is not None and self._transfers_open:
+            await self._execute_transfer(user, flag)
 
     async def freeze_user(self, user: str, *, placement: str | None = None) -> bool:
         """Park a user in the deposit and announce where he will wake.
@@ -643,7 +643,7 @@ class SpaWorker:
             await self.freeze_user(user, placement=self.name)
             await asyncio.sleep(0)
 
-    def decide_departures(
+    def plan_transfers(
         self, *, transfer_users: Iterable[str] = (), expiry_delay: float = math.inf
     ) -> dict[str, tuple[dict[str, Any], str | None]]:
         """Pair every user with the flag the next photo carries, and shut the gate.
@@ -664,7 +664,7 @@ class SpaWorker:
         """
         now = time.time()
         ceded = set(transfer_users)
-        departures: dict[str, tuple[dict[str, Any], str | None]] = {}
+        transfers: dict[str, tuple[dict[str, Any], str | None]] = {}
         with self.dispatch_lock:
             self._transfer_flags = {}
             for user, item in self._user_register.items():
@@ -676,15 +676,15 @@ class SpaWorker:
                         flag = "T"
                 if flag is not None:
                     self._transfer_flags[user] = flag
-                departures[user] = (item, flag)
-            self._departures_start_ts = now + self.transfer_start_delay
+                transfers[user] = (item, flag)
+            self._transfers_start_ts = now + self.transfer_start_delay
             if self._transfer_flags:
-                self._departures_done.clear()
+                self._transfers_done.clear()
             else:
-                self._departures_done.set()
-        return departures
+                self._transfers_done.set()
+        return transfers
 
-    async def execute_departures(self) -> None:
+    async def execute_transfers(self) -> None:
         """Wait out the gate, then let the flagged users go, one at a time.
 
         The expired are dropped with their announcements — eliminating them
@@ -692,9 +692,9 @@ class SpaWorker:
         soon as no call of theirs is in flight; whoever still has one is taken
         by the end of that call. The loop breathes between two users.
         """
-        await asyncio.sleep(self._departures_start_ts - time.time())
+        await asyncio.sleep(self._transfers_start_ts - time.time())
         for user, flag in list(self._transfer_flags.items()):
-            await self._execute_departure(user, flag)
+            await self._execute_transfer(user, flag)
             await asyncio.sleep(0)
 
     async def quit(self, *, expiry_delay: float = math.inf) -> None:
@@ -708,11 +708,11 @@ class SpaWorker:
         end, and only then leaves the process. Rebirth is not the worker's:
         whoever wants a successor launches one.
         """
-        self.decide_departures(
+        self.plan_transfers(
             transfer_users=list(self._user_register), expiry_delay=expiry_delay
         )
-        await self.execute_departures()
-        await self._departures_done.wait()
+        await self.execute_transfers()
+        await self._transfers_done.wait()
         self.exit_process()
 
     def exit_process(self) -> None:
@@ -724,11 +724,11 @@ class SpaWorker:
         self._exited = True
 
     @property
-    def _departures_open(self) -> bool:
+    def _transfers_open(self) -> bool:
         """Whether the gate opened on the departures last announced."""
-        return time.time() >= self._departures_start_ts
+        return time.time() >= self._transfers_start_ts
 
-    async def _execute_departure(self, user: str, flag: str) -> None:
+    async def _execute_transfer(self, user: str, flag: str) -> None:
         """Let one flagged user go: the expired dropped, the ceded to the deposit."""
         if flag == "X":
             self.drop_user(user)
@@ -739,7 +739,7 @@ class SpaWorker:
         with self.dispatch_lock:
             self._transfer_flags.pop(user, None)
             if not self._transfer_flags:
-                self._departures_done.set()
+                self._transfers_done.set()
 
     def _write_parcels(self, user: str, item: dict[str, Any]) -> None:
         """Write the user's store and one parcel per connection, under the held lock."""

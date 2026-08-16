@@ -199,3 +199,15 @@ Behaviour the texts imply and the code had to settle:
 - **mypy** now reports two advisory findings on the module, the second being
   `_last_real_activity` returning `Any` out of a schemaless item dict — the same
   category as the first. Nothing silenced in code.
+
+## Phase 3 — post-land rename (owner, 2026-08-16)
+The pair deciding and executing the departures had been named
+`decide_departures`/`execute_departures`; the owner ruled for the
+transfer family his own baptisms already use (`transfer_flag`,
+`TRANSFER_START_DELAY`, and the ruling that the X too is a transfer —
+to the cemetery): the methods are now **`plan_transfers`** /
+**`execute_transfers`**, internal bookkeeping renamed with them.
+"Departure" stays as the prose word for the concept (F40's «schema
+delle partenze»); the code family speaks transfer. §14's dead
+`build_plan`/`execute_plan` are the Commander's ladder — different
+object, no collision. Renamed by the foreman in its own commit.

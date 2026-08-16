@@ -94,11 +94,11 @@ def test_the_photo_pairs_every_user_with_his_flag(worker):
     worker.add_page("page-3", "cid-c", "ugo")
     age_user(worker, "ugo", 3600)
 
-    departures = worker.decide_departures(transfer_users=["mario"], expiry_delay=600)
+    transfers = worker.plan_transfers(transfer_users=["mario"], expiry_delay=600)
 
-    assert departures["mario"] == (worker.user_register["mario"], "T")
-    assert departures["anna"] == (worker.user_register["anna"], None)
-    assert departures["ugo"] == (worker.user_register["ugo"], "X")
+    assert transfers["mario"] == (worker.user_register["mario"], "T")
+    assert transfers["anna"] == (worker.user_register["anna"], None)
+    assert transfers["ugo"] == (worker.user_register["ugo"], "X")
 
 
 def test_a_beat_does_not_save_an_expired_user(worker):
@@ -106,10 +106,10 @@ def test_a_beat_does_not_save_an_expired_user(worker):
     age_user(worker, "mario", 3600)
     worker.refresh_chain("page-1")
 
-    departures = worker.decide_departures(expiry_delay=600)
+    transfers = worker.plan_transfers(expiry_delay=600)
 
     assert worker.user_register["mario"]["last_refresh_ts"] > time.time() - 1
-    assert departures["mario"][1] == "X"
+    assert transfers["mario"][1] == "X"
 
 
 def test_a_real_call_saves_the_user_the_beat_could_not(worker):
@@ -117,9 +117,9 @@ def test_a_real_call_saves_the_user_the_beat_could_not(worker):
     age_user(worker, "mario", 3600)
     worker.refresh_chain("page-1", "last_rpc_ts")
 
-    departures = worker.decide_departures(transfer_users=[], expiry_delay=600)
+    transfers = worker.plan_transfers(transfer_users=[], expiry_delay=600)
 
-    assert departures["mario"][1] is None
+    assert transfers["mario"][1] is None
 
 
 async def test_a_frozen_row_is_left_to_the_vertex(worker):
@@ -127,10 +127,10 @@ async def test_a_frozen_row_is_left_to_the_vertex(worker):
     await worker.freeze_user("mario", placement=WORKER_NAME)
     age_user(worker, "mario", 3600)
 
-    departures = worker.decide_departures(transfer_users=["mario"], expiry_delay=600)
+    transfers = worker.plan_transfers(transfer_users=["mario"], expiry_delay=600)
 
     assert worker.user_register["mario"]["state"] == "frozen"
-    assert departures["mario"][1] is None
+    assert transfers["mario"][1] is None
 
 
 # ----------------------------------------------------------------------
@@ -140,12 +140,12 @@ async def test_a_frozen_row_is_left_to_the_vertex(worker):
 
 async def test_the_gate_holds_the_departure_until_its_delay_has_passed(worker, deposit):
     worker.add_page("page-1", "cid-a", "mario")
-    worker.decide_departures(transfer_users=["mario"])
-    departure = asyncio.ensure_future(worker.execute_departures())
+    worker.plan_transfers(transfer_users=["mario"])
+    transfer = asyncio.ensure_future(worker.execute_transfers())
 
     await asyncio.sleep(worker.transfer_start_delay / 4)
     still_here = "mario" in worker.user_register
-    await departure
+    await transfer
 
     assert still_here
     assert "mario" not in worker.user_register
@@ -155,9 +155,9 @@ async def test_the_gate_holds_the_departure_until_its_delay_has_passed(worker, d
 async def test_a_ceded_user_leaves_with_his_placement_to_be_assigned(worker):
     worker.add_page("page-1", "cid-a", "mario")
     worker.events.clear()
-    worker.decide_departures(transfer_users=["mario"])
+    worker.plan_transfers(transfer_users=["mario"])
 
-    await worker.execute_departures()
+    await worker.execute_transfers()
 
     assert announced(worker) == ["user_frozen"]
     assert worker.events[0] == {
@@ -174,9 +174,9 @@ async def test_the_expired_are_dropped_with_their_announcements(worker, deposit)
     worker.add_page("page-1", "cid-a", "ugo")
     age_user(worker, "ugo", 3600)
     worker.events.clear()
-    worker.decide_departures(expiry_delay=600)
+    worker.plan_transfers(expiry_delay=600)
 
-    await worker.execute_departures()
+    await worker.execute_transfers()
 
     assert announced(worker) == ["drop_pages", "drop_connections", "drop_user"]
     assert "ugo" not in worker.user_register
@@ -191,9 +191,9 @@ async def test_the_expired_are_dropped_with_their_announcements(worker, deposit)
 async def test_a_call_in_flight_defers_the_departure_to_its_end(worker, deposit):
     worker.add_page("page-1", "cid-a", "mario")
     worker.open_request("mario")
-    worker.decide_departures(transfer_users=["mario"])
+    worker.plan_transfers(transfer_users=["mario"])
 
-    await worker.execute_departures()
+    await worker.execute_transfers()
 
     assert "mario" in worker.user_register
     assert deposit.read_user_register_item("mario") is None
@@ -209,8 +209,8 @@ async def test_the_departure_waits_for_the_last_of_several_calls(worker):
     worker.add_page("page-1", "cid-a", "mario")
     worker.open_request("mario")
     worker.open_request("mario")
-    worker.decide_departures(transfer_users=["mario"])
-    await worker.execute_departures()
+    worker.plan_transfers(transfer_users=["mario"])
+    await worker.execute_transfers()
 
     await worker.close_request("mario")
     assert "mario" in worker.user_register
@@ -222,7 +222,7 @@ async def test_the_departure_waits_for_the_last_of_several_calls(worker):
 async def test_a_call_closing_before_the_gate_takes_nobody_away(worker):
     worker.add_page("page-1", "cid-a", "mario")
     worker.open_request("mario")
-    worker.decide_departures(transfer_users=["mario"])
+    worker.plan_transfers(transfer_users=["mario"])
 
     await worker.close_request("mario")
 
@@ -358,9 +358,9 @@ async def test_a_refused_departure_does_not_keep_coming_back(tmp_path):
     deposit = RefusingDeposit(tmp_path / "frozen_users")
     worker = build_worker(deposit)
     worker.add_page("page-1", "cid-a", "mario")
-    worker.decide_departures(transfer_users=["mario"])
+    worker.plan_transfers(transfer_users=["mario"])
 
-    await worker.execute_departures()
+    await worker.execute_transfers()
     worker.open_request("mario")
     await worker.close_request("mario")
 
