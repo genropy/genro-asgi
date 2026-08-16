@@ -274,7 +274,65 @@ none of them and asks nobody.
     user alive, the X/T choice honouring the clocks and the measures.
   - Done: `pytest tests/orchestration -q` green; full suite green;
     `ruff check src/ tests/` clean.
-- [ ] **Phase 4**: The process shell and the wire
+- [x] **Phase 4**: The process shell and the wire
+  > Done: the worker now lives in a process and speaks. `WorkerEntry` (new
+  > module, heir of the legacy one) reads the seven-key payload from
+  > `GENRO_ASGI_WORKER`, pins the storage sync before its loop exists (D22),
+  > builds the `worker_class` with its own `FreezeHandler`, its two pool sizes
+  > and its grammar, opens the UDS and runs the worker until it leaves — and if
+  > the wire died first, the D8 self-defense runs before the exit. On
+  > `SpaWorker`: `attach_stream`, `send_presentation` (pid + config echo, the
+  > reply's `global_register_item_tytx` installing the replica whole),
+  > `receive_frames`, `handle_frame` (REPLY inline, CALL on its own task, EVENT
+  > logged as unconsumed, the store slot taken off EVERY inbound envelope
+  > first), `answer_call` (`/op/ping` answers the beat and nothing else; the
+  > http form; anything else refused by name), `serve_http` (the `wsgi_app`
+  > refusal FIRST and exactly as legacy — nothing born on the registers for a
+  > request never served — then the row resolved from `http`/`identity`/
+  > `user_frozen`, the clocks stamped, the call in the pendings, the seam on the
+  > TRAFFIC pool), `send_reply` (empties `events` onto the envelope),
+  > `call`/`_fail_pending` (the road up, and its failure when the wire ends),
+  > `on_wire_lost` (freeze everybody, exit — the mirror of `on_child_lost`), and
+  > `exit_process` made real (closes the wire, stops the pools). Two pools from
+  > the payload (`traffic_pool`/`service_pool`); the deposit IO moved onto the
+  > service pool, the semaphore wait left a coroutine on the loop. The photo:
+  > `worker_snapshot` property (aggregates + per-connection clocks + per-user
+  > *(item, transfer_flag)*) attached to any outbound envelope at the
+  > presentation, on every user-level population change, and past
+  > `worker_snapshot_ttl` (0.5 s default).
+  > Files: src/genro_asgi/spa/orchestration/spa_worker.py (+471 lines),
+  > src/genro_asgi/spa/orchestration/worker_entry.py (new, 208 lines),
+  > src/genro_asgi/spa/orchestration/__init__.py,
+  > tests/orchestration/test_orchestration_spa_worker_process.py (new,
+  > 29 tests),
+  > .phased/active/orchestration-m2-worker-process/notes.md
+  > Verified: `pytest tests/orchestration -q` 117 passed (three runs in a row,
+  > no stray child left); `pytest tests/ -q` 1811 passed, 2 skipped (baseline
+  > 1782/2, +29 new); `ruff check src/ tests/` clean; `spa_worker.py` at 99%
+  > line coverage (only the /proc read, unreachable on macOS, and the
+  > guard around a REPLY the dead wire refused), `worker_entry.py` at 93% (the
+  > `python -m` shell, proven by the real child exiting 0). Two neutralizations
+  > run and restored: making the photo always due fails the throttle test AND
+  > the population-change test; removing `freeze_all_users()` from
+  > `on_wire_lost` fails both self-defense tests, in-process and in the real
+  > child.
+  > Review: seven names this phase needed and F40 does not carry —
+  > `WorkerEntry` (inherited verbatim from the legacy module, same object in the
+  > new machine), `attach_stream` / `send_presentation` / `receive_frames`
+  > (composed from `attach_channel` and the connector's own words),
+  > `on_wire_lost` (the exact mirror of the ratified `on_child_lost`),
+  > `traffic_pool` / `service_pool` (the design's own two words), `rss_bytes`
+  > (inherited, turned property by rule 11), `WORKER_SNAPSHOT_TTL` /
+  > `CLOCK_NAMES` (module constants). Four shapes the texts did not spell: the
+  > photo's own keys (per-user pair as `{"item", "transfer_flag"}`, user item
+  > PROJECTED because the register item carries a Bag); the photo ATTACHED to
+  > the next envelope on a population change rather than pushed (no EVENT road
+  > exists downward or upward for it in M2, and the beat is an envelope every
+  > 5 s); the store replica kept as the TYTX string it travels as (the M1
+  > placeholder is not decodable, and the master is Macro 3's); the request's
+  > cid read from `http["cid"]` per design §10, with `identity == cid` meaning
+  > the anonymous, born `guest_<cid>` by the worker's own naming. All detailed
+  > in notes.md.
   - Run: opus / xhigh
   - Pattern: `src/genro_asgi/spa/worker_entry.py` (the child bootstrap
     being inherited: env-var payload, orphan detection);

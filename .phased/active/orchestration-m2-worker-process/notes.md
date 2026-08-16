@@ -1,5 +1,110 @@
 # Notes — orchestration-m2-worker-process
 
+## Phase 4
+
+Names the phase needed and F40 does not carry. All of them are either inherited
+verbatim from a class that already has them or composed of words the design uses
+in this exact sense; each is open to a different ruling.
+
+- **`WorkerEntry`** (the child shell) — inherited verbatim from the legacy
+  `spa/worker_entry.py`, module path included, because it is the same object in
+  the new machine. The two classes never meet (different packages, no import in
+  either direction) and the legacy one dies at Macro 6; the alternative was
+  coining a name for a thing that already has one.
+- **`attach_stream(stream)`** — the legacy `attach_channel(channel)` with the
+  object renamed to what is actually handed in (a `FrameStream`, not a channel:
+  the multi-member switchboard is dead).
+- **`send_presentation(config)`** — «presentation» is `worker_connector`'s own
+  word for this frame («Read the presentation»), and the verb says who sends.
+- **`receive_frames()`** — the child side of `WorkerConnector._receive_loop`, as
+  a public verb because the shell drives it. Transitive, so it carries its
+  object.
+- **`on_wire_lost()`** — the exact mirror of the ratified
+  `WorkerHandler.on_child_lost`, for the exact mirror fact: D8 calls the two
+  guardians symmetric, so they are named symmetrically.
+- **`handle_frame` / `answer_call` / `serve_http` / `send_reply` / `call`** —
+  inherited from the legacy worker and the connector, same meaning in both (the
+  homonymy check: `serve_http` still means «hand the http dict to the seam»,
+  `send_reply` still means «answer this CALL with its sub-envelopes»).
+  `serve_http` takes the WHOLE payload instead of `(http, identity)`: the row is
+  resolved from the `http` dict, the `identity` and the `user_frozen` verdict
+  together, and splitting them at the door would only put them back together.
+- **`traffic_pool` / `service_pool`** — the design's own two words («pool del
+  TRAFFICO», «pool di SERVIZIO»); the legacy `pool`/`http_pool` pair says
+  nothing about which is which.
+- **`rss_bytes`** — inherited from the legacy worker, turned into a property by
+  rule 11 (a pure reading with no arguments). /proc-only, `None` on macOS, no
+  dependency taken; the photo carries the counts either way.
+- **`WORKER_SNAPSHOT_TTL = 0.5`** and **`CLOCK_NAMES`** — module constants. The
+  first is the default of the baptised `worker_snapshot_ttl` grammar (the design
+  cites «~500 ms»); the second names the three ratified clocks in one place,
+  read by `_stamped` and by the photo.
+
+Shapes the texts did not spell, and how they landed:
+
+- **The photo's own shape.** Aggregates (`pid`, `name`, `group`, `rss_bytes`,
+  `user_count`, `connection_count`, `page_count`), `connections` keyed by cid
+  with the user and the three clocks, `users` keyed by identity with
+  `{"item": ..., "transfer_flag": ...}`. The pair is a named dict rather than a
+  two-element list: JSON has no tuple, and a reader that has to remember which
+  slot is which is exactly what rule 9 forbids. The user item is PROJECTED —
+  `state`, the three clocks, `connection_count` — because the register item
+  carries a `Bag` store and a set of connections, neither of which is
+  JSON-serializable and neither of which is the observer's business (the legacy
+  `monitor_state` draws the same line).
+- **The photo is attached, never pushed.** «Ogni cambio di popolazione manda la
+  sua foto» is implemented as: a user-level announcement (`new_user`,
+  `drop_user`, `user_frozen`, `user_adopted`) marks the photo due, and the next
+  envelope out carries it whatever the ttl. There is no push road in M2 — the
+  worker sends nothing on its own initiative, and the beat every 5 s is itself
+  an envelope, so a population change is on the parent's desk within one beat.
+  Inventing an EVENT path for the photo would have been inventing protocol.
+- **The store replica is kept in the form it travels.** `global_register_item_tytx`
+  is stored as the string that came down, replaced whole. Decoding it into a Bag
+  belongs with the master that produces it (Macro 3): the M1 placeholder the
+  handler answers today is not TYTX at all, and a child that tried to decode it
+  would die at the handshake.
+- **The cid of a request travels inside the `http` dict** (`http["cid"]`), which
+  is what design §10 lists among what the front packs. It is read directly: a
+  request that names no connection cannot be routed, and the KeyError comes back
+  as the CALL's error REPLY.
+- **The identity that equals the cid is the anonymous one.** The front hands
+  `connection_user.get(cid, cid)`, so `identity == cid` means «nobody has folded
+  him yet» and the row is born `guest_<cid>` through the worker's own naming
+  (`add_connection(cid, None)`). One line at the door, no new name.
+- **The http form stamps the connection and its user, not a page.** The form
+  names no page (the page protocol is Macro 4's), so `refresh_chain`'s climb is
+  reused one level down through the shared `_stamp_items`: `last_refresh_ts`
+  plus `last_rpc_ts`, the real clock a real call proves.
+- **Exactly one REPLY per CALL, whatever fails.** The row resolution, the
+  pendings and the WSGI stitching are one `_serve_request` inside `serve_http`'s
+  try: a deposit that refuses a parcel used to leave the caller waiting for its
+  timeout. The refusal for a missing `wsgi_app` stays FIRST, as in the legacy —
+  nothing is born on the registers for a request that was never served.
+- **The pendings of the worker's own CALLs fail when the wire ends**, mirroring
+  `WorkerConnector._fail_pending`: `call()` promises `ConnectionError`, so
+  something has to raise it.
+- **`exit_process` closes the wire.** That is what ends the read the shell is
+  parked on, so `quit()` really returns the process; the pools are shut down
+  with it. No `os._exit` anywhere: the shell returns from `asyncio.run` and the
+  process ends by itself (proven by the real child exiting 0).
+- **No SIGTERM handler.** The legacy entry had one because the commander asked
+  politely; the M1 handler only SIGKILLs, so a handler for a signal nobody sends
+  would be dead code.
+- **An inbound EVENT is logged, not served on a task.** The ratified division of
+  labour gives EVENT a task because it runs a consumer; there is no consumer
+  downward in M2 (the one thing that travels down is the store, taken off the
+  envelope before dispatch), so it says «not consumed yet» exactly as the parent
+  side does for the other direction.
+- **`ThreadPoolExecutor` directly**, not the legacy `WorkPool`: that class lives
+  in `spa/worker.py` and is untouchable this macro. What the worker needs of it
+  — run this callable on that pool — is one `run_in_executor`; the metrics
+  `WorkPool` also carries have no reader here yet.
+- **mypy** reports 8 advisory findings on the two modules, all of two kinds
+  already present on `worker_handler.py`: attribute access on an Optional the
+  lifecycle guarantees (`stream`, once attached) and `Any` out of a schemaless
+  dict. Nothing silenced in code, `pyproject.toml` untouched.
+
 ## Phase 2 — post-land rename (owner, 2026-08-16)
 The birth methods had been named after the announcements they emit
 (`new_user`/`new_connection`/`new_page`). The owner ruled for naming

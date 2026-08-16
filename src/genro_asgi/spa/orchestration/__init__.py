@@ -21,12 +21,14 @@ cutover happens later, in one declared step; until then the two coexist.
 Its foundations, in the order they are built: ``FreezeHandler``, the deposit on
 disk and the only place in the project that talks to the filesystem directly;
 ``WorkerConnector``, the wire of one worker; ``WorkerHandler``, which owns one
-process and its death; ``SpaWorker``, the registers that process serves from.
+process and its death; ``SpaWorker``, the registers that process serves from;
+``WorkerEntry``, the shell that runs one of those workers in a child process.
 """
 
 from .freeze_handler import FreezeHandler
 from .spa_worker import SpaWorker
 from .worker_connector import WorkerConnector
+from .worker_entry import WorkerEntry
 from .worker_handler import WorkerHandler
 
-__all__ = ["FreezeHandler", "SpaWorker", "WorkerConnector", "WorkerHandler"]
+__all__ = ["FreezeHandler", "SpaWorker", "WorkerConnector", "WorkerEntry", "WorkerHandler"]
