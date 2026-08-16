@@ -38,7 +38,8 @@ Decision log (authority): `temp/interview_handler_2026-08-15.md`
     src/genro_asgi/spa/orchestration/freeze_handler.py,
     tests/orchestration/__init__.py,
     tests/orchestration/test_orchestration_freeze_handler.py
-  - Decisions: root `.genroasgi/freezed_users/<user>/` (folder name via
+  - Decisions: root `.genroasgi/frozen_users/<user>/` (owner 2026-08-16:
+    `freezed` was not English; folder name via
     the one-way key); files `user_item.pickle` (user store) and
     `connection_item_<cid>.pickle` (connection + ITS PAGES); semaphore
     `.lock` (created O_CREAT|O_EXCL, holder name written inside);
@@ -146,34 +147,65 @@ Decision log (authority): `temp/interview_handler_2026-08-15.md`
     `src/genro_asgi/config/` existing builders
   - Files: src/genro_asgi/spa/orchestration/worker_handler.py,
     tests/orchestration/test_orchestration_worker_handler.py
-  - Decisions: the three surfaces the wire asks of its handler, baptised by
-    the owner on 2026-08-16 and already called by Phase 2 —
-    `global_register_item_tytx` (property, the whole global store TYTX-encoded;
-    born here with the PLACEHOLDER value `'not yet ready --- wait next phase'`
-    and filled for real in Macro 3, when the commander that holds the master
-    exists), `on_child_message(frame)` (an EVENT arrived from the child),
-    `on_child_lost()` (the wire died on its own — where the burial starts);
-    name = `<group_name>_<counter>` (`standard_0001`),
-    counter resets at server restart (F39); spawn payload carries: the
-    WorkerHandler name, the socket path, the DEPOSIT ADDRESS (never an
-    object, E19), pool sizes, worker grammar; surveillance = LOW
-    TOLERANCE (C2 full): mute probe → ONE repeat past the timeout →
-    SIGKILL to the process group → await OS death → only then a
-    successor — never two processes under one WorkerHandler (F22);
-    bonifica = ONE mutator on the roster of its users: prune traces,
-    discard parcels (folders) via FreezeHandler, remove semaphores
-    ANNOUNCED by the dead holder (F12), all on the death EVENT (E13);
-    governed deaths are the ones it ordered — everything else is wild
-    (C3); photo annotation slot + cumulative counters (Prometheus
-    sources, design §13.2); LocalWorkerHandler SUBCLASS: no probe, no
-    SIGKILL, no relaunch, no self-defense — its health IS the server
-    (F21); numbers (probe cadence, timeouts) in the config grammar.
-  - Details: lifecycle: spawn → wait handshake (via WorkerConnector) →
-    serving; kill chain; burial (socket unlink). Tests with a scripted
-    fake child (a tiny python script): handshake happy path, mute-probe
-    kill chain on a child that stops answering, wild-death bonifica
-    hooks (roster callback + semaphore cleanup via FreezeHandler),
-    LocalWorkerHandler exemptions.
+  - Decisions: EVERY public name below was baptised by the owner on
+    2026-08-16, in the round that followed Phase 2 — the executor invents
+    none of them and asks nobody.
+    *What the wire already calls* (written in Phase 2, implemented here):
+    `global_register_item_tytx` (property, the whole global store
+    TYTX-encoded; born here with the PLACEHOLDER value
+    `'not yet ready --- wait next phase'` and filled for real in Macro 3,
+    when the commander that holds the master exists),
+    `on_child_message(frame)` (an EVENT arrived from the child),
+    `on_child_lost()` (the wire died — where the handler decides whether
+    that death was its own).
+    *The process, verb-first and never a bare verb* (owner's rule, same day:
+    a verb always carries its object): `launch_process()` (open the wire,
+    spawn the child, wait for its presentation), `terminate_process()`
+    (SIGKILL to the process group, await the OS death), `restart_process()`
+    (terminate + launch a fresh one on the SAME name and socket — OS level
+    only: no tap, no freezing, no user policy; its one duty beyond the OS is
+    to mark the death as GOVERNED so the burial does not treat healthy users
+    as castaways), `ping_process()` (the health beat, websocket-analogous —
+    distinct from the browser ping of the three clocks).
+    *What it owns*: `hosted_users` (property, the users living on ITS
+    process — the group reads it), `worker_snapshot` (the last photo the
+    child attached to a reply: memory, load, counts, per-connection clocks —
+    the picture the judge reads to shape the pool; sibling of the existing
+    `app_snapshot`). NO counters of its own (owner, with the §13.2 table as
+    evidence: every per-worker metric is a gauge fed by the photo, every
+    counter is aggregate and lives at the Commander).
+    *Death — RIDETTATA by the owner, the bonifica is NOT here*: a governed
+    death (ordered inside `restart_process()`) is transparent and announces
+    nothing; a WILD death calls `on_worker_abort(worker_handler)` on
+    `self.group_handler` and the handler's job ends there. The group unhooks
+    it from the placement, the Commander — the single writer of the maps —
+    prunes the traces, discards and counts the parcels, removes the
+    semaphores ANNOUNCED by the dead one wherever they are, and its users
+    hear "session lost" → re-login. Reason: the semaphores "wherever they
+    are" were never this handler's to touch. Consequence for this phase:
+    **the FreezeHandler is NOT used here at all**.
+    *Spawn payload keys* (JSON in an env var, as today; strings and numbers,
+    never objects — E19): `name`, `uds_url` (always UDS: between machines it
+    is the subcommanders that speak, design §10), `frozen_users_path`,
+    `main_threadpool_size`, `aux_threadpool_size`, `worker_class`, `kwargs`.
+    *Config grammar*: `process_ping_interval`, `process_ping_timeout`.
+    *Unchanged*: name = `<group_name>_<counter>` (`standard_0001`), counter
+    resets at server restart (F39); surveillance = LOW TOLERANCE (C2 full):
+    mute ping → ONE repeat past the timeout → SIGKILL → await OS death →
+    only then a successor, never two processes under one WorkerHandler
+    (F22); every order and every wild death gets a line in the orchestration
+    log (§4.6); LocalWorkerHandler SUBCLASS: no ping, no SIGKILL, no
+    restart, no self-defense — its health IS the server (F21).
+  - Details: lifecycle: `launch_process` → wait presentation (via
+    WorkerConnector) → serving; the kill chain; burial (socket unlink).
+    The GroupHandler does not exist yet: the handler holds it as
+    `self.group_handler` (semantic parent name, rule 7) and calls
+    `on_worker_abort` on it, exactly as Phase 2's connector calls this
+    class. Tests with a scripted fake child (a tiny python script):
+    presentation happy path, mute-ping kill chain on a child that stops
+    answering, a wild death reaching a stub group as `on_worker_abort` with
+    `hosted_users` readable on the handler, a governed restart announcing
+    nothing, LocalWorkerHandler exemptions.
   - Done: `pytest tests/orchestration -q` green; `ruff check src/ tests/`
     clean.
 - [ ] **Phase 4**: Foundations end-to-end

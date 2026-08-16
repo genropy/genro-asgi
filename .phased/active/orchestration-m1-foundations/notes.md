@@ -73,6 +73,36 @@ metric of §13.2.
 - The child's presentation payload (pid, config echo) is no longer handed to
   anybody: it reaches the log. Nothing consumes it today, and Phase 3 can
   expose a reading on the connector if it turns out to need it.
+
+## Baptism round for Phase 3 (owner, 2026-08-16)
+Held BEFORE launching the phase, the lesson of Phase 2 applied: every public
+name Phase 3 needs was decided by the owner first, so the executor asks
+nobody. The names are listed in the phase's `Decisions:`; what follows is
+what the round changed beyond naming.
+
+- **A verb never stands alone** (new house rule from the owner): a method
+  name carries its object — `launch_process()`, not `launch()`. Applied to
+  every verb baptised here; worth promoting into the meta CLAUDE.md naming
+  rules, which today only say "a mutation leads with the verb".
+- **The bonifica leaves the WorkerHandler** (owner's correction, mid-round).
+  The design gave the handler a cleanup that had to remove semaphores
+  "wherever they are" — i.e. write on indexes owned by the Commander. Now
+  the handler only denounces (`on_worker_abort`), the group unhooks, the
+  Commander cleans. Two consequences: Phase 3 no longer touches the
+  FreezeHandler at all, and the death path matches the one-level-up shape
+  used everywhere else. Design v3 amended.
+- **No counters on the handler.** Read against the §13.2 table: every
+  per-worker family is a gauge fed by the photo, every counter is aggregate
+  (`orders_total` by kind/outcome, `relogins_total` by cause) and belongs to
+  the Commander — which, after the correction above, is also the one doing
+  the cleanup it would be counting. The orchestration log (§4.6) carries a
+  line per order AND per wild death (owner: a wild death is nobody's order,
+  but it is the event that starts everything).
+- **`freezed_users` → `frozen_users`**: the F39 folder name was not English.
+  No code carried it — only the plan text.
+- The 16 Prometheus families of §13.2 stay `[BATTESIMO]`: they are exposed in
+  Macro 5, and naming them tonight would have been naming what nothing yet
+  produces.
 - CALL/REPLY/EVENT are REDEFINED here with the same values instead of
   imported from `channel/hub.py`: same reasoning as Phase 1's
   `user_to_userkey` — the hub dies in Macro 6 and the new subpackage must not
