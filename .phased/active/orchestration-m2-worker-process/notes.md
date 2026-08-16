@@ -607,3 +607,26 @@ sent. Wiring rule for M3 (and the Phase 5 e2e where applicable):
 an outgoing envelope; the gate timer starts at that send. In M2 the
 tests call `plan_transfers` directly, which is why the gap seemed to
 exist. Design §7.1 amended with the dictation.
+
+## Review fixes — round 3 (the owner's rule on the flag, 2026-08-16)
+The two declared windows of round 2, closed by the owner's own dictation
+instead of the F37 acceptance the foreman had proposed:
+- **The flag is the promise**: it is consumed ONLY by a departure that
+  happened, a counted failure (B1 — the quit must still exit over a broken
+  deposit), or the man's own absence. `freeze_user` now answers three ways
+  (True went / None DEFERRED to the call's tail, flag untouched / False
+  stayed with the failure counted) and `_execute_transfer`'s epilogue pops
+  the flag only on a settled outcome. The two-porters instant (a call
+  closing between the deferral and the epilogue) leaves the flag standing
+  and the wakeup lets the quit's chewing cycle find it again — proven by
+  `TwoPorterDeposit`, which holds the give-back road open while the call
+  closes; the old pendings-based pop fails that test.
+- **The pendings cover the adoption**: `open_request` moved ahead of
+  `_resolve_row` in `_serve_request` — the call is visible while the store
+  is still travelling up, so no departure can wake in the gap between the
+  loading and the serving (round 2's second window). The user derivation
+  moved with it into the caller.
+Four regression tests added (bounced hook, write-window deferral, quit
+edge, pendings-over-adoption) plus the two-porters instant; both fixes
+neutralization-proven (old flag rule → give-back test fails; open_request
+back after the adoption → pendings test fails). Suite 1833 → 1838.

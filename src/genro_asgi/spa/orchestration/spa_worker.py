@@ -965,16 +965,19 @@ class SpaWorker:
         if flag is not None and self._transfers_open:
             await self._execute_transfer(user, flag)
 
-    async def freeze_user(self, user: str) -> bool:
+    async def freeze_user(self, user: str) -> bool | None:
         """Park a user in the deposit and announce that he left.
 
         Args:
             user: the user leaving memory.
 
         Returns:
-            True when he went to the deposit; False when he stayed — a row that
-            is not ``active``, a call of his in flight, a semaphore that never
-            came free, or a deposit that refused the parcels.
+            True when he went to the deposit; None when a call of his is what
+            holds him — DEFERRED: that call's own end is where his departure
+            happens, and the flag that sent him here must stay untouched;
+            False when he STAYED for good as far as this attempt goes — a row
+            that is not ``active``, a semaphore that never came free, or a
+            deposit that refused the parcels (both failures counted, B1).
 
         Writes his store and one parcel per connection under the folder
         semaphore, announces ``user_frozen`` — placement always ``None``, the
@@ -989,8 +992,12 @@ class SpaWorker:
         departure: the semaphore goes back, he stays alive where he is, nothing
         is announced, and the failure is logged and counted.
         """
-        if self._get_freezable_item(user) is None:
-            return False
+        with self.dispatch_lock:
+            first_look = self._user_register.get(user)
+            if first_look is None or first_look["state"] != "active":
+                return False
+            if user in self._pendings:
+                return None
         try:
             await self._take_folder_lock(user)
         except TimeoutError:
@@ -1000,9 +1007,12 @@ class SpaWorker:
             )
             return False
         try:
-            item = self._get_freezable_item(user)
-            if item is None:
-                return False
+            with self.dispatch_lock:
+                item = self._user_register.get(user)
+                if item is None or item["state"] != "active":
+                    return False
+                if user in self._pendings:
+                    return None
             store, connection_parcels = self._get_user_parcels(item)
             await self._run_in_pool(
                 self.service_pool,
@@ -1013,6 +1023,7 @@ class SpaWorker:
                 if leaving:
                     self.offer_event("user_frozen", user=user, placement=None)
                     self._release_rows(user)
+                deferred = not leaving and user in self._pendings
             if not leaving:
                 self._logger.warning(
                     "Worker %s: a call of %s was born while his parcels were written; "
@@ -1024,7 +1035,7 @@ class SpaWorker:
                     self.service_pool,
                     functools.partial(self._drop_parcels, user, connection_parcels),
                 )
-                return False
+                return None if deferred else False
         except Exception:
             self._freeze_failures += 1
             self._logger.exception(
@@ -1238,41 +1249,42 @@ class SpaWorker:
             self._logger.exception("Worker %s: service of CALL %s failed", self.name, frame.path)
 
     async def _serve_request(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """The row, the pendings and the stitching — everything that can fail as one.
+        """The pendings, the row and the stitching — everything that can fail as one.
 
-        The row comes first (the store adopted when the verdict authorises it,
-        the connection found by itself, the clocks stamped), the call is written
-        in the user's pendings for as long as it runs, and the stitching happens
-        on the traffic pool: WSGI is synchronous, and neither the loop nor the
+        The call is written in the user's pendings FIRST, before the row is put
+        in order: the pendings cover the adoption too, so no departure can wake
+        in the gap between the loading and the serving of the same call. Then
+        the row (the store adopted when the verdict authorises it, the
+        connection found by itself, the clocks stamped), and the stitching on
+        the traffic pool: WSGI is synchronous, and neither the loop nor the
         service pool may be held behind it. The end of the call is where a
         departure that had to wait for it happens.
-        """
-        user = await self._resolve_row(payload)
-        seam = WsgiSeam(self.wsgi_app)
-        work = functools.partial(seam.serve, payload["http"], payload.get("identity"))
-        self.open_request(user)
-        try:
-            return await self._run_in_pool(self.traffic_pool, work)
-        finally:
-            await self.close_request(user)
-
-    async def _resolve_row(self, payload: dict[str, Any]) -> str:
-        """Put the row of an incoming request in order, and say whose it is.
-
-        The identity the front routed on IS the user, except while it is still
-        the bare cid of somebody anonymous — that one is a guest by this
-        worker's own naming. The store comes home only if the envelope
-        authorises it; the connection is looked for in the deposit with no
-        authorisation at all, and is born empty when there is nothing there.
         """
         cid = payload["http"]["cid"]
         identity = payload.get("identity")
         user = identity if identity and identity != cid else GUEST_PREFIX + cid
+        self.open_request(user)
+        try:
+            await self._resolve_row(user, cid, payload)
+            seam = WsgiSeam(self.wsgi_app)
+            work = functools.partial(seam.serve, payload["http"], payload.get("identity"))
+            return await self._run_in_pool(self.traffic_pool, work)
+        finally:
+            await self.close_request(user)
+
+    async def _resolve_row(self, user: str, cid: str, payload: dict[str, Any]) -> None:
+        """Put the row of an incoming request in order.
+
+        Who the user IS was decided by the caller — the identity the front
+        routed on, or a guest named after his own cid. The store comes home
+        only if the envelope authorises it; the connection is looked for in
+        the deposit with no authorisation at all, and is born empty when
+        there is nothing there.
+        """
         if payload.get("user_frozen"):
             await self.adopt_user(user)
         await self.adopt_connection(user, cid)
         self._stamp_request(cid)
-        return user
 
     def _stamp_request(self, cid: str) -> None:
         """Stamp the connection a request came in on, and the user above it.
@@ -1320,9 +1332,12 @@ class SpaWorker:
         mid-adoption is WAITED for and never parked under its own pull: that is
         how the quit keeps a straggler whose store is still travelling. What
         goes wrong for one user is counted here and goes no further: a whole
-        worker leaving must not be stopped by one refused parcel. The flag goes
-        when he does, and stays only for the man whose call is still open,
-        because that call's own end is where his departure happens.
+        worker leaving must not be stopped by one refused parcel. The flag is
+        the promise (owner, 2026-08-16): only a departure that HAPPENED, a
+        counted failure or the man's own absence consumes it — a freeze
+        deferred to a call's tail keeps it, and the wakeup set below lets the
+        quit's cycle find it again, so no instant between a closing call and a
+        releasing claim can drop a man between two hands.
         """
         with self.dispatch_lock:
             if self._transfer_flags.get(user) != flag:
@@ -1332,21 +1347,23 @@ class SpaWorker:
             if not self._claim_departure(user):
                 return
             adopting = self._unfreeze_waits.get(user)
+        settled = True
         try:
             if adopting is not None:
                 await adopting.wait()
             if flag == "X":
                 self.drop_user(user)
             else:
-                await self.freeze_user(user)
+                settled = await self.freeze_user(user) is not None
         except Exception:
+            settled = True
             self._freeze_failures += 1
             self._logger.exception(
                 "Worker %s: the departure of %s fell over; the others go on", self.name, user
             )
         finally:
             with self.dispatch_lock:
-                if user not in self._pendings:
+                if settled or user not in self._user_register:
                     self._transfer_flags.pop(user, None)
                 self._release_departure(user)
                 self._transfers_changed.set()

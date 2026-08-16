@@ -829,3 +829,163 @@ async def test_a_departure_that_falls_over_does_not_keep_the_worker_alive(tmp_pa
     assert worker.user_register == {}
     assert deposit.read_user_register_item("mario") is not None
     assert deposit.read_user_register_item("anna") is not None
+
+
+# ----------------------------------------------------------------------
+# The flag is the promise (owner, 2026-08-16): only a departure that
+# happened, a counted failure or the man's own absence consumes it
+# ----------------------------------------------------------------------
+
+class SlowReadDeposit(FreezeHandler):
+    """A real deposit whose disk takes a visible moment to give a store back."""
+
+    STALL = 0.3
+
+    def __init__(self, root_path):
+        super().__init__(root_path)
+        self.reading = threading.Event()
+
+    def read_user_register_item(self, user):
+        self.reading.set()
+        time.sleep(self.STALL)
+        return super().read_user_register_item(user)
+
+
+async def test_a_bounced_hook_drops_no_flag_between_two_hands(worker, deposit):
+    # The two-porters race: the hook fires while somebody else still holds the
+    # claim; it bounces — and the bounce must consume NOTHING, because the flag
+    # is the promise and only a completed departure takes it away.
+    worker.add_page("page-1", "cid-a", "mario")
+    worker.plan_transfers(transfer_users=["mario"])
+    worker.open_request("mario")
+
+    worker._departing_users.add("mario")
+    await worker.close_request("mario")
+    assert "mario" in worker._transfer_flags
+
+    worker._release_departure("mario")
+    await asyncio.sleep(worker.transfer_start_delay + 0.05)
+    await worker.execute_transfers()
+    assert "mario" not in worker.user_register
+    assert deposit.read_user_register_item("mario") is not None
+    assert "mario" not in worker._transfer_flags
+
+
+async def test_a_write_window_deferral_keeps_the_flag_standing(tmp_path):
+    # A call born while the disk writes defers the freeze (None, not False):
+    # the flag stays, and the tail of that very call is what parks him.
+    deposit = SlowDeposit(tmp_path / "frozen_users")
+    worker = build_worker(deposit)
+    worker.add_page("page-1", "cid-a", "mario")
+    worker.plan_transfers(transfer_users=["mario"])
+    await asyncio.sleep(worker.transfer_start_delay + 0.05)
+
+    cycle = asyncio.ensure_future(worker.execute_transfers())
+    await asyncio.get_running_loop().run_in_executor(None, deposit.writing.wait)
+    worker.open_request("mario")
+    await asyncio.wait_for(cycle, 5.0)
+
+    assert "mario" in worker.user_register
+    assert worker.user_register["mario"]["state"] == "active"
+    assert "mario" in worker._transfer_flags
+    await worker.close_request("mario")
+    assert "mario" not in worker.user_register
+    assert deposit.read_user_register_item("mario") is not None
+    assert "mario" not in worker._transfer_flags
+
+
+async def test_the_quit_survives_a_departure_deferred_at_its_edge(tmp_path):
+    # Inside a quit the kept flag is found again by the chewing cycle: the
+    # process leaves only after the man is parked, never with him on board.
+    deposit = SlowDeposit(tmp_path / "frozen_users")
+    worker = build_worker(deposit)
+    worker.add_page("page-1", "cid-a", "mario")
+
+    leaving = asyncio.ensure_future(worker.quit())
+    await asyncio.get_running_loop().run_in_executor(None, deposit.writing.wait)
+    worker.open_request("mario")
+    await wait_until(lambda: "mario" not in worker._departing_users)
+    assert "mario" in worker._transfer_flags
+    await worker.close_request("mario")
+    await asyncio.wait_for(leaving, 5.0)
+
+    assert worker.exited
+    assert worker.user_register == {}
+    assert deposit.read_user_register_item("mario") is not None
+
+
+async def test_the_pendings_cover_the_adoption_itself(tmp_path):
+    # open_request comes before the row is put in order: while the store is
+    # still travelling up from the deposit, the call is already visible in the
+    # pendings, so no departure can wake in the gap between the loading and
+    # the serving of the same call.
+    deposit = SlowReadDeposit(tmp_path / "frozen_users")
+    worker = build_worker(deposit)
+    def tiny_site(environ, start_response):
+        start_response("200 OK", [("Content-Type", "text/plain")])
+        return [b"ok"]
+
+    worker.wsgi_app = tiny_site
+    deposit.take_lock("mario", "test")
+    deposit.write_user_register_item("mario", {"cart": 1}, writer="t", cause="t", group="g")
+    deposit.release_lock("mario", "test")
+
+    payload = {
+        "http": {
+            "method": "GET",
+            "path": "/",
+            "query_string": "",
+            "headers": [["host", "site.example:8080"]],
+            "body": "",
+            "cid": "cid-a",
+        },
+        "identity": "mario",
+        "user_frozen": True,
+    }
+    serving = asyncio.ensure_future(worker._serve_request(payload))
+    await asyncio.get_running_loop().run_in_executor(None, deposit.reading.wait)
+    assert worker._pendings.get("mario")
+    await asyncio.wait_for(serving, 5.0)
+    assert not worker._pendings
+
+
+class TwoPorterDeposit(SlowDeposit):
+    """A deposit that can hold the give-back road open: the drop of the parcels
+    written by an interrupted freeze waits until the test says go — the exact
+    window in which the interrupting call can close and the hook can bounce."""
+
+    def __init__(self, root_path):
+        super().__init__(root_path)
+        self.dropping = threading.Event()
+        self.release_drop = threading.Event()
+
+    def drop_user_register_item(self, user):
+        self.dropping.set()
+        self.release_drop.wait(5)
+        super().drop_user_register_item(user)
+
+
+async def test_a_call_closing_inside_the_give_back_drops_no_flag(tmp_path):
+    # THE two-porters instant: the freeze was deferred to the call's tail, and
+    # that very call closes while the executor is still giving the parcels
+    # back — the hook bounces off the claim, the executor's own epilogue runs
+    # with the pendings already empty. Only a completed departure may consume
+    # the flag: whoever pops it here leaves mario between two hands.
+    deposit = TwoPorterDeposit(tmp_path / "frozen_users")
+    worker = build_worker(deposit)
+    worker.add_page("page-1", "cid-a", "mario")
+    worker.plan_transfers(transfer_users=["mario"])
+    await asyncio.sleep(worker.transfer_start_delay + 0.05)
+
+    cycle = asyncio.ensure_future(worker.execute_transfers())
+    await asyncio.get_running_loop().run_in_executor(None, deposit.writing.wait)
+    worker.open_request("mario")
+    await asyncio.get_running_loop().run_in_executor(None, deposit.dropping.wait)
+    await worker.close_request("mario")
+    deposit.release_drop.set()
+    await asyncio.wait_for(cycle, 5.0)
+
+    assert "mario" in worker._transfer_flags
+    await worker.execute_transfers()
+    assert "mario" not in worker.user_register
+    assert deposit.read_user_register_item("mario") is not None
