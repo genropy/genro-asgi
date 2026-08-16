@@ -15,7 +15,8 @@ Decision log (authority): `temp/interview_handler_2026-08-15.md`
 (F39 carries the baptisms and the two amendments used here).
 
 ## Work Plan
-- [ ] **Phase 1**: FreezeHandler — the deposit class
+- [>] **Phase 1**: FreezeHandler — the deposit class
+  > In execution since 2026-08-16T11:52:00
   - Run: opus / medium
   - Pattern: `src/genro_asgi/spa/commander.py` (`user_to_userkey`, the
     one-way key; `freeze_user` parcel writing as the behaviour being
@@ -39,7 +40,16 @@ Decision log (authority): `temp/interview_handler_2026-08-15.md`
     folder listing returns a set (the 4-step sweeper of F34 consumes it);
     the async retry-wait for a busy lock belongs to CALLERS on their
     event loop (F27) — this class exposes non-blocking try-acquire plus
-    sync primitives for thread-pool use.
+    sync primitives for thread-pool use;
+    read_* methods return the BARE payload (None if absent) — the
+    diagnostic header is read via a separate `get_item_header(...)`
+    (rule 11: pure reading with args wears the get_ prefix); no new
+    wrapper type;
+    delete_* methods NEVER touch the lock: `release_lock` is the single
+    point that removes it, and if the folder is then reduced to the
+    lock alone it removes the folder too — one invariant: a folder
+    exists iff it has items OR an operation is in progress (F35 is
+    satisfied at the release of the same operation).
   - Details: class FreezeHandler(root_path); methods (verb-first for
     mutations, per naming rules): write_user_item / write_connection_item
     (direct write under held lock), read_user_item / read_connection_item,
