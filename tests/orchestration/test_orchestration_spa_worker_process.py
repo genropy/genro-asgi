@@ -270,6 +270,18 @@ def announced(reply: dict[str, Any]) -> list[str]:
     return [event["op"] for event in reply["events"]]
 
 
+def age_user(worker: SpaWorker, user: str, seconds: float) -> None:
+    """Push a user and his connections that many seconds into the past.
+
+    The forced step is what makes a restamp visible: a clock that was not
+    written again stays where this put it.
+    """
+    item = worker.user_register[user]
+    for one in [item] + [worker.connection_register[cid] for cid in item["connections"]]:
+        for clock in ("last_refresh_ts", "last_user_ts", "last_rpc_ts"):
+            one[clock] -= seconds
+
+
 @pytest.fixture
 def wire_root():
     """The short root holding the socket directory and the deposit."""
@@ -371,6 +383,18 @@ async def test_the_request_finds_its_row_born_and_its_clocks_stamped(wire):
     assert worker.connection_register["cid-a"]["last_rpc_ts"] >= before
 
 
+async def test_every_served_call_writes_the_real_clock_again(wire):
+    worker = await wire.take()
+    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
+    first = worker.user_register["mario"]["last_rpc_ts"]
+    age_user(worker, "mario", 60)
+
+    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
+
+    assert worker.user_register["mario"]["last_rpc_ts"] > first
+    assert worker.connection_register["cid-a"]["last_rpc_ts"] > first
+
+
 async def test_an_anonymous_request_is_a_guest_in_full(wire):
     worker = await wire.take()
 
@@ -405,6 +429,20 @@ async def test_a_frozen_user_comes_home_when_the_envelope_says_so(wire, deposit)
     assert "user_adopted" in announced(reply)
     assert worker.user_register["mario"]["state"] == "active"
     assert deposit.read_user_register_item("mario") is None
+
+
+async def test_a_deposit_that_never_frees_the_folder_answers_the_call_with_its_failure(
+    wire, deposit
+):
+    await wire.take(deposit_lock_wait_limit=0.05)
+    deposit.take_lock("mario", "standard_0002")
+
+    reply = await wire.connector.call(
+        "/site/invoices", http_call("cid-a", "mario", user_frozen=True), timeout=5.0
+    )
+
+    assert "TimeoutError" in reply["error"]
+    assert "result" not in reply
 
 
 async def test_a_site_that_falls_over_answers_with_its_failure_and_frees_the_user(wire):
@@ -486,6 +524,23 @@ async def test_a_user_leaving_puts_the_photo_on_the_envelope_too(wire):
 
     assert announced(reply) == ["user_frozen"]
     assert reply[WORKER_SNAPSHOT_KEY]["user_count"] == 0
+
+
+async def test_a_user_waking_puts_the_photo_on_the_envelope_too(wire, deposit):
+    worker = await wire.take()
+    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
+    await worker.freeze_user("mario")
+    await wire.connector.call(PING_OP_PATH, timeout=5.0)
+
+    woken = await wire.connector.call(
+        "/site/invoices", http_call("cid-a", "mario", user_frozen=True), timeout=5.0
+    )
+    quiet = await wire.connector.call(PING_OP_PATH, timeout=5.0)
+
+    assert announced(woken) == ["user_adopted", "new_connection"]
+    assert woken[WORKER_SNAPSHOT_KEY]["users"]["mario"]["item"]["state"] == "active"
+    assert woken[WORKER_SNAPSHOT_KEY]["user_count"] == 1
+    assert WORKER_SNAPSHOT_KEY not in quiet
 
 
 async def test_the_photo_carries_the_flag_the_transfers_decided(wire):

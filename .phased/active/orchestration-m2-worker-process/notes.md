@@ -1,5 +1,226 @@
 # Notes — orchestration-m2-worker-process
 
+## Review fixes — round 2
+
+The re-review of the whole diff came back with six findings, every one of them
+carried by an executed probe. Nothing outside `spa_worker.py` and
+`tests/orchestration/` was touched; the suite went from 1827 to 1833 passing
+(six new tests, three old ones re-shaped where a fix superseded what they
+asserted). Every finding below carries the change and the proof that the change
+is what holds it.
+
+- **[R1] The quit cycle chews until the map is empty.** `execute_transfers`
+  iterated ONE snapshot of the flag map. A man born while the worker was
+  leaving, served, and named by a shot taken after that snapshot had no road
+  left: his call was already closed, so no hook of his would fire again, and the
+  cycle never looked twice — the flag stayed, the departures were never over,
+  and the quit hung on a straggler nobody was carrying. In quit mode the cycle
+  is now a loop: it re-reads the flag map at every pass and sleeps between two
+  passes on `_transfers_changed` (set by a plan that leaves flags, and by every
+  departure that ends), never on a clock. It comes back only when
+  `_settle_transfers` says the departures are over, which is BOTH halves — no
+  flag left AND nobody on his way out — because a flag popped by the man who is
+  at that instant writing his parcels would otherwise let the quit leave from
+  under him. An ordinary cycle is unchanged: one pass and back.
+  *Neutralization:* putting the one-shot `for` back hangs
+  `test_a_user_flagged_after_the_first_pass_leaves_with_the_quit_all_the_same`
+  on its 5 s bound.
+- **[R2] A failed pull drops the row.** `adopt_user`'s failure path put the row
+  back to `frozen` and left it resident — an unknown user turned into a
+  half-born one, contradicting F41's «no resident frozen row» and needing a
+  reconciliation with the verdict that nobody wrote. Now the row goes whole
+  (`_release_rows`, the same verb the freeze ends on), with a loud ERROR line;
+  the parcel stays in the deposit and the mark stays on at the vertex, so the
+  next request of his carries the verdict again and the adoption retries BY
+  CONSTRUCTION — the unified row's own shape, no retry machinery. The sisters of
+  the burst, who awaited a transition that ended in nothing, are woken with a
+  failure of their own instead of being handed a row that is not there. This
+  supersedes the Phase 2 note «A failed pull leaves the row `frozen`» (marked
+  there). Two tests re-shaped, one added.
+  *Neutralization:* restoring `item["state"] = "frozen"` fails all three (the
+  retry story, the sisters' story, and the wait-limit story in the departures
+  suite).
+- **[R3] The write window closes, and the parcels travel as a photograph.**
+  Two defects in one method. (a) `_get_user_parcels` handed the LIVE `Bag` to
+  the service pool, where `FreezeHandler` pickles it under no lock of ours: the
+  docstring's «photographed before it was handed over» was simply false. The
+  handler pickles internally, so pre-pickled bytes would have changed what the
+  adoption reads back off the disk; the smallest change that makes the sentence
+  true is therefore a DEEP photograph under the dispatch lock — microseconds at
+  the ratified 2 KB scale (F28), and nothing live crosses the pool boundary.
+  (b) The pendings/row question was asked before the write and never again, so a
+  call born DURING the write was photographed mid-flight and its user parked
+  under it. It is now asked a third time, in the same locked breath as the
+  announcement and the release of the rows, with the folder semaphore still
+  held: a call born meanwhile takes the just-written parcels back off the
+  deposit (`_drop_parcels` — dropping what is not there is the same outcome),
+  leaves him active with his flag, and the tail of that very call is what parks
+  him. The announcement moved INSIDE the semaphore for it, which is why
+  `test_a_departure_that_falls_over_does_not_keep_the_worker_alive` had to be
+  re-shaped: the `BreakingDeposit` breaks on the way OUT, after the parcels are
+  written and the rows released, so both men really leave — what the containment
+  buys is the exit being reached anyway, with the falls counted.
+  *Neutralization:* forcing `leaving = True` parks a user with his call open
+  (the born-during-the-write test); returning the parcels without `deepcopy`
+  writes a mutation made during the stall onto the disk.
+- **[R4] The D8 road goes through the claim.** `freeze_all_users` — the mass
+  cycle of a lost wire — froze straight, so a user the transfer cycle was
+  already carrying was asked for a second time and parked on the folder
+  semaphore THIS worker was holding: a wait that can only end in the deadline,
+  with a WARNING naming the worker as its own obstacle and a `freeze_failures`
+  that means nothing. It now goes through `_claim_departure` /
+  `_release_departure`, the one claim all three roads share (cycle, end-of-call
+  hook, mass cycle).
+  *Neutralization:* freezing straight logs «the deposit folder of mario is held
+  by standard_0001» and counts the failure.
+- **[R5] The terminal plan covers `unfreezing` rows.** During a quit a row
+  mid-adoption was flagged by nobody — `plan_transfers` only judged the active —
+  so the quit could not see it, reached `exit_process` and shut the service pool
+  the pull was running on. A row mid-adoption is now a straggler like the man
+  with a call open: the terminal plan cedes him, and `_execute_transfer` waits
+  the transition on the sister event before freezing him (or finds R2's drop and
+  has nothing left to do). The exit is behind the last of them.
+  *Neutralization:* not flagging the non-active rows lets the quit exit while
+  the pull is still parked, and the adoption then dies on a shut pool.
+- **[R6+R7] Honesty and names.** (a) The `[5]` claim above said the gate half
+  was proven; only the newborn test proved it, because the straggler test slept
+  out the restarted gate before closing its call. That sleep is gone: the cycle
+  is now given its turn on the shot and goes back to sleep, and the call ends
+  INSIDE what a restarted gate would cost, so the hook is the only thing that
+  can free him — and a shot that shut the gate again leaves the quit with nobody
+  to wake it. Note that R1 changed what this test can see: with the chewing
+  cycle a restarted gate is no longer fatal by itself, since the cycle re-passes
+  on the shot; the falsifying shape is the one where the hook is alone.
+  (b) Three private renames, by rule 11: `_freezable_item` → `_get_freezable_item`
+  and `_user_parcels` → `_get_user_parcels` (pure readings that take an
+  argument wear `get_`; the second's docstring now says what the two things it
+  returns ARE — the payload of the store, and one parcel per connection), and
+  `_transfers_running` → `_departing_users` (a set of users, named for what it
+  holds and not for the routine that fills it). Mentions in these notes updated
+  in place.
+
+Two windows left standing, declared rather than papered over:
+
+- **A call that closes during the abort of R3.** If a call born during the write
+  ALSO closes in the instant between the re-question and the flag decision, its
+  end finds the claim still taken and bounces, and the flag is then popped
+  because the pendings are empty. Outside a quit the next shot re-flags him and
+  nothing is lost. Inside a quit the cycle would settle with him resident and
+  his parcels already dropped — he stays in a process that is leaving. Closing
+  it needs `freeze_user` to tell went / refused / DEFERRED apart, which is a
+  third outcome on a verb the round-1 ruling gave two; left for the owner.
+- **The pull that lands just before its `open_request`.** `_serve_request` opens
+  the pendings AFTER `_resolve_row` has adopted, so between the two there is no
+  call on the registers. The R5 waiter can wake in exactly that gap and park the
+  man whose request is being resolved; the request then rebuilds him through the
+  ordinary births and is served, but the parcel just written stays on disk and
+  he is resident in a worker that is leaving. Moving `open_request` before the
+  adoption is the fix, and it is a change to the serving path, not to the
+  departures.
+
+## Review fixes
+
+The whole-diff review of Macro 2 came back with eight findings, all confirmed by
+executed probes. The owner ruled on the two design ones (F41 in the interview
+register, design §7.1 + §7.5 amended with it). Every fix below is in
+`spa_worker.py` and its tests; no other source module was touched, and the fixes
+took the suite from 1812 to 1827 passing.
+
+- **[1+2] The valve rejoined the one departure scheme.** `freeze_idle_users`
+  was a road of its own: it froze on the spot, KEPT the row resident with an
+  emptied store and a placement pointing at this worker, and queued the
+  announcement behind. A user coming back inside that window found himself
+  walled into an empty store, and a row reborn under him swallowed the verdict.
+  The owner's ruling removed the second road instead of adding a rule to it. The
+  verb is gone from the public surface; the idle criterion now lives inside
+  `plan_transfers` — silence past `user_idle_freeze_delay`, judged on the real
+  clocks, is one more reason for a `'T'`, and expiry still wins over it on the
+  same user. `freeze_user` lost its `placement` parameter: EVERY freeze now
+  removes the row whole and announces `user_frozen` with `placement=None`, the
+  key kept as the protocol slot M3 will fill. `_release_rows` lost the in-place
+  branch with it. *Neutralization:* putting the idle criterion back out of
+  `plan_transfers` kills the three valve tests and the e2e; restoring the
+  resident emptied row kills the e2e (the photo still shows him) and the
+  departures story.
+- **[3] One departure per user at a time.** The transfer cycle and the
+  end-of-call hook could both be inside `freeze_user` for the same man, because
+  the flag was only popped when the freeze was over. `_execute_transfer` now
+  CLAIMS the departure under the dispatch lock, before its first await
+  (`_departing_users`), and whoever arrives second finds nothing to do. Same
+  method contains what goes wrong for one user — counted in `freeze_failures`,
+  logged, and the cycle goes on — so `quit()` reaches `exit_process()` even when
+  a departure raises where nothing else catches it. *Neutralization:* removing
+  the claim makes the hook queue behind the semaphore this worker itself holds
+  (the test's bounded `close_request` times out); removing the containment makes
+  a `quit()` over a deposit that breaks on release raise instead of exiting.
+- **[4] The pendings question is asked twice.** The row was judged once, before
+  a wait for the folder semaphore that can last as long as another worker likes;
+  a request born in that window was then photographed mid-flight. `freeze_user`
+  asks again UNDER the semaphore (`_get_freezable_item`, the one place the three
+  conditions live), and on a call born meanwhile it gives the semaphore back and
+  leaves the user active — his flag stays, and the tail of that very call is
+  what parks him. Same doctrine as `adopt_connection`'s double question: a check
+  taken before the window it decides about decides nothing. *Neutralization:*
+  dropping the second question writes his parcel while his call is open.
+- **[5] `quit()` owns the plan.** A `plan_transfers` taken while the quit waited
+  for a straggler reset the bookkeeping: flags cleared and the gate clock pushed
+  forward, so the exit could be reached with somebody still on board, or never
+  reached at all. In quit mode the plan is now terminal — every active user is
+  ceded, no flag already given is taken back, and the gate already open is not
+  shut again. *Neutralization:* the gate half was claimed proven by two tests;
+  the re-review found only ONE of them falsifying — the newborn's — because the
+  straggler test slept out the restarted gate before closing its call.
+  Corrected in round 2 (see `[R6a]`): the straggler test now closes inside what
+  a restarted gate would cost, and the two stand together. The
+  flag-reset half is NOT falsifiable on its own: with `_quitting` in the
+  decision every flag a reset could drop is re-derived in the same locked
+  breath, so the property holds twice over. Removing BOTH halves kills both quit
+  tests, which is the honest proof available. Left standing as the literal shape
+  of the ruling — and noted for M3: a flagged user removed from the register by
+  a drop cascade would leave a stale flag and a quit that never ends, which
+  nothing in M2 can reach because no wire op drops a page or a connection.
+- **[6] The dispatch lock never spans disk IO.** `_write_parcels` ran on the
+  service pool and took the dispatch lock for the whole write, so a slow disk
+  froze every mutation on the loop. The rows are now copied out under the lock
+  (`_get_user_parcels`, memory work) and the write is handed to the pool with the
+  lock let go. *Neutralization:* putting the lock back around the write makes a
+  concurrent `add_page` wait out the whole stall.
+- **[7] The semaphore wait got a floor and a voice.** It was an unbounded silent
+  `while not take_lock: sleep`. The first miss now says at WARNING who is
+  holding the folder — once per wait, not once per look — and the wait is bound
+  by `DEPOSIT_LOCK_WAIT_LIMIT` (module constant, 30 s, the `TRANSFER_START_DELAY`
+  precedent: a technical time, mirrored by a `deposit_lock_wait_limit` kwarg so
+  a test can shrink it). Past it the operation aborts LOUD: an adoption raises
+  and the caller's own REPLY carries the failure (one REPLY per CALL preserved,
+  asserted over the wire), a freeze takes the B1 shape — user alive, counted,
+  nothing announced. The docstring says what the bound is not: the per-order
+  budget is the Commander's parking budget (F13), and arrives with M3.
+  *Neutralization:* logging inside the loop gives many lines instead of one;
+  removing the deadline hangs the bounded freeze test.
+- **[8] The three vacuous coverages became real tests.** (a) a served http CALL
+  now has to WRITE `last_rpc_ts` again — the row is pushed a minute into the
+  past between two calls and the stamp must come back ahead of the first, where
+  the old test only asked for a birth stamp; (b) a wake is a population change —
+  with the long ttl the reply to the waking call must carry a photo and the next
+  beat must not; (c) the guard on a row that is not `active` is asserted on a
+  row mid-adoption, which is the only non-active state left now that no frozen
+  row is resident. All three die when the behaviour they name is removed.
+
+Two shapes the fixes needed and the texts did not spell:
+
+- **`_get_freezable_item(user)`** — the three conditions of «he may leave now»
+  (here, active, nobody calling) in one private reading, because they are now
+  asked more than once in the same method and a copy would rot. Private, and
+  wearing the `get_` prefix of rule 11 (a pure reading that takes an argument).
+- **The e2e drives the shot, not the valve.** The story's own routing keys are
+  now `/op/plan_transfers` and `/op/execute_transfers` beside `/op/quit`: the
+  valve has no verb to call any more, so the driver orders the SHOT (whose reply
+  carries the flags it decided) and then the CYCLE (whose reply, taken when the
+  cycle is over, carries the `user_frozen` with placement `None` and the photo
+  with his row gone). In the machine proper neither is an order at all — the
+  shot belongs to whoever composes a due photo — which is what the key names
+  say by naming the verbs they drive.
+
 ## Phase 5
 
 No source module was touched. The choices below are all test-side, and the first
@@ -254,6 +475,9 @@ deserve a ruling; the rest are consequences.
   row goes back from `unfreezing` to `frozen`, the sisters are woken, and the
   error propagates loud (B1's shape: the user stays where he is, nothing is
   silently half-done). Tested.
+  **SUPERSEDED in review round 2 by F41** (which leaves NO frozen row resident,
+  transitory or otherwise): a failed pull now drops the row whole — see
+  `## Review fixes — round 2`, `[R2]`.
 - **`adopt_connection` asks its question twice.** Once before the trip (a
   connection already held costs no disk at all — F9's «beta io non l'ho») and
   once after it, under the lock, because the trip is a handoff and a sister may

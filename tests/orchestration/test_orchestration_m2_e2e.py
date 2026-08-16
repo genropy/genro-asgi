@@ -23,20 +23,24 @@ is the test that says who is on board and that orders the departure.
 
 The worker in the child is ``DrivenWorker``, a ``SpaWorker`` subclass of this
 test package: it fills the ``wsgi_app`` seam with a tiny site, the way the
-genropy-asgi bridge fills it with a whole one, and it answers two orders the
-wire of Macro 2 does not carry — see its docstring, which declares those two
+genropy-asgi bridge fills it with a whole one, and it answers three orders the
+wire of Macro 2 does not carry — see its docstring, which declares those
 routing keys as the test's own.
 
 The story, in order: it is born with a photo and the global store on board; it
 serves http calls through the seam, and the rows are born and the clocks
-stamped; the valve parks the user who went silent, in place, and the parcel is
-read from the parent side; his next call carries the verdict and he comes home,
-parcel gone and folder with it; the driver orders the departure and the reply to
-that order carries the flagged photo; past the gate everybody is in the deposit
-and the process ENDS BY ITSELF, exit code 0 and nobody killed it. That death is
-still denounced WILD — in Macro 2 nothing marks it governed — and the successor
-launched on the same name and socket presents itself with a fresh photo over a
-deposit nothing has swept. That last picture is what Macro 3 inherits.
+stamped; the driver orders the shot, and inside it the user who went silent is
+flagged for cession by the VALVE — one more reason for a ``'T'``, not a road of
+its own — while the one who has just spoken is kept; past the gate the silent
+one is in the deposit with his placement to be assigned and his row is gone from
+memory entirely; his next call carries the verdict and he comes home — to
+whatever worker the vertex will name, which here is this one because there is
+only one; the driver orders the departure and the reply to that order carries
+the flagged photo; past the gate everybody is in the deposit and the process
+ENDS BY ITSELF, exit code 0 and nobody killed it. That death is still denounced
+WILD — in Macro 2 nothing marks it governed — and the successor launched on the
+same name and socket presents itself with a fresh photo over a deposit nothing
+has swept. That last picture is what Macro 3 inherits.
 
 The sockets and the deposit live under a short ``mkdtemp`` root: the system caps
 a UDS path at about a hundred characters and pytest's own directory is already
@@ -65,12 +69,15 @@ GROUP = "standard"
 ENTRY_MODULE = "genro_asgi.spa.orchestration.worker_entry"
 DRIVEN_WORKER = f"{__name__}:DrivenWorker"
 
-#: The two orders of this story. They are the TEST's own routing keys, not the
+#: The three orders of this story. They are the TEST's own routing keys, not the
 #: protocol's: Macro 2 routes the beat and the http form and nothing else, so
-#: the valve and the departure — both verbs of the worker — are reachable from
-#: the parent only through a subclass that answers for them. The group of Macro
-#: 3 is what will send the real ones.
-FREEZE_IDLE_ORDER = "/op/freeze_idle_users"
+#: the shot, the transfer cycle and the departure — all verbs of the worker —
+#: are reachable from the parent only through a subclass that answers for them.
+#: The group of Macro 3 is what will send the real ones, and in the machine
+#: proper the first two are not orders at all: the shot is taken by whoever
+#: composes a due photo, and the cycle follows it.
+PLAN_ORDER = "/op/plan_transfers"
+EXECUTE_ORDER = "/op/execute_transfers"
 QUIT_ORDER = "/op/quit"
 
 #: The silence past which the valve parks a user, and the gate the departures
@@ -86,19 +93,20 @@ DEATH_TIMEOUT = 15.0
 
 
 class DrivenWorker(SpaWorker):
-    """The worker of the story: it hosts a tiny site, and it takes two orders.
+    """The worker of the story: it hosts a tiny site, and it takes three orders.
 
     The site is the real seam — ``wsgi_app``, what the genropy-asgi bridge
     assigns — and it answers with the facts of the request plus the global store
     this process was handed at its presentation, which is how the parent reads
     back what the child holds.
 
-    The two orders are this test's own. ``quit`` and ``freeze_idle_users`` are
-    verbs of ``SpaWorker``, but no op of Macro 2 routes to either: the beat and
-    the http form are the whole of ``answer_call``. Rather than teach the
-    protocol something the design has not decided, the subclass — the place a
-    consumer already extends the worker — answers for them, exactly as the M1
-    child stub answers for the deposit orders it is driven with.
+    The three orders are this test's own. ``plan_transfers``,
+    ``execute_transfers`` and ``quit`` are verbs of ``SpaWorker``, but no op of
+    Macro 2 routes to any of them: the beat and the http form are the whole of
+    ``answer_call``. Rather than teach the protocol something the design has not
+    decided, the subclass — the place a consumer already extends the worker —
+    answers for them, exactly as the M1 child stub answers for the deposit
+    orders it is driven with.
     """
 
     def __init__(self, name: str, **kwargs: Any) -> None:
@@ -120,17 +128,21 @@ class DrivenWorker(SpaWorker):
                 f"for {environ['genro.identity']}".encode()]
 
     async def answer_call(self, frame: Any) -> None:
-        """Answer the two orders of the driver, and hand everything else upstairs.
+        """Answer the three orders of the driver, and hand everything else upstairs.
 
         Args:
             frame: the CALL as it came off the wire.
 
-        The departure is started BEFORE the reply is composed and given its first
-        turn: the flags are decided inside the shot, so the photo riding the reply
-        to the order is the one the transfers just flagged.
+        The shot is taken BEFORE the reply is composed, which is the whole point
+        of the shot logic: the photo riding the reply is the one the transfers
+        just flagged. The cycle order is answered when the cycle is OVER, so the
+        reply carries what the departures said and the picture they left.
         """
-        if frame.path == FREEZE_IDLE_ORDER:
-            await self.freeze_idle_users()
+        if frame.path == PLAN_ORDER:
+            self.plan_transfers()
+            await self.send_reply(frame, result={})
+        elif frame.path == EXECUTE_ORDER:
+            await self.execute_transfers()
             await self.send_reply(frame, result={})
         elif frame.path == QUIT_ORDER:
             self.leaving = asyncio.create_task(self.quit())
@@ -288,28 +300,41 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     )
     assert announced(arrival) == ["new_user", "new_connection"]
 
-    # FREEZES BY THE VALVE. The silent one is parked where he is: the placement
-    # the announcement carries is this worker's own name, so he wakes here. His
-    # store and his connection are in the deposit, readable from the parent side,
-    # and the photo shows the population that changed — his row stays behind,
-    # frozen, his connection does not.
-    parked = await handler.connector.call(FREEZE_IDLE_ORDER, timeout=CALL_TIMEOUT)
+    # THE VALVE FLAGS HIM. The driver orders the shot, and the departures are
+    # decided inside it: the silent one is ceded because he is idle past the
+    # valve's delay — one more reason for a 'T' — and the one who has just
+    # spoken is kept. The decision travels on the photo that answers the order.
+    planned = await handler.connector.call(PLAN_ORDER, timeout=CALL_TIMEOUT)
+
+    flagged = planned[WORKER_SNAPSHOT_KEY]["users"]
+    assert {user: pair["transfer_flag"] for user, pair in flagged.items()} == {
+        "mario": "T",
+        "anna": None,
+    }
+
+    # HE DEPARTS. Past the gate he goes to the deposit like anybody else
+    # leaving: the placement the announcement carries is NOBODY'S — the vertex
+    # decides where he wakes — and his row leaves memory whole, connection and
+    # all. His store and his connection are readable from the parent side.
+    parked = await handler.connector.call(EXECUTE_ORDER, timeout=CALL_TIMEOUT)
 
     assert parked["events"] == [
-        {"op": "user_frozen", "worker": WORKER_NAME, "user": "mario", "placement": WORKER_NAME}
+        {"op": "user_frozen", "worker": WORKER_NAME, "user": "mario", "placement": None}
     ]
     assert deposit.read_user_register_item("mario") is not None
     assert deposit.read_connection_register_item("mario", "cid-a") is not None
     assert deposit.get_item_header("mario")["writer"] == WORKER_NAME
     photo = parked[WORKER_SNAPSHOT_KEY]
-    assert photo["users"]["mario"]["item"]["state"] == "frozen"
+    assert "mario" not in photo["users"]
     assert photo["users"]["anna"]["item"]["state"] == "active"
     assert list(photo["connections"]) == ["cid-b"]
 
     # WAKES BY VERDICT. His next call carries the verdict, and only that
     # authorises the trip: the store comes home, the connection finds itself in
     # the deposit and is born again through the ordinary announcements, both
-    # parcels are taken away and the folder goes with the last of them.
+    # parcels are taken away and the folder goes with the last of them. WHICH
+    # worker he comes home to is the vertex's to say — here it is this one
+    # because this story runs a single worker.
     woken = await handler.connector.call(
         "/site/invoices",
         http_call("cid-a", "mario", path="/invoices", user_frozen=True),

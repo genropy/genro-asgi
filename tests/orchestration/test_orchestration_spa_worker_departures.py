@@ -20,11 +20,18 @@ can read it back. The gate is watched with a delay shrunk to a tenth of a second
 — the point being that it is waited for, not how long it is — and the clocks are
 pushed into the past by hand, because idleness measured by really waiting would
 make the suite sleep for the age it is meant to prove.
+
+Three deposits are played against here besides the plain one: one that refuses
+every write, one whose disk takes a visible half second to answer, and — through
+a semaphore taken by a name that is not this worker's — one whose folder is
+simply not available. What they are for is what happens on the loop MEANWHILE.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
+import threading
 import time
 
 import pytest
@@ -32,6 +39,7 @@ import pytest
 from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker
 
 WORKER_NAME = "standard_0001"
+OTHER_WORKER = "standard_0002"
 GROUP = "standard"
 CLOCKS = ("last_refresh_ts", "last_user_ts", "last_rpc_ts")
 
@@ -41,6 +49,33 @@ class RefusingDeposit(FreezeHandler):
 
     def write_user_register_item(self, user, payload, **header):
         raise OSError("no space left on device")
+
+
+class BreakingDeposit(FreezeHandler):
+    """A deposit that goes wrong where the departure catches nothing: on the way out."""
+
+    def release_lock(self, user, holder):
+        raise RuntimeError("the semaphore file vanished under us")
+
+
+class SlowDeposit(FreezeHandler):
+    """A real deposit whose disk takes a visible moment to take a store.
+
+    ``STALL`` is long enough that anything waiting behind it is unmistakable in
+    a measurement, and ``writing`` says when the wait has really begun — the
+    write runs on the service pool, so the flag is read from the loop.
+    """
+
+    STALL = 0.5
+
+    def __init__(self, root_path):
+        super().__init__(root_path)
+        self.writing = threading.Event()
+
+    def write_user_register_item(self, user, payload, **header):
+        self.writing.set()
+        time.sleep(self.STALL)
+        super().write_user_register_item(user, payload, **header)
 
 
 @pytest.fixture
@@ -68,6 +103,15 @@ def worker(deposit):
 def announced(worker):
     """The protocol names queued for the envelope out, in order."""
     return [event["op"] for event in worker.events]
+
+
+async def wait_until(condition, timeout=5.0):
+    """Give the loop back until something else has happened, or give up."""
+    deadline = time.monotonic() + timeout
+    while not condition():
+        if time.monotonic() >= deadline:
+            raise TimeoutError("the departure never reached the awaited state")
+        await asyncio.sleep(0.005)
 
 
 def age_user(worker, user, seconds):
@@ -122,15 +166,38 @@ def test_a_real_call_saves_the_user_the_beat_could_not(worker):
     assert transfers["mario"][1] is None
 
 
-async def test_a_frozen_row_is_left_to_the_vertex(worker):
+async def test_a_row_that_is_not_active_is_left_to_the_vertex(worker):
     worker.add_page("page-1", "cid-a", "mario")
-    await worker.freeze_user("mario", placement=WORKER_NAME)
+    worker.user_register["mario"]["state"] = "unfreezing"
     age_user(worker, "mario", 3600)
 
     transfers = worker.plan_transfers(transfer_users=["mario"], expiry_delay=600)
 
-    assert worker.user_register["mario"]["state"] == "frozen"
     assert transfers["mario"][1] is None
+    assert worker.worker_snapshot["users"]["mario"]["transfer_flag"] is None
+
+
+async def test_the_valve_is_one_more_reason_for_a_cession(deposit):
+    worker = build_worker(deposit, user_idle_freeze_delay=10)
+    worker.add_page("page-idle", "cid-idle", "mario")
+    worker.add_page("page-live", "cid-live", "anna")
+    age_user(worker, "mario", 60)
+    worker.refresh_chain("page-idle")
+
+    transfers = worker.plan_transfers()
+
+    assert transfers["mario"][1] == "T"
+    assert transfers["anna"][1] is None
+
+
+async def test_the_expiry_wins_over_the_valve_on_the_same_user(deposit):
+    worker = build_worker(deposit, user_idle_freeze_delay=10)
+    worker.add_page("page-1", "cid-a", "mario")
+    age_user(worker, "mario", 3600)
+
+    transfers = worker.plan_transfers(expiry_delay=600)
+
+    assert transfers["mario"][1] == "X"
 
 
 # ----------------------------------------------------------------------
@@ -242,7 +309,7 @@ async def test_a_call_closing_on_a_user_nobody_asked_for_changes_nothing(worker)
 
 
 # ----------------------------------------------------------------------
-# The valve: whoever only beats goes to sleep, and wakes where he left
+# The valve: whoever only beats leaves by the common road
 # ----------------------------------------------------------------------
 
 
@@ -254,33 +321,31 @@ async def test_the_valve_parks_whoever_only_beats_and_spares_the_active(deposit)
     worker.refresh_chain("page-idle")
     worker.events.clear()
 
-    await worker.freeze_idle_users()
+    worker.plan_transfers()
+    await worker.execute_transfers()
 
-    assert worker.user_register["mario"]["state"] == "frozen"
+    assert "mario" not in worker.user_register
     assert worker.user_register["anna"]["state"] == "active"
     assert worker.connection_register.keys() == {"cid-live"}
     assert worker.events == [
-        {
-            "op": "user_frozen",
-            "worker": WORKER_NAME,
-            "user": "mario",
-            "placement": WORKER_NAME,
-        }
+        {"op": "user_frozen", "worker": WORKER_NAME, "user": "mario", "placement": None}
     ]
 
-    await worker.freeze_idle_users()
+    worker.plan_transfers()
+    await worker.execute_transfers()
 
     assert len(worker.events) == 1
 
 
-async def test_the_valve_leaves_the_row_ready_to_wake_in_place(deposit):
+async def test_the_valve_leaves_nothing_of_him_behind(deposit):
     worker = build_worker(deposit, user_idle_freeze_delay=10)
     worker.add_page("page-1", "cid-a", "mario")
     worker.user_register["mario"]["store"]["cart.total"] = 12
     age_user(worker, "mario", 60)
 
-    await worker.freeze_idle_users()
-    assert len(worker.user_register["mario"]["store"]) == 0
+    worker.plan_transfers()
+    await worker.execute_transfers()
+    assert worker.user_register == {}
 
     item = await worker.adopt_user("mario")
     connection = await worker.adopt_connection("mario", "cid-a")
@@ -297,7 +362,8 @@ async def test_the_valve_leaves_alone_whoever_has_a_call_in_flight(deposit):
     age_user(worker, "mario", 60)
     worker.open_request("mario")
 
-    await worker.freeze_idle_users()
+    worker.plan_transfers()
+    await worker.execute_transfers()
 
     assert worker.user_register["mario"]["state"] == "active"
 
@@ -369,6 +435,215 @@ async def test_a_refused_departure_does_not_keep_coming_back(tmp_path):
 
 
 # ----------------------------------------------------------------------
+# A row mid-adoption is nobody's to park
+# ----------------------------------------------------------------------
+
+
+async def test_a_row_being_adopted_is_not_parked_under_the_adoption(worker, deposit):
+    worker.add_page("page-1", "cid-a", "mario")
+    worker.events.clear()
+    worker.user_register["mario"]["state"] = "unfreezing"
+
+    assert await worker.freeze_user("mario") is False
+    assert worker.user_register["mario"]["state"] == "unfreezing"
+    assert announced(worker) == []
+    assert deposit.read_user_register_item("mario") is None
+    assert deposit.user_folders == set()
+
+
+# ----------------------------------------------------------------------
+# One departure at a time, and the disk held by nobody
+# ----------------------------------------------------------------------
+
+
+async def test_the_cycle_and_the_hook_never_park_the_same_user_twice(tmp_path):
+    deposit = SlowDeposit(tmp_path / "frozen_users")
+    worker = build_worker(deposit)
+    worker.add_page("page-1", "cid-a", "mario")
+    worker.events.clear()
+    worker.plan_transfers(transfer_users=["mario"])
+    cycle = asyncio.ensure_future(worker.execute_transfers())
+    await wait_until(deposit.writing.is_set)
+
+    # A call opens and closes while his departure is already on the disk: the
+    # hook finds it claimed and comes straight back, instead of queueing behind
+    # a semaphore this worker itself is holding.
+    worker.open_request("mario")
+    await asyncio.wait_for(worker.close_request("mario"), SlowDeposit.STALL / 2)
+    await cycle
+
+    assert announced(worker) == ["user_frozen"]
+    assert "mario" not in worker.user_register
+    assert deposit.lock_holder("mario") is None
+
+
+async def test_a_call_born_while_the_parcels_were_written_keeps_the_user(tmp_path):
+    deposit = SlowDeposit(tmp_path / "frozen_users")
+    worker = build_worker(deposit)
+    worker.add_page("page-1", "cid-a", "mario")
+    worker.events.clear()
+    worker.plan_transfers(transfer_users=["mario"])
+    cycle = asyncio.ensure_future(worker.execute_transfers())
+    await wait_until(deposit.writing.is_set)
+
+    # His parcels are already going onto the disk when a call of his is born.
+    # The question asked again when the write comes back is what takes them off
+    # again and leaves him exactly as he was, flag included.
+    worker.open_request("mario")
+    await cycle
+
+    assert worker.user_register["mario"]["state"] == "active"
+    assert worker.connection_register["cid-a"]["pages"] == {"page-1"}
+    assert worker.page_register.keys() == {"page-1"}
+    assert announced(worker) == []
+    assert deposit.read_user_register_item("mario") is None
+    assert deposit.read_connection_register_item("mario", "cid-a") is None
+    assert worker.worker_snapshot["users"]["mario"]["transfer_flag"] == "T"
+
+    # And the tail of that very call is what parks him.
+    await worker.close_request("mario")
+
+    assert "mario" not in worker.user_register
+    assert deposit.read_user_register_item("mario") is not None
+    assert announced(worker) == ["user_frozen"]
+
+
+async def test_the_parcels_are_photographed_before_the_disk_takes_them(tmp_path):
+    deposit = SlowDeposit(tmp_path / "frozen_users")
+    worker = build_worker(deposit)
+    worker.add_page("page-1", "cid-a", "mario")
+    worker.user_register["mario"]["store"]["cart.total"] = 12
+    freezing = asyncio.ensure_future(worker.freeze_user("mario"))
+    await wait_until(deposit.writing.is_set)
+
+    # The disk is slow and the store is live. What a mutation writes now must
+    # NOT reach the parcel: the deposit pickles on the service pool, with no
+    # lock of the worker's, so what crosses over has to be a photograph.
+    worker.user_register["mario"]["store"]["cart.total"] = 99
+
+    assert await freezing is True
+    assert deposit.read_user_register_item("mario")["cart.total"] == 12
+
+
+async def test_the_mass_cycle_leaves_a_departure_already_under_way_to_whoever_has_it(
+    tmp_path, caplog
+):
+    caplog.set_level(logging.WARNING)
+    deposit = SlowDeposit(tmp_path / "frozen_users")
+    worker = build_worker(deposit, deposit_lock_wait_limit=SlowDeposit.STALL / 10)
+    worker.add_page("page-1", "cid-a", "mario")
+    worker.add_page("page-2", "cid-b", "anna")
+    worker.plan_transfers(transfer_users=["mario"])
+    cycle = asyncio.ensure_future(worker.execute_transfers())
+    await wait_until(deposit.writing.is_set)
+
+    # The wire dies while mario's parcels are being written. The D8 road goes
+    # through the same claim as every other departure, so mario is left to the
+    # cycle that has him instead of being queued behind a folder semaphore THIS
+    # worker itself is holding — a wait that would only ever end in a timeout.
+    await worker.freeze_all_users()
+    await cycle
+
+    assert worker.user_register == {}
+    assert worker.freeze_failures == 0
+    assert [record.getMessage() for record in caplog.records] == []
+    assert deposit.lock_holder("mario") is None
+    assert deposit.read_user_register_item("mario") is not None
+    assert deposit.read_user_register_item("anna") is not None
+
+
+async def test_a_slow_write_does_not_stall_the_loop(tmp_path):
+    deposit = SlowDeposit(tmp_path / "frozen_users")
+    worker = build_worker(deposit)
+    worker.add_page("page-1", "cid-a", "mario")
+    freezing = asyncio.ensure_future(worker.freeze_user("mario"))
+    await wait_until(deposit.writing.is_set)
+
+    started = time.monotonic()
+    worker.add_page("page-2", "cid-b", "anna")
+    elapsed = time.monotonic() - started
+
+    assert elapsed < SlowDeposit.STALL / 2
+    assert await freezing is True
+    assert "anna" in worker.user_register
+
+
+# ----------------------------------------------------------------------
+# The semaphore: a voice on the first miss, and a floor under the wait
+# ----------------------------------------------------------------------
+
+
+async def test_a_held_folder_says_once_who_is_holding_it(worker, deposit, caplog):
+    caplog.set_level(logging.WARNING)
+    worker.add_page("page-1", "cid-a", "mario")
+    deposit.take_lock("mario", OTHER_WORKER)
+    freezing = asyncio.ensure_future(worker.freeze_user("mario"))
+
+    await asyncio.sleep(worker.deposit_lock_retry_interval * 10)
+    deposit.release_lock("mario", OTHER_WORKER)
+
+    assert await freezing is True
+    warnings = [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING]
+    assert len(warnings) == 1
+    assert "mario" in warnings[0]
+    assert OTHER_WORKER in warnings[0]
+
+
+async def test_a_folder_nobody_gives_back_ends_the_departure_loud(deposit):
+    worker = build_worker(deposit, deposit_lock_wait_limit=0.05)
+    worker.add_page("page-1", "cid-a", "mario")
+    worker.events.clear()
+    deposit.take_lock("mario", OTHER_WORKER)
+
+    assert await asyncio.wait_for(worker.freeze_user("mario"), 2.0) is False
+    assert worker.user_register["mario"]["state"] == "active"
+    assert worker.freeze_failures == 1
+    assert announced(worker) == []
+    assert deposit.lock_holder("mario") == OTHER_WORKER
+
+
+async def test_a_folder_nobody_gives_back_makes_the_adoption_raise(deposit):
+    worker = build_worker(deposit, deposit_lock_wait_limit=0.05)
+    deposit.take_lock("mario", OTHER_WORKER)
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(worker.adopt_user("mario"), 2.0)
+
+    # The wait limit is one more failed pull: no row of his stays behind, and
+    # the verdict on his next request is what tries the folder again.
+    assert "mario" not in worker.user_register
+    assert deposit.lock_holder("mario") == OTHER_WORKER
+
+
+# ----------------------------------------------------------------------
+# The window of the wait: a call born inside it keeps its user
+# ----------------------------------------------------------------------
+
+
+async def test_a_call_born_while_the_semaphore_was_waited_for_keeps_the_user(worker, deposit):
+    worker.add_page("page-1", "cid-a", "mario")
+    worker.events.clear()
+    deposit.take_lock("mario", OTHER_WORKER)
+    worker.plan_transfers(transfer_users=["mario"])
+    cycle = asyncio.ensure_future(worker.execute_transfers())
+    await asyncio.sleep(worker.transfer_start_delay * 2)
+
+    worker.open_request("mario")
+    deposit.release_lock("mario", OTHER_WORKER)
+    await cycle
+
+    assert worker.user_register["mario"]["state"] == "active"
+    assert deposit.read_user_register_item("mario") is None
+    assert announced(worker) == []
+
+    await worker.close_request("mario")
+
+    assert "mario" not in worker.user_register
+    assert deposit.read_user_register_item("mario") is not None
+    assert announced(worker) == ["user_frozen"]
+
+
+# ----------------------------------------------------------------------
 # The mass cycle and the quit
 # ----------------------------------------------------------------------
 
@@ -433,3 +708,124 @@ async def test_quit_does_not_leave_while_a_call_is_in_flight(worker):
     assert still_here
     assert worker.exited
     assert worker.user_register == {}
+
+
+async def test_a_shot_taken_during_the_quit_does_not_free_the_straggler(worker, deposit):
+    worker.add_page("page-1", "cid-a", "mario")
+    worker.open_request("mario")
+    leaving = asyncio.ensure_future(worker.quit())
+    await asyncio.sleep(worker.transfer_start_delay * 3)
+
+    # An ordinary shot, naming nobody for cession: once the quit has begun the
+    # plan is its own, and this one may not take the straggler off it.
+    transfers = worker.plan_transfers()
+
+    assert transfers["mario"][1] == "T"
+    assert not worker.exited
+
+    # The cycle is given its turn on the shot and goes back to sleep on him,
+    # and only THEN does his call end — inside what a restarted gate would
+    # cost. So the hook is the only thing that can free him, and a gate the
+    # shot had shut again would leave the quit with nobody to wake it.
+    await asyncio.sleep(worker.transfer_start_delay / 4)
+    await worker.close_request("mario")
+    await asyncio.wait_for(leaving, 5.0)
+
+    assert worker.exited
+    assert worker.user_register == {}
+    assert deposit.read_user_register_item("mario") is not None
+
+
+async def test_a_user_born_during_the_quit_is_added_to_the_departing(worker, deposit):
+    worker.add_page("page-1", "cid-a", "mario")
+    worker.open_request("mario")
+    leaving = asyncio.ensure_future(worker.quit())
+    await asyncio.sleep(worker.transfer_start_delay * 3)
+
+    # Somebody arrives while the worker is leaving: his own call is what puts
+    # him on the registers, and the shot that answers it flags him too.
+    worker.add_page("page-2", "cid-b", "anna")
+    worker.open_request("anna")
+    transfers = worker.plan_transfers()
+
+    assert transfers["anna"][1] == "T"
+
+    await worker.close_request("anna")
+    await worker.close_request("mario")
+    await asyncio.wait_for(leaving, 5.0)
+
+    assert worker.exited
+    assert worker.user_register == {}
+    assert deposit.read_user_register_item("anna") is not None
+
+
+async def test_a_user_flagged_after_the_first_pass_leaves_with_the_quit_all_the_same(
+    worker, deposit
+):
+    worker.add_page("page-1", "cid-a", "mario")
+    worker.open_request("mario")
+    leaving = asyncio.ensure_future(worker.quit())
+    await asyncio.sleep(worker.transfer_start_delay * 3)
+
+    # Somebody arrives while the worker is leaving, is served, and his call is
+    # already CLOSED by the time the shot names him: no hook of his will ever
+    # fire again, so the cycle itself is what has to come back for him.
+    worker.add_page("page-2", "cid-b", "anna")
+    worker.open_request("anna")
+    await worker.close_request("anna")
+    transfers = worker.plan_transfers()
+
+    assert transfers["anna"][1] == "T"
+
+    await worker.close_request("mario")
+    await asyncio.wait_for(leaving, 5.0)
+
+    assert worker.exited
+    assert worker.user_register == {}
+    assert deposit.read_user_register_item("mario") is not None
+    assert deposit.read_user_register_item("anna") is not None
+
+
+async def test_the_quit_waits_for_a_pull_still_on_its_way(worker, deposit):
+    worker.add_page("page-1", "cid-a", "mario")
+
+    # anna's store is still travelling: her pull is parked on a folder somebody
+    # else is holding, so her row is neither active nor gone — she is a
+    # straggler like the man with a call open, and a quit that left now would
+    # shut the pool her own trip is running on.
+    deposit.take_lock("anna", OTHER_WORKER)
+    pull = asyncio.ensure_future(worker.adopt_user("anna"))
+    await wait_until(lambda: worker.user_register.get("anna", {}).get("state") == "unfreezing")
+
+    leaving = asyncio.ensure_future(worker.quit())
+    await asyncio.sleep(worker.transfer_start_delay * 3)
+
+    assert not worker.exited
+
+    deposit.release_lock("anna", OTHER_WORKER)
+    await asyncio.wait_for(pull, 5.0)
+    await asyncio.wait_for(leaving, 5.0)
+
+    assert worker.exited
+    assert worker.user_register == {}
+    assert deposit.read_user_register_item("mario") is not None
+    assert deposit.read_user_register_item("anna") is not None
+
+
+async def test_a_departure_that_falls_over_does_not_keep_the_worker_alive(tmp_path):
+    deposit = BreakingDeposit(tmp_path / "frozen_users")
+    worker = build_worker(deposit)
+    worker.add_page("page-1", "cid-a", "mario")
+    worker.add_page("page-2", "cid-b", "anna")
+
+    await asyncio.wait_for(worker.quit(), 5.0)
+
+    # What breaks here breaks on the way OUT — the parcels are already written
+    # and the rows already released under the semaphore — so both men really
+    # left; what the containment buys is the exit being reached anyway, with
+    # the two falls counted and shouted rather than raised at the quit.
+    assert worker.exited
+    assert worker.freeze_failures == 2
+    assert worker.user_register == {}
+    assert deposit.read_user_register_item("mario") is not None
+    assert deposit.read_user_register_item("anna") is not None

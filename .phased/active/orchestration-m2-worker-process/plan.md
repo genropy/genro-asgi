@@ -220,7 +220,9 @@ none of them and asks nobody.
   > `decide_departures` / `execute_departures` (built on the register's own
   > «decide le partenze» and on the `build_plan`/`execute_plan` precedent),
   > `freeze_idle_users` (the §7.5 valve, driven by hand until Phase 4 wires a
-  > task), `open_request`/`close_request` (INHERITED verbatim from
+  > task — REMOVED in the review round: F41 made the valve a criterion of
+  > `plan_transfers`, so the verb no longer exists),
+  > `open_request`/`close_request` (INHERITED verbatim from
   > `commander.py`, where `close_request` already carries «the last call close
   > launches the move» — homonymy across classes, same meaning), `exit_process`
   > (mirror of the ratified `WorkerHandler.launch_process`) and the counter
@@ -230,6 +232,29 @@ none of them and asks nobody.
   > measures yet and the expiry is grammar the caller holds), `group` as a
   > constructor kwarg (the deposit header asks for it and nothing else could
   > supply it), and the photo pairs returned as `{user: (item, flag)}`.
+  > FIXED IN THE REVIEW ROUND (see notes.md `## Review fixes`): the valve verb
+  > removed and folded into `plan_transfers` as a reason for a `'T'` (F41);
+  > `freeze_user` stripped of `placement` — every freeze takes the row away and
+  > announces `placement=None`; the departure CLAIMED before its first await so
+  > the cycle and the end-of-call hook cannot park the same user twice, with
+  > per-user failures contained so `quit()` always reaches the exit; the row
+  > judged again UNDER the folder semaphore; the plan made terminal once
+  > `quit()` has begun.
+  > FIXED IN REVIEW ROUND 2 (see notes.md `## Review fixes — round 2`): the
+  > quit's cycle re-reads the flag map at every pass instead of iterating one
+  > snapshot, and the departures are declared over only with no flag left AND
+  > nobody on his way out; a failed pull drops the row whole instead of leaving
+  > it resident `frozen` (F41), so the verdict on the next request retries the
+  > adoption by construction; the parcels are DEEP-photographed under the
+  > dispatch lock and the pendings/row question is asked once more when the
+  > write comes back, inside the semaphore and in the same breath as the
+  > announcement, a call born meanwhile taking its parcels back off the
+  > deposit; `freeze_all_users` goes through the same departure claim as the
+  > cycle and the hook, so the D8 road never waits on a folder this worker
+  > holds; the terminal plan cedes a row mid-adoption too, and the quit waits
+  > its transition rather than shutting the pool under it. Three private
+  > renames by rule 11: `_get_freezable_item`, `_get_user_parcels`,
+  > `_departing_users`.
   - Run: opus / high
   - Pattern: `spa_worker.py` as Phase 2 left it;
     `src/genro_asgi/spa/orchestration/freeze_handler.py` (lock + direct
@@ -333,6 +358,15 @@ none of them and asks nobody.
   > cid read from `http["cid"]` per design §10, with `identity == cid` meaning
   > the anonymous, born `guest_<cid>` by the worker's own naming. All detailed
   > in notes.md.
+  > FIXED IN THE REVIEW ROUND (see notes.md `## Review fixes`): the dispatch
+  > lock no longer spans the deposit write (the rows are copied out under it,
+  > the disk work runs on the service pool with it let go); the wait for a busy
+  > folder got a voice (one WARNING naming user and holder, on the first miss)
+  > and a floor (`DEPOSIT_LOCK_WAIT_LIMIT`, 30 s — adoption raises into the
+  > caller's own REPLY, freeze takes the B1 shape); and the three coverages that
+  > asserted nothing — the real clock of a served call, the photo a wake owes,
+  > the guard on a row that is not `active` — became tests that die when the
+  > behaviour is removed.
   - Run: opus / xhigh
   - Pattern: `src/genro_asgi/spa/worker_entry.py` (the child bootstrap
     being inherited: env-var payload, orphan detection);
@@ -421,23 +455,30 @@ none of them and asks nobody.
   > assertions; removing the turn the departure is given before the reply is
   > composed fails the flagged-photo assertion (`None` instead of `'T'`) — the
   > proof that the decision really rides the shot it was taken in.
-  > Review: **no wire op routes to `quit()` or to `freeze_idle_users()`** — a
-  > driver in another process cannot order a departure nor drive the valve;
-  > `answer_call` routes the beat and the http form and nothing else, and no task
-  > in `WorkerEntry` ticks the valve. Both verbs exist and are tested in-process
-  > (Phase 3), so this is the missing CALLER, expected in M3 with the group and
-  > the metronome — recorded, not worked around: the e2e's own worker subclass
-  > (`DrivenWorker`, a test-package `SpaWorker` heir, the place a consumer already
-  > extends the worker as the genropy-asgi bridge does) answers two routing keys
-  > declared in its docstring as the TEST's own. Second observation: at `quit()`
+  > Review: **no wire op routes to `quit()` or to the transfer cycle** — a
+  > driver in another process cannot order a departure nor take a shot;
+  > `answer_call` routes the beat and the http form and nothing else. The verbs
+  > exist and are tested in-process (Phase 3), so this is the missing CALLER,
+  > expected in M3 with the group and the metronome — recorded, not worked
+  > around: the e2e's own worker subclass (`DrivenWorker`, a test-package
+  > `SpaWorker` heir, the place a consumer already extends the worker as the
+  > genropy-asgi bridge does) answers the routing keys, declared in its
+  > docstring as the TEST's own — `/op/plan_transfers`, `/op/execute_transfers`
+  > and `/op/quit` since the review round, the valve having no verb of its own
+  > any more. Second observation: at `quit()`
   > the per-user `user_frozen` announcements (placement `None`) are queued and die
   > with the wire the worker closes behind itself — the flagged photo already
   > named who was leaving, so nothing is lost, but M3 should confirm the fold acts
   > on the flags and not on those announcements.
+  > FIXED IN THE REVIEW ROUND (see notes.md `## Review fixes`): chapters 3 and 4
+  > tell the ruled story — the idle user is flagged `'T'` inside the shot, waits
+  > the gate, goes to the deposit with placement `None` and his row leaves
+  > memory whole; his next call carries the verdict and adopts him back, on
+  > whatever worker the vertex names (here the only one there is).
   > Verify: read top to bottom as the story of Macro 2 — the chapters are in
   > order, the names read as spoken (SpaWorker, the registers, freeze_user,
   > adopt_user, transfer_flag, the photo, the valve, the gate, the deposit), no
-  > coined jargon; the only vocabulary the test adds is its own two order paths
+  > coined jargon; the only vocabulary the test adds is its own order paths
   > and the `DrivenWorker` that answers them, both declared as the test's.
   - Run: opus / high
   - Pattern: `tests/orchestration/test_orchestration_foundations_e2e.py`

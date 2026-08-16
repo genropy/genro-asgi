@@ -250,8 +250,12 @@ async def test_a_burst_on_a_frozen_row_makes_one_trip_and_the_sisters_wait(worke
     assert announced(worker) == ["user_adopted"]
 
 
-async def test_a_pull_that_fails_leaves_the_row_frozen_and_says_so(worker, deposit, monkeypatch):
-    freeze_store(deposit, "mario", Bag())
+async def test_a_pull_that_fails_leaves_no_row_and_the_next_request_retries(
+    worker, deposit, monkeypatch
+):
+    store = Bag()
+    store["cart.total"] = 7
+    freeze_store(deposit, "mario", store)
 
     def unreadable(user):
         raise OSError("the deposit is unreachable")
@@ -261,9 +265,44 @@ async def test_a_pull_that_fails_leaves_the_row_frozen_and_says_so(worker, depos
     with pytest.raises(OSError, match="unreachable"):
         await worker.adopt_user("mario")
 
-    assert worker.user_register["mario"]["state"] == "frozen"
+    # No row of his is resident: his parcel is still on disk and the mark is
+    # still on at the vertex, so the verdict comes back with his next request
+    # and the trip is retried by the shape of the unified row itself.
+    assert "mario" not in worker.user_register
     assert announced(worker) == []
     assert deposit.lock_holder("mario") is None
+
+    monkeypatch.undo()
+    assert deposit.read_user_register_item("mario")["cart.total"] == 7
+    item = await worker.adopt_user("mario")
+
+    assert item["state"] == "active"
+    assert item["store"]["cart.total"] == 7
+    assert announced(worker) == ["user_adopted"]
+
+
+async def test_a_pull_that_fails_wakes_the_sisters_with_a_failure_of_their_own(
+    worker, deposit, monkeypatch
+):
+    freeze_store(deposit, "mario", Bag())
+    deposit.take_lock("mario", "standard_0002")
+
+    def unreadable(user):
+        raise OSError("the deposit is unreachable")
+
+    monkeypatch.setattr(deposit, "read_user_register_item", unreadable)
+    burst = [asyncio.create_task(worker.adopt_user("mario")) for _ in range(3)]
+    await asyncio.sleep(0.02)
+    deposit.release_lock("mario", "standard_0002")
+
+    outcomes = await asyncio.wait_for(asyncio.gather(*burst, return_exceptions=True), 2.0)
+
+    # One of them made the trip and carries what the deposit said; the sisters
+    # awaited a transition that ended in nothing and are told so, never handed
+    # a row that is not there.
+    assert any(isinstance(one, OSError) for one in outcomes)
+    assert all(isinstance(one, Exception) for one in outcomes)
+    assert "mario" not in worker.user_register
 
 
 async def test_a_parcel_no_envelope_authorises_is_never_touched(worker, deposit):
