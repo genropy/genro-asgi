@@ -391,8 +391,8 @@ async def test_every_order_of_the_group_leaves_its_row_in_the_orchestration_log(
         await group.restart_worker(worker_handler)
 
     rows = [record.getMessage() for record in caplog.records]
-    assert any("order=launch_worker subject=standard_0001" in row for row in rows)
+    assert any("order=start_worker subject=standard_0001" in row for row in rows)
     assert any("order=restart_worker subject=standard_0001" in row for row in rows)
     assert any("order=drop_worker subject=standard_0001 numbers=None outcome=quitted" in row
                for row in rows)
-    assert any("order=launch_worker subject=standard_0002" in row for row in rows)
+    assert any("order=start_worker subject=standard_0002" in row for row in rows)

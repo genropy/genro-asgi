@@ -336,11 +336,11 @@ class GroupHandler:
             await worker_handler.connector.stop()
             self.state = "broken"
             self._logger.exception("Group %s: %s could not be started", self.name, name)
-            self.spa_commander.log_order(self.name, "launch_worker", name, outcome=str(failure))
+            self.spa_commander.log_order(self.name, "start_worker", name, outcome=str(failure))
             return None
         self.state = "running"
         self.spa_commander.log_order(
-            self.name, "launch_worker", name, numbers={"workers": len(self.living_workers)}
+            self.name, "start_worker", name, numbers={"workers": len(self.living_workers)}
         )
         return worker_handler
 
