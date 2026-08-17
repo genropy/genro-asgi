@@ -32,6 +32,16 @@ envelope, then calls the layer above and brings back what goes DOWN; at the vert
 the climb ends and the answer is composed. The wire writes that answer where there
 IS an envelope going down — the reply to a presentation — and drops it otherwise.
 
+**Only the presentation is answered with the store.** The one thing the vertex
+has to say to a process that just spoke is the global store, and the only process
+that has none of it is one that was just born: so the descent carries it when the
+envelope is a presentation — recognised by the ``pid`` the child says at birth
+and never again — and carries nothing at all otherwise. The REPLICA IS REPLACED
+ENTIRE, always, so a newborn is not a special case and nothing can arrive out of
+order. How a change of the master reaches a process already alive is not decided
+here: the update travels with the sensor that notices the change, which belongs
+to the phase of the pages.
+
 **A layer may in principle change the envelope, and today none does.** What
 arrives is what the worker said, and altering it would mix the two: whoever reads
 it later could not tell a worker event from an addition. But nothing in the shape
@@ -66,26 +76,36 @@ that has ended announces nothing — it is gone. What the handler has instead is
 its ``state``, and ``WorkerEnvelopeHandler.announce_death_TBD()`` turns that
 state into the worker event the levels above consume, on the round that reads it.
 So a death climbs the same ladder as everything else, and no level learns about
-it in a way of its own.
+it in a way of its own. That worker event says who died, who was on board and —
+decided at the bottom, once, because that is the level holding both the state and
+the last photo — which of them are in the freezer and which are lost: an orderly
+departure froze whoever its last photo had flagged for cession, even the ones
+whose own worker event died with the wire, while a death nobody ordered saves
+NOBODY, because a process that went for reasons of its own leaves nothing that
+can be trusted. Both deaths are then read the same way at every level above, the
+worker event itself carrying the difference: the traces of the lost go, what they
+left in the freezer is discarded and counted, and their next request is a
+re-login — the declared price of a death nobody ordered.
 """
 
 from __future__ import annotations
 
-import logging
 from typing import Any
+
+from genro_tytx import to_tytx
 
 from .worker_connector import GLOBAL_STORE_KEY, WORKER_SNAPSHOT_KEY
 
 #: The slot the worker events travel in, as the worker composes it.
 WORKER_EVENTS_KEY = "worker_events"
 
-#: The two states of a handler whose process has ended, and the worker event each
-#: one becomes: the death somebody ordered, and the death nobody did.
-DEATH_WORKER_EVENTS = {"quitted": "process_quitted", "aborted": "process_aborted"}
+#: What only a presentation carries: the child says its pid at birth and never
+#: again. It is what tells the vertex that this envelope is owed the whole store.
+PRESENTATION_KEY = "pid"
 
 __all__ = [
+    "PRESENTATION_KEY",
     "WORKER_EVENTS_KEY",
-    "DEATH_WORKER_EVENTS",
     "CommanderEnvelopeHandler",
     "EnvelopeHandler",
     "GroupEnvelopeHandler",
@@ -102,33 +122,23 @@ class EnvelopeHandler:
     so a reader of any layer sees which way is up.
     """
 
-    def __init__(self) -> None:
-        self._logger = logging.getLogger(f"{type(self).__module__}.{type(self).__name__}")
-
-    def work_on_envelope(self, envelope: dict[str, Any], worker_handler: Any) -> None:
-        """Do this layer's part of what the envelope carries.
+    def work_on_envelope(self, envelope: dict[str, Any]) -> None:
+        """This layer's part of what the envelope carries: the photo, then the worker events.
 
         Args:
             envelope: the payload as it came off the wire — the photo in its own
                 slot, the worker events in theirs, the primary answer beside them.
-            worker_handler: the handler whose wire it arrived on; every level
-                needs to know whose envelope this is.
 
-        The photo first, because it is the state the shot found, then the
-        worker events in the order they were made. What this layer has nothing to
-        do about it does not carry a method for, and skips.
+        Acts through the ``on_`` methods this layer carries, and skips whatever it
+        carries none for.
         """
         photo = envelope.get(WORKER_SNAPSHOT_KEY)
         if photo is not None:
-            self.on_worker_snapshot(photo, worker_handler)
+            self.on_worker_snapshot(photo)
         for worker_event in envelope.get(WORKER_EVENTS_KEY) or ():
             reader = getattr(self, f"on_{worker_event['op']}", None)
             if reader is not None:
-                reader(worker_event, worker_handler)
-
-    def on_worker_snapshot(self, photo: dict[str, Any], worker_handler: Any) -> None:
-        """This layer's reading of the photo — every level has one, so this raises."""
-        raise NotImplementedError(f"{type(self).__name__} does not read the photo")
+                reader(worker_event)
 
 
 class WorkerEnvelopeHandler(EnvelopeHandler):
@@ -140,53 +150,43 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
     """
 
     def __init__(self, worker_handler: Any, group_envelope_handler: GroupEnvelopeHandler) -> None:
-        super().__init__()
         self.worker_handler = worker_handler
         self.group_envelope_handler = group_envelope_handler
 
     def __call__(self, envelope: dict[str, Any]) -> dict[str, Any]:
-        """Work on the envelope for the handler that owns this layer, then hand it up.
+        """Work on the envelope for this handler, then hand it up.
 
         Args:
-            envelope: the payload as it came off the wire. Whose it is needs no
-                saying here: this layer was built for that handler.
+            envelope: the payload as it came off the wire.
 
         Returns:
             The payload that goes down, as the chain composed it.
         """
-        self.work_on_envelope(envelope, self.worker_handler)
-        return self.group_envelope_handler(envelope, self.worker_handler)
+        self.work_on_envelope(envelope)
+        return self.group_envelope_handler(envelope)
 
     def announce_death_TBD(self) -> dict[str, Any]:
         """Turn the ended state of this handler's process into the worker event of it.
 
         Returns:
             The payload that goes down, as the chain composed it — nothing will
-            be sent, since the wire this envelope speaks of is gone, but the
-            climb is the same one every envelope makes.
+            be sent, since the wire this envelope speaks of is gone.
 
         Raises:
-            ValueError: the process has not ended. Whoever calls this read a
-                state that says the opposite, and a death announced for a living
-                process would take its users away from it.
-
-        The worker event says who died, who was on board, and — decided HERE,
-        once, because this is the level that holds both the state and the last
-        photo — which of them are in the freezer and which are lost. An orderly
-        departure froze whoever its last photo had flagged for cession, even the
-        ones whose own worker event died with the wire; a death nobody ordered
-        saves nobody, because a process that went for reasons of its own leaves
-        nothing that can be trusted.
+            ValueError: the process has not ended, and a death announced for a
+                living process would take its users away from it.
         """
         state = self.worker_handler.state
-        if state not in DEATH_WORKER_EVENTS:
+        if state not in ("quitted", "aborted"):
             raise ValueError(
                 f"WorkerHandler {self.worker_handler.name}: its process is {state}, not dead"
             )
         users = set(self.worker_handler.hosted_users)
-        frozen = users & self.get_flagged_users_TBD() if state == "quitted" else set()
+        rows = (self.worker_handler.worker_snapshot or {}).get("users") or {}
+        flagged = {user for user, row in rows.items() if row.get("transfer_flag") == "T"}
+        frozen = users & flagged if state == "quitted" else set()
         worker_event = {
-            "op": DEATH_WORKER_EVENTS[state],
+            "op": f"process_{state}",
             "worker": self.worker_handler.name,
             "users": sorted(users),
             "frozen_users": sorted(frozen),
@@ -194,19 +194,9 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
         }
         return self({WORKER_EVENTS_KEY: [worker_event]})
 
-    def get_flagged_users_TBD(self) -> set[str]:
-        """Who the last photo of this process showed on his way out.
-
-        Returns:
-            The users flagged for cession when that photo was taken — the ones a
-            departure had already promised to the freezer.
-        """
-        rows = (self.worker_handler.worker_snapshot or {}).get("users") or {}
-        return {user for user, row in rows.items() if row.get("transfer_flag") == "T"}
-
-    def on_worker_snapshot(self, photo: dict[str, Any], worker_handler: Any) -> None:
+    def on_worker_snapshot(self, photo: dict[str, Any]) -> None:
         """File the photo as this handler's latest: the gauges everybody judges on."""
-        worker_handler.worker_snapshot = photo
+        self.worker_handler.worker_snapshot = photo
 
 
 class GroupEnvelopeHandler(EnvelopeHandler):
@@ -220,57 +210,46 @@ class GroupEnvelopeHandler(EnvelopeHandler):
     def __init__(
         self, group_handler: Any, commander_envelope_handler: CommanderEnvelopeHandler
     ) -> None:
-        super().__init__()
         self.group_handler = group_handler
         self.commander_envelope_handler = commander_envelope_handler
 
-    def __call__(self, envelope: dict[str, Any], worker_handler: Any) -> dict[str, Any]:
+    def __call__(self, envelope: dict[str, Any]) -> dict[str, Any]:
         """Work on the envelope for this group, then hand it to the vertex.
 
         Args:
             envelope: the payload as it came off the wire.
-            worker_handler: the handler it arrived on — which of this group's it
-                was has to be said, because a group has many.
 
         Returns:
             The payload that goes down, as the vertex composed it.
         """
-        self.work_on_envelope(envelope, worker_handler)
-        return self.commander_envelope_handler(envelope, worker_handler)
+        self.work_on_envelope(envelope)
+        return self.commander_envelope_handler(envelope)
 
-    def on_worker_snapshot(self, photo: dict[str, Any], worker_handler: Any) -> None:
+    def on_worker_snapshot(self, photo: dict[str, Any]) -> None:
         """Ring the group's wake when this photo cannot wait for the next round."""
         if self.group_handler.snapshot_is_urgent_TBD(photo):
             self.group_handler.ping_now()
 
-    def on_user_frozen(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
+    def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
         """A user has left for the freezer: his placement is to be assigned again."""
         self.group_handler.record_placement_TBD(worker_event["user"], None)
 
-    def on_drop_user(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
+    def on_drop_user(self, worker_event: dict[str, Any]) -> None:
         """A user is gone for good: he has no placement in this group any more."""
         self.group_handler.forget_placement_TBD(worker_event["user"])
 
-    def on_process_quitted(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
-        """The process left as it was asked to: its users and then its handler."""
-        self._bury_worker(worker_event, worker_handler)
-
-    def on_process_aborted(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
-        """The process died with nobody waiting for it: the same reading, and nobody saved."""
-        self._bury_worker(worker_event, worker_handler)
-
-    def _bury_worker(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
-        """A death, read as this group reads one: the placements first, the handler last.
-
-        Whoever is in the freezer is to be assigned again — he exists and needs a
-        home; whoever is lost has no placement at all any more. Then the handler
-        comes out of the group, which is the same verb for both kinds of death.
-        """
+    def on_process_quitted(self, worker_event: dict[str, Any]) -> None:
+        """A death: the frozen are to be assigned again, the lost lose their
+        placement, and the handler named by the worker event leaves the group."""
         for user in worker_event["frozen_users"]:
             self.group_handler.record_placement_TBD(user, None)
         for user in worker_event["lost_users"]:
             self.group_handler.forget_placement_TBD(user)
-        self.group_handler.drop_worker(worker_handler)
+        self.group_handler.drop_worker(worker_event["worker"])
+
+    #: The wild death is read exactly as the ordered one: the worker event
+    #: already carries who was saved and who was lost.
+    on_process_aborted = on_process_quitted
 
 
 class CommanderEnvelopeHandler(EnvelopeHandler):
@@ -282,110 +261,75 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
     """
 
     def __init__(self, spa_commander: Any) -> None:
-        super().__init__()
         self.spa_commander = spa_commander
 
-    def __call__(self, envelope: dict[str, Any], worker_handler: Any) -> dict[str, Any]:
-        """Work on the envelope for the vertex, and answer with the global store.
+    def __call__(self, envelope: dict[str, Any]) -> dict[str, Any]:
+        """Work on the envelope for the vertex, and answer a presentation with the store.
 
         Args:
             envelope: the payload as it came off the wire.
-            worker_handler: the handler it arrived on.
 
         Returns:
-            The whole store in the form it travels in. There is nobody above the
-            vertex, so the climb ends here and this is what goes down: the store
-            is the one thing the vertex has to say to a process that just spoke,
-            and the REPLICA IS REPLACED ENTIRE, always, so a newborn is not a
-            special case and nothing can arrive out of order.
-
-        The wire writes this where there IS an envelope going down — the answer to
-        a presentation — and drops it otherwise: an answer is not answered. How a
-        change of the master reaches a process that is already alive is not
-        decided yet: the write climbs and the update is sent to everybody, and
-        both belong to the phase that gives the vertex its groups.
+            The whole store in the form it travels in when this envelope is a
+            presentation; nothing at all otherwise — an answer is not answered.
         """
-        self.work_on_envelope(envelope, worker_handler)
-        return {GLOBAL_STORE_KEY: self.spa_commander.global_register.item_tytx}
+        self.work_on_envelope(envelope)
+        if PRESENTATION_KEY not in envelope:
+            return {}
+        return {GLOBAL_STORE_KEY: to_tytx(self.spa_commander.global_register, "json")}
 
-    def on_worker_snapshot(self, photo: dict[str, Any], worker_handler: Any) -> None:
-        """Park every user the photo shows on his way out of that process.
-
-        A user flagged for cession or for expiry is about to lose the process he
-        lives on, so a request of his that arrived meanwhile must not be routed
-        there: the hold is what makes it wait for the departure to be over. The
-        flag is the worker's own decision, taken at the moment of the photo, and
-        this is where the rest of the machine learns it.
-        """
+    def on_worker_snapshot(self, photo: dict[str, Any]) -> None:
+        """Park every user the photo shows on his way out: his next request waits."""
         for user, row in (photo.get("users") or {}).items():
             flag = row.get("transfer_flag")
             if flag is not None:
                 self.spa_commander.hold_user_TBD(user, f"transfer_flag {flag}")
 
-    def on_new_page(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
+    def on_new_page(self, worker_event: dict[str, Any]) -> None:
         """A page was born: it belongs to the connection that asked for it, for good."""
-        self.spa_commander.add_page(worker_event["page_id"], worker_event["session_id"])
+        self.spa_commander.page_connection_map[worker_event["page_id"]] = worker_event[
+            "session_id"
+        ]
 
-    def on_drop_page(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
+    def on_drop_page(self, worker_event: dict[str, Any]) -> None:
         """A page is gone."""
         self.spa_commander.drop_page(worker_event["page_id"])
 
-    def on_drop_pages(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
+    def on_drop_pages(self, worker_event: dict[str, Any]) -> None:
         """A cascade took several pages at once — a connection or a user leaving."""
         for page_id in worker_event["page_ids"]:
             self.spa_commander.drop_page(page_id)
 
-    def on_drop_connection(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
-        """A connection is gone: its pages with it, its identity kept.
-
-        The cookie is eternal: the browser that comes back on that same cid is
-        the same person, so what is dropped is the connection's pages and not
-        the row that says whose the cid is.
-        """
+    def on_drop_connection(self, worker_event: dict[str, Any]) -> None:
+        """A connection is gone: its pages with it, its identity kept (the cookie is eternal)."""
         self.spa_commander.drop_connection(worker_event["session_id"])
 
-    def on_drop_connections(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
+    def on_drop_connections(self, worker_event: dict[str, Any]) -> None:
         """Several connections at once — the cascade of a user leaving."""
         for cid in worker_event["session_ids"]:
             self.spa_commander.drop_connection(cid)
 
-    def on_drop_user(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
+    def on_drop_user(self, worker_event: dict[str, Any]) -> None:
         """A user is gone: his row, his connections and whatever was waiting for him."""
         self.spa_commander.drop_user(worker_event["user"])
 
-    def on_user_frozen(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
+    def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
         """A user is in the freezer: the mark goes on, with what he is expected to cost."""
         self.spa_commander.record_user_frozen_TBD(
             worker_event["user"], worker_event.get("occupancy_percent")
         )
 
-    def on_user_adopted(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
-        """A user came home from the freezer: the mark goes off, and his waiting is served."""
+    def on_user_adopted(self, worker_event: dict[str, Any]) -> None:
+        """A user came home from the freezer: the mark goes off, his waiting is drained."""
         self.spa_commander.record_user_adopted_TBD(worker_event["user"])
 
-    def on_process_quitted(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
-        """The process left as ordered: whoever it was holding is accounted for.
-
-        An orderly departure freezes everybody and announces every one of them,
-        but the last worker events travel on a wire that is closing: the ones the
-        worker event names as frozen are in the freezer whether their own
-        worker event made it or not, so their marks are written here.
-        """
-        self._bury_users(worker_event)
-
-    def on_process_aborted(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
-        """The process died on its own: nobody it held can be trusted any more.
-
-        Not knowing WHY it died, every user that was on it is suspect — frozen and
-        not alike — which is why the worker event of a wild death names nobody as
-        saved: the traces go, what they left in the freezer is discarded and
-        counted, and their next request is a re-login. This is the price of a
-        death nobody ordered, and it is paid here.
-        """
-        self._bury_users(worker_event)
-
-    def _bury_users(self, worker_event: dict[str, Any]) -> None:
-        """The users of a dead process: the freezer marks written, the rest discarded."""
+    def on_process_quitted(self, worker_event: dict[str, Any]) -> None:
+        """The users of a dead process: the frozen are marked — whether their own
+        worker event survived the closing wire or not — and the lost are purged."""
         for user in worker_event["frozen_users"]:
             self.spa_commander.record_user_frozen_TBD(user, None)
         self.spa_commander.purge_users_TBD(worker_event["lost_users"], cause=worker_event["op"])
+
+    #: The wild death is read exactly as the ordered one, and it names nobody as
+    #: saved: whoever was on board is purged, which is the price of it.
+    on_process_aborted = on_process_quitted

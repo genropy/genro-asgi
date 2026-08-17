@@ -21,9 +21,9 @@ of the chain — and the group is the stub that stands in for the level not yet
 built, whose own verbs are the contract that level will owe.
 
 The last test is the whole thing with a REAL child process: a worker event born
-in another process lands in the vertex's indexes, a change of the master rides
-the next order down without anybody pushing it, and a fold that refuses an
-envelope is denounced without severing the wire.
+in another process lands in the vertex's indexes, the store answers the
+presentation and only it, and a fold that refuses an envelope is denounced
+without severing the wire.
 """
 
 from __future__ import annotations
@@ -38,8 +38,10 @@ from typing import Any
 
 import pytest
 
-from genro_asgi.spa.orchestration import EnvelopeHandler, UserOnHold, WorkerHandler
-from genro_asgi.spa.orchestration.envelope_handler import WORKER_EVENTS_KEY
+from genro_tytx import to_tytx
+
+from genro_asgi.spa.orchestration import UserOnHold, WorkerHandler
+from genro_asgi.spa.orchestration.envelope_handler import PRESENTATION_KEY, WORKER_EVENTS_KEY
 from genro_asgi.spa.orchestration.worker_connector import GLOBAL_STORE_KEY, WORKER_SNAPSHOT_KEY
 
 from .child_stub import ANNOUNCE_OP
@@ -56,6 +58,11 @@ def envelope(*worker_events: dict[str, Any], photo: dict[str, Any] | None = None
     if photo is not None:
         made[WORKER_SNAPSHOT_KEY] = photo
     return made
+
+
+def presentation(**payload: Any) -> dict[str, Any]:
+    """The envelope of a child being born: what only a presentation carries."""
+    return {PRESENTATION_KEY: 4242, **payload}
 
 
 def photo_of(**users: str | None) -> dict[str, Any]:
@@ -308,7 +315,7 @@ async def test_the_ordered_death_freezes_the_flagged_and_discards_the_rest(
     assert commander.user_is_frozen(leaving) is True
     assert staying not in commander.user_map
     assert group.user_worker_map == {leaving: None}
-    assert group.dropped_workers == [handler]
+    assert group.dropped_workers == [WORKER_NAME]
 
 
 async def test_the_wild_death_saves_nobody_and_its_parcels_are_discarded(
@@ -332,7 +339,7 @@ async def test_the_wild_death_saves_nobody_and_its_parcels_are_discarded(
     assert commander.user_map == {}
     assert commander.freeze_handler.user_folders == set()
     assert commander.counters["frozen_users_discarded"] == 1
-    assert group.dropped_workers == [handler]
+    assert group.dropped_workers == [WORKER_NAME]
     assert "order=purge_user" in caplog.text
     assert "outcome=process_aborted" in caplog.text
 
@@ -344,23 +351,23 @@ async def test_a_death_announced_for_a_living_process_is_refused(handler):
         handler.envelope_handler.announce_death_TBD()
 
 
-async def test_what_the_chain_answers_is_the_whole_store(handler, commander):
+async def test_a_presentation_is_answered_with_the_whole_store(handler, commander):
     register = commander.global_register
 
-    assert handler.read_envelope(envelope()) == {GLOBAL_STORE_KEY: register.item_tytx}
+    assert handler.read_envelope(presentation()) == {GLOBAL_STORE_KEY: to_tytx(register, "json")}
 
     register.set_item("counters.invoices", 3)
-    answer = handler.read_envelope(envelope())
+    answer = handler.read_envelope(presentation())
 
-    assert answer == {GLOBAL_STORE_KEY: register.item_tytx}
+    assert answer == {GLOBAL_STORE_KEY: to_tytx(register, "json")}
     assert "invoices" in str(answer[GLOBAL_STORE_KEY])
 
 
-async def test_every_layer_must_say_how_it_reads_the_photo(handler):
-    bare = EnvelopeHandler()
+async def test_an_answer_is_not_answered_and_carries_no_store(handler, commander):
+    commander.global_register.set_item("counters.invoices", 3)
 
-    with pytest.raises(NotImplementedError, match="EnvelopeHandler"):
-        bare.work_on_envelope(envelope(photo=photo_of(mario=None)), handler)
+    assert handler.read_envelope(envelope()) == {}
+    assert handler.read_envelope(envelope(photo=photo_of(mario=None))) == {}
 
 
 async def test_a_real_child_announces_and_the_vertex_learns_it(
@@ -401,7 +408,7 @@ async def test_a_real_child_announces_and_the_vertex_learns_it(
     )
 
     assert reply["result"] == {"announcing": 2}
-    assert reply[WORKER_SNAPSHOT_KEY]["global_store"] == commander.global_register.item_tytx
+    assert reply[WORKER_SNAPSHOT_KEY]["global_store"] == to_tytx(commander.global_register, "json")
     assert commander.page_connection_map == {"p1": "cid-a"}
     assert commander.user_is_frozen(user) is True
     assert commander.user_map[user]["occupancy_percent"] == 4.0
@@ -417,7 +424,7 @@ async def test_a_real_child_announces_and_the_vertex_learns_it(
     beat = await handler.ping_process()
 
     assert beat[WORKER_SNAPSHOT_KEY]["global_store"] == born_with
-    assert born_with != commander.global_register.item_tytx
+    assert born_with != to_tytx(commander.global_register, "json")
 
     # A FOLD THAT REFUSES DOES NOT SEVER THE WIRE. An worker event about somebody
     # the vertex never wrote cannot be filed — and a bug one level up must not

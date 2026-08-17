@@ -31,7 +31,9 @@ from pathlib import Path
 
 import pytest
 
-from genro_asgi.spa.orchestration import GlobalRegister, SpaCommander, UserOnHold
+from genro_bag import Bag
+
+from genro_asgi.spa.orchestration import SpaCommander, UserOnHold
 from genro_asgi.spa.orchestration.spa_commander import GUEST_PREFIX
 
 WORKER_NAME = "standard_0001"
@@ -138,25 +140,16 @@ def test_a_freeze_ends_the_wait_it_was_the_reason_for(commander):
     assert commander.resolve_user("cid-a") == user
 
 
-def test_an_adoption_hands_back_what_was_waiting_and_empties_the_row(commander):
+def test_an_adoption_empties_the_row_of_what_was_waiting(commander):
     user = commander.resolve_user("cid-a")
     commander.record_user_frozen_TBD(user, 6.0)
     commander.user_map[user]["pending_dbevents"] = [{"table": "invoices"}]
 
-    waiting = commander.record_user_adopted_TBD(user)
+    commander.record_user_adopted_TBD(user)
 
-    assert waiting == {"pending_dbevents": [{"table": "invoices"}], "pending_datachanges": []}
     assert commander.user_map[user]["pending_dbevents"] == []
+    assert commander.user_map[user]["pending_datachanges"] == []
     assert commander.user_is_frozen(user) is False
-
-
-def test_a_page_belongs_to_its_connection_and_a_connection_to_its_person(commander):
-    user = commander.resolve_user("cid-a")
-    commander.add_page("p1", "cid-a")
-    commander.add_page("p2", "cid-a")
-
-    assert commander.get_connection_pages_TBD("cid-a") == ["p1", "p2"]
-    assert commander.get_user_connections_TBD(user) == ["cid-a"]
 
 
 def test_dropping_what_is_already_gone_is_that_same_outcome(commander):
@@ -171,8 +164,8 @@ def test_dropping_what_is_already_gone_is_that_same_outcome(commander):
 def test_a_user_who_is_gone_takes_his_connections_and_pages_with_him(commander):
     user = commander.resolve_user("cid-a")
     commander.connection_user_map["cid-b"] = user
-    commander.add_page("p1", "cid-a")
-    commander.add_page("p2", "cid-b")
+    commander.page_connection_map["p1"] = "cid-a"
+    commander.page_connection_map["p2"] = "cid-b"
     commander.user_map[user]["pending_datachanges"] = [{"path": "a.b"}, {"path": "a.c"}]
 
     commander.drop_user(user)
@@ -232,20 +225,5 @@ def test_one_process_has_one_vertex_and_the_log_is_its_own(vertex_root):
 
 def test_the_machine_starts_running_and_holds_the_master_of_the_store(commander):
     assert commander.state == "running"
-    assert isinstance(commander.global_register, GlobalRegister)
-    assert commander.global_register.bag.keys() == []
-
-
-def test_the_master_of_the_store_is_written_here_and_travels_whole(commander):
-    register = commander.global_register
-
-    register.set_item("counters.invoices", 3)
-    register.set_item("counters.orders", 7)
-
-    assert register.bag["counters.invoices"] == 3
-    encoded = register.item_tytx
-    assert "invoices" in encoded and "orders" in encoded
-
-    register.drop_item("counters.orders")
-
-    assert register.bag["counters.orders"] is None
+    assert isinstance(commander.global_register, Bag)
+    assert commander.global_register.keys() == []

@@ -62,8 +62,8 @@ class GroupStub:
         self.wakes: list[str] = []
         #: Who was on board at each of those wakes.
         self.users_on_board: list[set[str]] = []
-        #: The handlers taken out of the group, in order.
-        self.dropped_workers: list[Any] = []
+        #: The names of the handlers taken out of the group, in order.
+        self.dropped_workers: list[str] = []
         #: Whether the next photo counts as urgent — the tests set it.
         self.urgent_snapshots = False
         #: The handler under this group; the tests assign it after construction.
@@ -86,9 +86,9 @@ class GroupStub:
         """Take a user out of the placement: he is not this group's business any more."""
         self.user_worker_map.pop(user, None)
 
-    def drop_worker(self, worker_handler: Any) -> None:
+    def drop_worker(self, worker: str) -> None:
         """Take a dead handler out of the group, with the placements that pointed at it."""
-        self.dropped_workers.append(worker_handler)
+        self.dropped_workers.append(worker)
         for user in list(self.user_worker_map):
-            if self.user_worker_map[user] == worker_handler.name:
+            if self.user_worker_map[user] == worker:
                 del self.user_worker_map[user]

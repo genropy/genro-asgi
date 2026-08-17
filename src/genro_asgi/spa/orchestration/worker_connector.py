@@ -35,11 +35,12 @@ chain, by whoever is sending it. So the protocol lives here and the meaning live
 there, and neither has to be changed for the other.
 
 **The store goes whole, every time.** There is no delta and no version number:
-the master replaces the replica entire, at the presentation like at every later
-change, so the newborn is not a special case and nothing can arrive out of
-order. It costs the whole store per change, which at this scale is nothing —
-the global store is measured in kilobytes and changes something like once every
-three hours.
+the master replaces the replica entire, so nothing can arrive out of order. It
+costs the whole store per change, which at this scale is nothing — the global
+store is measured in kilobytes and changes something like once every three
+hours. Today it travels on one envelope only, the answer to the presentation,
+because that is the only process holding none of it; the update to a process
+already alive replaces the replica the same way when it arrives.
 
 **Stale socket, always unlinked.** The socket file outlives the process that
 crashed, and a bind over it fails; the path is cleared before every bind. The
@@ -139,11 +140,7 @@ class WorkerConnector:
         return self._connected_event.is_set()
 
     async def start(self) -> None:
-        """Bind the socket and start listening for the child of this handler.
-
-        Creates the socket directory private (0700), clears whatever the
-        previous life left at the path, and binds.
-        """
+        """Bind the socket and start listening: the directory private, the stale path cleared."""
         self.socket_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.socket_path.unlink(missing_ok=True)
         self._server = await asyncio.start_unix_server(
@@ -154,10 +151,8 @@ class WorkerConnector:
     async def stop(self) -> None:
         """Close the wire for good and take the socket away — announced to nobody.
 
-        Closes the child's stream and the listening socket, fails the pending
-        CALLs and unlinks the socket file. FINAL: this connector does not reopen.
-        The death it causes is not denounced, which is the whole point — a wire
-        closed on purpose must not look like a worker dying on its own.
+        Acts on the stream, the listening socket, the pending CALLs and the socket
+        file. FINAL: this connector does not reopen.
         """
         self._closing = True
         if self._stream is not None:
@@ -293,9 +288,7 @@ class WorkerConnector:
 
         Whatever it composed for the descent is dropped: nothing goes down in
         answer to an answer. A fold that raises is denounced and the caller is
-        answered anyway — the same rule as every other thing the handler is told
-        here, because a bug one level up must not sever a wire and take a whole
-        process's users with it.
+        answered anyway.
         """
         try:
             self.worker_handler.read_envelope(frame.data or {})

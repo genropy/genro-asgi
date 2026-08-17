@@ -201,3 +201,25 @@ baptised in the plan (`quit_process`, `ping_now`, the six `state` values,
 (`_answer_then_quit`, `_flag_everybody_for_departure`, `_park_death_wait`,
 `_settle_death_wait`). `SECONDS_PER_MINUTE` is the only new public constant: it is
 a unit conversion, not a decision, and it is named after what it is.
+
+## Simplification round (2026-08-17, foreman-2, after phases 1-2)
+
+Owner's criterion, now a standing rule: excess code IS a defect ("150
+lines where 70 suffice is shit"). Adversarial review found ~20% code
+excess + docstring bloat vs the ratified triplet; fix round applied
+R1-R9: bare public maps (pattern subscription_index), one-dict-write
+methods inlined, global_register.py deleted (bare Bag on the
+commander, TYTX at the consumer), store attached ONLY to presentation
+envelopes (gate: top-level "pid"), worker_handler parameter removed
+from all chain signatures (drop_worker takes the NAME), base-class
+ceremony deleted, on_process_aborted = on_process_quitted alias (the
+worker event already distinguishes: frozen_users empty on aborted),
+DEATH_WORKER_EVENTS dict -> f-string, docstring triplet pass.
+Re-review (adversarial, 9 neutralization probes): LANDABLE; restored
+the orders-logger detach loop + its test (R9 had deleted real
+behavior: cross-commander log pollution); killed 2 tautological tests
+left by R3. Executable code of the new modules 298 -> ~250.
+Contract notes for phases 3-4: the real GroupHandler.drop_worker must
+be LOUD on an unknown name (the stub is silent); an ordered quit
+whose photo never arrived purges everybody as quitted — the caller
+(the group) must ensure a photo preceded the order.

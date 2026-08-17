@@ -51,6 +51,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from genro_tytx import to_tytx
 
 from genro_asgi.spa.orchestration import FreezeHandler, WorkerHandler
 
@@ -149,7 +150,7 @@ async def test_a_worker_is_born_works_dies_wild_and_leaves_its_traces_behind(
     assert handler.worker_snapshot == {
         "pid": handler.process.pid,
         "name": "standard_0001",
-        "global_store": group.spa_commander.global_register.item_tytx,
+        "global_store": to_tytx(group.spa_commander.global_register, "json"),
     }
 
     # It takes the semaphore of one of its users. Nothing is announced upward:

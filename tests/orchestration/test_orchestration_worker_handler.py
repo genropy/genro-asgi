@@ -42,6 +42,9 @@ from typing import Any
 
 import pytest
 
+from genro_tytx import to_tytx
+
+from genro_asgi.spa.orchestration.envelope_handler import PRESENTATION_KEY
 from genro_asgi.spa.orchestration.worker_connector import GLOBAL_STORE_KEY, WORKER_SNAPSHOT_KEY
 from genro_asgi.spa.orchestration import WorkerHandler
 from genro_asgi.spa.orchestration import worker_handler as worker_handler_module
@@ -181,12 +184,15 @@ async def test_the_spawn_payload_carries_the_child_whole_configuration(make_hand
     }
 
 
-async def test_the_store_has_an_owner_now_and_the_chain_answers_with_it(make_handler, group):
+async def test_the_store_has_an_owner_now_and_the_presentation_is_answered_with_it(
+    make_handler, group
+):
     handler = make_handler()
 
-    assert handler.read_envelope({}) == {
-        GLOBAL_STORE_KEY: group.spa_commander.global_register.item_tytx
+    assert handler.read_envelope({PRESENTATION_KEY: 4242}) == {
+        GLOBAL_STORE_KEY: to_tytx(group.spa_commander.global_register, "json")
     }
+    assert handler.read_envelope({}) == {}
 
 
 async def test_a_launched_process_presents_itself_on_the_handlers_socket(make_handler):

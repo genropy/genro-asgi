@@ -61,6 +61,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from genro_tytx import to_tytx
 
 from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker, UserOnHold, WorkerHandler
 from genro_asgi.spa.orchestration.worker_connector import WORKER_SNAPSHOT_KEY
@@ -286,7 +287,7 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
 
     assert reply["result"]["status"] == 200
     assert ["X-Worker", WORKER_NAME] in reply["result"]["headers"]
-    master_store = group.spa_commander.global_register.item_tytx
+    master_store = to_tytx(group.spa_commander.global_register, "json")
     assert ["X-Global-Store", master_store] in reply["result"]["headers"]
     assert body_of(reply) == "GET /invoices for mario"
     assert announced(reply) == ["new_user", "new_connection"]
@@ -427,7 +428,7 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     # flagged — whose own worker events died with the wire.
     handler.envelope_handler.announce_death_TBD()
 
-    assert group.dropped_workers == [handler]
+    assert group.dropped_workers == [WORKER_NAME]
     assert commander.user_is_frozen("mario") is True
     assert commander.user_is_frozen("anna") is True
     assert group.user_worker_map == {"mario": None, "anna": None}

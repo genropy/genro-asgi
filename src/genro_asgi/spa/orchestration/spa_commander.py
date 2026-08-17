@@ -39,7 +39,16 @@ BEFORE anything descends, ``resolve_user`` writes the identity (``guest_<cid>``)
 and its row: routing somebody the indexes do not carry is exactly what cannot be
 done, so the writing comes first. The worker events the reception then sends
 upward (``new_user``, ``new_connection``) find the work already done, and are
-idempotent no-ops by design.
+idempotent no-ops by design. A cid whose row is gone — a cookie that outlived it
+— is minted again, empty: the browser is still known, its state is not.
+
+**The master of the store lives here, and it is a Bag.** Every worker holds a
+replica of it and never writes it: what a worker wants written travels up, is
+written here, and comes back down as the whole content again. The Bag is where
+the store meets the application; the TYTX encoding is where it meets the channel,
+so it happens on the way out and nowhere else. The read-modify-write grant — one
+worker at a time holding the master while it computes a new value — is the lock,
+and it arrives with the request chain.
 
 **Two writers, both here.** The minting above is one; the other is the fold — the
 chain of the envelope, which turns what the processes announce into these
@@ -72,10 +81,11 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
+from genro_bag import Bag
+
 from .envelope_handler import CommanderEnvelopeHandler
 from .exceptions import UserOnHold
 from .freeze_handler import FreezeHandler
-from .global_register import GlobalRegister
 
 #: What a user with no name of his own is called: the prefix plus his cid. The
 #: name itself carries the rule — whoever reads it knows nobody logged in here.
@@ -111,52 +121,30 @@ class SpaCommander:
         orchestration_log_backup_count: int = 5,
     ) -> None:
         self.freeze_handler = FreezeHandler(frozen_users_path)
-        self.global_register = GlobalRegister()
+        #: The master of the store every worker holds a replica of: the only
+        #: writer of that content is here, and a replica is replaced entire.
+        self.global_register = Bag()
         self.envelope_handler = CommanderEnvelopeHandler(self)
         #: Where the whole machine stands: ``running``, ``saturated`` (no room
         #: for a newcomer anywhere) or ``broken``. Written by the check of the
         #: resources, which arrives with the heartbeat.
         self.state = "running"
+        #: The aggregate counts, one key per thing worth counting.
         self.counters: Counter[str] = Counter()
-        self._user_map: dict[str, dict[str, Any]] = {}
-        self._connection_user_map: dict[str, str] = {}
-        self._page_connection_map: dict[str, str] = {}
+        #: The anagraph: one row per identity the machine knows. Read it through
+        #: the predicates, and leave the writing to the mutators.
+        self.user_map: dict[str, dict[str, Any]] = {}
+        #: Whose each cid is. A cid stays here once written: the cookie outlives
+        #: the process, the placement and the freezer.
+        self.connection_user_map: dict[str, str] = {}
+        #: Which connection each page belongs to; written once, only ever removed.
+        self.page_connection_map: dict[str, str] = {}
         self._logger = logging.getLogger(__name__)
         self._orders_logger = self._build_orders_logger(
             orchestration_log_path,
             orchestration_log_max_bytes,
             orchestration_log_backup_count,
         )
-
-    @property
-    def user_map(self) -> dict[str, dict[str, Any]]:
-        """The anagraph: one row per identity the machine knows.
-
-        Returns:
-            The live index — read it through the predicates, and leave the
-            writing to the mutators.
-        """
-        return self._user_map
-
-    @property
-    def connection_user_map(self) -> dict[str, str]:
-        """Whose each cid is.
-
-        Returns:
-            The live index. A cid stays here once written: the cookie outlives
-            the process, the placement and the freezer.
-        """
-        return self._connection_user_map
-
-    @property
-    def page_connection_map(self) -> dict[str, str]:
-        """Which connection each page belongs to.
-
-        Returns:
-            The live index. A page's connection never changes, so a row here is
-            written once and only ever removed.
-        """
-        return self._page_connection_map
 
     def resolve_user(self, cid: str) -> str:
         """The reception desk: whose cid this is, minting him if he is new.
@@ -173,20 +161,16 @@ class SpaCommander:
                 asked for him waits rather than being routed to an address that
                 is being emptied.
 
-        Acts on the indexes when the cid or the row is missing: the rows of a
-        newcomer are written HERE, before anything descends, because routing
-        somebody the indexes do not carry cannot be done. A cid whose row is gone
-        — a cookie that outlived it — is minted again, empty: the browser is
-        still known, its state is not.
+        Acts on the indexes when the cid or the row is missing.
         """
-        user = self._connection_user_map.get(cid)
+        user = self.connection_user_map.get(cid)
         if user is None:
             user = f"{GUEST_PREFIX}{cid}"
-            self._connection_user_map[cid] = user
+            self.connection_user_map[cid] = user
             self._logger.info("Vertex: cid %s is new — minted as %s", cid, user)
-        if user not in self._user_map:
-            self._user_map[user] = self._new_row()
-        row = self._user_map[user]
+        if user not in self.user_map:
+            self.user_map[user] = self._new_row()
+        row = self.user_map[user]
         if row["on_hold"] is not None:
             raise UserOnHold(user, row["on_hold"])
         return user
@@ -201,7 +185,7 @@ class SpaCommander:
             True when the mark is on. An identity with no row at all is not
             frozen — there is nothing of his anywhere.
         """
-        row = self._user_map.get(user)
+        row = self.user_map.get(user)
         return bool(row and row["frozen"])
 
     def hold_user_TBD(self, user: str, cause: str) -> None:
@@ -211,24 +195,12 @@ class SpaCommander:
             user: the identity on his way out of the process he lives on.
             cause: what put him there, kept for the log.
 
-        Acts on his row. Setting a hold that is already there is that same state,
-        and the cause of the first one stays: it is the one that explains the
-        wait.
+        Acts on his row; a hold already there keeps its first cause, which is
+        the one that explains the wait.
         """
-        row = self._user_map[user]
+        row = self.user_map[user]
         if row["on_hold"] is None:
             row["on_hold"] = cause
-
-    def add_page(self, page_id: str, cid: str) -> None:
-        """Write which connection a newborn page belongs to.
-
-        Args:
-            page_id: the page that was born.
-            cid: the connection that asked for it.
-
-        Acts on ``page_connection_map``.
-        """
-        self._page_connection_map[page_id] = cid
 
     def drop_page(self, page_id: str) -> None:
         """Forget a page.
@@ -239,7 +211,7 @@ class SpaCommander:
 
         Acts on ``page_connection_map``.
         """
-        self._page_connection_map.pop(page_id, None)
+        self.page_connection_map.pop(page_id, None)
 
     def drop_connection(self, cid: str) -> None:
         """Forget a connection's pages, and keep the connection's identity.
@@ -248,11 +220,10 @@ class SpaCommander:
             cid: the connection that is gone.
 
         Acts on ``page_connection_map`` only: the cid stays in
-        ``connection_user_map``, because the cookie is eternal and the browser
-        that comes back on it is the same person.
+        ``connection_user_map``, because the cookie is eternal.
         """
-        for page_id in self.get_connection_pages_TBD(cid):
-            del self._page_connection_map[page_id]
+        for page_id in [page for page, owner in self.page_connection_map.items() if owner == cid]:
+            del self.page_connection_map[page_id]
 
     def drop_user(self, user: str) -> None:
         """Forget an identity whole: his row, his connections, his pages, his waiting.
@@ -264,14 +235,13 @@ class SpaCommander:
         Acts on all three indexes, and counts what was waiting for him and will
         now never be delivered.
         """
-        row = self._user_map.pop(user, None) or {}
-        for cid in self.get_user_connections_TBD(user):
+        row = self.user_map.pop(user, None) or {}
+        for cid in [cid for cid, owner in self.connection_user_map.items() if owner == user]:
             self.drop_connection(cid)
-            del self._connection_user_map[cid]
-        waiting = len(row.get("pending_dbevents") or ()) + len(
+            del self.connection_user_map[cid]
+        self.counters["pendings_lost"] += len(row.get("pending_dbevents") or ()) + len(
             row.get("pending_datachanges") or ()
         )
-        self.record_count_TBD("pendings_lost", waiting)
 
     def record_user_frozen_TBD(self, user: str, occupancy_percent: float | None) -> None:
         """Write down that a user's state is on disk, and what it is expected to cost.
@@ -286,36 +256,26 @@ class SpaCommander:
         Acts on his row: the mark goes on and the wait he may have been in is
         over — his next request is routed by the mark itself.
         """
-        row = self._user_map[user]
+        row = self.user_map[user]
         row["frozen"] = True
         row["on_hold"] = None
         if occupancy_percent is not None:
             row["occupancy_percent"] = occupancy_percent
 
-    def record_user_adopted_TBD(self, user: str) -> dict[str, list[Any]]:
-        """Write down that a user came home from the freezer, and take his waiting off the row.
+    def record_user_adopted_TBD(self, user: str) -> None:
+        """Write down that a user came home from the freezer.
 
         Args:
             user: the identity now living in a process again.
 
-        Returns:
-            What was waiting for him while he was away, drained from the row —
-            its DELIVERY belongs to whoever answers his requests, and arrives
-            with the data plane. Nothing fills these slots yet.
-
-        Acts on his row: the mark goes off, the wait is over, the slots are
-        emptied.
+        Acts on his row: the mark goes off, the wait is over, the slots of what
+        was waiting are emptied.
         """
-        row = self._user_map[user]
+        row = self.user_map[user]
         row["frozen"] = False
         row["on_hold"] = None
-        waiting = {
-            "pending_dbevents": row["pending_dbevents"],
-            "pending_datachanges": row["pending_datachanges"],
-        }
         row["pending_dbevents"] = []
         row["pending_datachanges"] = []
-        return waiting
 
     def purge_users_TBD(self, users: list[str], *, cause: str) -> None:
         """Take these users out of the machine and discard whatever they left on disk.
@@ -326,16 +286,14 @@ class SpaCommander:
                 somebody on the way.
 
         Acts on all three indexes and on the deposit: what a process nobody can
-        question left behind cannot be trusted, so it goes, counted. Their next
-        request finds nothing of them and is a re-login, which is the declared
-        price of a death nobody ordered.
+        question left behind cannot be trusted, so it goes, counted.
         """
         folders = self.freeze_handler.user_folders
         for user in users:
             had_state = self.freeze_handler.user_to_userkey(user) in folders
             if had_state:
                 self.freeze_handler.drop_user_folder(user)
-                self.record_count_TBD("frozen_users_discarded")
+                self.counters["frozen_users_discarded"] += 1
             self.drop_user(user)
             self.log_order(
                 "vertex",
@@ -344,17 +302,6 @@ class SpaCommander:
                 numbers={"had_state": had_state},
                 outcome=cause,
             )
-
-    def record_count_TBD(self, name: str, amount: int = 1) -> None:
-        """Add to one of the aggregate counters.
-
-        Args:
-            name: what is being counted.
-            amount: how much to add.
-
-        Acts on ``counters``.
-        """
-        self.counters[name] += amount
 
     def log_order(
         self,
@@ -373,10 +320,6 @@ class SpaCommander:
             subject: on whom or on what.
             numbers: what the decider had in front of it when it decided.
             outcome: how it ended.
-
-        The row is the account of a decision, and a wild death is written like an
-        order nobody gave: whoever reads this file must find every fact that
-        changed the shape of the pool.
         """
         self._orders_logger.info(
             "decided_by=%s order=%s subject=%s numbers=%s outcome=%s",
@@ -386,31 +329,6 @@ class SpaCommander:
             numbers,
             outcome,
         )
-
-    def get_user_connections_TBD(self, user: str) -> list[str]:
-        """The cids of one user.
-
-        Args:
-            user: the identity to look up.
-
-        Returns:
-            His connections, as a list taken now: the caller usually goes on to
-            drop them, and a view would change under it.
-        """
-        return [cid for cid, owner in self._connection_user_map.items() if owner == user]
-
-    def get_connection_pages_TBD(self, cid: str) -> list[str]:
-        """The pages of one connection.
-
-        Args:
-            cid: the connection to look up.
-
-        Returns:
-            Its pages, as a list taken now. The index is page → connection, so
-            this walks it: pages are few per connection and the walk happens
-            when one goes away, never on the way in.
-        """
-        return [page for page, owner in self._page_connection_map.items() if owner == cid]
 
     def _new_row(self) -> dict[str, Any]:
         """The row of an identity nobody knows anything about yet."""
@@ -428,10 +346,9 @@ class SpaCommander:
     ) -> logging.Logger:
         """The dedicated logger of the orders, with its own file when there is one.
 
-        The file is attached in place of whatever was there: a process has ONE
-        vertex, so this logger is this object's, and a second commander in the
-        same process — which only a test builds — replaces the first rather than
-        writing every row twice.
+        The file is attached in place of whatever was there: a second commander
+        in the same process replaces the first rather than writing every row
+        twice into somebody else's file.
         """
         logger = logging.getLogger(ORDERS_LOGGER_NAME)
         if path is None:

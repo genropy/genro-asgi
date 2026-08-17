@@ -24,8 +24,8 @@ disk and the only place in the project that talks to the filesystem directly;
 process and its death; ``SpaWorker``, the registers that process serves from;
 ``WorkerEntry``, the shell that runs one of those workers in a child process;
 the three ``EnvelopeHandler`` layers, the chain everything a process announces
-climbs; ``SpaCommander``, the vertex that owns the indexes of the whole machine,
-with ``GlobalRegister`` holding the store every worker replicates.
+climbs; ``SpaCommander``, the vertex that owns the indexes of the whole machine
+and the master of the store every worker replicates.
 """
 
 from .envelope_handler import (
@@ -36,7 +36,6 @@ from .envelope_handler import (
 )
 from .exceptions import UserOnHold
 from .freeze_handler import FreezeHandler
-from .global_register import GlobalRegister
 from .spa_commander import SpaCommander
 from .spa_worker import SpaWorker
 from .worker_connector import WorkerConnector
@@ -47,7 +46,6 @@ __all__ = [
     "CommanderEnvelopeHandler",
     "EnvelopeHandler",
     "FreezeHandler",
-    "GlobalRegister",
     "GroupEnvelopeHandler",
     "SpaCommander",
     "SpaWorker",

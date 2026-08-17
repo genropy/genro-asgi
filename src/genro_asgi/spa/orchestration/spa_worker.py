@@ -670,8 +670,7 @@ class SpaWorker:
             config: the spawn payload this process was built from, echoed back
                 so the handler sees what its child understood of it.
 
-        Sets ``global_register_item_tytx``. The presentation carries the first
-        photo: a live process is never without one.
+        Sets ``global_register_item_tytx``.
         """
         await self.stream.write(
             Frame(
@@ -709,11 +708,9 @@ class SpaWorker:
             frame: the envelope as it came off the wire.
 
         A CALL is served on its own task, so a long op cannot make this worker
-        deaf to the next one — and a CALL is the ONLY envelope that comes down
-        this wire, because the protocol is asymmetric: orders descend, and what
-        this worker has to say rides the answers going up. Anything else is
-        denounced. The one thing that travels down beside an order — the store —
-        was taken off this envelope before anything looked at its kind.
+        deaf to the next one, and it is the ONLY envelope that comes down this
+        wire; anything else is denounced. The store is taken off the envelope
+        before anything looks at its kind.
         """
         self._take_global_store(frame)
         if frame.method == CALL_METHOD:
@@ -731,12 +728,7 @@ class SpaWorker:
         Args:
             frame: the CALL as it came off the wire.
 
-        Sends exactly one REPLY, whatever the outcome. The beat asks aliveness
-        and gets an empty answer — what it proves is that the answer came. A drop
-        is answered when it is done, so the worker events it made ride that same
-        reply; the order to leave is answered BEFORE the departures start,
-        because the process ends with them. Each op is named after the verb of
-        this class that serves it, and carries that verb's own argument.
+        Sends exactly one REPLY, whatever the outcome.
         """
         payload = frame.data or {}
         if frame.path == PING_OP_PATH:
@@ -1202,11 +1194,7 @@ class SpaWorker:
         return time.time() >= self._transfers_start_ts
 
     def _outbound(self, data: dict[str, Any]) -> dict[str, Any]:
-        """Attach the photo to an envelope going out, when it is due.
-
-        One road for the three moments the design names — the presentation, a
-        population that changed, a photo gone stale — because there is one slot.
-        """
+        """Attach the photo to an envelope going out, when it is due."""
         if not self._snapshot_due:
             return data
         data[WORKER_SNAPSHOT_KEY] = self.worker_snapshot
@@ -1215,11 +1203,7 @@ class SpaWorker:
         return data
 
     def _take_global_store(self, frame: Frame) -> None:
-        """Take the whole global store off an inbound envelope and replace the replica.
-
-        The mirror of what the wire does with the photo in the other direction:
-        the slot is read before anything asks what kind of envelope this is.
-        """
+        """Take the whole global store off an inbound envelope and replace the replica."""
         if isinstance(frame.data, dict) and GLOBAL_STORE_KEY in frame.data:
             self.global_register_item_tytx = frame.data[GLOBAL_STORE_KEY]
 
@@ -1231,10 +1215,8 @@ class SpaWorker:
             payload: its payload; ``expiry_delay`` is the silence past which a
                 user is dropped instead of parked.
 
-        The flags are posed BEFORE the answer, so the photo riding it shows every
-        user ceded and the level above parks them all in one read. Only then the
-        departures run — and the process ends with them, which is why the answer
-        could not have waited for the work.
+        Acts on the flags before the answer, so the photo riding it shows every
+        user ceded and the level above parks them all in one read.
         """
         expiry_delay = payload.get("expiry_delay", math.inf)
         self._flag_everybody_for_departure(expiry_delay)
@@ -1242,11 +1224,7 @@ class SpaWorker:
         await self.quit(expiry_delay=expiry_delay)
 
     def _flag_everybody_for_departure(self, expiry_delay: float) -> None:
-        """Cede every user and make the plan terminal: this worker is leaving.
-
-        Sets ``_quitting`` and the flags. Posing them twice is the same outcome
-        as posing them once — the plan of a departure takes nobody back off it.
-        """
+        """Cede every user and make the plan terminal: sets ``_quitting`` and the flags."""
         self._quitting = True
         self.plan_transfers(transfer_users=list(self._user_register), expiry_delay=expiry_delay)
 
