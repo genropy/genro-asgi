@@ -386,6 +386,17 @@ register item, freezer, check, timeout, restart, congelamento per inattività.
     is DEDUCED (max − reserve), never configured.
   - Details: the group is the level that owns the manoeuvres; it never
     touches an index of the vertex and never opens the freezer.
+    CONTRACT NOTES from the simplification round (2026-08-17, binding):
+    (a) `GroupHandler.drop_worker(name)` is LOUD on an unknown name — the
+    test stub is silently idempotent, the real one must not be;
+    (b) an ordered quit whose photo never arrived purges everybody as
+    quitted — the group ensures a photo preceded the order (the quit
+    REPLY itself carries one; the guard is about the degenerate path).
+    LINE CAP (the owner's rule: excess code IS a defect): the new
+    `group_handler.py` stays around ~200 executable lines (the twin
+    `worker_handler.py` runs ~200); method docstrings are the TRIPLET,
+    narrative lives in the module docstring only. The phase review
+    judges volume as a defect class, same as correctness.
   - Done: `pytest tests/ -q` green; `ruff check src/ tests/` clean; tests
     covering: boot brings up the reception; the fullest-first walk; each of
     the four refusals raised and caught; growth on demand inside the quota
@@ -448,6 +459,9 @@ register item, freezer, check, timeout, restart, congelamento per inattività.
     only the frozen are the vertex's.
   - Details: no caretaker object exists — the probe IS the beat. The
     monitor gets a fresh photo for free by ringing the wake.
+    LINE CAP: the loop + cascade + vertex tasks are ~120 executable
+    lines added across the two files; triplet docstrings, volume judged
+    as a defect at review.
   - Done: `pytest tests/ -q` green; `ruff check src/ tests/` clean; tests
     covering: one round with a real child; a mute process delaying its own
     group and not the others; a wake giving an anticipated round on one
@@ -506,6 +520,13 @@ register item, freezer, check, timeout, restart, congelamento per inattività.
 
 ## Notes
 
+- **Volume is a defect** (owner's rule, 2026-08-17, standing): "150
+  lines where 70 suffice" is an error of the same class as wrong code.
+  Every phase carries a line cap; wrapper layers delegating 1:1,
+  methods wrapping one dict-write, dead parameters and defensive code
+  without a requester are findings at review. Method docstrings follow
+  the ratified triplet (params, returns, acts-on-state — nothing else);
+  narrative belongs to module docstrings.
 - **The chain of identity** stays as M2 left it: cookie → cid →
   `connection_user_map` → `user_worker_map` → the worker. The front
   (`SpaApplication`) keeps ZERO state, and wiring it to the new commander is
