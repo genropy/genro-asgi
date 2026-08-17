@@ -1,0 +1,433 @@
+# Context: wf/orchestration-m3-commander-groups
+Parent: main
+Mode: interactive
+
+## Objective
+Build the two upper levels of the SPA orchestration rebuild (design v4,
+Macro 3): the envelope chain (`WorkerEnvelopeHandler` /
+`GroupEnvelopeHandler` / `CommanderEnvelopeHandler`), the vertex
+(`SpaCommander` — the three indexes, the minting of the newcomer, the
+parking gate, the global register master, the orchestration log) and the
+group (`GroupHandler` — the user→worker map, EAFP placement on occupancy,
+the manoeuvres, the crisis states), driven by ONE heartbeat at the vertex.
+The request chain and the login are Macro 4; the legacy machine
+(`spa/commander.py`, `spa/worker.py`) stays untouched until Macro 6.
+
+Authority order on any doubt: `temp/interview_handler_2026-08-15.md`
+(decision register, F1–F47) > `temp/design_orchestrazione_v4_2026-08-17.md`
+(spec) > `temp/design_orchestrazione_v3_2026-08-16.md` (the sections v4 does
+not touch: deposit/freezer §8, login §11, boot §12, data plane §9, deaths
+and pushbacks §14–15) > this plan.
+
+**This plan amends the v4 on four points**, all ratified by the owner during
+this planning session (2026-08-17, afternoon). They are recorded here because
+no register entry carries them yet:
+
+1. **Vocabulary.** `heartbeat` names the FREQUENCY only; `ping` is the
+   ACTION. So the cascade is `ping_groups()` → `ping()` → `ping_workers()` →
+   `ping_process()`, and `on_heartbeat` does NOT exist: `on_` stays exclusive
+   to the announcements that climb. Each level names the object it acts on
+   (the group is not a dog, it is the owner of dogs).
+2. **One cadence, counters below.** The vertex has ONE clock. It pings every
+   group every beat; the group counts its own beats and runs its own
+   `check_occupancy()` when due. `MEDIUM_URGENCY_EVERY` /
+   `LOW_URGENCY_EVERY` as vertex constants do NOT exist: the number lives
+   where the knowledge is. A round is one-per-group: a group whose previous
+   round is still open skips its turn, the others go (a mute process delays
+   its own group only, never the machine).
+3. **The group has no target.** `target_workers` DIES. At boot the reception
+   is born; the group grows on demand (nobody admits → wake → a process is
+   born, if the memory quota has room) and shrinks when capacity is wasted.
+   With it die `launch_missing_workers`, the `target − 1` of F46 step 1, the
+   `target` restored at step 6, and the `vivi == target` reconcile.
+4. **The death is a state, not a pocket.** The `WorkerHandler` carries
+   `state` among six values; `_governed_death` and every mark posed from
+   outside dissolve, and no announcement is stored waiting for a turn.
+
+**Naming rule for this workflow** (ratified 2026-08-17, replaces
+"every baptism in planning"): a new public name whose baptism is not settled
+is born with the `_TBD` suffix (`accept_offer_TBD`). At the END of each phase
+the executing chat brings the owner ONLY the surviving `_TBD` names — one at
+a time, semantics plus 2–3 candidates — and the rename is a search-and-replace
+in its own commit. A name whose code turned out unnecessary dies with it and
+is never brought up. No `_TBD` survives the end of the workflow.
+
+**Names already baptised, in this session** (the executor invents none of
+them, and asks nobody):
+`WorkerQuittingError` · `heartbeat_loop()` · `ping_groups()` · `ping()` ·
+`ping_workers()` · `ping_now()` / `ping_now_event` · the six `state` values
+on `WorkerHandler` (`starting` / `running` / `quitting` / `restarting` /
+`quitted` / `aborted`) · `resolve_user(cid)` · `assign_user` (the same word
+on the three rungs) · `check_occupancy()` · `drop_expired_users()` ·
+`check_resources()` · `log_order()` · `GlobalRegister` · the three `state`
+values on `GroupHandler` and `SpaCommander` (`running` / `saturated` /
+`broken`).
+Inherited from F42–F47 and still valid: `SpaCommander` · `user_map` /
+`connection_user_map` / `page_connection_map` · `user_worker_map` ·
+`WorkerEnvelopeHandler` / `GroupEnvelopeHandler` / `CommanderEnvelopeHandler` ·
+`on_<announcement>` · `AssignmentRefused` / `NoRoomError` /
+`WorkerRestartingError` · `UserOnHold` · `quit_process` · `restart_worker` ·
+`drop_worker` · `process_quitted` / `process_aborted` · `/op/quit`,
+`/op/drop_user`, `/op/drop_connection` · `user_is_frozen(user)` ·
+`occupancy_percent` · `disk_cleanup` · `need_resources`.
+
+**Excluded words** (from names AND prose): parcel, deposit, judgment, budget,
+valvola, relaunch, seat/posto, and the names of the dead. Say instead:
+register item, freezer, check, timeout, restart, congelamento per inattività.
+
+## Work Plan
+
+- [ ] **Phase 1**: Retrofit M1/M2 to the v4 — the death becomes a state
+  - Run: opus / medium
+  - Pattern: `.phased/done/orchestration-m2-worker-process/plan.md` Phase 1
+    (the same job, done once already: rename + remove, no new behaviour);
+    the M1/M2 modules themselves.
+  - Files: src/genro_asgi/spa/orchestration/worker_handler.py,
+    src/genro_asgi/spa/orchestration/worker_connector.py,
+    src/genro_asgi/spa/orchestration/spa_worker.py,
+    src/genro_asgi/spa/orchestration/__init__.py,
+    tests/orchestration/test_orchestration_worker_handler.py,
+    tests/orchestration/test_orchestration_worker_connector.py,
+    tests/orchestration/test_orchestration_spa_worker_process.py,
+    tests/orchestration/test_orchestration_spa_worker_departures.py,
+    tests/orchestration/test_orchestration_m2_e2e.py,
+    tests/orchestration/child_stub.py
+  - Decisions:
+    (1) **The state machine.** `WorkerHandler.state` holds one of
+    `starting` (process spawned, not yet presented) · `running` ·
+    `quitting` (`/op/quit` sent, draining, will not come back) ·
+    `restarting` (dead and awaiting its successor, will come back) ·
+    `quitted` (died as ordered, the group has yet to consume it) ·
+    `aborted` (died with nobody waiting — the wild death, C3 bonifica).
+    The classification is the PURE WAIT: `quit_process()` parks a future,
+    the EOF resolves it; EOF with a live wait = `quitted`, without =
+    `aborted`. REMOVED: `_governed_death`, `_wait_ordered_death_seen`, and
+    the marking inside `restart_process`.
+    (2) **`quit_process()`** is born: sends `/op/quit`, sets `quitting`,
+    awaits the seen death with `QUIT_TIMEOUT_SECONDS`; a timeout is a loud
+    abort. `restart_process` keeps its own name (M1) and sets `restarting`.
+    (3) **`on_child_lost`** no longer classifies and no longer calls
+    `on_worker_abort`: it writes the state and calls `ping_now()` on its
+    group — the group learns at its (anticipated) round, reading the state.
+    (4) **`ping_process` returns the REPLY payload** instead of discarding
+    it (today `await self.connector.call(PING_OP_PATH, ...)` throws away
+    everything the child announced — the producer exists since M2 and the
+    consumer does not, so every announcement riding a ping's REPLY dies
+    silently). Phase 2 hands that payload to the chain; in this phase the
+    return value is asserted by the tests.
+    (5) **The op contracts on `SpaWorker`**: `/op/quit`, `/op/drop_user`,
+    `/op/drop_connection` (key = the verb of `SpaWorker`); the reply to the
+    quit carries the photo with every flag `T`.
+    (6) **What dies**: `SpaWorker.call()` and the whole EVENT lane in both
+    directions (the channel protocol is asymmetric: CALL down, the
+    presentation at birth and then REPLY only up), `on_child_message`.
+    (7) **Unit renames**: `user_idle_freeze_delay` →
+    `user_idle_freeze_minutes` (with the conversion at the call sites);
+    `worker_snapshot_ttl` and `deposit_lock_retry_interval` are judged in
+    the same pass and renamed only if the unit is missing from the name.
+    (8) `global_register_item_tytx` stays as the placeholder it is: it moves
+    to the vertex in Phase 2.
+    (9) The `event` word keeps its M2 spelling. The rename proposed in
+    planning (`worker_events` / `add_worker_event`) is NOT part of this
+    phase: the owner declined the strategy of naming ahead of the code, and
+    whatever survives the chain gets its `_TBD` round at the end of Phase 2.
+  - Details: mechanical, one commit. `GroupStub` in the tests grows
+    `ping_now()` and loses `on_worker_abort`; the tests that photographed
+    the wild-death denunciation of a quit are rewritten on the state (a
+    failing one here is a real regression, not a test to adapt).
+  - Done: `pytest tests/ -q` green (the count may drop with the tests of
+    the removed mechanics); `ruff check src/ tests/` clean;
+    `grep -rn "_governed_death\|_wait_ordered_death_seen\|on_worker_abort\|on_child_message\|EVENT_METHOD\|user_idle_freeze_delay" src/genro_asgi/spa/orchestration/ tests/orchestration/`
+    returns nothing.
+
+- [ ] **Phase 2**: The envelope chain and the vertex
+  - Run: opus / high
+  - Pattern: `src/genro_asgi/middleware/base.py:87` (`BaseMiddleware` — the
+    callable chain, both ends handed in at construction, never discovered by
+    walking wrappers: the shape the three EnvelopeHandler take);
+    `src/genro_asgi/spa/orchestration/spa_worker.py` (the registers, the
+    single-mutator discipline under one lock);
+    `src/genro_asgi/spa/subscription_index.py` (the single mutator that
+    keeps two directions in step); the legacy `src/genro_asgi/spa/commander.py`
+    for the indexes being rethought — DEEP RETHINK, never a verbatim
+    transplant.
+  - Files: src/genro_asgi/spa/orchestration/envelope_handler.py (new),
+    src/genro_asgi/spa/orchestration/spa_commander.py (new),
+    src/genro_asgi/spa/orchestration/global_register.py (new),
+    src/genro_asgi/spa/orchestration/worker_handler.py,
+    src/genro_asgi/spa/orchestration/worker_connector.py,
+    src/genro_asgi/spa/orchestration/__init__.py,
+    tests/orchestration/test_orchestration_envelope_chain.py (new),
+    tests/orchestration/test_orchestration_spa_commander.py (new)
+  - Decisions:
+    (1) **Three classes, one per level, CALLABLE**, each holding the next:
+    `WorkerEnvelopeHandler` (one per handler) → `GroupEnvelopeHandler` (one
+    per group) → `CommanderEnvelopeHandler` (one). The `WorkerHandler` does
+    `return self.envelope_handler(envelope)`. Dispatch by name inside each
+    layer: `on_<announcement>` methods, homonymy cascading across layers
+    (cite `Class.method` when in doubt).
+    (2) **Up for nested calls, down for the return.** Every layer may
+    ENRICH what descends: the `CommanderEnvelopeHandler` adds
+    `global_register_item_tytx` when the master has changed. The primary
+    answer of a REPLY is handed to the parked caller as today. Rule: whoever
+    orchestrates calls, whoever owns executes and returns — no level
+    forwards on its own initiative.
+    (3) **The announcement census is v4 §3** (F47, ratified "all good, we
+    will refine if needed"): `worker_snapshot` (handler annotates → group
+    thresholds → vertex T/X flags into `on_hold`) · `new_user` /
+    `new_connection` (no-op, the minting already wrote them) · `new_page` ·
+    `drop_page(s)` · `drop_connection(s)` (the vertex drops its pages and
+    leaves `connection_user_map` intact — the cookie is eternal, A7) ·
+    `drop_user` · `user_frozen` (group: "to be assigned"; vertex: the mark
+    plus `occupancy_percent`) · `user_adopted` · `process_quitted` /
+    `process_aborted` (group: `drop_worker`; vertex: prune, or bonifica).
+    (4) **`SpaCommander`** in `spa/orchestration/spa_commander.py` (the
+    legacy `UserStickyCommander` untouched until Macro 6). It owns
+    `user_map` — `{group, frozen, on_hold, occupancy_percent,
+    pending_dbevents, pending_datachanges}` — `connection_user_map`
+    (cid → user) and `page_connection_map` (page → cid, immutable). Reading
+    goes through predicates (`user_is_frozen(user)`); `on_hold` is read ONLY
+    as `except UserOnHold`.
+    (5) **`resolve_user(cid)`**: the reception desk. Resolves the identity,
+    MINTS the entries of a cid never seen before (F47: the front mints the
+    cookie, the vertex writes the rows before descending — it cannot route
+    whom it has not written; the guest is named `guest_<cid>`), and raises
+    `UserOnHold` when the row carries a cause. The placement is the separate
+    step (`assign_user`, Phase 3).
+    (6) **`GlobalRegister`** (new class): holds the master, exposes the
+    TYTX-encoded form, knows it has changed and spreads the change to the
+    replicas. The lock grant is Macro 4. The placeholder property leaves
+    `WorkerHandler`.
+    (7) **`SpaCommander.state`**: `running` / `saturated` / `broken` — the
+    machine-level crisis, written by `check_resources()` in Phase 4.
+    (8) **`log_order(...)`**: composes ONE structured row per order (who
+    decided, what, on whom, when, the numbers it had in front, the outcome)
+    over a dedicated rotating handler; a wild death gets a row too. The
+    group does not know the file: it calls the vertex. Path, size and
+    backup count are grammar (Phase 5).
+  - Details: the chain is synchronous (RAM writes) and runs inline at the
+    point of arrival, so FIFO by construction. This phase closes the hole
+    Phase 1 declares: the payload `ping_process` now returns is handed to
+    `WorkerEnvelopeHandler` and climbs.
+  - Done: `pytest tests/ -q` green; `ruff check src/ tests/` clean; an
+    end-to-end test with a REAL child process (the M2 child stub) shows an
+    announcement born in the worker landing in the vertex's indexes, and the
+    global register change riding the descending envelope; every census row
+    of v4 §3 covered by a test.
+  - Verify: now — read `spa_commander.py` and the three EnvelopeHandler as
+    prose: does the ladder read as one mechanism, or does a layer look like
+    it is doing somebody else's job?
+  - Verify: now — the `_TBD` round: the surviving placeholders, one at a
+    time, semantics plus candidates.
+
+- [ ] **Phase 3**: GroupHandler — placement, manoeuvres, the two crises
+  - Run: opus / high
+  - Pattern: `src/genro_asgi/spa/orchestration/worker_handler.py` (the twin
+    level: how a handler owns its own and asks the level above nothing);
+    `src/genro_asgi/spa/evaluator.py:130` (`build_targets`,
+    `worker_saturation`, `worker_components` — the occupancy formula is
+    TRANSPLANTED from design #5, per component with its clamp, never
+    reinvented); the legacy `spa/commander.py` pool logic as a source to
+    rethink, never to copy.
+  - Files: src/genro_asgi/spa/orchestration/group_handler.py (new),
+    src/genro_asgi/spa/orchestration/exceptions.py (new, or the existing
+    `genro_asgi/exceptions.py` if the family belongs there),
+    src/genro_asgi/spa/orchestration/spa_commander.py,
+    src/genro_asgi/spa/orchestration/worker_handler.py,
+    src/genro_asgi/spa/orchestration/__init__.py,
+    tests/orchestration/test_orchestration_group_handler.py (new),
+    tests/orchestration/test_orchestration_placement.py (new)
+  - Decisions:
+    (1) **No target.** At boot the group brings the RECEPTION into being —
+    a role, not a count. It grows only on demand: nobody admits → the wake
+    rings → at the round `check_occupancy()` sees everybody at the setpoint
+    and brings a process into being, IF the group's memory quota has room
+    (sum of the group's rss ≤ quota × concession, AND the machine under its
+    alarm line). The stranger got a 503 with `Retry-After` and enters on his
+    retry. Nothing in grammar says how many processes there are.
+    (2) **EAFP placement.** `GroupHandler.assign_user(user)` walks the
+    candidates from the fullest down and calls
+    `WorkerHandler.assign_user(user)`, which judges itself from its
+    annotated photo and REFUSES BY RAISING. Family: `AssignmentRefused`
+    (base) ← `NoRoomError` (the projected count `mine + estimate(incomer) >
+    occupancy_max_percent`), `WorkerRestartingError` (state `restarting`),
+    `WorkerQuittingError` (state `quitting` — it will never come back).
+    Candidates exhausted → the base rises → the vertex answers 503 and the
+    wake rings. `decide_worker` and any admission predicate are NOT born.
+    (3) **The incomer's estimate**: computed by the worker that hosted him,
+    normalised into occupancy, travelling in `user_frozen`, living in the
+    `occupancy_percent` field of the `user_map` row; whoever has no estimate
+    (first login, guest) gets `new_user_occupancy_percent`. Overshoot
+    accepted (F15).
+    (4) **`check_occupancy()`** — ONE input (the occupancy picture), THREE
+    outputs: a process is born (group at the setpoint, quota has room), a
+    worker is closed (capacity wasted), a worker is restarted (over
+    `restart_occupancy_max_percent`). It ACTS on state, and its docstring
+    says so. Called by `ping()` when the group's own counter is due, and
+    IMMEDIATELY when the group was woken (the wake overrides the counter).
+    (5) **The closure**, F46 rewritten without the target: the group decides
+    a worker may die → `quit_process()`; the worker answers at once with the
+    photo all `T` → the vertex parks his users; the worker drains, freezing
+    one at a time, the announcements riding the ping replies; emptied, it
+    leaves by itself → the EOF was awaited → state `quitted` → at the round
+    the group does `drop_worker` (socket closed, out of the list) — the same
+    verb the wild-death bonifica uses. Past `QUIT_TIMEOUT_SECONDS` the abort
+    is loud and counted.
+    (6) **`restart_worker(handler)`** stays the ratified coroutine: same
+    quit, then `launch_process`. The why lives in the caller's stack, never
+    in a map of orders.
+    (7) **`GroupHandler.state`**: `running` / `saturated` (the memory quota
+    is full — a 503 that hopes somebody leaves) / `broken` (a
+    `launch_process` failed — a 503 that says we are working on it). Both
+    warn the sysop through `log_order`. There is no `crisis_policy` and no
+    `fallback_group`: a user does not change group.
+    (8) **`user_worker_map`** lives here, `None` meaning "to be assigned",
+    written by the single mutator that the announcements go through.
+    (9) **`reception_reserved_percent`**: the reception's placement setpoint
+    is DEDUCED (max − reserve), never configured.
+  - Details: the group is the level that owns the manoeuvres; it never
+    touches an index of the vertex and never opens the freezer.
+  - Done: `pytest tests/ -q` green; `ruff check src/ tests/` clean; tests
+    covering: boot brings up the reception; the fullest-first walk; each of
+    the four refusals raised and caught; growth on demand inside the quota
+    and refused outside it; the six steps of the closure with a real child;
+    `saturated` and `broken` reached and left.
+  - Verify: now — the `_TBD` round of this phase.
+  - Verify: deferred: needs Phase 5 — with a real installation, the group
+    grows and shrinks under load in a way that looks sane in the
+    orchestration log.
+
+- [ ] **Phase 4**: The heartbeat — one clock, counters below
+  - Run: opus / high
+  - Pattern: `src/genro_asgi/tasks/scheduler.py:100` (`start` / `stop` /
+    `_run_loop` — the periodic loop owned by the lifespan, the tick isolated
+    so a failing round never kills the loop, and a `tick()` a test can call
+    without the loop); `src/genro_asgi/lifespan.py` for the ordered
+    startup/shutdown.
+  - Files: src/genro_asgi/spa/orchestration/spa_commander.py,
+    src/genro_asgi/spa/orchestration/group_handler.py,
+    src/genro_asgi/spa/orchestration/freeze_handler.py,
+    src/genro_asgi/applications/spa_app.py,
+    tests/orchestration/test_orchestration_heartbeat.py (new)
+  - Decisions:
+    (1) **`heartbeat_loop()`** — the ONE interval of the whole system,
+    started and stopped by the lifespan. It waits on `timer OR any
+    `ping_now_event``: the timer gives a full round, a wake gives an
+    anticipated round on THAT group only. `HEARTBEAT_SECONDS = 5.0`
+    (constant, twin of `PROCESS_PING_INTERVAL`).
+    (2) **`ping_groups()`** is the cascade and NOTHING else — a separate
+    method so a test can run one round without the loop. It walks the
+    groups, skipping any whose previous round is still open (the per-group
+    lock), and awaits them with
+    `asyncio.gather(..., return_exceptions=True)`: everybody is awaited, an
+    exception is a value, nobody cancels a sibling. A mute process spends
+    its two `PROCESS_PING_TIMEOUT` inside its own group and delays nobody
+    else.
+    (3) **`GroupHandler.ping()`** is the group's turn: it increments its
+    counter, calls `ping_workers()` (only the SILENT ones — a photo fresh
+    from traffic is skipped), and when the counter is due (or the group was
+    woken) runs `check_occupancy()`. `ping_workers()` gathers
+    `handler.ping_process()` the same way.
+    (4) **The vertex's own tasks, each on its counter** inside
+    `heartbeat_loop`: `drop_expired_users()` (the frozen whose
+    `user_expiry_hours` / `guest_expiry_hours` ran out — nobody below them
+    can notice, so the vertex prunes the row and the disk with verification,
+    the declared F24 exception), `disk_cleanup` (the tasks that open the
+    disk; the folder set-difference is a step of it), `check_resources()`
+    (machine RAM against `machine_memory_alarm_percent`, deposit disk
+    against `frozen_users_disk_alarm_percent` → writes
+    `SpaCommander.state` and calls `need_resources()`, base `pass`, a
+    Kubernetes commander overrides it by subclass).
+    (5) **The wake is the only PUSH in the system**: an event per group,
+    idempotent, without content — the information is WHICH event rang. It is
+    rung by the EOF of one of its handlers, by the "nobody admits" of its
+    placement, and by the crisis threshold on one of its photos. Machine
+    urgencies (RAM, disk) stay on the timer: they are trends, not
+    emergencies.
+    (6) The active users' expiry belongs to the WORKER (X at the shot: it
+    does everything and announces, and the ladder is pruned layer by layer);
+    only the frozen are the vertex's.
+  - Details: no caretaker object exists — the probe IS the beat. The
+    monitor gets a fresh photo for free by ringing the wake.
+  - Done: `pytest tests/ -q` green; `ruff check src/ tests/` clean; tests
+    covering: one round with a real child; a mute process delaying its own
+    group and not the others; a wake giving an anticipated round on one
+    group only; the counters firing `check_occupancy` / `drop_expired_users`
+    / `disk_cleanup` / `check_resources` at their own cadences; the loop
+    surviving a round that raises.
+  - Verify: now — the `_TBD` round of this phase.
+
+- [ ] **Phase 5**: The grammar and the whole machine end to end
+  - Run: opus / medium
+  - Pattern: `src/genro_asgi/config/elements.py:78` (`AsgiServerGrammar`,
+    the `@element(parent_tags=..., sub_tags=...)` declarations and the
+    `subbuilder` seam at line 266); `tests/orchestration/test_orchestration_m2_e2e.py`
+    (the end-to-end style with real child processes);
+    `docs/configuration.md` for the guide section.
+  - Files: src/genro_asgi/config/elements.py,
+    src/genro_asgi/config/default_config.py,
+    src/genro_asgi/spa/orchestration/spa_commander.py,
+    src/genro_asgi/spa/orchestration/group_handler.py,
+    tests/orchestration/test_orchestration_m3_e2e.py (new),
+    tests/test_config.py, docs/configuration.md
+  - Decisions:
+    (1) **The rule**: grammar carries the POLICIES of an installation
+    (percentages, ages, paths); module constants carry the TECHNICAL times.
+    Units in the name, always.
+    (2) **Vertex grammar**: `memory_max_percent` (the server's concession on
+    the machine; None = all of it, or the container limit) ·
+    `machine_memory_alarm_percent` · `frozen_users_disk_alarm_percent` ·
+    `orchestration_log_path` (+ `_max_bytes` / `_backup_count`).
+    (3) **Group grammar**: `memory_max_percent` (the group's quota, a
+    percentage of the concession — homonymy cascading on purpose) ·
+    `occupancy_max_percent` · `restart_occupancy_max_percent` ·
+    `reception_reserved_percent` · `new_user_occupancy_percent` ·
+    `user_idle_freeze_minutes` · `user_expiry_hours` · `guest_expiry_hours` ·
+    plus the inherited identity of the child (`entry_module`, `executable`,
+    `worker_class`, `kwargs`, `main_threadpool_size`, `aux_threadpool_size`).
+    NO `target_workers`, NO `max_workers`.
+    (4) **Constants**: `HEARTBEAT_SECONDS` · `QUIT_TIMEOUT_SECONDS` ·
+    `USER_PENDING_MAX_ITEMS` · the group's own check cadence in beats ·
+    (existing: `PROCESS_PING_INTERVAL`, `PROCESS_PING_TIMEOUT`,
+    `TRANSFER_START_DELAY`, `DEPOSIT_LOCK_WAIT_LIMIT`).
+  - Details: the keys are wired into the existing config grammar (M1's
+    builder), with the defaults chosen here and written down; the guide
+    section follows the keys.
+  - Done: `pytest tests/ -q` green; `ruff check src/ tests/` clean; a config
+    file carrying every key above builds a server whose commander and groups
+    read them; the M3 end-to-end with REAL child processes covers: the
+    reception born at boot, growth on demand, a user frozen by idleness, his
+    lazy wake on the next request, a wild death with its bonifica, a closure
+    for wasted capacity, and one orchestration log line per order.
+  - Verify: now — read `docs/configuration.md`'s new section and the
+    orchestration log of the e2e run: do the rows say who decided what, on
+    whom, with which numbers, and how it ended?
+  - Verify: now — the `_TBD` round of this phase, and the grep that no
+    `_TBD` survives.
+
+## Notes
+
+- **The chain of identity** stays as M2 left it: cookie → cid →
+  `connection_user_map` → `user_worker_map` → the worker. The front
+  (`SpaApplication`) keeps ZERO state, and wiring it to the new commander is
+  Macro 4 — this workflow drives the two upper levels with tests and
+  drivers, never through a real HTTP request.
+- **The freezer is outside the ladder**: 6 ↔ disk ↔ 2, never through the
+  wire. Filesystem access goes ONLY through storage nodes, and storage is
+  pinned synchronous (`StorageMixin` calls `set_sync()`; the tests pin the
+  same) — never `await` a storage node call.
+- **The notifications are out of Macro 3** (`pending_notifications`, the
+  broadcast dictionary, `notify_user`): they are designed with the page
+  protocol in Macro 4. One requirement noted for then: the reply to a ping
+  may carry the broadcasts about to expire.
+- **Still [TRAVASO] from v3 §16, and NOT in this workflow**: the mechanics of
+  a group hijack (F20), the fate of `workers_occupancy_metric` and the
+  evaluator as objects (the formula itself is transplanted in Phase 3), the
+  three clocks in full, the auth of the Prometheus scrape.
+- **The legacy machine is untouched.** No module under
+  `spa/orchestration/` imports `spa/commander.py` or `spa/worker.py`, in
+  either direction; shared values (`GUEST_PREFIX`, `PING_OP_PATH`) are
+  redefined with their ratified value, as M1/M2 already do.
+- **A failing contract test is a STOP**, never something to adapt: the
+  tests under `tests/orchestration/` that assert M1/M2 behaviour are the
+  continuity of two macros of work.
