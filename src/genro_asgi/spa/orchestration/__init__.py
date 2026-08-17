@@ -25,7 +25,9 @@ process and its death; ``SpaWorker``, the registers that process serves from;
 ``WorkerEntry``, the shell that runs one of those workers in a child process;
 the three ``EnvelopeHandler`` layers, the chain everything a process announces
 climbs; ``SpaCommander``, the vertex that owns the indexes of the whole machine
-and the master of the store every worker replicates.
+and the master of the store every worker replicates; ``GroupHandler``, the
+workers of one grammar, where a user of theirs lands and what the group does
+about its own shape.
 """
 
 from .envelope_handler import (
@@ -34,8 +36,15 @@ from .envelope_handler import (
     GroupEnvelopeHandler,
     WorkerEnvelopeHandler,
 )
-from .exceptions import UserOnHold
+from .exceptions import (
+    AssignmentRefused,
+    NoRoomError,
+    UserOnHold,
+    WorkerQuittingError,
+    WorkerRestartingError,
+)
 from .freeze_handler import FreezeHandler
+from .group_handler import GroupHandler
 from .spa_commander import SpaCommander
 from .spa_worker import SpaWorker
 from .worker_connector import WorkerConnector
@@ -43,10 +52,13 @@ from .worker_entry import WorkerEntry
 from .worker_handler import WorkerHandler
 
 __all__ = [
+    "AssignmentRefused",
     "CommanderEnvelopeHandler",
     "EnvelopeHandler",
     "FreezeHandler",
     "GroupEnvelopeHandler",
+    "GroupHandler",
+    "NoRoomError",
     "SpaCommander",
     "SpaWorker",
     "UserOnHold",
@@ -54,4 +66,6 @@ __all__ = [
     "WorkerEntry",
     "WorkerEnvelopeHandler",
     "WorkerHandler",
+    "WorkerQuittingError",
+    "WorkerRestartingError",
 ]

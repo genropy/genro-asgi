@@ -319,7 +319,63 @@ register item, freezer, check, timeout, restart, congelamento per inattività.
   - Verify: now — the `_TBD` round: the surviving placeholders, one at a
     time, semantics plus candidates.
 
-- [ ] **Phase 3**: GroupHandler — placement, manoeuvres, the two crises
+- [x] **Phase 3**: GroupHandler — placement, manoeuvres, the two crises
+  > Done: `GroupHandler` is born (179 executable lines, cap ~200) and it owns the
+  > three things nobody else does — `user_worker_map` (`None` = to be assigned,
+  > written by the chain straight into the bare map), the manoeuvres on its own
+  > workers, and its own shape. NO TARGET: the first `launch_worker_TBD` is the
+  > reception (the oldest living worker, succeeded silently), growth is on demand
+  > and shrinking is by waste. The placement is EAFP: `assign_user` walks the
+  > candidates from the FULLEST down and `WorkerHandler.assign_user(user,
+  > occupancy_percent)` judges itself on its own last photo and refuses by raising
+  > — `NoRoomError` (projected over the setpoint), `WorkerRestartingError`,
+  > `WorkerQuittingError`, and the base for a worker that has not presented itself
+  > yet; candidates exhausted, the base rises and the wake rings on the way out.
+  > The estimate is read from the user's row at the vertex, `new_user_occupancy_percent`
+  > when nobody has ever measured him, and the overshoot of two placements judged on
+  > one photo is accepted (F15). The occupancy is the transplant of design #5 read
+  > over the photo the M2 worker really sends: one clamped component per measurable
+  > gauge (`rss_bytes` against what one worker of the group may hold), the fullest
+  > wins, in percent. `check_occupancy` takes ONE picture and does the FIRST thing
+  > it calls for — restart past `restart_occupancy_max_percent`, grow when nobody
+  > has room for a newcomer left, close the worker whose share the others can
+  > absorb AND still admit (the margin that keeps a closure from undoing a growth).
+  > The crises: `saturated` when the memory quota (or the vertex's own state)
+  > refuses the growth, left the moment there is room again; `broken` when a
+  > `launch_process` fails, left by the first process that starts. `drop_worker(name)`
+  > is LOUD on a name the group does not carry, takes the wire away detached and
+  > releases the placements that still pointed at it; the ordered quit photographs
+  > the worker first, so a departure is never settled on nothing.
+  > Verified: `pytest tests/ -q` 1900 passed / 2 skipped (was 1877/2, +25 tests);
+  > `ruff check src/ tests/` clean; `mypy src/` unchanged (94, the baseline) and ZERO
+  > findings in `group_handler.py` and `exceptions.py`; coverage of the new module
+  > 100%, `envelope_handler` 100%, `worker_handler` 99%. TEN NEUTRALIZATION PROBES,
+  > each removing one mechanism and each breaking its own test: the photo before the
+  > order, the reception's reserve, the closure margin, the loudness of `drop_worker`,
+  > the quota gate, the fullest-first order of the walk, the wake when nobody admits,
+  > the `restarting` refusal, the urgency threshold, and the walk's sort direction.
+  > The closure runs its six steps over a REAL child process, end to end.
+  > Files: src/genro_asgi/spa/orchestration/group_handler.py (new),
+  > src/genro_asgi/spa/orchestration/exceptions.py,
+  > src/genro_asgi/spa/orchestration/worker_handler.py,
+  > src/genro_asgi/spa/orchestration/envelope_handler.py,
+  > src/genro_asgi/spa/orchestration/__init__.py,
+  > tests/orchestration/test_orchestration_group_handler.py (new),
+  > tests/orchestration/test_orchestration_placement.py (new),
+  > tests/orchestration/group_stub.py,
+  > tests/orchestration/test_orchestration_envelope_chain.py,
+  > .phased/active/orchestration-m3-commander-groups/notes.md
+  > Verify: now — the `_TBD` round of this phase: `launch_worker_TBD`,
+  > `get_placement_max_percent_TBD`, `memory_max_bytes_TBD`,
+  > `worker_memory_max_bytes_TBD`, `worker_settings_TBD`, and the two inherited from
+  > Phase 2 that survived (`snapshot_is_urgent_TBD`, `announce_death_TBD`).
+  > Verify: now — the reading declared in notes.md: `restart_worker` settles the
+  > departure through the death and comes back with a NEW worker, not the same
+  > handler relaunched (the plan's decision (6) says `launch_process`).
+  > Verify: now — the finding declared in notes.md: the M2 photo throttle can leave
+  > the answer to `/op/quit` carrying no photo, so a departure would be settled on a
+  > picture taken BEFORE the flags. Outside this phase's files; the guard covers only
+  > the no-photo case, as the plan's contract note says.
   - Run: opus / high
   - Pattern: `src/genro_asgi/spa/orchestration/worker_handler.py` (the twin
     level: how a handler owns its own and asks the level above nothing);

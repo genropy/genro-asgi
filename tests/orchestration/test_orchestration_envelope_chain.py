@@ -225,7 +225,7 @@ async def test_several_connections_leave_in_one_worker_event(handler, commander)
 
 async def test_a_user_who_is_gone_leaves_nothing_behind(handler, commander, group):
     user = commander.resolve_user("cid-a")
-    group.record_placement_TBD(user, WORKER_NAME)
+    group.user_worker_map[user] = WORKER_NAME
     handler.read_envelope(
         envelope({"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a"})
     )
@@ -242,7 +242,7 @@ async def test_a_user_who_is_gone_leaves_nothing_behind(handler, commander, grou
 
 async def test_a_freeze_is_a_mark_above_and_a_placement_to_assign_below(handler, commander, group):
     user = commander.resolve_user("cid-a")
-    group.record_placement_TBD(user, WORKER_NAME)
+    group.user_worker_map[user] = WORKER_NAME
 
     handler.read_envelope(
         envelope(
@@ -305,8 +305,8 @@ async def test_the_ordered_death_freezes_the_flagged_and_discards_the_rest(
     staying = commander.resolve_user("cid-a")
     leaving = commander.resolve_user("cid-b")
     handler.hosted_users.update({staying, leaving})
-    group.record_placement_TBD(staying, WORKER_NAME)
-    group.record_placement_TBD(leaving, WORKER_NAME)
+    group.user_worker_map[staying] = WORKER_NAME
+    group.user_worker_map[leaving] = WORKER_NAME
     handler.read_envelope(envelope(photo=photo_of(**{staying: None, leaving: "T"})))
     handler.state = "quitted"
 

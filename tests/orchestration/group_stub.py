@@ -24,9 +24,10 @@ indexes.
 What it stands in for is only the group's OWN work, and this is therefore the
 list of what the real one owes the chain: the wake (``ping_now``), whether a photo
 is urgent enough to bring its round forward, the placement of its users
-(``user_worker_map``, ``None`` meaning "to be assigned") and taking a dead
-handler out of the group (``drop_worker``). Everything the tests assert about the
-group is asserted on these.
+(``user_worker_map``, ``None`` meaning "to be assigned", written by the chain
+straight into the map) and taking a dead handler out of the group
+(``drop_worker`` — silent here on a name it does not carry, where the real one is
+LOUD). Everything the tests assert about the group is asserted on these.
 """
 
 from __future__ import annotations
@@ -77,14 +78,6 @@ class GroupStub:
     def snapshot_is_urgent_TBD(self, photo: dict[str, Any]) -> bool:
         """Whether this photo cannot wait for the round the cadence would give it."""
         return self.urgent_snapshots
-
-    def record_placement_TBD(self, user: str, worker: str | None) -> None:
-        """Write where a user of this group lives; None means he is to be assigned."""
-        self.user_worker_map[user] = worker
-
-    def forget_placement_TBD(self, user: str) -> None:
-        """Take a user out of the placement: he is not this group's business any more."""
-        self.user_worker_map.pop(user, None)
 
     def drop_worker(self, worker: str) -> None:
         """Take a dead handler out of the group, with the placements that pointed at it."""

@@ -23,11 +23,23 @@ request that just arrived cannot be routed at his old address and must not open 
 new one either — it waits, and how long a request may wait belongs to whoever
 answers requests. The row at the vertex carries the cause, and the ONLY way that
 field is read is by catching this.
+
+``AssignmentRefused`` and its family are the placement: a group asks its workers
+one at a time and each of them answers by taking the user or by RAISING, so a
+walk is a ``try`` and the reason a worker said no is its class. The base is what
+the group itself raises when it has asked everybody — nobody took him, and
+whoever asked answers 503.
 """
 
 from __future__ import annotations
 
-__all__ = ["UserOnHold"]
+__all__ = [
+    "AssignmentRefused",
+    "NoRoomError",
+    "UserOnHold",
+    "WorkerQuittingError",
+    "WorkerRestartingError",
+]
 
 
 class UserOnHold(Exception):
@@ -43,3 +55,29 @@ class UserOnHold(Exception):
         super().__init__(f"{user} is on hold: {cause}")
         self.user = user
         self.cause = cause
+
+
+class AssignmentRefused(Exception):
+    """Nobody took this user: the answer to a placement, never a failure of it.
+
+    Args:
+        user: the identity that was not placed.
+        cause: who refused and why, for the log — the branching is on the class.
+    """
+
+    def __init__(self, user: str, cause: str) -> None:
+        super().__init__(f"{user} was not placed: {cause}")
+        self.user = user
+        self.cause = cause
+
+
+class NoRoomError(AssignmentRefused):
+    """He does not fit: this worker plus what he is expected to cost is over the setpoint."""
+
+
+class WorkerRestartingError(AssignmentRefused):
+    """This worker's process died and its successor is on the way: it will come back, later."""
+
+
+class WorkerQuittingError(AssignmentRefused):
+    """This worker's process is leaving, or has left: it will never take anybody again."""

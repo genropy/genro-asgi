@@ -1108,6 +1108,9 @@ class SpaWorker:
             if not self._quitting:
                 self._transfers_start_ts = now + self.transfer_start_delay
             if self._transfer_flags:
+                # A flag is a promise the vertex must read: the photo that
+                # carries it is due whatever the throttle says.
+                self._population_changed = True
                 self._transfers_done.clear()
                 self._transfers_changed.set()
             elif not self._quitting:

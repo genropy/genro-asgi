@@ -4,6 +4,129 @@
 rejected. The `_TBD` names each phase brought to the owner, and the name they
 got, belong here too.)
 
+## Phase 3
+
+**The occupancy formula was transplanted over the gauges that really travel, and
+one of the two knobs it needs does not exist in the ratified grammar.** Design #5
+reads a worker as the MAX of its clamped components (`memory`, `cpu`,
+`executor`), each against a target; the photo the M2 worker actually sends
+(`SpaWorker.worker_snapshot`) carries `rss_bytes` and counts, and no cpu or pool
+gauge at all. So the shape is the transplant — a list of components, each clamped
+to its own full, the fullest winning, expressed in percent so a worker's fullness,
+a user's cost and a setpoint are the same number — with ONE component implemented,
+and the evaluator's own degrade kept: a component whose gauge or whose ceiling is
+missing is simply absent, and a photo with none reads 0.0 (an unmeasured worker
+admits, as it does today). Writing the other two now would have been code no
+photo can feed. The memory component needs a per-worker ceiling, which F45
+neither kept nor replaced (`memory_limit_mb` is the legacy's,
+`worker_memory_max_bytes` was on the table in F44.6 and never ratified, and
+Phase 5's group grammar does not list it): it is here as
+`worker_memory_max_bytes_TBD`, defaulting to None, so the gap is VISIBLE at the
+baptism round instead of hidden in a derivation. Rejected on the way: reading
+each worker against the GROUP's whole quota — it needs no new knob, but then four
+workers each under their own setpoint blow the quota fourfold, since the quota
+gate only stops new PROCESSES, never new users.
+
+**The group's quota is held in bytes, not in the ratified percent.** F45.1 says
+`memory_max_percent` cascades (the vertex's concession on the machine, the
+group's percentage of it), and Phase 5 owns that grammar while Phase 4 owns the
+machine sensor that turns a percentage into bytes. Phase 3 therefore holds the
+DERIVED number, `memory_max_bytes_TBD`, and the other half of the ratified gate —
+"and the machine under its alarm line" — is read where it already lives, as
+`SpaCommander.state == "running"`, which Phase 4's `check_resources()` writes. No
+new sensor was built here.
+
+**`restart_worker` comes back with a NEW worker, and this is a declared deviation
+from the letter of decision (6).** The plan says "same quit, then
+`launch_process`". The quit drains the worker into the freezer, and the freezes
+announced while it drains ride the replies to the pings — except the last ones,
+which die with the wire the worker closes behind itself (the M2 e2e says so out
+loud). Those users are rescued by ONE thing only, the death worker event, which
+reads the last photo's `T` flags; and nobody composes that event for a handler
+that goes quitted → starting → running inside one coroutine. So `restart_worker`
+plays the death (`announce_death_TBD`) between the quit and the birth — which is
+also what settles the placements — and since `GroupEnvelopeHandler.on_process_quitted`
+ends in `drop_worker`, the handler leaves the group and a fresh one takes its
+place. The stability of the handle is not lost by it: after a full drain nobody
+points at that worker any more. The alternative — a second settlement path
+written by hand for the restart alone — was rejected as the invention it would be.
+
+**The two placement writes went into the chain, and two `_TBD` names died.**
+`record_placement_TBD` / `forget_placement_TBD` were the Phase 2 stub's contract;
+the real group would have carried them as two methods each wrapping ONE dict
+write, which the simplification round ruled out. `user_worker_map` is a bare
+public map (the shape that round ratified), so `GroupEnvelopeHandler` writes it
+directly, exactly as `CommanderEnvelopeHandler` writes `page_connection_map`. The
+two names are gone from `GroupStub` too, and the four SETUP lines in
+`test_orchestration_envelope_chain.py` that used them now write the map (no
+assertion touched).
+
+**`WorkerHandler.assign_user` writes NOTHING, and that is what keeps
+`hosted_users` honest.** The first draft had it add the user to `hosted_users`,
+which would have given that set a writer with no remover — the announcements are
+what fill and empty it, and a user frozen or dropped would have stayed on board
+for ever, so the next death would have "frozen" somebody the vertex had already
+purged (a `KeyError` inside the fold). The placement is recorded where decision
+(8) puts it, in the group's `user_worker_map`; who is INSIDE a process stays what
+that process announces. So the census of v4 §3 is untouched, and the M2 e2e —
+whose driver is the one saying who is on board — keeps meaning what it says.
+
+**A worker that has not presented itself yet refuses with the BASE.** The
+ratified family has three children and none of them fits `starting`: it is not
+restarting (nothing died) and not quitting (it is arriving). Raising
+`WorkerQuittingError` for it would have made the class lie, so it raises
+`AssignmentRefused` itself, which the group catches like any other — the reason
+is in the message, and the family stays as ratified. `quitted` and `aborted` do
+raise `WorkerQuittingError` (they will never take anybody again), though the
+group's own walk never offers them: `living_workers` leaves them out.
+
+**The closure margin is what keeps the ladder from oscillating.** "Capacity
+wasted" cannot be "somebody is empty": with two workers at 78% and 0%, closing
+the empty one leaves a group that admits nobody, and the next round grows it back
+— for ever. So the group closes a worker only while the others, read as if they
+shared what it holds, would still take a newcomer:
+`total / (living - 1) + new_user_occupancy_percent <= occupancy_max_percent`. The
+same number that decides the growth decides the shrink, so the two cannot cross,
+and no new knob was invented for the hysteresis. Test:
+`test_a_closure_that_would_undo_a_growth_is_not_made`.
+
+**FINDING, outside this phase's files: the photo riding the answer to `/op/quit`
+may not exist.** `SpaWorker._outbound` attaches the photo only when one is DUE
+(the population changed, or `worker_snapshot_ttl` ran out), and
+`plan_transfers` — which is what poses every `T` at the quit — does NOT mark it
+due. So a worker whose photo is fresh and whose population has not changed
+answers the order to leave with NO photo, and the handler settles the death on a
+picture taken BEFORE the flags: everybody reads as kept, so everybody is purged
+instead of parked. The M2 e2e does not see it because it pins
+`worker_snapshot_ttl` to 0. The guard this phase owes is the plan's contract note
+(b) — the no-photo case, which `_order_quit` covers with a beat — and the one-line
+cure for the staleness (a flag change marks the photo due) lives in
+`spa_worker.py`, which Phase 3 must not touch. The scripted child of
+`test_orchestration_group_handler.py` models the case (`photo_on_quit`), which is
+also what makes the guard's test bite: without the beat, the user is purged.
+
+**`start()` was not born.** A boot verb whose whole body is
+`await self.launch_worker_TBD()` is a wrapper delegating 1:1, which the volume
+rule forbids; the boot IS that call, and Phase 4's lifespan makes it. Same
+reasoning for `stop()`: shutting a group down is the lifespan's, and building it
+here with only a test fixture asking for it would have been code without a
+requester — the two test files close their own workers, as the M1/M2 fixtures do.
+`check_occupancy` on an empty group grows one by itself, which is the same boot
+by another road.
+
+**The `_TBD` names this phase leaves for the owner** (semantics in the plan's
+Verify line): `launch_worker_TBD` (the group's own verb for bringing a worker
+into being — the sibling of the ratified `drop_worker` / `restart_worker`),
+`get_placement_max_percent_TBD` (how full a given worker takes users up to, the
+reception's reserve already deducted), `memory_max_bytes_TBD`,
+`worker_memory_max_bytes_TBD`, `worker_settings_TBD` (the bag of everything a
+`WorkerHandler` of this group is built with, splatted verbatim — it keeps eight
+pass-through parameters out of the constructor). `snapshot_is_urgent_TBD` and
+`announce_death_TBD` survive from Phase 2 unchanged. `start` and `stop` were not
+coined; `living_workers`, `reception`, `check_occupancy`, `assign_user`,
+`drop_worker`, `restart_worker`, `ping_now` / `ping_now_event`, `user_worker_map`
+and the three `state` values are the plan's own, verbatim.
+
 ## Phase 2
 
 **The three binding corrections of the owner** (2026-08-17, at the gate): (1) no

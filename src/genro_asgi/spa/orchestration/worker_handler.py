@@ -29,6 +29,13 @@ beat, and it gives back what the child answered. Nothing here freezes a user,
 closes a tap or reads a policy: those belong one level up, and a handler that
 took them would be deciding for the pool.
 
+**The refusal is the answer.** ``assign_user`` is no order: it is the judgement a
+group asks for while it walks its workers looking for one that takes a user. The
+handler judges ITSELF — its own last photo against the setpoint its group carries
+— and says no by RAISING, the class of the refusal being the reason. It writes
+nothing: where a user lives is the group's map, and who is inside a process is
+what that process announces.
+
 **Low tolerance, and never two processes.** A mute beat is repeated ONCE past
 the timeout — against a lost packet, not against a sick worker — and then the
 process group is killed and its OS death awaited: SIGKILL, no escalation and no
@@ -98,6 +105,12 @@ from pathlib import Path
 from typing import Any
 
 from .envelope_handler import WorkerEnvelopeHandler
+from .exceptions import (
+    AssignmentRefused,
+    NoRoomError,
+    WorkerQuittingError,
+    WorkerRestartingError,
+)
 from .worker_connector import WorkerConnector
 
 #: The environment variable the spawn payload travels in, as today.
@@ -233,6 +246,38 @@ class WorkerHandler:
             "worker_class": self.worker_class,
             "kwargs": self.worker_kwargs,
         }
+
+    def assign_user(self, user: str, occupancy_percent: float) -> None:
+        """Judge whether this worker takes one more user, and refuse by raising.
+
+        Args:
+            user: the identity being placed here.
+            occupancy_percent: what he is expected to cost, on the same scale the
+                photo is read in.
+
+        Raises:
+            WorkerRestartingError: this handler's process died and its successor
+                is on the way — it will take users again, later.
+            WorkerQuittingError: this handler's process is leaving or is gone.
+            AssignmentRefused: it has not presented itself yet, so there is
+                nobody down there to serve him.
+            NoRoomError: the projected count is over this worker's placement
+                setpoint.
+
+        Nothing is written: who lives where is the group's map, and who is in a
+        process is what that process announces.
+        """
+        if self.state == "restarting":
+            raise WorkerRestartingError(user, f"{self.name} is restarting")
+        if self.state in ("quitting", "quitted", "aborted"):
+            raise WorkerQuittingError(user, f"{self.name} is {self.state}")
+        if self.state != "running":
+            raise AssignmentRefused(user, f"{self.name} is {self.state}")
+        projected = (
+            self.group_handler.get_occupancy_percent(self.worker_snapshot) + occupancy_percent
+        )
+        if projected > self.group_handler.get_placement_max_percent_TBD(self):
+            raise NoRoomError(user, f"{self.name} would stand at {projected:.1f}%")
 
     def read_envelope(self, envelope: dict[str, Any]) -> dict[str, Any]:
         """Hand an envelope that arrived from the process to the chain.

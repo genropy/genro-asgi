@@ -232,19 +232,19 @@ class GroupEnvelopeHandler(EnvelopeHandler):
 
     def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
         """A user has left for the freezer: his placement is to be assigned again."""
-        self.group_handler.record_placement_TBD(worker_event["user"], None)
+        self.group_handler.user_worker_map[worker_event["user"]] = None
 
     def on_drop_user(self, worker_event: dict[str, Any]) -> None:
         """A user is gone for good: he has no placement in this group any more."""
-        self.group_handler.forget_placement_TBD(worker_event["user"])
+        self.group_handler.user_worker_map.pop(worker_event["user"], None)
 
     def on_process_quitted(self, worker_event: dict[str, Any]) -> None:
         """A death: the frozen are to be assigned again, the lost lose their
-        placement, and the handler named by the worker event leaves the group."""
+        placement, and the worker named by the worker event leaves the group."""
         for user in worker_event["frozen_users"]:
-            self.group_handler.record_placement_TBD(user, None)
+            self.group_handler.user_worker_map[user] = None
         for user in worker_event["lost_users"]:
-            self.group_handler.forget_placement_TBD(user)
+            self.group_handler.user_worker_map.pop(user, None)
         self.group_handler.drop_worker(worker_event["worker"])
 
     #: The wild death is read exactly as the ordered one: the worker event
