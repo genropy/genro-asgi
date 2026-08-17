@@ -37,6 +37,7 @@ import time
 import pytest
 
 from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker
+from genro_asgi.spa.orchestration.worker_connector import WORKER_SNAPSHOT_KEY
 
 WORKER_NAME = "standard_0001"
 OTHER_WORKER = "standard_0002"
@@ -198,6 +199,22 @@ async def test_the_expiry_wins_over_the_valve_on_the_same_user(deposit):
     transfers = worker.plan_transfers(expiry_delay=600)
 
     assert transfers["mario"][1] == "X"
+
+
+async def test_a_flag_posed_puts_the_photo_on_the_next_envelope_out(deposit):
+    # A photo that stays fresh for an hour: nothing the throttle knows about
+    # would put another one on the wire before then.
+    worker = build_worker(deposit, worker_snapshot_ttl=3600)
+    worker.add_page("page-1", "cid-a", "mario")
+    worker._outbound({})
+    assert WORKER_SNAPSHOT_KEY not in worker._outbound({})
+
+    worker.plan_transfers(transfer_users=["mario"])
+
+    # A flag is a promise the vertex has to read: without the photo carrying it,
+    # a departure settled on the last one would count this user as kept.
+    envelope = worker._outbound({})
+    assert envelope[WORKER_SNAPSHOT_KEY]["users"]["mario"]["transfer_flag"] == "T"
 
 
 # ----------------------------------------------------------------------

@@ -276,7 +276,7 @@ class WorkerHandler:
         projected = (
             self.group_handler.get_occupancy_percent(self.worker_snapshot) + occupancy_percent
         )
-        if projected > self.group_handler.get_placement_max_percent_TBD(self):
+        if projected > self.group_handler.get_worker_cap(self):
             raise NoRoomError(user, f"{self.name} would stand at {projected:.1f}%")
 
     def read_envelope(self, envelope: dict[str, Any]) -> dict[str, Any]:

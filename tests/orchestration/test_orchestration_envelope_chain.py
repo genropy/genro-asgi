@@ -310,7 +310,7 @@ async def test_the_ordered_death_freezes_the_flagged_and_discards_the_rest(
     handler.read_envelope(envelope(photo=photo_of(**{staying: None, leaving: "T"})))
     handler.state = "quitted"
 
-    handler.envelope_handler.announce_death_TBD()
+    handler.envelope_handler.report_death()
 
     assert commander.user_is_frozen(leaving) is True
     assert staying not in commander.user_map
@@ -334,7 +334,7 @@ async def test_the_wild_death_saves_nobody_and_its_parcels_are_discarded(
     handler.read_envelope(envelope(photo=photo_of(**{user: "T"})))
     handler.state = "aborted"
 
-    handler.envelope_handler.announce_death_TBD()
+    handler.envelope_handler.report_death()
 
     assert commander.user_map == {}
     assert commander.freeze_handler.user_folders == set()
@@ -344,11 +344,11 @@ async def test_the_wild_death_saves_nobody_and_its_parcels_are_discarded(
     assert "outcome=process_aborted" in caplog.text
 
 
-async def test_a_death_announced_for_a_living_process_is_refused(handler):
+async def test_a_death_reported_for_a_living_process_is_refused(handler):
     handler.state = "running"
 
     with pytest.raises(ValueError, match="not dead"):
-        handler.envelope_handler.announce_death_TBD()
+        handler.envelope_handler.report_death()
 
 
 async def test_a_presentation_is_answered_with_the_whole_store(handler, commander):

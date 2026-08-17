@@ -20,9 +20,10 @@ process under it — what a placement reads is the ``state`` and the last photo,
 and both are written straight in, the way the machine writes them. The processes
 have their own tests, one file over.
 
-The occupancy of this group is measured against a round million of bytes, so a
-photo of 780_000 bytes is a worker standing at 78% and the arithmetic of every
-refusal is readable in the numbers themselves.
+The occupancy of this group is measured against a round million of bytes — the
+whole concession is the group's quota and the whole quota is what one worker may
+hold — so a photo of 780_000 bytes is a worker standing at 78% and the arithmetic
+of every refusal is readable in the numbers themselves.
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ def group(commander, tmp_path):
     return GroupHandler(
         commander,
         "standard",
-        worker_memory_max_bytes_TBD=MEMORY_CEILING,
+        memory_concession_bytes=MEMORY_CEILING,
         instance_dir=tmp_path / "i",
         frozen_users_path=tmp_path / "frozen_users",
         entry_module="never.launched",
@@ -63,7 +64,7 @@ def group(commander, tmp_path):
 
 def worker_at(group, name: str, occupancy_percent: float, state: str = "running"):
     """One real worker of the group, standing at that occupancy, with no process under it."""
-    worker_handler = WorkerHandler(group, name, **group.worker_settings_TBD)
+    worker_handler = WorkerHandler(group, name, **group.worker_settings)
     worker_handler.state = state
     worker_handler.worker_snapshot = {
         "rss_bytes": int(MEMORY_CEILING * occupancy_percent / 100)
@@ -84,6 +85,26 @@ async def test_a_photo_reads_as_the_percentage_it_is_and_never_over_full(group):
     assert group.get_occupancy_percent({"rss_bytes": 3 * MEMORY_CEILING}) == 100.0
 
 
+async def test_a_worker_reads_as_full_at_its_own_share_of_the_group_quota(commander, tmp_path):
+    group = GroupHandler(
+        commander,
+        "standard",
+        memory_concession_bytes=MEMORY_CEILING,
+        memory_max_percent=50.0,
+        worker_memory_max_percent=50.0,
+        instance_dir=tmp_path / "i",
+        frozen_users_path=tmp_path / "f",
+        entry_module="never.launched",
+    )
+
+    # The cascade: half the concession is this group's quota, half of that quota
+    # is what one of its workers may hold — so a quarter of the machine is a
+    # worker of this group standing at its full.
+    assert group.memory_quota_bytes == MEMORY_CEILING / 2
+    assert group.get_occupancy_percent({"rss_bytes": MEMORY_CEILING // 4}) == 100.0
+    assert group.get_occupancy_percent({"rss_bytes": MEMORY_CEILING // 8}) == 50.0
+
+
 async def test_a_group_that_measures_nothing_reads_every_worker_as_empty(commander, tmp_path):
     group = GroupHandler(
         commander, "standard", instance_dir=tmp_path / "i",
@@ -91,6 +112,8 @@ async def test_a_group_that_measures_nothing_reads_every_worker_as_empty(command
     )
 
     assert group.get_occupancy_percent({"rss_bytes": 10**9}) == 0.0
+    assert group.memory_quota_bytes is None
+    assert group.memory_occupied_percent == 0.0
 
 
 async def test_the_fullest_worker_that_still_takes_him_is_the_one_that_gets_him(group, commander):
@@ -132,7 +155,7 @@ async def test_the_reception_keeps_its_reserve_and_takes_less_than_the_others(gr
 
     # Both stand at 28, but the reception's own setpoint is the difference
     # between the group's and its reserve: 80 - 50 = 30, and 28 + 5 is over it.
-    assert group.get_placement_max_percent_TBD(reception) == 30.0
+    assert group.get_worker_cap(reception) == 30.0
     assert group.assign_user(user) == "standard_0002"
 
 

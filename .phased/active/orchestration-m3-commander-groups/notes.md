@@ -20,19 +20,23 @@ admits, as it does today). Writing the other two now would have been code no
 photo can feed. The memory component needs a per-worker ceiling, which F45
 neither kept nor replaced (`memory_limit_mb` is the legacy's,
 `worker_memory_max_bytes` was on the table in F44.6 and never ratified, and
-Phase 5's group grammar does not list it): it is here as
-`worker_memory_max_bytes_TBD`, defaulting to None, so the gap is VISIBLE at the
-baptism round instead of hidden in a derivation. Rejected on the way: reading
+Phase 5's group grammar does not list it): it was carried to the baptism round as
+a placeholder in bytes, so the gap would be VISIBLE there instead of hidden in a
+derivation, and the owner closed it with the third rung of the cascade —
+`worker_memory_max_percent`, one worker's share of the group's own quota (see the
+ruling below). Rejected on the way: reading
 each worker against the GROUP's whole quota — it needs no new knob, but then four
 workers each under their own setpoint blow the quota fourfold, since the quota
 gate only stops new PROCESSES, never new users.
 
-**The group's quota is held in bytes, not in the ratified percent.** F45.1 says
-`memory_max_percent` cascades (the vertex's concession on the machine, the
-group's percentage of it), and Phase 5 owns that grammar while Phase 4 owns the
-machine sensor that turns a percentage into bytes. Phase 3 therefore holds the
-DERIVED number, `memory_max_bytes_TBD`, and the other half of the ratified gate —
-"and the machine under its alarm line" — is read where it already lives, as
+**The group's quota was first held in bytes, and the owner put it back in the
+ratified percent.** F45.1 says `memory_max_percent` cascades (the vertex's
+concession on the machine, the group's percentage of it), and Phase 5 owns that
+grammar while Phase 4 owns the machine sensor that turns a percentage into bytes.
+Phase 3 first held the DERIVED number in bytes; at the baptism round it went back
+to `memory_max_percent`, with `memory_concession_bytes` as the only total handed
+in (see the ruling below). The other half of the ratified gate — "and the machine
+under its alarm line" — is read where it already lives, as
 `SpaCommander.state == "running"`, which Phase 4's `check_resources()` writes. No
 new sensor was built here.
 
@@ -44,7 +48,7 @@ which die with the wire the worker closes behind itself (the M2 e2e says so out
 loud). Those users are rescued by ONE thing only, the death worker event, which
 reads the last photo's `T` flags; and nobody composes that event for a handler
 that goes quitted → starting → running inside one coroutine. So `restart_worker`
-plays the death (`announce_death_TBD`) between the quit and the birth — which is
+plays the death (`report_death`) between the quit and the birth — which is
 also what settles the placements — and since `GroupEnvelopeHandler.on_process_quitted`
 ends in `drop_worker`, the handler leaves the group and a fresh one takes its
 place. The stability of the handle is not lost by it: after a full drain nobody
@@ -106,7 +110,7 @@ cure for the staleness (a flag change marks the photo due) lives in
 also what makes the guard's test bite: without the beat, the user is purged.
 
 **`start()` was not born.** A boot verb whose whole body is
-`await self.launch_worker_TBD()` is a wrapper delegating 1:1, which the volume
+`await self.start_worker()` is a wrapper delegating 1:1, which the volume
 rule forbids; the boot IS that call, and Phase 4's lifespan makes it. Same
 reasoning for `stop()`: shutting a group down is the lifespan's, and building it
 here with only a test fixture asking for it would have been code without a
@@ -114,18 +118,53 @@ requester — the two test files close their own workers, as the M1/M2 fixtures 
 `check_occupancy` on an empty group grows one by itself, which is the same boot
 by another road.
 
-**The `_TBD` names this phase leaves for the owner** (semantics in the plan's
-Verify line): `launch_worker_TBD` (the group's own verb for bringing a worker
-into being — the sibling of the ratified `drop_worker` / `restart_worker`),
-`get_placement_max_percent_TBD` (how full a given worker takes users up to, the
-reception's reserve already deducted), `memory_max_bytes_TBD`,
-`worker_memory_max_bytes_TBD`, `worker_settings_TBD` (the bag of everything a
-`WorkerHandler` of this group is built with, splatted verbatim — it keeps eight
-pass-through parameters out of the constructor). `snapshot_is_urgent_TBD` and
-`announce_death_TBD` survive from Phase 2 unchanged. `start` and `stop` were not
-coined; `living_workers`, `reception`, `check_occupancy`, `assign_user`,
-`drop_worker`, `restart_worker`, `ping_now` / `ping_now_event`, `user_worker_map`
-and the three `state` values are the plan's own, verbatim.
+**The names this phase brought to the owner, and what he ruled.** `start_worker`
+(the group's own verb for bringing a worker into being — the sibling of the
+ratified `drop_worker` / `restart_worker`); `get_worker_cap` (how full a given
+worker takes users up to, the reception's reserve already deducted) — BARE, the
+owner refused the unit suffix the placeholder carried; `worker_settings`,
+confirmed as it stood, because it is the VALUES dict and not the grammar (the bag
+of everything a `WorkerHandler` of this group is built with, splatted verbatim —
+it keeps eight pass-through parameters out of the constructor); and, inherited
+from Phase 2, `report_death` — the handler REPORTS a fact, and the word
+"announce" left the prose that spoke of that method, the worker-events vocabulary
+untouched. `start` and `stop` were not coined; `living_workers`, `reception`,
+`check_occupancy`, `assign_user`, `drop_worker`, `restart_worker`, `ping_now` /
+`ping_now_event`, `user_worker_map` and the three `state` values are the plan's
+own, verbatim.
+
+**Two of them died unborn, and the whole memory reading moved into percent
+space.** `memory_max_bytes` and `worker_memory_max_bytes` never got a name: the
+owner ruled that the cascade F45.1 already ratifies is read percent against
+percent all the way down. So the constructor takes ONE total —
+`memory_concession_bytes`, what the machine concedes, the denominator and nothing
+else — and two percentages: `memory_max_percent`, this group's share of the
+concession, and `worker_memory_max_percent`, what ONE worker may hold as a share
+of the group's own quota. That second one carries the SAME grammar key as the
+first one rung down (vertex % of machine → group % of concession → worker % of
+quota); the prefix exists only because two rungs of the cascade meet in one
+Python constructor. The growth gate now reads the new property
+`memory_occupied_percent` — the summed rss of the living workers over the
+concession — against `memory_max_percent`, and the occupancy formula normalises a
+worker's rss against its share of the quota, the transplanted design #5 shape
+untouched. Everything unmeasurable still reads 0.0, so a group nobody has
+measured is ungated by construction rather than by a `None` branch.
+
+**`snapshot_is_urgent` was killed rather than baptised.** It had exactly one
+caller, `GroupEnvelopeHandler.on_worker_snapshot`, and its whole body was one
+comparison against `restart_occupancy_max_percent`; the comparison now stands
+where it is read, and the method is gone. `GroupStub` follows: it no longer
+answers a question about urgency, it answers `get_occupancy_percent` and carries
+the setpoint, which is what the real group does.
+
+**The photo-due finding of this phase got its biting test.** The staleness
+declared above was cured in `spa_worker.py` by 08cc20a — `plan_transfers` marks
+the photo due the moment it poses a flag — but nothing failed when that line was
+taken away. `test_a_flag_posed_puts_the_photo_on_the_next_envelope_out` (in the
+departures file, where the flags live) pins `worker_snapshot_ttl` to an hour,
+sends one envelope so the photo is fresh, poses a `T`, and demands the photo on
+the next envelope out. Neutralized: without the line it fails on
+`KeyError: 'worker_snapshot'`.
 
 ## Phase 2
 
@@ -235,7 +274,7 @@ change made after a birth does not reach that process, and the e2e says so out
 loud.
 
 **The death is classified ONCE, by whoever composes the announcement.**
-`announce_death_TBD` splits the users into `frozen_users` (the ones the last photo
+`report_death` splits the users into `frozen_users` (the ones the last photo
 had flagged for cession, and only for a `quitted`) and `lost_users`, so neither the
 group nor the vertex re-reads the photo: an orderly departure freezes whoever it
 had promised the freezer even if his own announcement died with the wire, a wild
@@ -252,7 +291,8 @@ every row twice.
 into `tests/orchestration/group_stub.py`, shared by four test files, and it carries
 the real `GroupEnvelopeHandler` over a real `SpaCommander`: what it stands in for
 is only the group's OWN verbs, which is exactly the contract Phase 3 owes —
-`ping_now`, `snapshot_is_urgent_TBD`, `record_placement_TBD`,
+`ping_now`, `get_occupancy_percent` (`snapshot_is_urgent` was killed at the
+baptism round and its threshold inlined at the caller), `record_placement_TBD`,
 `forget_placement_TBD`, `drop_worker` (which also takes away the placements that
 pointed at the dead handler).
 

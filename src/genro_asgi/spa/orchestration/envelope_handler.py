@@ -73,7 +73,7 @@ worker events of the same envelope, which is the order it was taken in.
 
 **The death is the one worker event born on this side of the wire.** A process
 that has ended announces nothing — it is gone. What the handler has instead is
-its ``state``, and ``WorkerEnvelopeHandler.announce_death_TBD()`` turns that
+its ``state``, and ``WorkerEnvelopeHandler.report_death()`` turns that
 state into the worker event the levels above consume, on the round that reads it.
 So a death climbs the same ladder as everything else, and no level learns about
 it in a way of its own. That worker event says who died, who was on board and —
@@ -165,7 +165,7 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
         self.work_on_envelope(envelope)
         return self.group_envelope_handler(envelope)
 
-    def announce_death_TBD(self) -> dict[str, Any]:
+    def report_death(self) -> dict[str, Any]:
         """Turn the ended state of this handler's process into the worker event of it.
 
         Returns:
@@ -173,7 +173,7 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
             be sent, since the wire this envelope speaks of is gone.
 
         Raises:
-            ValueError: the process has not ended, and a death announced for a
+            ValueError: the process has not ended, and a death reported for a
                 living process would take its users away from it.
         """
         state = self.worker_handler.state
@@ -227,8 +227,10 @@ class GroupEnvelopeHandler(EnvelopeHandler):
 
     def on_worker_snapshot(self, photo: dict[str, Any]) -> None:
         """Ring the group's wake when this photo cannot wait for the next round."""
-        if self.group_handler.snapshot_is_urgent_TBD(photo):
-            self.group_handler.ping_now()
+        group_handler = self.group_handler
+        occupancy_percent = group_handler.get_occupancy_percent(photo)
+        if occupancy_percent > group_handler.restart_occupancy_max_percent:
+            group_handler.ping_now()
 
     def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
         """A user has left for the freezer: his placement is to be assigned again."""

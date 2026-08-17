@@ -22,8 +22,9 @@ NOT a fake: the layer it carries is the real ``GroupEnvelopeHandler`` over a rea
 indexes.
 
 What it stands in for is only the group's OWN work, and this is therefore the
-list of what the real one owes the chain: the wake (``ping_now``), whether a photo
-is urgent enough to bring its round forward, the placement of its users
+list of what the real one owes the chain: the wake (``ping_now``), how full a
+photo reads and the setpoint past which it brings the round forward, the
+placement of its users
 (``user_worker_map``, ``None`` meaning "to be assigned", written by the chain
 straight into the map) and taking a dead handler out of the group
 (``drop_worker`` — silent here on a name it does not carry, where the real one is
@@ -65,8 +66,10 @@ class GroupStub:
         self.users_on_board: list[set[str]] = []
         #: The names of the handlers taken out of the group, in order.
         self.dropped_workers: list[str] = []
-        #: Whether the next photo counts as urgent — the tests set it.
+        #: Whether the next photo counts as urgent — the tests set it, and the
+        #: reading below turns it into the occupancy the chain judges.
         self.urgent_snapshots = False
+        self.restart_occupancy_max_percent = 95.0
         #: The handler under this group; the tests assign it after construction.
         self.worker_handler: Any = None
 
@@ -75,9 +78,9 @@ class GroupStub:
         self.wakes.append(self.worker_handler.state)
         self.users_on_board.append(set(self.worker_handler.hosted_users))
 
-    def snapshot_is_urgent_TBD(self, photo: dict[str, Any]) -> bool:
-        """Whether this photo cannot wait for the round the cadence would give it."""
-        return self.urgent_snapshots
+    def get_occupancy_percent(self, worker_snapshot: dict[str, Any] | None) -> float:
+        """How full the worker of this photo is: full when the tests want it urgent."""
+        return 100.0 if self.urgent_snapshots else 0.0
 
     def drop_worker(self, worker: str) -> None:
         """Take a dead handler out of the group, with the placements that pointed at it."""

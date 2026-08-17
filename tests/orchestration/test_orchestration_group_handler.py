@@ -101,7 +101,9 @@ asyncio.run(live())
 
 CHILD_MODULE = "scripted_group_child"
 
-#: What one worker of these groups reads as full.
+#: What the machine concedes these groups. Their quota and what one worker of
+#: theirs may hold are both the whole of it by default, so this is also the
+#: ceiling every photo below is read against.
 MEMORY_CEILING = 1_000_000
 
 
@@ -137,7 +139,7 @@ async def make_group(instance_root, commander):
         group = GroupHandler(
             commander,
             "standard",
-            worker_memory_max_bytes_TBD=MEMORY_CEILING,
+            memory_concession_bytes=MEMORY_CEILING,
             instance_dir=instance_root / "i",
             frozen_users_path=instance_root / "frozen_users",
             entry_module=CHILD_MODULE,
@@ -180,7 +182,7 @@ async def test_the_first_worker_of_a_group_is_its_reception(make_group):
     group = make_group()
     assert group.reception is None
 
-    worker_handler = await group.launch_worker_TBD()
+    worker_handler = await group.start_worker()
 
     assert group.worker_handler_map == {"standard_0001": worker_handler}
     assert group.reception is worker_handler
@@ -191,7 +193,7 @@ async def test_the_first_worker_of_a_group_is_its_reception(make_group):
 
 async def test_a_group_where_nobody_admits_anybody_grows_at_its_check(make_group):
     group = make_group(rss_bytes=int(0.79 * MEMORY_CEILING))
-    await group.launch_worker_TBD()
+    await group.start_worker()
 
     await group.check_occupancy()
 
@@ -199,37 +201,57 @@ async def test_a_group_where_nobody_admits_anybody_grows_at_its_check(make_group
     assert group.state == "running"
 
 
-async def test_a_growth_the_quota_refuses_saturates_the_group_until_there_is_room(make_group):
-    group = make_group(rss_bytes=int(0.79 * MEMORY_CEILING), memory_max_bytes_TBD=1)
-    worker_handler = await group.launch_worker_TBD()
+async def test_a_group_of_one_closes_nobody(make_group):
+    group = make_group()
+    reception = await group.start_worker()
 
     await group.check_occupancy()
 
+    # Empty as it is, the reception is still the one that receives whoever
+    # arrives unplaced: it is nobody's spare capacity.
     assert list(group.worker_handler_map) == ["standard_0001"]
+    assert reception.state == "running"
+
+
+async def test_a_growth_the_quota_refuses_saturates_the_group_until_there_is_room(make_group):
+    # Half the concession is this group's, and one worker of it may hold that
+    # half whole: two of them at 79% of what they may hold stand together at 79%
+    # of the concession, which is over the group's own share of it.
+    quota = MEMORY_CEILING // 2
+    group = make_group(rss_bytes=int(0.79 * quota), memory_max_percent=50.0)
+    reception = await group.start_worker()
+    spare = await group.start_worker()
+
+    await group.check_occupancy()
+
+    assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
+    assert group.memory_occupied_percent == 79.0
     assert group.state == "saturated"
 
     # Somebody left: the same reading admits again, and the crisis is over
     # without anybody having to say so.
-    worker_handler.worker_snapshot = {"rss_bytes": 0}
+    reception.worker_snapshot = {"rss_bytes": quota // 5}
+    spare.worker_snapshot = {"rss_bytes": 3 * quota // 5}
     await group.check_occupancy()
 
+    assert group.memory_occupied_percent == 40.0
     assert group.state == "running"
-    assert list(group.worker_handler_map) == ["standard_0001"]
+    assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
 
 
 async def test_a_process_that_never_starts_breaks_the_group_until_one_does(make_group, caplog):
     group = make_group(behaviour="absent")
 
     with caplog.at_level("ERROR"):
-        assert await group.launch_worker_TBD() is None
+        assert await group.start_worker() is None
 
     assert group.state == "broken"
     assert group.worker_handler_map == {}
     assert "could not be started" in caplog.text
 
     # The first process that starts closes the crisis — nothing else does.
-    group.worker_settings_TBD["worker_kwargs"]["behaviour"] = "answer"
-    assert await group.launch_worker_TBD() is not None
+    group.worker_settings["worker_kwargs"]["behaviour"] = "answer"
+    assert await group.start_worker() is not None
     assert group.state == "running"
 
 
@@ -238,7 +260,7 @@ async def test_a_worker_past_the_restart_setpoint_is_replaced_by_a_fresh_one(
 ):
     group = make_group(rss_bytes=int(0.99 * MEMORY_CEILING), users=["mario"])
     known_at_the_vertex(commander, "cid-a", "mario")
-    doomed = await group.launch_worker_TBD()
+    doomed = await group.start_worker()
     doomed.hosted_users.add("mario")
     group.user_worker_map["mario"] = doomed.name
 
@@ -257,8 +279,8 @@ async def test_a_worker_past_the_restart_setpoint_is_replaced_by_a_fresh_one(
 async def test_the_closure_of_a_spare_worker_goes_through_its_six_steps(make_group, commander):
     group = make_group(users=["mario"])
     known_at_the_vertex(commander, "cid-a", "mario")
-    reception = await group.launch_worker_TBD()
-    spare = await group.launch_worker_TBD()
+    reception = await group.start_worker()
+    spare = await group.start_worker()
     spare.hosted_users.add("mario")
     group.user_worker_map["mario"] = spare.name
 
@@ -276,7 +298,7 @@ async def test_the_closure_of_a_spare_worker_goes_through_its_six_steps(make_gro
     # 5. at the round that reads the ended state, the group takes it out: out of
     # the list, its wire away, its placements released — and the vertex marks the
     # user whose own worker event died with the wire.
-    spare.envelope_handler.announce_death_TBD()
+    spare.envelope_handler.report_death()
 
     assert list(group.worker_handler_map) == ["standard_0001"]
     assert group.reception is reception
@@ -287,8 +309,8 @@ async def test_the_closure_of_a_spare_worker_goes_through_its_six_steps(make_gro
 
 async def test_a_closure_that_would_undo_a_growth_is_not_made(make_group):
     group = make_group()
-    reception = await group.launch_worker_TBD()
-    spare = await group.launch_worker_TBD()
+    reception = await group.start_worker()
+    spare = await group.start_worker()
     reception.worker_snapshot = {"rss_bytes": int(0.78 * MEMORY_CEILING)}
     spare.worker_snapshot = {"rss_bytes": 0}
 
@@ -302,7 +324,7 @@ async def test_a_closure_that_would_undo_a_growth_is_not_made(make_group):
 
 async def test_a_placement_pointing_at_a_worker_that_died_goes_with_it(make_group, commander):
     group = make_group()
-    worker_handler = await group.launch_worker_TBD()
+    worker_handler = await group.start_worker()
     user = commander.resolve_user("cid-a")
     assert group.assign_user(user) == worker_handler.name
 
@@ -310,15 +332,15 @@ async def test_a_placement_pointing_at_a_worker_that_died_goes_with_it(make_grou
     # names him at the death, so his placement goes with the worker holding it.
     worker_handler.process.kill()
     await wait_for(lambda: worker_handler.state == "aborted")
-    worker_handler.envelope_handler.announce_death_TBD()
+    worker_handler.envelope_handler.report_death()
 
     assert group.worker_handler_map == {}
     assert group.user_worker_map == {}
 
 
-async def test_a_death_announced_for_a_worker_this_group_does_not_have_is_loud(make_group):
+async def test_a_death_reported_for_a_worker_this_group_does_not_have_is_loud(make_group):
     group = make_group()
-    await group.launch_worker_TBD()
+    await group.start_worker()
 
     with pytest.raises(KeyError):
         group.drop_worker("standard_9999")
@@ -333,7 +355,7 @@ async def test_an_ordered_quit_photographs_the_worker_first_so_nobody_is_lost(
     # throttle of a real one does when none is due.
     group = make_group(users=["mario"], photo_on_quit=False)
     known_at_the_vertex(commander, "cid-a", "mario")
-    worker_handler = await group.launch_worker_TBD()
+    worker_handler = await group.start_worker()
     worker_handler.hosted_users.add("mario")
     # And of which there is no photo at all: a departure is settled on the last
     # one, so without the beat the order takes first, this user would be purged
@@ -349,7 +371,7 @@ async def test_an_ordered_quit_photographs_the_worker_first_so_nobody_is_lost(
 
 async def test_a_photo_past_the_restart_setpoint_brings_the_round_forward(make_group):
     group = make_group()
-    worker_handler = await group.launch_worker_TBD()
+    worker_handler = await group.start_worker()
     group.ping_now_event.clear()
 
     worker_handler.read_envelope({WORKER_SNAPSHOT_KEY: {"rss_bytes": MEMORY_CEILING // 2}})
@@ -365,7 +387,7 @@ async def test_every_order_of_the_group_leaves_its_row_in_the_orchestration_log(
 ):
     group = make_group()
     with caplog.at_level("INFO", logger="genro_asgi.orchestration.orders"):
-        worker_handler = await group.launch_worker_TBD()
+        worker_handler = await group.start_worker()
         await group.restart_worker(worker_handler)
 
     rows = [record.getMessage() for record in caplog.records]

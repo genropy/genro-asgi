@@ -46,6 +46,16 @@ the same number and can be added. Today the photo carries one such gauge, the
 resident memory against what a worker of this group may hold; a photo carrying
 none reads 0, which is what a worker nobody has measured yet honestly is.
 
+**The memory is a CASCADE of percentages, and only the bottom of it is bytes.**
+One total is handed in — ``memory_concession_bytes``, what the machine concedes —
+and everything below it is a share: ``memory_max_percent`` is this group's share
+of the concession, and ``worker_memory_max_percent`` is what ONE worker may hold
+of the group's own quota. So the gate on the growth compares
+``memory_occupied_percent``, what the living workers hold read against the
+concession, with ``memory_max_percent``: percent against percent, never a byte
+count against a byte count. A concession nobody has measured makes every reading
+0, which leaves the growth ungated by construction rather than by a special case.
+
 **The shape is decided on ONE picture, and one step per round.**
 ``check_occupancy`` takes the occupancy of every living worker once and then does
 the FIRST thing that reading calls for: restart the worker past
@@ -110,11 +120,17 @@ class GroupHandler:
             only it has; its own placement setpoint is the difference.
         new_user_occupancy_percent: what a user nobody has ever measured is
             expected to cost.
-        memory_max_bytes_TBD: the memory this group may hold; None leaves the
-            growth ungated. (Phase 5 derives it from the vertex's concession.)
-        worker_memory_max_bytes_TBD: the memory ONE worker of this group reads as
-            full; None leaves the occupancy unmeasurable, and every photo reads 0.
-        worker_settings_TBD: what every ``WorkerHandler`` of this group is built
+        memory_concession_bytes: what the machine concedes the whole pool, in
+            bytes — the total every percentage below is read against. None until
+            somebody has measured it, and then nothing here is measurable.
+        memory_max_percent: this group's share of that concession.
+        worker_memory_max_percent: what ONE worker of this group may hold, as a
+            share of the group's own quota. In the grammar this rung carries the
+            same key as the one above it (``memory_max_percent``): the cascade is
+            the vertex's percentage of the machine, the group's of the
+            concession, the worker's of the quota, and the prefix is here only
+            because two rungs meet in one constructor.
+        worker_settings: what every ``WorkerHandler`` of this group is built
             with — the child's identity and the installation's paths — handed
             over verbatim.
     """
@@ -128,9 +144,10 @@ class GroupHandler:
         restart_occupancy_max_percent: float = 95.0,
         reception_reserved_percent: float = 50.0,
         new_user_occupancy_percent: float = 5.0,
-        memory_max_bytes_TBD: int | None = None,
-        worker_memory_max_bytes_TBD: int | None = None,
-        **worker_settings_TBD: Any,
+        memory_concession_bytes: int | None = None,
+        memory_max_percent: float = 100.0,
+        worker_memory_max_percent: float = 100.0,
+        **worker_settings: Any,
     ) -> None:
         self.spa_commander = spa_commander
         self.name = name
@@ -138,9 +155,10 @@ class GroupHandler:
         self.restart_occupancy_max_percent = restart_occupancy_max_percent
         self.reception_reserved_percent = reception_reserved_percent
         self.new_user_occupancy_percent = new_user_occupancy_percent
-        self.memory_max_bytes_TBD = memory_max_bytes_TBD
-        self.worker_memory_max_bytes_TBD = worker_memory_max_bytes_TBD
-        self.worker_settings_TBD = worker_settings_TBD
+        self.memory_concession_bytes = memory_concession_bytes
+        self.memory_max_percent = memory_max_percent
+        self.worker_memory_max_percent = worker_memory_max_percent
+        self.worker_settings = worker_settings
         self.envelope_handler = GroupEnvelopeHandler(self, spa_commander.envelope_handler)
         #: Where each user of this group lives, by worker name; None says his
         #: state is somewhere else and he is to be assigned on his next request.
@@ -172,6 +190,36 @@ class GroupHandler:
         living = self.living_workers
         return living[0] if living else None
 
+    @property
+    def memory_quota_bytes(self) -> float | None:
+        """What this group may hold: its share of the concession, in bytes.
+
+        Returns:
+            The quota, or None while nobody has measured the concession — and
+            then nothing of this group is measurable either.
+        """
+        if not self.memory_concession_bytes:
+            return None
+        return self.memory_concession_bytes * self.memory_max_percent / 100.0
+
+    @property
+    def memory_occupied_percent(self) -> float:
+        """What this group's living workers hold, as a share of the concession.
+
+        Returns:
+            The summed resident memory of their last photos over the concession,
+            in percent — 0.0 when the concession is unknown, which is what an
+            unmeasured group honestly is. Read against ``memory_max_percent``,
+            so the gate on the growth is percent against percent.
+        """
+        if not self.memory_concession_bytes:
+            return 0.0
+        rss_bytes = sum(
+            (worker_handler.worker_snapshot or {}).get("rss_bytes") or 0
+            for worker_handler in self.living_workers
+        )
+        return 100.0 * rss_bytes / self.memory_concession_bytes
+
     def ping_now(self) -> None:
         """Ring this group's wake: its round comes now instead of at its cadence."""
         self.ping_now_event.set()
@@ -184,14 +232,17 @@ class GroupHandler:
 
         Returns:
             The fullest of the components the photo carries, each clamped to its
-            own full — 0.0 when nothing in it is measurable.
+            own full — 0.0 when nothing in it is measurable. The memory component
+            is read against what one worker of this group may hold, which is
+            ``worker_memory_max_percent`` of the group's own quota.
         """
-        ceiling = self.worker_memory_max_bytes_TBD
+        quota_bytes = self.memory_quota_bytes
+        ceiling = quota_bytes * self.worker_memory_max_percent / 100.0 if quota_bytes else None
         rss_bytes = (worker_snapshot or {}).get("rss_bytes")
         components = [rss_bytes / ceiling] if ceiling and rss_bytes is not None else []
         return 100.0 * min(max(components, default=0.0), 1.0)
 
-    def get_placement_max_percent_TBD(self, worker_handler: WorkerHandler) -> float:
+    def get_worker_cap(self, worker_handler: WorkerHandler) -> float:
         """How full a worker of this group takes users up to, in percent.
 
         Args:
@@ -204,18 +255,6 @@ class GroupHandler:
         if worker_handler is self.reception:
             return self.occupancy_max_percent - self.reception_reserved_percent
         return self.occupancy_max_percent
-
-    def snapshot_is_urgent_TBD(self, worker_snapshot: dict[str, Any]) -> bool:
-        """Whether this photo cannot wait for the round the cadence would give it.
-
-        Args:
-            worker_snapshot: the photo that has just arrived.
-
-        Returns:
-            True when it shows a worker past the restart setpoint — the round
-            that acts on it is brought forward.
-        """
-        return self.get_occupancy_percent(worker_snapshot) > self.restart_occupancy_max_percent
 
     def assign_user(self, user: str) -> str:
         """Place a user on this group's fullest worker that still takes him.
@@ -277,7 +316,7 @@ class GroupHandler:
         if spare is not None:
             await self._order_quit(spare, "close_worker")
 
-    async def launch_worker_TBD(self) -> WorkerHandler | None:
+    async def start_worker(self) -> WorkerHandler | None:
         """Bring one more worker into this group and start its process.
 
         Returns:
@@ -288,7 +327,7 @@ class GroupHandler:
         """
         self._worker_counter += 1
         name = f"{self.name}_{self._worker_counter:04d}"
-        worker_handler = WorkerHandler(self, name, **self.worker_settings_TBD)
+        worker_handler = WorkerHandler(self, name, **self.worker_settings)
         self.worker_handler_map[name] = worker_handler
         try:
             await worker_handler.launch_process()
@@ -320,8 +359,8 @@ class GroupHandler:
         process, so the placements it held are released before the new one exists.
         """
         await self._order_quit(worker_handler, "restart_worker")
-        worker_handler.envelope_handler.announce_death_TBD()
-        return await self.launch_worker_TBD()
+        worker_handler.envelope_handler.report_death()
+        return await self.start_worker()
 
     def drop_worker(self, name: str) -> None:
         """Take a worker out of the group for good: its wire, its placements, itself.
@@ -330,7 +369,7 @@ class GroupHandler:
             name: the worker that has ended.
 
         Raises:
-            KeyError: this group has no worker of that name — a death announced
+            KeyError: this group has no worker of that name — a death reported
                 for somebody else's worker is a bug, not a thing to swallow.
 
         Acts on ``worker_handler_map`` and ``user_worker_map``; the socket is
@@ -350,7 +389,7 @@ class GroupHandler:
         """Whether any living worker would still take a newcomer of the default size."""
         return any(
             occupancy_percent + self.new_user_occupancy_percent
-            <= self.get_placement_max_percent_TBD(self.worker_handler_map[name])
+            <= self.get_worker_cap(self.worker_handler_map[name])
             for name, occupancy_percent in picture.items()
         )
 
@@ -375,19 +414,19 @@ class GroupHandler:
 
     async def _grow(self, picture: dict[str, float]) -> None:
         """Bring a worker into being if the memory affords it; the saturation when it does not."""
-        rss_bytes = sum(
-            (worker_handler.worker_snapshot or {}).get("rss_bytes") or 0
-            for worker_handler in self.living_workers
-        )
-        quota = self.memory_max_bytes_TBD
-        if self.spa_commander.state == "running" and (quota is None or rss_bytes <= quota):
-            await self.launch_worker_TBD()
+        occupied_percent = self.memory_occupied_percent
+        if self.spa_commander.state == "running" and occupied_percent <= self.memory_max_percent:
+            await self.start_worker()
             return
         self.state = "saturated"
         self.spa_commander.log_order(
             self.name,
             "grow",
-            numbers={"rss_bytes": rss_bytes, "memory_max_bytes": quota, "workers": len(picture)},
+            numbers={
+                "memory_occupied_percent": occupied_percent,
+                "memory_max_percent": self.memory_max_percent,
+                "workers": len(picture),
+            },
             outcome="saturated",
         )
 

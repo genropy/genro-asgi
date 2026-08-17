@@ -192,7 +192,7 @@ register item, freezer, check, timeout, restart, congelamento per inattività.
   > the wire writes it where there is an envelope going down, the presentation.
   > How a change reaches a process already alive is NOT decided here (see the
   > pending point below). The death climbs as `process_quitted` /
-  > `process_aborted` from `announce_death_TBD`, which splits the users ONCE into
+  > `process_aborted` from `report_death`, which splits the users ONCE into
   > frozen and lost. Every census row of v4 §3 is covered by a test.
   > Verified: `pytest tests/ -q` 1877 passed / 2 skipped (was 1841/2);
   > `ruff check src/ tests/` clean; `mypy src/` unchanged and ZERO findings in the
@@ -323,7 +323,7 @@ register item, freezer, check, timeout, restart, congelamento per inattività.
   > Done: `GroupHandler` is born (179 executable lines, cap ~200) and it owns the
   > three things nobody else does — `user_worker_map` (`None` = to be assigned,
   > written by the chain straight into the bare map), the manoeuvres on its own
-  > workers, and its own shape. NO TARGET: the first `launch_worker_TBD` is the
+  > workers, and its own shape. NO TARGET: the first `start_worker` is the
   > reception (the oldest living worker, succeeded silently), growth is on demand
   > and shrinking is by waste. The placement is EAFP: `assign_user` walks the
   > candidates from the FULLEST down and `WorkerHandler.assign_user(user,
@@ -365,10 +365,33 @@ register item, freezer, check, timeout, restart, congelamento per inattività.
   > tests/orchestration/group_stub.py,
   > tests/orchestration/test_orchestration_envelope_chain.py,
   > .phased/active/orchestration-m3-commander-groups/notes.md
-  > Verify: now — the `_TBD` round of this phase: `launch_worker_TBD`,
-  > `get_placement_max_percent_TBD`, `memory_max_bytes_TBD`,
-  > `worker_memory_max_bytes_TBD`, `worker_settings_TBD`, and the two inherited from
-  > Phase 2 that survived (`snapshot_is_urgent_TBD`, `announce_death_TBD`).
+  > Verify: DONE — the baptism round of this phase: the group's verb for bringing
+  > a worker into being (`start_worker`), the placement setpoint
+  > (`get_worker_cap`), the group's memory quota and the per-worker ceiling (both
+  > died unborn, replaced by the percent cascade), the bag of worker settings
+  > (`worker_settings`), and the two inherited from Phase 2 that survived (the
+  > urgency of a photo — killed and inlined — and the death of a process,
+  > `report_death`).
+  > Verified: the owner's rulings, applied as one search-and-replace.
+  > `start_worker` is the group's verb (the sibling of `drop_worker` /
+  > `restart_worker`); `get_worker_cap` is the placement setpoint, BARE — the
+  > owner refused the unit suffix; `worker_settings` is confirmed as it stood, it
+  > is the VALUES dict and not the grammar; `report_death` is the handler
+  > REPORTING a fact, and the word "announce" left the prose that spoke of that
+  > method (the worker-events vocabulary is untouched). TWO DIED UNBORN, both
+  > byte-denominated: `memory_max_bytes` and `worker_memory_max_bytes` are gone,
+  > and the ratified cascade is read in PERCENT space — `memory_concession_bytes`
+  > is the only total handed in, `memory_max_percent` is this group's share of
+  > it, `worker_memory_max_percent` (the same grammar key one rung down, the
+  > deliberate homonymy) is one worker's share of the group's quota. So the
+  > growth gate reads the new property `memory_occupied_percent` against
+  > `memory_max_percent`, percent against percent, and the occupancy formula
+  > normalises a worker's rss against its share of the quota — the transplanted
+  > design #5 shape untouched. ONE KILLED OUTRIGHT: `snapshot_is_urgent`, whose
+  > threshold check is now inline at its single caller,
+  > `GroupEnvelopeHandler.on_worker_snapshot`.
+  > `pytest tests/ -q` 1903 passed / 2 skipped (was 1900/2, +3 tests); `ruff check
+  > src/ tests/` clean; `group_handler.py` back to 100%.
   > Verify: now — the reading declared in notes.md: `restart_worker` settles the
   > departure through the death and comes back with a NEW worker, not the same
   > handler relaunched (the plan's decision (6) says `launch_process`).
@@ -376,6 +399,13 @@ register item, freezer, check, timeout, restart, congelamento per inattività.
   > the answer to `/op/quit` carrying no photo, so a departure would be settled on a
   > picture taken BEFORE the flags. Outside this phase's files; the guard covers only
   > the no-photo case, as the plan's contract note says.
+  > Verified: the staleness itself was cured in `spa_worker.py` by 08cc20a
+  > (`plan_transfers` marks the photo due the moment it poses a flag), and the
+  > baptism pass gave it the biting test it had none of —
+  > `test_a_flag_posed_puts_the_photo_on_the_next_envelope_out`, on a worker whose
+  > `worker_snapshot_ttl` is pinned to an hour and whose photo has already gone
+  > out. Proved by neutralization: with the line removed the third envelope
+  > carries no photo and the test fails on `KeyError: 'worker_snapshot'`.
   - Run: opus / high
   - Pattern: `src/genro_asgi/spa/orchestration/worker_handler.py` (the twin
     level: how a handler owns its own and asks the level above nothing);

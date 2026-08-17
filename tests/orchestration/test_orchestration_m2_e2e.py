@@ -426,7 +426,7 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     # round: the ended state becomes the worker event, the group takes the handler
     # out, and the vertex writes the freezer marks of the two the last photo had
     # flagged — whose own worker events died with the wire.
-    handler.envelope_handler.announce_death_TBD()
+    handler.envelope_handler.report_death()
 
     assert group.dropped_workers == [WORKER_NAME]
     assert commander.user_is_frozen("mario") is True
