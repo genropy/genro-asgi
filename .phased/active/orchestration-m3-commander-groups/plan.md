@@ -107,11 +107,12 @@ register item, freezer, check, timeout, restart, congelamento per inattività.
   > tests/orchestration/test_orchestration_foundations_e2e.py,
   > tests/orchestration/child_stub.py,
   > .phased/active/orchestration-m3-commander-groups/notes.md
-  > Verify: now — the unit judgement of decision (7): `worker_snapshot_ttl` and
-  > `deposit_lock_retry_interval` were KEPT, on the ground that they are technical
-  > seconds like the four siblings Phase 5 preserves unchanged. Say so if you want
-  > the `_seconds` suffix on the whole family instead — it is one
-  > search-and-replace.
+  > Verified: the unit judgement of decision (7) was put to the owner and RULED on
+  > 2026-08-17: the technical seconds keep their names — `worker_snapshot_ttl` and
+  > `deposit_lock_retry_interval` stay as they are, with the four siblings Phase 5
+  > preserves unchanged. The `_seconds` suffix stays reserved for the policy keys
+  > of the grammar, where the unit is part of the installation's decision. No
+  > `_seconds` sweep over M1/M2 is owed.
   - Run: opus / medium
   - Pattern: `.phased/done/orchestration-m2-worker-process/plan.md` Phase 1
     (the same job, done once already: rename + remove, no new behaviour);
