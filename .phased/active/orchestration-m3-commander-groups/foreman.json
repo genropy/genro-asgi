@@ -1,5 +1,7 @@
 {
-  "foreman": "wf:orchestration-m3-commander-groups:foreman",
-  "since": "2026-08-17T14:03:55Z",
-  "history": []
+  "foreman": "wf:orchestration-m3-commander-groups:foreman-2",
+  "since": "2026-08-17T15:10:00Z",
+  "history": [
+    {"foreman": "wf:orchestration-m3-commander-groups:foreman", "deposed": "2026-08-17T15:10:00Z"}
+  ]
 }

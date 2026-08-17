@@ -67,7 +67,7 @@ from genro_asgi.spa.orchestration.worker_handler import PING_OP_PATH, WORKER_ENV
 #: It answers this one, and nothing after it.
 GO_MUTE_OP = "/go_mute"
 
-#: The parent tells the child what to announce: the announcements it is handed
+#: The parent tells the child what to announce: the worker events it is handed
 #: come back on the reply, in the slot a real worker fills with what really
 #: happened in it. It is how a test says «a user was born in that process» without
 #: a whole worker in there.
@@ -99,7 +99,7 @@ class ChildStub:
         self.global_store: str | None = None
         self.answering = True
         self.stream: FrameStream | None = None
-        self.announcements: list[dict[str, Any]] = []
+        self.worker_events: list[dict[str, Any]] = []
         self.operations = {
             PING_OP_PATH: self.answer_ping,
             ANNOUNCE_OP: self.announce,
@@ -164,18 +164,18 @@ class ChildStub:
         the mirror of what the parent does with the photo — so a change made up
         there shows in the next photo taken down here. Then a CALL is answered
         with its REPLY, reusing its id, and whatever this process was told to
-        announce rides that answer, as a real worker's own announcements do. A
+        announce rides that answer, as a real worker's own worker events do. A
         mute process answers no CALL at all, and the order that mutes it is the
         last thing it answers.
 
-        Sets ``global_store``, and empties ``announcements``: they are delivered
+        Sets ``global_store``, and empties ``worker_events``: they are delivered
         once.
         """
         if isinstance(frame.data, dict) and GLOBAL_STORE_KEY in frame.data:
             self.global_store = frame.data[GLOBAL_STORE_KEY]
         if frame.method == CALL_METHOD and self.answering:
             result = await self.operations[frame.path](frame.data)
-            announcements, self.announcements = self.announcements, []
+            worker_events, self.worker_events = self.worker_events, []
             await self.stream.write(
                 Frame(
                     id=frame.id,
@@ -183,7 +183,7 @@ class ChildStub:
                     path=frame.path,
                     data={
                         "result": result,
-                        "events": announcements,
+                        "worker_events": worker_events,
                         WORKER_SNAPSHOT_KEY: self.photo,
                     },
                 )
@@ -201,19 +201,19 @@ class ChildStub:
         return {}
 
     async def announce(self, data: Any) -> dict[str, Any]:
-        """Take the announcements the parent handed down and say them back up.
+        """Take the worker events the parent handed down and say them back up.
 
         Args:
-            data: the announcements to make, under ``announcements``.
+            data: the worker events to make, under ``worker_events``.
 
         Returns:
             How many were taken.
 
-        Sets ``announcements``: they leave on the reply to this very order, which
+        Sets ``worker_events``: they leave on the reply to this very order, which
         is the only road anything has out of here.
         """
-        self.announcements.extend(data["announcements"])
-        return {"announcing": len(self.announcements)}
+        self.worker_events.extend(data["worker_events"])
+        return {"announcing": len(self.worker_events)}
 
     async def take_deposit_lock(self, data: Any) -> dict[str, Any]:
         """Take the semaphore of a user.

@@ -37,13 +37,13 @@ that resolves an identity. So a caller cannot forget to look at it.
 state; the vertex mints the ROWS. At the first request of a cid never seen, and
 BEFORE anything descends, ``resolve_user`` writes the identity (``guest_<cid>``)
 and its row: routing somebody the indexes do not carry is exactly what cannot be
-done, so the writing comes first. The announcements the reception then sends
+done, so the writing comes first. The worker events the reception then sends
 upward (``new_user``, ``new_connection``) find the work already done, and are
 idempotent no-ops by design.
 
 **Two writers, both here.** The minting above is one; the other is the fold — the
 chain of the envelope, which turns what the processes announce into these
-indexes, one announcement at a time, synchronously. The mutators live on this
+indexes, one worker event at a time, synchronously. The mutators live on this
 class because the data does, and the chain calls them by name.
 
 **The freezer is not on the ladder.** A worker parks a user's state on disk
@@ -280,7 +280,7 @@ class SpaCommander:
             user: the identity that left his process.
             occupancy_percent: what he occupied where he was, normalised — the
                 estimate whoever places him next reads. None leaves the estimate
-                as it was, which is the case of a user whose own announcement
+                as it was, which is the case of a user whose own worker event
                 died with the wire.
 
         Acts on his row: the mark goes on and the wait he may have been in is

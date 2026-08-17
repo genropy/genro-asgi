@@ -16,7 +16,7 @@
 
 An envelope arrives from a child process — its presentation, or the answer to an
 order — and carries two things beside its own payload: the photo the process took
-of itself, and the announcements of everything that happened there since the last
+of itself, and the worker events of everything that happened there since the last
 envelope. Both have to be READ by three different levels, each for its own
 reason, and the levels must read them in the same order every time.
 
@@ -34,37 +34,37 @@ IS an envelope going down — the reply to a presentation — and drops it other
 
 **A layer may in principle change the envelope, and today none does.** What
 arrives is what the worker said, and altering it would mix the two: whoever reads
-it later could not tell an announcement from an addition. But nothing in the shape
+it later could not tell a worker event from an addition. But nothing in the shape
 forbids a layer from adding, removing or rewriting on the way through, which is
 the door deliberately left open for the day a level has to say something to the
 level above — which is why the method is called ``work_on_envelope`` and not
 something that says reading only.
 
 **The chain is synchronous, and runs where the envelope landed.** Its work is
-writes in RAM, so it needs no await and cannot be interleaved: the announcements
+writes in RAM, so it needs no await and cannot be interleaved: the worker events
 of one envelope are applied in the order the child made them, and two envelopes
 are applied in the order they arrived. FIFO by construction rather than by
 discipline.
 
-**Dispatch by name.** Every announcement carries its protocol name in ``op``, and
+**Dispatch by name.** Every worker event carries its protocol name in ``op``, and
 a layer that has something to do about it has a method called ``on_<op>``:
 ``on_new_page``, ``on_user_frozen``, ``on_process_aborted``. A layer with nothing
-to do about an announcement simply has no such method — the census of who reads
+to do about a worker event simply has no such method — the census of who reads
 what is READABLE as the set of methods each class carries. The same name on three
 layers is deliberate (``GroupEnvelopeHandler.on_drop_user`` unhooks the placement
 while ``CommanderEnvelopeHandler.on_drop_user`` prunes the indexes), so anything
 said about one of them cites the class with it.
 
-**The photo is not an announcement.** It travels in its own slot, it is not a
+**The photo is not a worker event.** It travels in its own slot, it is not a
 fact that happened but a state that is true, and every layer reads it: the
 handler files it as its latest, the group judges whether it needs a round NOW,
 the Commander parks the users it shows on their way out. It is read BEFORE the
-announcements of the same envelope, which is the order it was taken in.
+worker events of the same envelope, which is the order it was taken in.
 
-**The death is the one announcement born on this side of the wire.** A process
+**The death is the one worker event born on this side of the wire.** A process
 that has ended announces nothing — it is gone. What the handler has instead is
 its ``state``, and ``WorkerEnvelopeHandler.announce_death_TBD()`` turns that
-state into the announcement the levels above consume, on the round that reads it.
+state into the worker event the levels above consume, on the round that reads it.
 So a death climbs the same ladder as everything else, and no level learns about
 it in a way of its own.
 """
@@ -76,16 +76,16 @@ from typing import Any
 
 from .worker_connector import GLOBAL_STORE_KEY, WORKER_SNAPSHOT_KEY
 
-#: The slot the announcements travel in, as the worker composes it.
-ANNOUNCEMENTS_KEY = "events"
+#: The slot the worker events travel in, as the worker composes it.
+WORKER_EVENTS_KEY = "worker_events"
 
-#: The two states of a handler whose process has ended, and the announcement each
+#: The two states of a handler whose process has ended, and the worker event each
 #: one becomes: the death somebody ordered, and the death nobody did.
-DEATH_ANNOUNCEMENTS = {"quitted": "process_quitted", "aborted": "process_aborted"}
+DEATH_WORKER_EVENTS = {"quitted": "process_quitted", "aborted": "process_aborted"}
 
 __all__ = [
-    "ANNOUNCEMENTS_KEY",
-    "DEATH_ANNOUNCEMENTS",
+    "WORKER_EVENTS_KEY",
+    "DEATH_WORKER_EVENTS",
     "CommanderEnvelopeHandler",
     "EnvelopeHandler",
     "GroupEnvelopeHandler",
@@ -110,21 +110,21 @@ class EnvelopeHandler:
 
         Args:
             envelope: the payload as it came off the wire — the photo in its own
-                slot, the announcements in theirs, the primary answer beside them.
+                slot, the worker events in theirs, the primary answer beside them.
             worker_handler: the handler whose wire it arrived on; every level
                 needs to know whose envelope this is.
 
         The photo first, because it is the state the shot found, then the
-        announcements in the order they were made. What this layer has nothing to
+        worker events in the order they were made. What this layer has nothing to
         do about it does not carry a method for, and skips.
         """
         photo = envelope.get(WORKER_SNAPSHOT_KEY)
         if photo is not None:
             self.on_worker_snapshot(photo, worker_handler)
-        for announcement in envelope.get(ANNOUNCEMENTS_KEY) or ():
-            reader = getattr(self, f"on_{announcement['op']}", None)
+        for worker_event in envelope.get(WORKER_EVENTS_KEY) or ():
+            reader = getattr(self, f"on_{worker_event['op']}", None)
             if reader is not None:
-                reader(announcement, worker_handler)
+                reader(worker_event, worker_handler)
 
     def on_worker_snapshot(self, photo: dict[str, Any], worker_handler: Any) -> None:
         """This layer's reading of the photo — every level has one, so this raises."""
@@ -158,7 +158,7 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
         return self.group_envelope_handler(envelope, self.worker_handler)
 
     def announce_death_TBD(self) -> dict[str, Any]:
-        """Turn the ended state of this handler's process into the announcement of it.
+        """Turn the ended state of this handler's process into the worker event of it.
 
         Returns:
             The payload that goes down, as the chain composed it — nothing will
@@ -170,29 +170,29 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
                 state that says the opposite, and a death announced for a living
                 process would take its users away from it.
 
-        The announcement says who died, who was on board, and — decided HERE,
+        The worker event says who died, who was on board, and — decided HERE,
         once, because this is the level that holds both the state and the last
         photo — which of them are in the freezer and which are lost. An orderly
         departure froze whoever its last photo had flagged for cession, even the
-        ones whose own announcement died with the wire; a death nobody ordered
+        ones whose own worker event died with the wire; a death nobody ordered
         saves nobody, because a process that went for reasons of its own leaves
         nothing that can be trusted.
         """
         state = self.worker_handler.state
-        if state not in DEATH_ANNOUNCEMENTS:
+        if state not in DEATH_WORKER_EVENTS:
             raise ValueError(
                 f"WorkerHandler {self.worker_handler.name}: its process is {state}, not dead"
             )
         users = set(self.worker_handler.hosted_users)
         frozen = users & self.get_flagged_users_TBD() if state == "quitted" else set()
-        announcement = {
-            "op": DEATH_ANNOUNCEMENTS[state],
+        worker_event = {
+            "op": DEATH_WORKER_EVENTS[state],
             "worker": self.worker_handler.name,
             "users": sorted(users),
             "frozen_users": sorted(frozen),
             "lost_users": sorted(users - frozen),
         }
-        return self({ANNOUNCEMENTS_KEY: [announcement]})
+        return self({WORKER_EVENTS_KEY: [worker_event]})
 
     def get_flagged_users_TBD(self) -> set[str]:
         """Who the last photo of this process showed on his way out.
@@ -243,32 +243,32 @@ class GroupEnvelopeHandler(EnvelopeHandler):
         if self.group_handler.snapshot_is_urgent_TBD(photo):
             self.group_handler.ping_now()
 
-    def on_user_frozen(self, announcement: dict[str, Any], worker_handler: Any) -> None:
+    def on_user_frozen(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
         """A user has left for the freezer: his placement is to be assigned again."""
-        self.group_handler.record_placement_TBD(announcement["user"], None)
+        self.group_handler.record_placement_TBD(worker_event["user"], None)
 
-    def on_drop_user(self, announcement: dict[str, Any], worker_handler: Any) -> None:
+    def on_drop_user(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
         """A user is gone for good: he has no placement in this group any more."""
-        self.group_handler.forget_placement_TBD(announcement["user"])
+        self.group_handler.forget_placement_TBD(worker_event["user"])
 
-    def on_process_quitted(self, announcement: dict[str, Any], worker_handler: Any) -> None:
+    def on_process_quitted(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
         """The process left as it was asked to: its users and then its handler."""
-        self._bury_worker(announcement, worker_handler)
+        self._bury_worker(worker_event, worker_handler)
 
-    def on_process_aborted(self, announcement: dict[str, Any], worker_handler: Any) -> None:
+    def on_process_aborted(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
         """The process died with nobody waiting for it: the same reading, and nobody saved."""
-        self._bury_worker(announcement, worker_handler)
+        self._bury_worker(worker_event, worker_handler)
 
-    def _bury_worker(self, announcement: dict[str, Any], worker_handler: Any) -> None:
+    def _bury_worker(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
         """A death, read as this group reads one: the placements first, the handler last.
 
         Whoever is in the freezer is to be assigned again — he exists and needs a
         home; whoever is lost has no placement at all any more. Then the handler
         comes out of the group, which is the same verb for both kinds of death.
         """
-        for user in announcement["frozen_users"]:
+        for user in worker_event["frozen_users"]:
             self.group_handler.record_placement_TBD(user, None)
-        for user in announcement["lost_users"]:
+        for user in worker_event["lost_users"]:
             self.group_handler.forget_placement_TBD(user)
         self.group_handler.drop_worker(worker_handler)
 
@@ -322,70 +322,70 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
             if flag is not None:
                 self.spa_commander.hold_user_TBD(user, f"transfer_flag {flag}")
 
-    def on_new_page(self, announcement: dict[str, Any], worker_handler: Any) -> None:
+    def on_new_page(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
         """A page was born: it belongs to the connection that asked for it, for good."""
-        self.spa_commander.add_page(announcement["page_id"], announcement["session_id"])
+        self.spa_commander.add_page(worker_event["page_id"], worker_event["session_id"])
 
-    def on_drop_page(self, announcement: dict[str, Any], worker_handler: Any) -> None:
+    def on_drop_page(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
         """A page is gone."""
-        self.spa_commander.drop_page(announcement["page_id"])
+        self.spa_commander.drop_page(worker_event["page_id"])
 
-    def on_drop_pages(self, announcement: dict[str, Any], worker_handler: Any) -> None:
+    def on_drop_pages(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
         """A cascade took several pages at once — a connection or a user leaving."""
-        for page_id in announcement["page_ids"]:
+        for page_id in worker_event["page_ids"]:
             self.spa_commander.drop_page(page_id)
 
-    def on_drop_connection(self, announcement: dict[str, Any], worker_handler: Any) -> None:
+    def on_drop_connection(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
         """A connection is gone: its pages with it, its identity kept.
 
         The cookie is eternal: the browser that comes back on that same cid is
         the same person, so what is dropped is the connection's pages and not
         the row that says whose the cid is.
         """
-        self.spa_commander.drop_connection(announcement["session_id"])
+        self.spa_commander.drop_connection(worker_event["session_id"])
 
-    def on_drop_connections(self, announcement: dict[str, Any], worker_handler: Any) -> None:
+    def on_drop_connections(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
         """Several connections at once — the cascade of a user leaving."""
-        for cid in announcement["session_ids"]:
+        for cid in worker_event["session_ids"]:
             self.spa_commander.drop_connection(cid)
 
-    def on_drop_user(self, announcement: dict[str, Any], worker_handler: Any) -> None:
+    def on_drop_user(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
         """A user is gone: his row, his connections and whatever was waiting for him."""
-        self.spa_commander.drop_user(announcement["user"])
+        self.spa_commander.drop_user(worker_event["user"])
 
-    def on_user_frozen(self, announcement: dict[str, Any], worker_handler: Any) -> None:
+    def on_user_frozen(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
         """A user is in the freezer: the mark goes on, with what he is expected to cost."""
         self.spa_commander.record_user_frozen_TBD(
-            announcement["user"], announcement.get("occupancy_percent")
+            worker_event["user"], worker_event.get("occupancy_percent")
         )
 
-    def on_user_adopted(self, announcement: dict[str, Any], worker_handler: Any) -> None:
+    def on_user_adopted(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
         """A user came home from the freezer: the mark goes off, and his waiting is served."""
-        self.spa_commander.record_user_adopted_TBD(announcement["user"])
+        self.spa_commander.record_user_adopted_TBD(worker_event["user"])
 
-    def on_process_quitted(self, announcement: dict[str, Any], worker_handler: Any) -> None:
+    def on_process_quitted(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
         """The process left as ordered: whoever it was holding is accounted for.
 
         An orderly departure freezes everybody and announces every one of them,
-        but the last announcements travel on a wire that is closing: the ones the
-        announcement names as frozen are in the freezer whether their own
-        announcement made it or not, so their marks are written here.
+        but the last worker events travel on a wire that is closing: the ones the
+        worker event names as frozen are in the freezer whether their own
+        worker event made it or not, so their marks are written here.
         """
-        self._bury_users(announcement)
+        self._bury_users(worker_event)
 
-    def on_process_aborted(self, announcement: dict[str, Any], worker_handler: Any) -> None:
+    def on_process_aborted(self, worker_event: dict[str, Any], worker_handler: Any) -> None:
         """The process died on its own: nobody it held can be trusted any more.
 
         Not knowing WHY it died, every user that was on it is suspect — frozen and
-        not alike — which is why the announcement of a wild death names nobody as
+        not alike — which is why the worker event of a wild death names nobody as
         saved: the traces go, what they left in the freezer is discarded and
         counted, and their next request is a re-login. This is the price of a
         death nobody ordered, and it is paid here.
         """
-        self._bury_users(announcement)
+        self._bury_users(worker_event)
 
-    def _bury_users(self, announcement: dict[str, Any]) -> None:
+    def _bury_users(self, worker_event: dict[str, Any]) -> None:
         """The users of a dead process: the freezer marks written, the rest discarded."""
-        for user in announcement["frozen_users"]:
+        for user in worker_event["frozen_users"]:
             self.spa_commander.record_user_frozen_TBD(user, None)
-        self.spa_commander.purge_users_TBD(announcement["lost_users"], cause=announcement["op"])
+        self.spa_commander.purge_users_TBD(worker_event["lost_users"], cause=worker_event["op"])

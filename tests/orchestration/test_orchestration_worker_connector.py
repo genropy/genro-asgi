@@ -107,7 +107,7 @@ class ChildPeer:
                         id=frame.id,
                         method=REPLY_METHOD,
                         path=frame.path,
-                        data={"result": self.reply_result, "events": []},
+                        data={"result": self.reply_result, "worker_events": []},
                     )
                 )
 
@@ -205,7 +205,7 @@ async def test_a_call_travels_and_its_reply_comes_back(connector):
 
     payload = await connector.call("/probe", {"kwargs": {}})
 
-    assert payload == {"result": {"alive": True}, "events": []}
+    assert payload == {"result": {"alive": True}, "worker_events": []}
     assert child.received[0].method == CALL_METHOD
     assert child.received[0].path == "/probe"
     assert child.received[0].data == {"kwargs": {}}
@@ -296,7 +296,7 @@ async def test_a_second_child_on_a_taken_wire_is_refused(connector):
     assert await intruder.stream.read() is None
 
     resident.reply_result = "still here"
-    assert await connector.call("/probe") == {"result": "still here", "events": []}
+    assert await connector.call("/probe") == {"result": "still here", "worker_events": []}
 
     await resident.close()
 

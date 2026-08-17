@@ -27,7 +27,7 @@ that arrived, what the answer to the presentation is, that the wire has died. No
 callbacks are handed in at construction: a second road to an object already in
 hand is one road too many.
 
-**The wire reads nothing.** It does not know what an announcement means, what a
+**The wire reads nothing.** It does not know what a worker event means, what a
 photo is, or that a global store exists: an envelope that arrives goes WHOLE to
 the handler, which pushes it into the chain of the fold, and what comes back is
 written down as the answer. An envelope that leaves was composed by that same

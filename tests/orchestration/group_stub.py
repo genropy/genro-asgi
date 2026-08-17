@@ -18,7 +18,7 @@
 group above it — for the wake it rings when its process ends, and for the layer of
 the chain everything it hears climbs through — so this is that group, and it is
 NOT a fake: the layer it carries is the real ``GroupEnvelopeHandler`` over a real
-``SpaCommander``, so an announcement born in a child process lands in the real
+``SpaCommander``, so a worker event born in a child process lands in the real
 indexes.
 
 What it stands in for is only the group's OWN work, and this is therefore the

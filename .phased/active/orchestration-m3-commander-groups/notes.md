@@ -29,6 +29,17 @@ or, at the vertex, read my share and answer with the store. Gone with the dance:
 `hand_up_TBD` and two of the three `NotImplementedError` stubs; the one left says
 that every layer reads the photo, which is true of all three.
 
+**The vocabulary of Phase 1's decision (9) landed here, and I had to be reminded.**
+The plan deferred `worker_events` / `add_worker_event` to «the `_TBD` round at the
+end of Phase 2», and I did not put it on the list of names to settle — the owner
+did («abbiamo fatto una sessione dicendo che erano worker_event»). Applied across
+the whole subpackage: the list is `worker_events`, the verb `add_worker_event`, the
+wire slot `"worker_events"`, the chain's constant `WORKER_EVENTS_KEY`, the two death
+names in `DEATH_WORKER_EVENTS`, and in prose the thing is a *worker event*, not an
+«announcement». The legacy machine (`spa/worker.py`, its tests) keeps its own
+words, as always. Lesson for the next round: a name postponed by an earlier phase
+belongs on the list, and the list is read off the plan, not off memory.
+
 **The envelope may in principle be ALTERED by a layer, and the name of the base's
 method says so.** Asked at the naming round whether a group can add something for
 the vertex, the owner ruled that the door stays open «se un domani serve»: on the

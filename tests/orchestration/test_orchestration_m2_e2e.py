@@ -184,7 +184,7 @@ def body_of(reply: dict[str, Any]) -> str:
 
 def announced(reply: dict[str, Any]) -> list[str]:
     """The protocol names the reply carried up, in order."""
-    return [event["op"] for event in reply["events"]]
+    return [event["op"] for event in reply["worker_events"]]
 
 
 async def wait_for(condition, timeout: float = CALL_TIMEOUT) -> None:
@@ -278,7 +278,7 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     # SERVES. The request crosses the process boundary inside the envelope and
     # comes back as the site answered it — headers and body whole, and among the
     # headers the whole global store the presentation was answered with. The rows
-    # are born on the way in, and the announcements say so.
+    # are born on the way in, and the worker events say so.
     before = time.time()
     reply = await handler.connector.call(
         "/site/invoices", http_call("cid-a", "mario", path="/invoices"), timeout=CALL_TIMEOUT
@@ -336,18 +336,18 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     assert commander.resolve_user("cid-b") == "anna"
 
     # HE DEPARTS. Past the gate he goes to the deposit like anybody else
-    # leaving: the placement the announcement carries is NOBODY'S — the vertex
+    # leaving: the placement the worker event carries is NOBODY'S — the vertex
     # decides where he wakes — and his row leaves memory whole, connection and
     # all. His store and his connection are readable from the parent side.
     parked = await handler.connector.call(EXECUTE_ORDER, timeout=CALL_TIMEOUT)
 
-    assert parked["events"] == [
+    assert parked["worker_events"] == [
         {"op": "user_frozen", "worker": WORKER_NAME, "user": "mario", "placement": None}
     ]
     assert deposit.read_user_register_item("mario") is not None
     assert deposit.read_connection_register_item("mario", "cid-a") is not None
     assert deposit.get_item_header("mario")["writer"] == WORKER_NAME
-    # The fold turned that announcement into the two facts it is: at the vertex the
+    # The fold turned that worker event into the two facts it is: at the vertex the
     # mark says his state is on disk and the wait is over, in the group his
     # placement is to be assigned again.
     assert commander.user_is_frozen("mario") is True
@@ -360,7 +360,7 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
 
     # WAKES BY VERDICT. His next call carries the verdict, and only that
     # authorises the trip: the store comes home, the connection finds itself in
-    # the deposit and is born again through the ordinary announcements, both
+    # the deposit and is born again through the ordinary worker events, both
     # parcels are taken away and the folder goes with the last of them. WHICH
     # worker he comes home to is the vertex's to say — here it is this one
     # because this story runs a single worker.
@@ -376,7 +376,7 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     assert deposit.read_connection_register_item("mario", "cid-a") is None
     assert deposit.user_folders == set()
     assert woken[WORKER_SNAPSHOT_KEY]["users"]["mario"]["item"]["state"] == "active"
-    # The vertex turned the mark off on the same announcement: he lives in a process
+    # The vertex turned the mark off on the same worker event: he lives in a process
     # again, so his next request is routed there and not to the deposit.
     assert commander.user_is_frozen("mario") is False
 
@@ -422,9 +422,9 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
 
     # AND THE ROUND CONSUMES IT. What the group does at that round is Macro 3's
     # own; what the CHAIN does with it exists already, so the driver plays the
-    # round: the ended state becomes the announcement, the group takes the handler
+    # round: the ended state becomes the worker event, the group takes the handler
     # out, and the vertex writes the freezer marks of the two the last photo had
-    # flagged — whose own announcements died with the wire.
+    # flagged — whose own worker events died with the wire.
     handler.envelope_handler.announce_death_TBD()
 
     assert group.dropped_workers == [handler]

@@ -100,7 +100,7 @@ class HandlerStub:
 
     The wire hands every envelope over whole and writes back down whatever comes
     out, so this stub plays the fold as well: it files the photo an envelope
-    carried, keeps the announcements for the assertions, and answers with the
+    carried, keeps the worker events for the assertions, and answers with the
     store — which is what the real chain composes for a process that holds none.
     It doubles as the level above the handler in the real-child test at the end,
     where the only thing asked of a group is the wake — so it answers for that
@@ -118,7 +118,7 @@ class HandlerStub:
         """Read the envelope as the three layers would, and answer with the store."""
         if WORKER_SNAPSHOT_KEY in envelope:
             self.worker_snapshot = envelope[WORKER_SNAPSHOT_KEY]
-        self.announced.extend(envelope.get("events") or ())
+        self.announced.extend(envelope.get("worker_events") or ())
         return {GLOBAL_STORE_KEY: self.global_register_item_tytx}
 
     def on_child_lost(self) -> None:
@@ -287,7 +287,7 @@ def body_of(reply: dict[str, Any]) -> str:
 
 def announced(reply: dict[str, Any]) -> list[str]:
     """The protocol names the reply carried up, in order."""
-    return [event["op"] for event in reply["events"]]
+    return [event["op"] for event in reply["worker_events"]]
 
 
 def age_user(worker: SpaWorker, user: str, seconds: float) -> None:
@@ -360,7 +360,7 @@ async def test_the_beat_is_answered_and_asks_for_nothing_else(wire):
     reply = await wire.connector.call(PING_OP_PATH, timeout=5.0)
 
     assert reply["result"] == {}
-    assert reply["events"] == []
+    assert reply["worker_events"] == []
 
 
 async def test_an_op_nobody_here_knows_is_refused_by_name(wire):

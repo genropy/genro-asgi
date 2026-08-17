@@ -14,13 +14,13 @@
 
 """The chain of the envelope: who reads what, and what goes back down.
 
-Every announcement of the census is exercised here, one test each, on the real
+Every worker event of the census is exercised here, one test each, on the real
 three layers over a real ``SpaCommander``: the handler is a real
 ``WorkerHandler`` with no process under it — construction alone builds its layer
 of the chain — and the group is the stub that stands in for the level not yet
 built, whose own verbs are the contract that level will owe.
 
-The last test is the whole thing with a REAL child process: an announcement born
+The last test is the whole thing with a REAL child process: a worker event born
 in another process lands in the vertex's indexes, a change of the master rides
 the next order down without anybody pushing it, and a fold that refuses an
 envelope is denounced without severing the wire.
@@ -39,7 +39,7 @@ from typing import Any
 import pytest
 
 from genro_asgi.spa.orchestration import EnvelopeHandler, UserOnHold, WorkerHandler
-from genro_asgi.spa.orchestration.envelope_handler import ANNOUNCEMENTS_KEY
+from genro_asgi.spa.orchestration.envelope_handler import WORKER_EVENTS_KEY
 from genro_asgi.spa.orchestration.worker_connector import GLOBAL_STORE_KEY, WORKER_SNAPSHOT_KEY
 
 from .child_stub import ANNOUNCE_OP
@@ -50,9 +50,9 @@ WORKER_NAME = "standard_0001"
 CALL_TIMEOUT = 5.0
 
 
-def envelope(*announcements: dict[str, Any], photo: dict[str, Any] | None = None) -> dict[str, Any]:
-    """One envelope as a child composes it: its announcements, and its photo if due."""
-    made: dict[str, Any] = {ANNOUNCEMENTS_KEY: list(announcements)}
+def envelope(*worker_events: dict[str, Any], photo: dict[str, Any] | None = None) -> dict[str, Any]:
+    """One envelope as a child composes it: its worker events, and its photo if due."""
+    made: dict[str, Any] = {WORKER_EVENTS_KEY: list(worker_events)}
     if photo is not None:
         made[WORKER_SNAPSHOT_KEY] = photo
     return made
@@ -169,7 +169,7 @@ async def test_a_page_is_written_where_it_belongs_and_forgotten_one_by_one(handl
     assert commander.page_connection_map == {"p2": "cid-a"}
 
 
-async def test_a_cascade_of_pages_goes_in_one_announcement(handler, commander):
+async def test_a_cascade_of_pages_goes_in_one_worker_event(handler, commander):
     handler.read_envelope(
         envelope(
             {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a"},
@@ -196,7 +196,7 @@ async def test_a_connection_leaves_its_pages_and_keeps_its_identity(handler, com
     assert commander.resolve_user("cid-a") == user
 
 
-async def test_several_connections_leave_in_one_announcement(handler, commander):
+async def test_several_connections_leave_in_one_worker_event(handler, commander):
     commander.resolve_user("cid-a")
     commander.resolve_user("cid-b")
     handler.read_envelope(
@@ -284,7 +284,7 @@ async def test_a_hold_is_lifted_by_the_freeze_it_was_waiting_for(handler, comman
     assert commander.resolve_user("cid-a") == user
 
 
-async def test_an_announcement_no_layer_knows_is_ignored(handler, commander):
+async def test_a_worker_event_no_layer_knows_is_ignored(handler, commander):
     handler.read_envelope(
         envelope({"op": "something_nobody_reads", "worker": WORKER_NAME, "user": "mario"})
     )
@@ -386,7 +386,7 @@ async def test_a_real_child_announces_and_the_vertex_learns_it(
     reply = await handler.connector.call(
         ANNOUNCE_OP,
         {
-            "announcements": [
+            "worker_events": [
                 {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a"},
                 {
                     "op": "user_frozen",
@@ -419,13 +419,13 @@ async def test_a_real_child_announces_and_the_vertex_learns_it(
     assert beat[WORKER_SNAPSHOT_KEY]["global_store"] == born_with
     assert born_with != commander.global_register.item_tytx
 
-    # A FOLD THAT REFUSES DOES NOT SEVER THE WIRE. An announcement about somebody
+    # A FOLD THAT REFUSES DOES NOT SEVER THE WIRE. An worker event about somebody
     # the vertex never wrote cannot be filed — and a bug one level up must not
     # take a whole process's users down with it: the refusal is denounced and the
     # caller is answered.
     refused = await handler.connector.call(
         ANNOUNCE_OP,
-        {"announcements": [{"op": "drop_page", "worker": WORKER_NAME, "page_id": "p1"}]},
+        {"worker_events": [{"op": "drop_page", "worker": WORKER_NAME, "page_id": "p1"}]},
         timeout=CALL_TIMEOUT,
     )
     assert refused["result"] == {"announcing": 1}
@@ -433,7 +433,7 @@ async def test_a_real_child_announces_and_the_vertex_learns_it(
     stranger = await handler.connector.call(
         ANNOUNCE_OP,
         {
-            "announcements": [
+            "worker_events": [
                 {"op": "user_frozen", "worker": WORKER_NAME, "user": "nobody", "placement": None}
             ]
         },

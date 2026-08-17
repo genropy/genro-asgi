@@ -91,10 +91,10 @@ per user, reading and unpickling a parcel costs microseconds.
 reads back — the store under the user, one parcel per connection carrying that
 connection and its pages — under the folder semaphore, which is the deposit's
 only coherence mechanism, and then says ``user_frozen``. WHERE he wakes is not
-this worker's business: the announcement keeps a ``placement`` slot for the
+this worker's business: the worker event keeps a ``placement`` slot for the
 vertex that will decide it and this worker never fills it, so every departure
 leaves with the placement to be assigned and the row leaves memory WHOLE. No
-drop is announced beside it: the freeze announcement already told the story, and
+drop is announced beside it: the freeze worker event already told the story, and
 the wake tells it back through the ordinary births. A write that fails aborts
 the departure whole — the semaphore goes back, the user stays alive exactly
 where he is, nothing is announced, and the failure is logged and counted. Nobody
@@ -134,7 +134,7 @@ alone proves nobody — is ceded by the same decision, on the same road, with no
 verb of his own. Then THE GATE: the worker does not park anybody in the same turn
 it announced them. It waits ``TRANSFER_START_DELAY``, the time the fold needs to
 park the users just named, and only then lets them go — the expired dropped with
-their announcements, the ceded written to the deposit one at a time, the loop
+their worker events, the ceded written to the deposit one at a time, the loop
 breathing between two. So there is ONE departure scheme and no special case: the
 window in which somebody could come back to a row that was already emptied
 cannot open, because whoever comes back either is already in the pendings and
@@ -170,7 +170,7 @@ work.
 serves them and carry that verb's own argument: ``/op/quit``, answered AT ONCE
 with the photo that shows every user flagged for cession, the departures running
 after the answer because the process ends with them; ``/op/drop_user`` and
-``/op/drop_connection``, answered when the drop is done, so the announcements it
+``/op/drop_connection``, answered when the drop is done, so the worker events it
 made ride that same reply. The http CALL form (an ``http`` dict beside the
 ``identity`` and the ``user_frozen`` verdict) is a request the front packed
 whole: it lands on the unified row FIRST — the store adopted when the verdict
@@ -195,7 +195,7 @@ newborn is not a special case, and nothing can arrive out of order.
 the wire: two guardians converging on the same safe state. A wire gone means
 nobody can be told anything, so the worker parks everybody in the deposit — the
 road to safety does not pass through the channel — and leaves. The
-announcements stay unsaid: whoever finds the parcels needs no telling.
+worker events stay unsaid: whoever finds the parcels needs no telling.
 """
 
 from __future__ import annotations
@@ -260,9 +260,9 @@ SECONDS_PER_MINUTE = 60.0
 #: The three clocks every register item carries, in the order of their rank.
 CLOCK_NAMES = ("last_refresh_ts", "last_user_ts", "last_rpc_ts")
 
-# The announcements that mean the population changed — a user entering or
+# The worker events that mean the population changed — a user entering or
 # leaving — and therefore that the next envelope out owes a fresh photo.
-POPULATION_EVENTS = frozenset({"new_user", "drop_user", "user_frozen", "user_adopted"})
+POPULATION_WORKER_EVENTS = frozenset({"new_user", "drop_user", "user_frozen", "user_adopted"})
 
 __all__ = [
     "CLOCK_NAMES",
@@ -281,7 +281,7 @@ class SpaWorker:
 
     Args:
         name: the worker's name, the one its handler minted; it stamps every
-            announcement and holds the deposit semaphore.
+            worker event and holds the deposit semaphore.
         freeze_handler: the deposit surface — the only way to the parcels.
         group: the group this worker serves in; it goes in the diagnostic header
             of every parcel, which is read for counting and for the sysop.
@@ -342,7 +342,7 @@ class SpaWorker:
         self._user_register: dict[str, dict[str, Any]] = {}
         self._connection_register: dict[str, dict[str, Any]] = {}
         self._page_register: dict[str, dict[str, Any]] = {}
-        self._events: list[dict[str, Any]] = []
+        self._worker_events: list[dict[str, Any]] = []
         self._unfreeze_waits: dict[str, asyncio.Event] = {}
         self._pendings: dict[str, int] = {}
         self._transfer_flags: dict[str, str] = {}
@@ -387,13 +387,13 @@ class SpaWorker:
         return self._page_register
 
     @property
-    def events(self) -> list[dict[str, Any]]:
-        """The announcements waiting for the next envelope out.
+    def worker_events(self) -> list[dict[str, Any]]:
+        """The worker events waiting for the next envelope out.
 
         Returns:
             The live list: whoever composes the envelope takes them from here.
         """
-        return self._events
+        return self._worker_events
 
     @property
     def freeze_failures(self) -> int:
@@ -465,22 +465,22 @@ class SpaWorker:
                 },
             }
 
-    def offer_event(self, op: str, **payload: Any) -> dict[str, Any]:
-        """Queue one announcement for the envelope out.
+    def add_worker_event(self, op: str, **payload: Any) -> dict[str, Any]:
+        """Queue one worker event for the envelope out.
 
         Args:
             op: the protocol name of what happened.
             payload: the entity keys that name it.
 
         Returns:
-            The announcement as it was queued.
+            The worker event as it was queued.
 
         Appends to ``events``, and marks the photo due when what happened is a
         user entering or leaving.
         """
         event = {"op": op, "worker": self.name, **payload}
-        self._events.append(event)
-        if op in POPULATION_EVENTS:
+        self._worker_events.append(event)
+        if op in POPULATION_WORKER_EVENTS:
             self._population_changed = True
         return event
 
@@ -498,7 +498,7 @@ class SpaWorker:
         """
         with self.dispatch_lock:
             item = self._add_user_item(user, **fields)
-            self.offer_event("new_user", user=user)
+            self.add_worker_event("new_user", user=user)
             return item
 
     def add_connection(self, cid: str, user: str | None = None, **fields: Any) -> dict[str, Any]:
@@ -521,7 +521,7 @@ class SpaWorker:
             if user not in self._user_register:
                 self.add_user(user)
             item = self._add_connection_item(cid, user, **fields)
-            self.offer_event("new_connection", user=user, session_id=cid)
+            self.add_worker_event("new_connection", user=user, session_id=cid)
             return item
 
     def add_page(
@@ -546,7 +546,7 @@ class SpaWorker:
             if cid not in self._connection_register:
                 self.add_connection(cid, user)
             item = self._add_page_item(page_id, cid, **fields)
-            self.offer_event(
+            self.add_worker_event(
                 "new_page", user=self._page_user(page_id), page_id=page_id, session_id=cid
             )
             return item
@@ -567,10 +567,10 @@ class SpaWorker:
             cid = self._page_register[page_id]["connection_id"]
             user = self._page_user(page_id)
             self._remove_page_item(page_id)
-            self.offer_event("drop_page", user=user, page_id=page_id, session_id=cid)
+            self.add_worker_event("drop_page", user=user, page_id=page_id, session_id=cid)
             if not self._connection_register[cid]["pages"]:
                 self._remove_connection_item(cid)
-                self.offer_event("drop_connection", user=user, session_id=cid)
+                self.add_worker_event("drop_connection", user=user, session_id=cid)
                 self._drop_emptied_user(user)
 
     def drop_connection(self, cid: str) -> None:
@@ -592,9 +592,9 @@ class SpaWorker:
             for page_id in page_ids:
                 self._remove_page_item(page_id)
             if page_ids:
-                self.offer_event("drop_pages", user=user, page_ids=page_ids, session_id=cid)
+                self.add_worker_event("drop_pages", user=user, page_ids=page_ids, session_id=cid)
             self._remove_connection_item(cid)
-            self.offer_event("drop_connection", user=user, session_id=cid)
+            self.add_worker_event("drop_connection", user=user, session_id=cid)
             self._drop_emptied_user(user)
 
     def drop_user(self, user: str) -> None:
@@ -620,14 +620,14 @@ class SpaWorker:
             for page_id in page_ids:
                 self._remove_page_item(page_id)
             if page_ids:
-                self.offer_event("drop_pages", user=user, page_ids=page_ids)
+                self.add_worker_event("drop_pages", user=user, page_ids=page_ids)
             for cid in session_ids:
                 self._remove_connection_item(cid)
             if session_ids:
-                self.offer_event("drop_connections", user=user, session_ids=session_ids)
+                self.add_worker_event("drop_connections", user=user, session_ids=session_ids)
             del self._user_register[user]
             self._unfreeze_waits.pop(user, None)
-            self.offer_event("drop_user", user=user)
+            self.add_worker_event("drop_user", user=user)
 
     def refresh_chain(self, page_id: str, *clocks: str) -> float:
         """Stamp a page and the chain above it with the server's own instant.
@@ -733,7 +733,7 @@ class SpaWorker:
 
         Sends exactly one REPLY, whatever the outcome. The beat asks aliveness
         and gets an empty answer — what it proves is that the answer came. A drop
-        is answered when it is done, so the announcements it made ride that same
+        is answered when it is done, so the worker events it made ride that same
         reply; the order to leave is answered BEFORE the departures start,
         because the process ends with them. Each op is named after the verb of
         this class that serves it, and carries that verb's own argument.
@@ -791,14 +791,14 @@ class SpaWorker:
             result: the answer, when there is one.
             error: what went wrong instead.
 
-        Empties ``events`` onto the envelope — the announcements are delivered
+        Empties ``events`` onto the envelope — the worker events are delivered
         once, and the send IS the delivery — and attaches the photo when it is
         due.
         """
         with self.dispatch_lock:
-            events = self._events
-            self._events = []
-        data: dict[str, Any] = {"events": events}
+            events = self._worker_events
+            self._worker_events = []
+        data: dict[str, Any] = {"worker_events": events}
         if error is not None:
             data["error"] = error
         else:
@@ -880,7 +880,7 @@ class SpaWorker:
                 if store is not None:
                     item["store"] = store
                 item["state"] = "active"
-                self.offer_event("user_adopted", user=user)
+                self.add_worker_event("user_adopted", user=user)
         finally:
             with self.dispatch_lock:
                 del self._unfreeze_waits[user]
@@ -908,7 +908,7 @@ class SpaWorker:
 
         Reads the parcel by itself (no verdict authorises a connection), deletes
         it from the deposit and brings the connection and its pages into being
-        through the ordinary mutators: the announcements are the natural
+        through the ordinary mutators: the worker events are the natural
         ``new_connection``/``new_page``, never one of its own. A connection
         already held costs no trip at all; the question is asked again on the
         way back, because the trip is a handoff and a sister may have installed
@@ -980,7 +980,7 @@ class SpaWorker:
         judged THREE times: before the semaphore, under it, and once more when
         the write is over, each time because the wait just ended could have
         brought a call of his into being. That last question is asked in the
-        same locked breath as the announcement, so nothing is photographed
+        same locked breath as the worker event, so nothing is photographed
         mid-flight: a call born while the disk was writing takes his parcels
         back off the deposit, leaves him active with his flag, and the tail of
         that very call is what parks him. A failed write aborts the whole
@@ -1016,7 +1016,7 @@ class SpaWorker:
             with self.dispatch_lock:
                 leaving = self._get_freezable_item(user) is not None
                 if leaving:
-                    self.offer_event("user_frozen", user=user, placement=None)
+                    self.add_worker_event("user_frozen", user=user, placement=None)
                     self._release_rows(user)
                 deferred = not leaving and user in self._pendings
             if not leaving:
@@ -1125,7 +1125,7 @@ class SpaWorker:
     async def execute_transfers(self) -> None:
         """Wait out the gate, then let the flagged users go, one at a time.
 
-        The expired are dropped with their announcements — eliminating them
+        The expired are dropped with their worker events — eliminating them
         everywhere else is the vertex's — and the ceded go to the deposit as
         soon as no call of theirs is in flight; whoever still has one is taken
         by the end of that call. The loop breathes between two users.
@@ -1563,7 +1563,7 @@ class SpaWorker:
         if not self._user_register[user]["connections"]:
             del self._user_register[user]
             self._unfreeze_waits.pop(user, None)
-            self.offer_event("drop_user", user=user)
+            self.add_worker_event("drop_user", user=user)
 
     def _stamped(self, **fields: Any) -> dict[str, Any]:
         """An item born with the three clocks on the server's own instant."""

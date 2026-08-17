@@ -236,7 +236,10 @@ register item, freezer, check, timeout, restart, congelamento per inattività.
   > `descending_payload_TBD` and `hand_up_TBD` died with the code they belonged to
   > (the invented store workflow, and the template-method dance the owner cut);
   > the base's own step → **`work_on_envelope`** (ruled 2026-08-17: a name that
-  > leaves a layer free to add, remove and modify, not only to read); 10 left.
+  > leaves a layer free to add, remove and modify, not only to read); the
+  > vocabulary Phase 1 decision (9) postponed to this round applied at last —
+  > `worker_events` / `add_worker_event` / `"worker_events"` on the wire, and
+  > *worker event* in prose; 10 left.
   - Run: opus / high
   - Pattern: `src/genro_asgi/middleware/base.py:87` (`BaseMiddleware` — the
     callable chain, both ends handed in at construction, never discovered by

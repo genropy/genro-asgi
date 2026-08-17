@@ -56,9 +56,9 @@ touches the deposit.
 
 **Every envelope goes to the chain, and the chain answers what goes down.** What
 arrives from below is handed to ``envelope_handler`` — the handler's own layer of
-the fold — which reads the photo, lets the levels above read the announcements,
+the fold — which reads the photo, lets the levels above read the worker events,
 and gives back the payload for the envelope going down. So this handler carries
-no knowledge of what an announcement means, and the wire carries none either:
+no knowledge of what a worker event means, and the wire carries none either:
 the wire writes what it is handed. The one thing that answer carries today is the
 global store, whole, which is what a process presenting itself is waiting for.
 
@@ -371,7 +371,7 @@ class WorkerHandler:
         """One health beat: are you alive? Kill the process if it stays mute.
 
         Returns:
-            The payload the child answered with — the announcements it had
+            The payload the child answered with — the worker events it had
             waiting and whatever else rode that envelope — or None when it
             answered neither beat and its process was killed for it.
 
