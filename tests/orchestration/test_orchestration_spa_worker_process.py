@@ -49,14 +49,19 @@ import pytest
 from genro_asgi.channel.frame import Frame, FrameStream
 from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker, WorkerEntry, WorkerHandler
 from genro_asgi.spa.orchestration.worker_connector import (
-    CALL_METHOD,
     GLOBAL_STORE_KEY,
     REPLY_METHOD,
     WORKER_SNAPSHOT_KEY,
     WorkerConnector,
 )
 from genro_asgi.spa.orchestration.worker_entry import DEFAULT_WORKER_CLASS
-from genro_asgi.spa.orchestration.worker_handler import PING_OP_PATH, WORKER_ENV_VAR
+from genro_asgi.spa.orchestration.worker_handler import (
+    DROP_CONNECTION_OP_PATH,
+    DROP_USER_OP_PATH,
+    PING_OP_PATH,
+    QUIT_OP_PATH,
+    WORKER_ENV_VAR,
+)
 
 WORKER_NAME = "standard_0001"
 GROUP = "standard"
@@ -89,19 +94,24 @@ class EchoWorker(SpaWorker):
 
 
 class HandlerStub:
-    """The WorkerHandler seen from the wire: the store it answers, what it is told."""
+    """The WorkerHandler seen from the wire: the store it answers, what it is told.
+
+    It doubles as the level above the handler in the real-child test at the end,
+    where the only thing asked of a group is the wake — so it answers for that
+    too, and counts it.
+    """
 
     def __init__(self) -> None:
         self.global_register_item_tytx = GLOBAL_STORE
         self.worker_snapshot: dict[str, Any] | None = None
-        self.messages: list[Frame] = []
         self.lost = 0
-
-    def on_child_message(self, frame: Frame) -> None:
-        self.messages.append(frame)
+        self.wakes = 0
 
     def on_child_lost(self) -> None:
         self.lost += 1
+
+    def ping_now(self) -> None:
+        self.wakes += 1
 
 
 class Wire:
@@ -155,18 +165,16 @@ class Wire:
 
 
 class ParentWire:
-    """A parent that answers whatever the worker CALLs: the road upward, bare.
+    """A bare parent: it answers the presentation, and it can break the protocol.
 
-    The connector has no consumer for a CALL coming up — that is Macro 3's — so
-    the one thing this test double does is answer, which is what the worker's
-    inline REPLY resolution needs to be proven at all.
+    No connector above it, so what it proves is what a worker does when the thing
+    on the other end stops speaking the language — a picture the package's own
+    wire, which never writes nonsense, cannot produce.
     """
 
     def __init__(self, socket_path: Path, deposit_path: Path) -> None:
         self.socket_path = socket_path
         self.deposit_path = deposit_path
-        self.calls: list[Frame] = []
-        self.answering = True
         self.server: asyncio.Server | None = None
         self.stream: FrameStream | None = None
         self.entries: list[WorkerEntry] = []
@@ -222,15 +230,13 @@ class ParentWire:
             frame = await stream.read()
             if frame is None:
                 return
-            if frame.method == CALL_METHOD:
-                self.calls.append(frame)
-                if not self.answering:
-                    continue
-                data: dict[str, Any] = {"result": "heard"}
-            else:
-                data = {GLOBAL_STORE_KEY: GLOBAL_STORE}
             await stream.write(
-                Frame(id=frame.id, method=REPLY_METHOD, path=frame.path, data=data)
+                Frame(
+                    id=frame.id,
+                    method=REPLY_METHOD,
+                    path=frame.path,
+                    data={GLOBAL_STORE_KEY: GLOBAL_STORE},
+                )
             )
 
 
@@ -558,7 +564,54 @@ async def test_the_photo_carries_the_flag_the_transfers_decided(wire):
 
 
 # ----------------------------------------------------------------------
-# The store downward, and the road upward
+# The three ops: everybody out, one user out, one connection out
+# ----------------------------------------------------------------------
+
+
+async def test_the_order_to_leave_is_answered_with_everybody_flagged_and_then_taken(wire, deposit):
+    worker = await wire.take(worker_snapshot_ttl=0, transfer_start_delay=0.1)
+    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
+    await wire.connector.call("/site/orders", http_call("cid-b", "anna"), timeout=5.0)
+
+    leaving = await wire.connector.call(QUIT_OP_PATH, timeout=5.0)
+
+    flags = leaving[WORKER_SNAPSHOT_KEY]["users"]
+    assert {user: pair["transfer_flag"] for user, pair in flags.items()} == {
+        "mario": "T",
+        "anna": "T",
+    }
+    await wait_for(lambda: worker.exited)
+    assert deposit.read_user_register_item("mario") is not None
+    assert deposit.read_user_register_item("anna") is not None
+
+
+async def test_the_order_to_drop_a_user_answers_with_what_it_announced(wire):
+    worker = await wire.take()
+    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
+
+    reply = await wire.connector.call(
+        DROP_USER_OP_PATH, {"user": "mario"}, timeout=5.0
+    )
+
+    assert announced(reply) == ["drop_connections", "drop_user"]
+    assert worker.user_register == {}
+    assert worker.connection_register == {}
+
+
+async def test_the_order_to_drop_a_connection_answers_with_what_it_announced(wire):
+    worker = await wire.take()
+    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
+
+    reply = await wire.connector.call(
+        DROP_CONNECTION_OP_PATH, {"cid": "cid-a"}, timeout=5.0
+    )
+
+    assert announced(reply) == ["drop_connection", "drop_user"]
+    assert worker.connection_register == {}
+
+
+# ----------------------------------------------------------------------
+# The store downward, and the envelope that has no lane
 # ----------------------------------------------------------------------
 
 
@@ -566,48 +619,25 @@ async def test_the_store_slot_replaces_the_replica_whole(wire):
     worker = await wire.take()
     assert worker.global_register_item_tytx == GLOBAL_STORE
 
-    await wire.connector.send_event("/anything", {GLOBAL_STORE_KEY: "a later store"})
+    # The store rides an order going down — the beat is the one that always
+    # comes — because down this wire there is nothing else to ride.
+    await wire.connector.call(
+        PING_OP_PATH, {GLOBAL_STORE_KEY: "a later store"}, timeout=5.0
+    )
 
-    await wait_for(lambda: worker.global_register_item_tytx == "a later store")
-
-
-async def test_a_call_of_the_worker_is_resolved_by_the_reply_that_answers_it(parent_wire):
-    worker = await parent_wire.take()
-
-    answer = await worker.call("/op/anything", {"asked": "something"})
-
-    assert answer == {"result": "heard"}
-    assert parent_wire.calls[0].data["asked"] == "something"
-    assert parent_wire.calls[0].data[WORKER_SNAPSHOT_KEY]["name"] == WORKER_NAME
+    assert worker.global_register_item_tytx == "a later store"
 
 
-async def test_a_call_in_flight_when_the_wire_dies_is_failed_not_forgotten(parent_wire):
-    worker = await parent_wire.take()
-    parent_wire.answering = False
-    asking = asyncio.create_task(worker.call("/op/anything"))
-    await wait_for(lambda: parent_wire.calls)
-
-    await parent_wire.stream.close()
-
-    with pytest.raises(ConnectionError):
-        await asking
-
-
-async def test_a_reply_nobody_is_waiting_for_is_dropped(wire):
-    worker = await wire.take()
-
-    worker.handle_frame(Frame(id="never-asked", method=REPLY_METHOD, path="/op/anything"))
-
-    assert worker.exited is False
-
-
-async def test_an_envelope_of_no_known_kind_is_denounced_and_nothing_else(wire, caplog):
+async def test_an_envelope_that_is_not_an_order_is_denounced_and_nothing_else(wire, caplog):
     caplog.set_level(logging.WARNING)
     worker = await wire.take()
 
+    worker.handle_frame(Frame(method=REPLY_METHOD, path="/op/anything"))
     worker.handle_frame(Frame(method="POST", path="/op/anything"))
 
+    assert f"unexpected envelope {REPLY_METHOD}" in caplog.text
     assert "unexpected envelope POST" in caplog.text
+    assert worker.exited is False
 
 
 async def test_a_violation_of_the_protocol_ends_the_wire_like_a_death(parent_wire):

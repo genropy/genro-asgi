@@ -24,20 +24,22 @@ Its life: connect to the socket it was given, present itself with its pid and
 the configuration it received, and keep the whole global store that comes back
 in the answer. Its presentation already carries its first photo, and so does
 every reply after it: the photo rides the envelope, in the
-``worker_snapshot`` slot beside the payload. Then serve the parent — the health beat with its photo, the three
-deposit orders, the instrument that emits one EVENT upward, and the one EVENT
-that makes it go mute.
+``worker_snapshot`` slot beside the payload. Then serve the parent — the health
+beat with its photo, the three deposit orders, and the order that makes it go
+mute. Everything it has to say travels in the answer to what was asked of it:
+the wire is asymmetric, orders down and answers up, and nothing here speaks
+unbidden.
 
 **It reaches the deposit on its own side.** Nothing hands it a FreezeHandler:
 it builds one over ``frozen_users_path``, exactly as a worker in another process
 must. What it writes there the parent reads back through a FreezeHandler of its
 own, over the same root.
 
-**Going mute is how it dies.** On ``/go_mute`` it stops answering while still
-reading the wire — a process that is up and no longer serving, which is what the
-surveillance kills. Whatever it was holding in the deposit when the SIGKILL
-lands stays there: nothing in this stub tidies up, because nothing in the
-foundations does.
+**Going mute is how it dies.** On ``/go_mute`` it answers that once and then
+stops answering, while still reading the wire — a process that is up and no
+longer serving, which is what the surveillance kills. Whatever it was holding in
+the deposit when the SIGKILL lands stays there: nothing in this stub tidies up,
+because nothing in the foundations does.
 
 The routing keys below are this stub's own: the parent side of the protocol is
 Macro 2's and its names are baptised there. The one exception is the beat, which
@@ -55,22 +57,15 @@ from genro_asgi.channel.frame import REGISTER_METHOD, REGISTER_PATH, Frame, Fram
 from genro_asgi.spa.orchestration import FreezeHandler
 from genro_asgi.spa.orchestration.worker_connector import (
     CALL_METHOD,
-    EVENT_METHOD,
     GLOBAL_STORE_KEY,
     REPLY_METHOD,
     WORKER_SNAPSHOT_KEY,
 )
 from genro_asgi.spa.orchestration.worker_handler import PING_OP_PATH, WORKER_ENV_VAR
 
-#: A test instrument, not a protocol: the parent asks for one EVENT back, so
-#: that the road carrying an EVENT from the child up to ``on_child_message`` is
-#: exercised at least once. Nothing a worker does is announced upward: what the
-#: vertex must know it knows from the suspension it granted (owner, 2026-08-16).
-EMIT_EVENT_OP = "/emit_one_event"
-STUB_EVENT = "/stub_event"
-
 #: The parent tells the child to stop answering: the mute worker of the drill.
-GO_MUTE_EVENT = "/go_mute"
+#: It answers this one, and nothing after it.
+GO_MUTE_OP = "/go_mute"
 
 #: The three deposit orders the parent drives the child through.
 TAKE_LOCK_OP = "/take_deposit_lock"
@@ -78,10 +73,8 @@ WRITE_CONNECTION_REGISTER_ITEM_OP = "/write_connection_register_item"
 RELEASE_LOCK_OP = "/release_deposit_lock"
 
 __all__ = [
-    "EMIT_EVENT_OP",
-    "GO_MUTE_EVENT",
+    "GO_MUTE_OP",
     "RELEASE_LOCK_OP",
-    "STUB_EVENT",
     "TAKE_LOCK_OP",
     "WRITE_CONNECTION_REGISTER_ITEM_OP",
     "ChildStub",
@@ -104,7 +97,7 @@ class ChildStub:
             TAKE_LOCK_OP: self.take_deposit_lock,
             WRITE_CONNECTION_REGISTER_ITEM_OP: self.write_connection_register_item,
             RELEASE_LOCK_OP: self.release_deposit_lock,
-            EMIT_EVENT_OP: self.emit_one_event,
+            GO_MUTE_OP: self.go_mute,
         }
 
     @property
@@ -158,12 +151,10 @@ class ChildStub:
         Args:
             frame: the envelope as it came off the wire.
 
-        A CALL is answered with its REPLY, reusing its id; the mute EVENT stops
-        every answer from then on, and a mute process answers no CALL at all.
+        A CALL is answered with its REPLY, reusing its id; a mute process answers
+        no CALL at all, and the order that mutes it is the last thing it answers.
         """
-        if frame.method == EVENT_METHOD and frame.path == GO_MUTE_EVENT:
-            self.answering = False
-        elif frame.method == CALL_METHOD and self.answering:
+        if frame.method == CALL_METHOD and self.answering:
             result = await self.operations[frame.path](frame.data)
             await self.stream.write(
                 Frame(
@@ -236,19 +227,19 @@ class ChildStub:
         self.freeze_handler.release_lock(user, self.name)
         return {"released": user}
 
-    async def emit_one_event(self, data: Any) -> dict[str, Any]:
-        """Send one EVENT upward — the instrument that exercises that road.
+    async def go_mute(self, data: Any) -> dict[str, Any]:
+        """Answer this one, then stop answering: the mute worker of the drill.
 
         Args:
-            data: what to put in the event, echoed as it comes.
+            data: whatever the order carried; the order carries nothing.
 
         Returns:
-            The path the event was sent on.
+            That it has gone mute — the last thing this process ever says.
 
-        Writes one EVENT frame on the wire.
+        Sets ``answering``.
         """
-        await self.stream.write(Frame(method=EVENT_METHOD, path=STUB_EVENT, data=data))
-        return {"emitted": STUB_EVENT}
+        self.answering = False
+        return {"muted": True}
 
 
 if __name__ == "__main__":

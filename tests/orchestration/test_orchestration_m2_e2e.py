@@ -23,9 +23,9 @@ is the test that says who is on board and that orders the departure.
 
 The worker in the child is ``DrivenWorker``, a ``SpaWorker`` subclass of this
 test package: it fills the ``wsgi_app`` seam with a tiny site, the way the
-genropy-asgi bridge fills it with a whole one, and it answers three orders the
-wire of Macro 2 does not carry — see its docstring, which declares those
-routing keys as the test's own.
+genropy-asgi bridge fills it with a whole one, and it answers the two orders the
+protocol does not carry — see its docstring, which declares those routing keys as
+the test's own.
 
 The story, in order: it is born with a photo and the global store on board; it
 serves http calls through the seam, and the rows are born and the clocks
@@ -35,12 +35,13 @@ its own — while the one who has just spoken is kept; past the gate the silent
 one is in the deposit with his placement to be assigned and his row is gone from
 memory entirely; his next call carries the verdict and he comes home — to
 whatever worker the vertex will name, which here is this one because there is
-only one; the driver orders the departure and the reply to that order carries
-the flagged photo; past the gate everybody is in the deposit and the process
-ENDS BY ITSELF, exit code 0 and nobody killed it. That death is still denounced
-WILD — in Macro 2 nothing marks it governed — and the successor launched on the
-same name and socket presents itself with a fresh photo over a deposit nothing
-has swept. That last picture is what Macro 3 inherits.
+only one; the handler asks the process to leave and the reply to that order
+carries the flagged photo at once; past the gate everybody is in the deposit and
+the process ENDS BY ITSELF, exit code 0 and nobody killed it. That death is the
+one somebody was waiting for, so the handler writes ``quitted`` — not a word of
+WILD anywhere — and the successor launched on the same name and socket presents
+itself with a fresh photo over a deposit nothing has swept. That last picture is
+what Macro 3 inherits.
 
 The sockets and the deposit live under a short ``mkdtemp`` root: the system caps
 a UDS path at about a hundred characters and pytest's own directory is already
@@ -69,21 +70,22 @@ GROUP = "standard"
 ENTRY_MODULE = "genro_asgi.spa.orchestration.worker_entry"
 DRIVEN_WORKER = f"{__name__}:DrivenWorker"
 
-#: The three orders of this story. They are the TEST's own routing keys, not the
-#: protocol's: Macro 2 routes the beat and the http form and nothing else, so
-#: the shot, the transfer cycle and the departure — all verbs of the worker —
-#: are reachable from the parent only through a subclass that answers for them.
-#: The group of Macro 3 is what will send the real ones, and in the machine
-#: proper the first two are not orders at all: the shot is taken by whoever
-#: composes a due photo, and the cycle follows it.
+#: The two orders of this story that the protocol does NOT carry. They are the
+#: TEST's own routing keys: the shot and the transfer cycle are verbs of the
+#: worker, and in the machine proper they are not orders at all — the shot is
+#: taken by whoever composes a due photo, and the cycle follows it. So they are
+#: reachable from the parent only through a subclass that answers for them. The
+#: departure, one of these in Macro 2, is now the protocol's own ``/op/quit`` and
+#: is ordered through the handler's ``quit_process``.
 PLAN_ORDER = "/op/plan_transfers"
 EXECUTE_ORDER = "/op/execute_transfers"
-QUIT_ORDER = "/op/quit"
 
-#: The silence past which the valve parks a user, and the gate the departures
-#: wait out — both shrunk from their own defaults through the spawn grammar, so
-#: the story is told in fractions of a second instead of in seconds.
-IDLE_DELAY = 0.5
+#: The silence past which the valve parks a user — a policy, so the worker counts
+#: it in MINUTES — and the gate the departures wait out. Both shrunk from their
+#: own defaults through the spawn grammar, so the story is told in fractions of a
+#: second instead of in seconds.
+IDLE_SECONDS = 0.5
+IDLE_MINUTES = IDLE_SECONDS / 60
 GATE_DELAY = 0.5
 
 #: The bounds every wait of this test is given: multiples of the times above and
@@ -100,19 +102,17 @@ class DrivenWorker(SpaWorker):
     this process was handed at its presentation, which is how the parent reads
     back what the child holds.
 
-    The three orders are this test's own. ``plan_transfers``,
-    ``execute_transfers`` and ``quit`` are verbs of ``SpaWorker``, but no op of
-    Macro 2 routes to any of them: the beat and the http form are the whole of
-    ``answer_call``. Rather than teach the protocol something the design has not
-    decided, the subclass — the place a consumer already extends the worker —
-    answers for them, exactly as the M1 child stub answers for the deposit
-    orders it is driven with.
+    The two orders are this test's own. ``plan_transfers`` and
+    ``execute_transfers`` are verbs of ``SpaWorker`` that no op routes to — the
+    machine takes the shot when a photo is due, and the cycle follows it. Rather
+    than teach the protocol something the design has not decided, the subclass —
+    the place a consumer already extends the worker — answers for them, exactly as
+    the M1 child stub answers for the deposit orders it is driven with.
     """
 
     def __init__(self, name: str, **kwargs: Any) -> None:
         super().__init__(name, **kwargs)
         self.wsgi_app = self.tiny_site
-        self.leaving: asyncio.Task[None] | None = None
 
     def tiny_site(self, environ: dict[str, Any], start_response: Any) -> list[bytes]:
         """The WSGI callable: say back who asked, for what, and what this process holds."""
@@ -128,7 +128,7 @@ class DrivenWorker(SpaWorker):
                 f"for {environ['genro.identity']}".encode()]
 
     async def answer_call(self, frame: Any) -> None:
-        """Answer the three orders of the driver, and hand everything else upstairs.
+        """Answer the two orders of the driver, and hand everything else upstairs.
 
         Args:
             frame: the CALL as it came off the wire.
@@ -144,24 +144,22 @@ class DrivenWorker(SpaWorker):
         elif frame.path == EXECUTE_ORDER:
             await self.execute_transfers()
             await self.send_reply(frame, result={})
-        elif frame.path == QUIT_ORDER:
-            self.leaving = asyncio.create_task(self.quit())
-            await asyncio.sleep(0)
-            await self.send_reply(frame, result={})
         else:
             await super().answer_call(frame)
 
 
 class GroupStub:
-    """The GroupHandler seen from below: what it is told, and who was on board when."""
+    """The GroupHandler seen from below: the wake it gets, and what it reads at it."""
 
     def __init__(self) -> None:
-        self.aborted: list[Any] = []
+        self.worker_handler: Any = None
+        self.wakes: list[str] = []
         self.users_on_board: list[set[str]] = []
 
-    def on_worker_abort(self, worker_handler: Any) -> None:
-        self.aborted.append(worker_handler)
-        self.users_on_board.append(set(worker_handler.hosted_users))
+    def ping_now(self) -> None:
+        """The wake: at this round the group reads the state and who was on board."""
+        self.wakes.append(self.worker_handler.state)
+        self.users_on_board.append(set(self.worker_handler.hosted_users))
 
 
 def http_call(cid: str, identity: str, *, path: str, **payload: Any) -> dict[str, Any]:
@@ -236,7 +234,7 @@ async def handler(story_root, group, monkeypatch):
         worker_class=DRIVEN_WORKER,
         worker_kwargs={
             "group": GROUP,
-            "user_idle_freeze_delay": IDLE_DELAY,
+            "user_idle_freeze_minutes": IDLE_MINUTES,
             "transfer_start_delay": GATE_DELAY,
             # Every envelope carries a photo: this story reads what the photo
             # says, and the throttle has its own tests one phase down.
@@ -244,6 +242,7 @@ async def handler(story_root, group, monkeypatch):
         },
         process_ping_timeout=CALL_TIMEOUT,
     )
+    group.worker_handler = worker_handler
     yield worker_handler
     if worker_handler.process is not None and worker_handler.process.poll() is None:
         worker_handler.process.kill()
@@ -294,7 +293,7 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
 
     # A second user arrives while the first has gone quiet past the valve's
     # silence: one of them is about to be parked, the other has just spoken.
-    await asyncio.sleep(2 * IDLE_DELAY)
+    await asyncio.sleep(2 * IDLE_SECONDS)
     arrival = await handler.connector.call(
         "/site/orders", http_call("cid-b", "anna", path="/orders"), timeout=CALL_TIMEOUT
     )
@@ -348,23 +347,24 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     assert deposit.user_folders == set()
     assert woken[WORKER_SNAPSHOT_KEY]["users"]["mario"]["item"]["state"] == "active"
 
-    # QUITS ON ORDER. The driver orders the departure, and the reply to that
-    # order carries the photo the transfers flagged: everybody ceded, nobody
-    # kept. The decision travels in the shot it was taken in.
-    leaving = await handler.connector.call(QUIT_ORDER, timeout=CALL_TIMEOUT)
+    # QUITS ON ORDER. The handler asks the process to leave and waits for it to
+    # be gone. The answer to that order came back AT ONCE, carrying the photo the
+    # transfers had just flagged — everybody ceded, nobody kept — and the wire
+    # filed it: the decision travels in the shot it was taken in, which is what
+    # the fold acts on while the departures are still running.
+    await handler.quit_process()
 
-    flags = leaving[WORKER_SNAPSHOT_KEY]["users"]
+    flags = handler.worker_snapshot["users"]
     assert {user: pair["transfer_flag"] for user, pair in flags.items()} == {
         "mario": "T",
         "anna": "T",
     }
-    assert leaving[WORKER_SNAPSHOT_KEY]["user_count"] == 2
+    assert handler.worker_snapshot["user_count"] == 2
 
     # Past the gate everybody is in the deposit and the process ends BY ITSELF:
     # the exit code is its own clean 0, and nothing in this test killed it. What
     # the freezes would have announced — the placement of each, nobody's — dies
-    # with the wire the worker closes behind itself; the flagged photo already
-    # said who was leaving, which is what the fold acts on.
+    # with the wire the worker closes behind itself.
     await wait_for(lambda: born.poll() is not None, timeout=DEATH_TIMEOUT)
 
     assert born.poll() == 0
@@ -377,14 +377,14 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     assert deposit.lock_holder("mario") is None
     assert deposit.lock_holder("anna") is None
 
-    # THE DECLARED SEAM. In Macro 2 that departure is still a WILD death: the
-    # handler marks a death governed only when IT ordered the relaunch, and
-    # nothing here reads the intent the worker announced. So the group is told
-    # of an abort, carrying the handler and the users the vertex had on board.
-    # The governed mark arrives in Macro 3, with the group that reads the photo.
-    await wait_for(lambda: group.aborted == [handler])
+    # THE SEAM M2 DECLARED IS CLOSED. That departure is the death somebody was
+    # waiting for: the wait the order parked is what classifies it, so the state
+    # says `quitted` and nothing in the log says WILD. The group was woken to read
+    # exactly that, with the users the vertex had on board.
+    await wait_for(lambda: group.wakes == ["quitted"])
+    assert handler.state == "quitted"
     assert group.users_on_board == [{"mario", "anna"}]
-    assert "WILD death" in caplog.text
+    assert "WILD death" not in caplog.text
     assert handler.connector.connected is False
 
     # RELAUNCH. The same handler launches a successor on the same name and the

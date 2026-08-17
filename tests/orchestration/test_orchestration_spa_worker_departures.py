@@ -178,7 +178,7 @@ async def test_a_row_that_is_not_active_is_left_to_the_vertex(worker):
 
 
 async def test_the_valve_is_one_more_reason_for_a_cession(deposit):
-    worker = build_worker(deposit, user_idle_freeze_delay=10)
+    worker = build_worker(deposit, user_idle_freeze_minutes=0.5)
     worker.add_page("page-idle", "cid-idle", "mario")
     worker.add_page("page-live", "cid-live", "anna")
     age_user(worker, "mario", 60)
@@ -191,7 +191,7 @@ async def test_the_valve_is_one_more_reason_for_a_cession(deposit):
 
 
 async def test_the_expiry_wins_over_the_valve_on_the_same_user(deposit):
-    worker = build_worker(deposit, user_idle_freeze_delay=10)
+    worker = build_worker(deposit, user_idle_freeze_minutes=0.5)
     worker.add_page("page-1", "cid-a", "mario")
     age_user(worker, "mario", 3600)
 
@@ -314,7 +314,7 @@ async def test_a_call_closing_on_a_user_nobody_asked_for_changes_nothing(worker)
 
 
 async def test_the_valve_parks_whoever_only_beats_and_spares_the_active(deposit):
-    worker = build_worker(deposit, user_idle_freeze_delay=10)
+    worker = build_worker(deposit, user_idle_freeze_minutes=0.5)
     worker.add_page("page-idle", "cid-idle", "mario")
     worker.add_page("page-live", "cid-live", "anna")
     age_user(worker, "mario", 60)
@@ -338,7 +338,7 @@ async def test_the_valve_parks_whoever_only_beats_and_spares_the_active(deposit)
 
 
 async def test_the_valve_leaves_nothing_of_him_behind(deposit):
-    worker = build_worker(deposit, user_idle_freeze_delay=10)
+    worker = build_worker(deposit, user_idle_freeze_minutes=0.5)
     worker.add_page("page-1", "cid-a", "mario")
     worker.user_register["mario"]["store"]["cart.total"] = 12
     age_user(worker, "mario", 60)
@@ -357,7 +357,7 @@ async def test_the_valve_leaves_nothing_of_him_behind(deposit):
 
 
 async def test_the_valve_leaves_alone_whoever_has_a_call_in_flight(deposit):
-    worker = build_worker(deposit, user_idle_freeze_delay=10)
+    worker = build_worker(deposit, user_idle_freeze_minutes=0.5)
     worker.add_page("page-1", "cid-a", "mario")
     age_user(worker, "mario", 60)
     worker.open_request("mario")

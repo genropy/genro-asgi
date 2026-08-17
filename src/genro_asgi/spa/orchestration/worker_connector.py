@@ -23,7 +23,7 @@ parcels) the child fetches itself from the deposit.
 
 **The wire knows its handler, and asks it.** Everything the connector cannot
 answer by itself it asks ``self.worker_handler`` — the payload of the
-presentation reply, where an inbound EVENT goes, that the wire has died. No
+presentation reply, the photo riding an envelope, that the wire has died. No
 callbacks are handed in at construction: a second road to an object already in
 hand is one road too many.
 
@@ -53,11 +53,13 @@ else with the frame. So the photo has ONE road instead of three, a live process
 has a photo from birth, and the beat is left with the only question its name
 asks: are you alive.
 
-**Three envelopes, the ratified division of labour.** A REPLY hands its payload
-to the parked caller inline — O(1), it stays in the receive loop. An EVENT runs
-a consumer, so it goes on its own task and the loop returns to the wire; per-
-event ordering is therefore not preserved. A CALL arriving from the child has
-no consumer today and is logged as an unexpected envelope.
+**The protocol is ASYMMETRIC, and that is what keeps it small.** Down go CALLs;
+up come the presentation at birth and then REPLYs, nothing else. So a REPLY is
+the only envelope this wire routes — its payload handed to the parked caller
+inline, O(1), the loop staying on the wire — and whatever the child announces
+travels in that payload, riding the answer to whatever was asked of it. Anything
+else arriving from below is logged as an unexpected envelope: there is no lane
+for it to be on.
 
 **The end of the wire is a LOCAL fact of this handler.** EOF — the death signal
 on a same-host socket — or a protocol violation closes the stream, fails every
@@ -78,13 +80,11 @@ from ...channel.frame import MAX_FRAME_SIZE, REGISTER_METHOD, Frame, FrameStream
 
 CALL_METHOD = "CALL"
 REPLY_METHOD = "REPLY"
-EVENT_METHOD = "EVENT"
 GLOBAL_STORE_KEY = "global_register_item_tytx"
 WORKER_SNAPSHOT_KEY = "worker_snapshot"
 
 __all__ = [
     "CALL_METHOD",
-    "EVENT_METHOD",
     "GLOBAL_STORE_KEY",
     "REPLY_METHOD",
     "WORKER_SNAPSHOT_KEY",
@@ -98,8 +98,8 @@ class WorkerConnector:
     Args:
         worker_handler: the handler this wire belongs to, and the only thing it
             asks — ``global_register_item_tytx`` for the presentation reply,
-            ``on_child_message`` for an inbound EVENT, ``on_child_lost`` when
-            the wire dies on its own.
+            ``worker_snapshot`` to file the photo an envelope carried,
+            ``on_child_lost`` when the wire dies on its own.
         socket_path: the UDS path to bind, ``<instance_dir>/<name>.sock``.
         max_size: the frame ceiling on this wire.
     """
@@ -118,7 +118,6 @@ class WorkerConnector:
         self._server: asyncio.Server | None = None
         self._stream: FrameStream | None = None
         self._pending: dict[str, asyncio.Future[Any]] = {}
-        self._event_tasks: set[asyncio.Task[None]] = set()
         self._connected_event = asyncio.Event()
         self._closing = False
 
@@ -195,23 +194,6 @@ class WorkerConnector:
             return await asyncio.wait_for(future, timeout)
         finally:
             self._pending.pop(frame.id, None)
-
-    async def send_event(self, path: str, data: Any = None) -> str:
-        """Send one EVENT to the child, fire-and-forget.
-
-        Args:
-            path: the routing key of the event.
-            data: the payload, JSON-serializable.
-
-        Returns:
-            The frame id.
-
-        Raises:
-            ConnectionError: no child is on the wire.
-        """
-        frame = Frame(method=EVENT_METHOD, path=path, data=data)
-        await self._live_stream().write(frame)
-        return frame.id
 
     def _live_stream(self) -> FrameStream:
         """The child's stream, or ``ConnectionError`` when there is no child."""
@@ -297,13 +279,9 @@ class WorkerConnector:
             self.worker_handler.worker_snapshot = frame.data[WORKER_SNAPSHOT_KEY]
 
     def _dispatch(self, frame: Frame) -> None:
-        """Route one inbound frame: resolve a REPLY inline, serve an EVENT on a task."""
+        """Route one inbound frame: a REPLY is resolved inline, and there is no other lane."""
         if frame.method == REPLY_METHOD:
             self._resolve_reply(frame)
-        elif frame.method == EVENT_METHOD:
-            task = asyncio.create_task(self._fire(self.worker_handler.on_child_message, frame))
-            self._event_tasks.add(task)
-            task.add_done_callback(self._event_tasks.discard)
         else:
             self._logger.warning(
                 "Unexpected envelope %s from the child on %s", frame.method, self.socket_path.name

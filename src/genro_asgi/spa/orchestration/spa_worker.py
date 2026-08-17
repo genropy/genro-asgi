@@ -129,10 +129,10 @@ only for ACTIVE rows — a frozen user is the vertex's business — while the ch
 of whom to cede belongs to whoever holds the measures (the fattest by memory, the
 costliest by load, preferring those with no call in flight) and is handed in.
 THE VALVE IS ONE MORE REASON FOR A ``'T'``: whoever has been silent past
-``user_idle_freeze_delay`` — silence read on the real clocks, since a beat alone
-proves nobody — is ceded by the same decision, on the same road, with no verb of
-his own. Then THE GATE: the worker does not park anybody in the same turn it
-announced them. It waits ``TRANSFER_START_DELAY``, the time the fold needs to
+``user_idle_freeze_minutes`` — silence read on the real clocks, since a beat
+alone proves nobody — is ceded by the same decision, on the same road, with no
+verb of his own. Then THE GATE: the worker does not park anybody in the same turn
+it announced them. It waits ``TRANSFER_START_DELAY``, the time the fold needs to
 park the users just named, and only then lets them go — the expired dropped with
 their announcements, the ceded written to the deposit one at a time, the loop
 breathing between two. So there is ONE departure scheme and no special case: the
@@ -152,10 +152,11 @@ wants a successor launches one.
 process connects to the handler's socket and hands the stream over
 (``attach_stream``); the worker presents itself on it — its pid and the
 configuration it was built from — and the answer brings the whole global store
-down. Then it reads envelopes until the wire ends. A REPLY is resolved inline,
-because that is O(1) and the loop belongs on the wire; a CALL is served on its
-own task, so a long one cannot make this worker deaf to the next; an EVENT has
-no consumer here yet.
+down. Then it reads envelopes until the wire ends. What comes down is a CALL and
+nothing else, served on its own task so a long one cannot make this worker deaf
+to the next; the protocol is asymmetric, so this worker never asks anything
+upward — what it has to say rides the answer to what was asked of it, and any
+other kind of envelope arriving here is denounced.
 
 **Two pools, and what runs where.** The TRAFFIC pool takes the WSGI stitching
 and the long calls, the SERVICE pool — much smaller — takes the deposit IO;
@@ -164,14 +165,19 @@ for a busy folder is a coroutine on the loop, because whoever holds that
 semaphore is working, and a thread parked here would be a thread not doing that
 work.
 
-**One op, and one form.** ``/op/ping`` answers the health beat and nothing else
-— are you alive. The http CALL form (an ``http`` dict beside the ``identity``
-and the ``user_frozen`` verdict) is a request the front packed whole: it lands
-on the unified row FIRST — the store adopted when the verdict authorises it, the
-connection looked up in the deposit by itself, the clocks stamped — and only
-then goes to the ``WsgiSeam`` on the traffic pool. That seam's ``wsgi_app`` is
-``None`` here: this class hosts no site, and says so explicitly. A subclass
-assigns it, which is the whole contract with the bridge.
+**Four ops, and one form.** ``/op/ping`` answers the health beat and nothing else
+— are you alive. The other three are named after the verb of this class that
+serves them and carry that verb's own argument: ``/op/quit``, answered AT ONCE
+with the photo that shows every user flagged for cession, the departures running
+after the answer because the process ends with them; ``/op/drop_user`` and
+``/op/drop_connection``, answered when the drop is done, so the announcements it
+made ride that same reply. The http CALL form (an ``http`` dict beside the
+``identity`` and the ``user_frozen`` verdict) is a request the front packed
+whole: it lands on the unified row FIRST — the store adopted when the verdict
+authorises it, the connection looked up in the deposit by itself, the clocks
+stamped — and only then goes to the ``WsgiSeam`` on the traffic pool. That
+seam's ``wsgi_app`` is ``None`` here: this class hosts no site, and says so
+explicitly. A subclass assigns it, which is the whole contract with the bridge.
 
 **The photo rides out.** ``worker_snapshot`` is a slot ANY envelope leaving here
 may carry beside its own payload: the presentation carries it (a live process is
@@ -213,12 +219,16 @@ from ..environ import WsgiSeam
 from .freeze_handler import FreezeHandler
 from .worker_connector import (
     CALL_METHOD,
-    EVENT_METHOD,
     GLOBAL_STORE_KEY,
     REPLY_METHOD,
     WORKER_SNAPSHOT_KEY,
 )
-from .worker_handler import PING_OP_PATH
+from .worker_handler import (
+    DROP_CONNECTION_OP_PATH,
+    DROP_USER_OP_PATH,
+    PING_OP_PATH,
+    QUIT_OP_PATH,
+)
 
 #: The reserved prefix that names an anonymous user — the daemon's own
 #: convention, so the name itself carries the guest rule. Redefined here with
@@ -243,6 +253,10 @@ TRANSFER_START_DELAY = 2.0
 #: next envelope out carries a new one.
 WORKER_SNAPSHOT_TTL = 0.5
 
+#: The conversion the valve makes: its silence is a policy and comes in minutes,
+#: the clocks it reads are seconds.
+SECONDS_PER_MINUTE = 60.0
+
 #: The three clocks every register item carries, in the order of their rank.
 CLOCK_NAMES = ("last_refresh_ts", "last_user_ts", "last_rpc_ts")
 
@@ -255,6 +269,7 @@ __all__ = [
     "DEPOSIT_LOCK_RETRY_INTERVAL",
     "DEPOSIT_LOCK_WAIT_LIMIT",
     "GUEST_PREFIX",
+    "SECONDS_PER_MINUTE",
     "TRANSFER_START_DELAY",
     "WORKER_SNAPSHOT_TTL",
     "SpaWorker",
@@ -276,8 +291,10 @@ class SpaWorker:
             loud.
         transfer_start_delay: how long the gate stays shut between announcing
             the departures and parking them.
-        user_idle_freeze_delay: the silence past which the valve flags a user
-            for the deposit; with nothing said, the valve never fires.
+        user_idle_freeze_minutes: the silence, IN MINUTES, past which the valve
+            flags a user for the deposit; with nothing said, the valve never
+            fires. Minutes because it is a policy of the installation, and the
+            comparison against the clocks converts where it is made.
         main_threadpool_size: the traffic pool's size — the WSGI stitching and
             the long calls; ``None`` leaves the interpreter's own default.
         aux_threadpool_size: the service pool's size — the deposit IO, and much
@@ -294,7 +311,7 @@ class SpaWorker:
         deposit_lock_retry_interval: float = DEPOSIT_LOCK_RETRY_INTERVAL,
         deposit_lock_wait_limit: float = DEPOSIT_LOCK_WAIT_LIMIT,
         transfer_start_delay: float = TRANSFER_START_DELAY,
-        user_idle_freeze_delay: float = math.inf,
+        user_idle_freeze_minutes: float = math.inf,
         main_threadpool_size: int | None = None,
         aux_threadpool_size: int | None = None,
         worker_snapshot_ttl: float = WORKER_SNAPSHOT_TTL,
@@ -305,7 +322,7 @@ class SpaWorker:
         self.deposit_lock_retry_interval = deposit_lock_retry_interval
         self.deposit_lock_wait_limit = deposit_lock_wait_limit
         self.transfer_start_delay = transfer_start_delay
-        self.user_idle_freeze_delay = user_idle_freeze_delay
+        self.user_idle_freeze_minutes = user_idle_freeze_minutes
         self.worker_snapshot_ttl = worker_snapshot_ttl
         self.traffic_pool = ThreadPoolExecutor(
             max_workers=main_threadpool_size, thread_name_prefix=f"{name}-traffic"
@@ -337,7 +354,6 @@ class SpaWorker:
         self._quitting = False
         self._freeze_failures = 0
         self._exited = False
-        self._pending: dict[str, asyncio.Future[Any]] = {}
         self._service_tasks: set[asyncio.Task[None]] = set()
         self._snapshot_sent_ts = 0.0
         self._population_changed = False
@@ -671,25 +687,20 @@ class SpaWorker:
 
         Returns when the wire is gone — EOF, the death signal on a same-host
         socket — or a protocol violation closed it. What a worker without a wire
-        does is not decided here: the caller asks for ``on_wire_lost``. Whatever
-        this worker had asked upward fails on the way out: nobody is going to
-        answer it now.
+        does is not decided here: the caller asks for ``on_wire_lost``.
         """
-        try:
-            while True:
-                try:
-                    frame = await self.stream.read()
-                except ValueError:
-                    self._logger.exception(
-                        "Worker %s: protocol violation from its handler; leaving the wire",
-                        self.name,
-                    )
-                    return
-                if frame is None:
-                    return
-                self.handle_frame(frame)
-        finally:
-            self._fail_pending()
+        while True:
+            try:
+                frame = await self.stream.read()
+            except ValueError:
+                self._logger.exception(
+                    "Worker %s: protocol violation from its handler; leaving the wire",
+                    self.name,
+                )
+                return
+            if frame is None:
+                return
+            self.handle_frame(frame)
 
     def handle_frame(self, frame: Frame) -> None:
         """Route one envelope from the handler, the global store taken off it first.
@@ -697,42 +708,49 @@ class SpaWorker:
         Args:
             frame: the envelope as it came off the wire.
 
-        A REPLY is resolved inline — O(1), and the loop belongs on the wire; a
-        CALL is served on its own task, so a long op cannot make this worker
-        deaf to the next one. An EVENT has no consumer here yet: the descending
-        pipes are the Commander's, and the one thing that travels down today —
-        the store — was taken off this envelope before anything looked at it.
+        A CALL is served on its own task, so a long op cannot make this worker
+        deaf to the next one — and a CALL is the ONLY envelope that comes down
+        this wire, because the protocol is asymmetric: orders descend, and what
+        this worker has to say rides the answers going up. Anything else is
+        denounced. The one thing that travels down beside an order — the store —
+        was taken off this envelope before anything looked at its kind.
         """
         self._take_global_store(frame)
-        if frame.method == REPLY_METHOD:
-            self._resolve_reply(frame)
-        elif frame.method == CALL_METHOD:
+        if frame.method == CALL_METHOD:
             task = asyncio.create_task(self._guarded_call(frame))
             self._service_tasks.add(task)
             task.add_done_callback(self._service_tasks.discard)
-        elif frame.method == EVENT_METHOD:
-            self._logger.info(
-                "Worker %s: EVENT %s from its handler, not consumed yet", self.name, frame.path
-            )
         else:
             self._logger.warning(
                 "Worker %s: unexpected envelope %s from its handler", self.name, frame.method
             )
 
     async def answer_call(self, frame: Frame) -> None:
-        """Answer one CALL: the beat, the http form, or an op nobody here knows.
+        """Answer one CALL: the beat, the http form, one of the three ops, or nothing known.
 
         Args:
             frame: the CALL as it came off the wire.
 
         Sends exactly one REPLY, whatever the outcome. The beat asks aliveness
-        and gets an empty answer — what it proves is that the answer came.
+        and gets an empty answer — what it proves is that the answer came. A drop
+        is answered when it is done, so the announcements it made ride that same
+        reply; the order to leave is answered BEFORE the departures start,
+        because the process ends with them. Each op is named after the verb of
+        this class that serves it, and carries that verb's own argument.
         """
         payload = frame.data or {}
         if frame.path == PING_OP_PATH:
             await self.send_reply(frame, result={})
         elif "http" in payload:
             await self.serve_http(frame, payload)
+        elif frame.path == QUIT_OP_PATH:
+            await self._answer_then_quit(frame, payload)
+        elif frame.path == DROP_USER_OP_PATH:
+            self.drop_user(payload["user"])
+            await self.send_reply(frame, result={})
+        elif frame.path == DROP_CONNECTION_OP_PATH:
+            self.drop_connection(payload["cid"])
+            await self.send_reply(frame, result={})
         else:
             await self.send_reply(frame, error=f"unknown op: {frame.path!r}")
 
@@ -788,29 +806,6 @@ class SpaWorker:
         await self.stream.write(
             Frame(id=frame.id, method=REPLY_METHOD, path=frame.path, data=self._outbound(data))
         )
-
-    async def call(self, path: str, data: dict[str, Any] | None = None) -> Any:
-        """CALL the handler and await its REPLY.
-
-        Args:
-            path: the routing key of the call.
-            data: the payload; an envelope out of here is always a mapping,
-                because any of them may carry the photo.
-
-        Returns:
-            The handler's payload, untouched — reading it is the caller's job.
-
-        Raises:
-            ConnectionError: the wire died while the answer was awaited.
-        """
-        frame = Frame(method=CALL_METHOD, path=path, data=self._outbound(dict(data or {})))
-        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
-        self._pending[frame.id] = future
-        try:
-            await self.stream.write(frame)
-            return await future
-        finally:
-            self._pending.pop(frame.id, None)
 
     async def on_wire_lost(self) -> None:
         """The wire is gone: park everybody in the deposit and leave.
@@ -1085,7 +1080,7 @@ class SpaWorker:
 
         Remembers the flags that are not ``None`` and starts the clock of the
         gate: nothing departs before ``transfer_start_delay`` has passed. A user
-        idle past ``user_idle_freeze_delay`` is ceded like any other — the valve
+        idle past ``user_idle_freeze_minutes`` is ceded like any other — the valve
         is a reason for a ``'T'``, not a road of its own — unless expiry already
         claimed him. Once ``quit`` has begun the plan is terminal: everybody is
         ceded, a row still mid-adoption included (he is a straggler, ceded as
@@ -1107,7 +1102,11 @@ class SpaWorker:
                         idle = now - self._last_real_activity(item)
                         if idle > expiry_delay:
                             flag = "X"
-                        elif self._quitting or user in ceded or idle > self.user_idle_freeze_delay:
+                        elif (
+                            self._quitting
+                            or user in ceded
+                            or idle > self.user_idle_freeze_minutes * SECONDS_PER_MINUTE
+                        ):
                             flag = "T"
                     elif self._quitting:
                         flag = "T"
@@ -1171,10 +1170,7 @@ class SpaWorker:
         the disk says. Rebirth is not the worker's: whoever wants a successor
         launches one.
         """
-        self._quitting = True
-        self.plan_transfers(
-            transfer_users=list(self._user_register), expiry_delay=expiry_delay
-        )
+        self._flag_everybody_for_departure(expiry_delay)
         await self.execute_transfers()
         await self._transfers_done.wait()
         self.exit_process()
@@ -1227,19 +1223,32 @@ class SpaWorker:
         if isinstance(frame.data, dict) and GLOBAL_STORE_KEY in frame.data:
             self.global_register_item_tytx = frame.data[GLOBAL_STORE_KEY]
 
-    def _resolve_reply(self, frame: Frame) -> None:
-        """Hand a REPLY to the parked caller; a caller already gone drops it."""
-        future = self._pending.get(frame.id)
-        if future is None or future.done():
-            self._logger.debug("Worker %s: REPLY %s has no parked caller", self.name, frame.id)
-            return
-        future.set_result(frame.data or {})
+    async def _answer_then_quit(self, frame: Frame, payload: dict[str, Any]) -> None:
+        """Answer the order to leave with everybody already flagged, then leave.
 
-    def _fail_pending(self) -> None:
-        """Fail every CALL still waiting: the wire that would have answered is gone."""
-        for future in self._pending.values():
-            if not future.done():
-                future.set_exception(ConnectionError(f"the wire of {self.name} is down"))
+        Args:
+            frame: the CALL being answered.
+            payload: its payload; ``expiry_delay`` is the silence past which a
+                user is dropped instead of parked.
+
+        The flags are posed BEFORE the answer, so the photo riding it shows every
+        user ceded and the level above parks them all in one read. Only then the
+        departures run — and the process ends with them, which is why the answer
+        could not have waited for the work.
+        """
+        expiry_delay = payload.get("expiry_delay", math.inf)
+        self._flag_everybody_for_departure(expiry_delay)
+        await self.send_reply(frame, result={})
+        await self.quit(expiry_delay=expiry_delay)
+
+    def _flag_everybody_for_departure(self, expiry_delay: float) -> None:
+        """Cede every user and make the plan terminal: this worker is leaving.
+
+        Sets ``_quitting`` and the flags. Posing them twice is the same outcome
+        as posing them once — the plan of a departure takes nobody back off it.
+        """
+        self._quitting = True
+        self.plan_transfers(transfer_users=list(self._user_register), expiry_delay=expiry_delay)
 
     async def _guarded_call(self, frame: Frame) -> None:
         """Serve one CALL with the guard inside the task, so nothing dies unretrieved."""

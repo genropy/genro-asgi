@@ -40,7 +40,6 @@ from genro_asgi.channel.frame import REGISTER_METHOD, REGISTER_PATH, Frame, Fram
 from genro_asgi.spa.orchestration import WorkerConnector
 from genro_asgi.spa.orchestration.worker_connector import (
     CALL_METHOD,
-    EVENT_METHOD,
     GLOBAL_STORE_KEY,
     REPLY_METHOD,
 )
@@ -119,11 +118,7 @@ class HandlerStub:
     def __init__(self, name: str = "standard_0001") -> None:
         self.name = name
         self.global_register_item_tytx = "::T::the whole store"
-        self.messages: list[Frame] = []
         self.losses = 0
-
-    def on_child_message(self, frame: Frame) -> None:
-        self.messages.append(frame)
 
     def on_child_lost(self) -> None:
         self.losses += 1
@@ -206,29 +201,18 @@ async def test_a_call_travels_and_its_reply_comes_back(connector):
     await child.close()
 
 
-async def test_an_event_from_the_child_reaches_the_handler(connector, handler):
+async def test_an_envelope_that_is_not_a_reply_has_no_lane_and_is_denounced(
+    connector, handler, caplog
+):
     child = ChildPeer(str(connector.socket_path))
     await child.present()
 
-    await child.send(EVENT_METHOD, "/lock_taken", {"user": "mario"})
-    await wait_for(lambda: len(handler.messages) == 1)
+    with caplog.at_level("WARNING"):
+        await child.send(CALL_METHOD, "/lock_taken", {"user": "mario"})
+        await wait_for(lambda: "Unexpected envelope" in caplog.text)
 
-    assert handler.messages[0].path == "/lock_taken"
-    assert handler.messages[0].data == {"user": "mario"}
-
-    await child.close()
-
-
-async def test_an_event_reaches_the_child(connector):
-    child = ChildPeer(str(connector.socket_path))
-    await child.present()
-
-    await connector.send_event("/global_store_change", {"version": 8})
-    await child.wait_frames(1)
-
-    assert child.received[0].method == EVENT_METHOD
-    assert child.received[0].path == "/global_store_change"
-    assert child.received[0].data == {"version": 8}
+    assert f"Unexpected envelope {CALL_METHOD}" in caplog.text
+    assert handler.losses == 0
 
     await child.close()
 
@@ -308,7 +292,7 @@ async def test_a_second_child_on_a_taken_wire_is_refused(connector):
 async def test_a_child_that_does_not_present_itself_is_refused(connector):
     intruder = ChildPeer(str(connector.socket_path))
     await intruder.connect_without_presenting()
-    await intruder.stream.write(Frame(method=EVENT_METHOD, path="/whatever"))
+    await intruder.stream.write(Frame(method=CALL_METHOD, path="/whatever"))
 
     assert await intruder.stream.read() is None
     assert connector.connected is False
@@ -317,5 +301,3 @@ async def test_a_child_that_does_not_present_itself_is_refused(connector):
 async def test_calling_a_wire_with_no_child_is_an_error(connector):
     with pytest.raises(ConnectionError):
         await connector.call("/probe")
-    with pytest.raises(ConnectionError):
-        await connector.send_event("/global_store_change")

@@ -77,7 +77,41 @@ register item, freezer, check, timeout, restart, congelamento per inattività.
 
 ## Work Plan
 
-- [ ] **Phase 1**: Retrofit M1/M2 to the v4 — the death becomes a state
+- [x] **Phase 1**: Retrofit M1/M2 to the v4 — the death becomes a state
+  > Done: `WorkerHandler.state` (six values) replaces `_governed_death`,
+  > `_wait_ordered_death_seen` and the mark in `restart_process`; the
+  > classification is the parked wait an EOF resolves, and `on_child_lost` now
+  > only writes the state and rings `group.ping_now()`. `quit_process()` born
+  > (`/op/quit`, `quitting`, `QUIT_TIMEOUT_SECONDS`, timeout = loud abort);
+  > `ping_process()` returns the REPLY payload instead of discarding it. On the
+  > worker: the three ops `/op/quit` (answered at once, photo all `T`, drain
+  > after), `/op/drop_user`, `/op/drop_connection`; `SpaWorker.call()`, the whole
+  > EVENT lane in both directions and `on_child_message` removed, and with them
+  > the REPLY-down parking lot they were the only producer of;
+  > `user_idle_freeze_delay` → `user_idle_freeze_minutes` with the conversion at
+  > the comparison. `worker_snapshot_ttl` and `deposit_lock_retry_interval` judged
+  > and KEPT (rationale in notes.md). The M2 e2e now closes the seam it declared:
+  > that departure is `quitted`, not a WILD death.
+  > Verified: `pytest tests/ -q` 1841 passed / 2 skipped (was 1838/2);
+  > `ruff check src/ tests/` clean; the `Done:` grep returns nothing; coverage of
+  > the three touched modules up (worker_handler 91% → 98%, worker_connector
+  > 91% → 92%, spa_worker 98%). No `_TBD` name survives the phase.
+  > Files: src/genro_asgi/spa/orchestration/worker_handler.py,
+  > src/genro_asgi/spa/orchestration/worker_connector.py,
+  > src/genro_asgi/spa/orchestration/spa_worker.py,
+  > tests/orchestration/test_orchestration_worker_handler.py,
+  > tests/orchestration/test_orchestration_worker_connector.py,
+  > tests/orchestration/test_orchestration_spa_worker_process.py,
+  > tests/orchestration/test_orchestration_spa_worker_departures.py,
+  > tests/orchestration/test_orchestration_m2_e2e.py,
+  > tests/orchestration/test_orchestration_foundations_e2e.py,
+  > tests/orchestration/child_stub.py,
+  > .phased/active/orchestration-m3-commander-groups/notes.md
+  > Verify: now — the unit judgement of decision (7): `worker_snapshot_ttl` and
+  > `deposit_lock_retry_interval` were KEPT, on the ground that they are technical
+  > seconds like the four siblings Phase 5 preserves unchanged. Say so if you want
+  > the `_seconds` suffix on the whole family instead — it is one
+  > search-and-replace.
   - Run: opus / medium
   - Pattern: `.phased/done/orchestration-m2-worker-process/plan.md` Phase 1
     (the same job, done once already: rename + remove, no new behaviour);
