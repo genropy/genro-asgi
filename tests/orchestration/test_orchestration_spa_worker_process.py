@@ -55,6 +55,8 @@ from genro_asgi.spa.orchestration.worker_connector import (
     WorkerConnector,
 )
 from genro_asgi.spa.orchestration.worker_entry import DEFAULT_WORKER_CLASS
+
+from .group_stub import GroupStub
 from genro_asgi.spa.orchestration.worker_handler import (
     DROP_CONNECTION_OP_PATH,
     DROP_USER_OP_PATH,
@@ -94,8 +96,12 @@ class EchoWorker(SpaWorker):
 
 
 class HandlerStub:
-    """The WorkerHandler seen from the wire: the store it answers, what it is told.
+    """The WorkerHandler seen from the wire: the envelopes it takes, what it is told.
 
+    The wire hands every envelope over whole and writes back down whatever comes
+    out, so this stub plays the fold as well: it files the photo an envelope
+    carried, keeps the announcements for the assertions, and answers with the
+    store — which is what the real chain composes for a process that holds none.
     It doubles as the level above the handler in the real-child test at the end,
     where the only thing asked of a group is the wake — so it answers for that
     too, and counts it.
@@ -104,8 +110,16 @@ class HandlerStub:
     def __init__(self) -> None:
         self.global_register_item_tytx = GLOBAL_STORE
         self.worker_snapshot: dict[str, Any] | None = None
+        self.announced: list[dict[str, Any]] = []
         self.lost = 0
         self.wakes = 0
+
+    def read_envelope(self, envelope: dict[str, Any]) -> dict[str, Any]:
+        """Read the envelope as the three layers would, and answer with the store."""
+        if WORKER_SNAPSHOT_KEY in envelope:
+            self.worker_snapshot = envelope[WORKER_SNAPSHOT_KEY]
+        self.announced.extend(envelope.get("events") or ())
+        return {GLOBAL_STORE_KEY: self.global_register_item_tytx}
 
     def on_child_lost(self) -> None:
         self.lost += 1
@@ -763,7 +777,7 @@ async def handler(wire_root, monkeypatch):
         "PYTHONPATH", os.pathsep.join([str(repo_root), inherited]).rstrip(os.pathsep)
     )
     worker_handler = WorkerHandler(
-        HandlerStub(),
+        GroupStub(wire_root / "frozen_users"),
         WORKER_NAME,
         instance_dir=wire_root / "i",
         frozen_users_path=wire_root / "frozen_users",

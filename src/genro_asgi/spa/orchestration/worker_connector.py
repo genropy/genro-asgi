@@ -22,10 +22,17 @@ back the global store. Nothing else travels at birth: the cold memory (the
 parcels) the child fetches itself from the deposit.
 
 **The wire knows its handler, and asks it.** Everything the connector cannot
-answer by itself it asks ``self.worker_handler`` — the payload of the
-presentation reply, the photo riding an envelope, that the wire has died. No
+answer by itself it asks ``self.worker_handler`` — what to do with an envelope
+that arrived, what the answer to the presentation is, that the wire has died. No
 callbacks are handed in at construction: a second road to an object already in
 hand is one road too many.
+
+**The wire reads nothing.** It does not know what an announcement means, what a
+photo is, or that a global store exists: an envelope that arrives goes WHOLE to
+the handler, which pushes it into the chain of the fold, and what comes back is
+written down as the answer. An envelope that leaves was composed by that same
+chain, by whoever is sending it. So the protocol lives here and the meaning lives
+there, and neither has to be changed for the other.
 
 **The store goes whole, every time.** There is no delta and no version number:
 the master replaces the replica entire, at the presentation like at every later
@@ -47,11 +54,11 @@ the resident is the real one. The address survives the relaunch: the killed
 child's successor presents itself on the same socket and the wire lives again.
 
 **Every envelope may carry the photo.** Whatever the child sends — its
-presentation, a reply, an event — can bring a ``worker_snapshot`` slot beside
-its own payload, and the wire hands it to the handler before doing anything
-else with the frame. So the photo has ONE road instead of three, a live process
-has a photo from birth, and the beat is left with the only question its name
-asks: are you alive.
+presentation or a reply — can bring a ``worker_snapshot`` slot beside its own
+payload, and it travels up with the rest of the envelope: whoever reads photos
+reads it there. So the photo has ONE road instead of three, a live process has a
+photo from birth, and the beat is left with the only question its name asks: are
+you alive.
 
 **The protocol is ASYMMETRIC, and that is what keeps it small.** Down go CALLs;
 up come the presentation at birth and then REPLYs, nothing else. So a REPLY is
@@ -97,9 +104,9 @@ class WorkerConnector:
 
     Args:
         worker_handler: the handler this wire belongs to, and the only thing it
-            asks — ``global_register_item_tytx`` for the presentation reply,
-            ``worker_snapshot`` to file the photo an envelope carried,
-            ``on_child_lost`` when the wire dies on its own.
+            asks — ``read_envelope`` for every envelope that arrives, whose
+            answer is what goes back down, and ``on_child_lost`` when the wire
+            dies on its own.
         socket_path: the UDS path to bind, ``<instance_dir>/<name>.sock``.
         max_size: the frame ceiling on this wire.
     """
@@ -229,7 +236,7 @@ class WorkerConnector:
                 await self._fire(self.worker_handler.on_child_lost)
 
     async def _present(self, stream: FrameStream) -> bool:
-        """Read the presentation and answer it with the whole global store; False if it is not one."""
+        """Read the presentation and answer it with what the chain composed; False if it is not one."""
         try:
             frame = await stream.read()
         except ValueError:
@@ -245,13 +252,12 @@ class WorkerConnector:
                 REGISTER_METHOD,
             )
             return False
-        self._take_snapshot(frame)
         await stream.write(
             Frame(
                 id=frame.id,
                 method=REPLY_METHOD,
                 path=frame.path,
-                data={GLOBAL_STORE_KEY: self.worker_handler.global_register_item_tytx},
+                data=self.worker_handler.read_envelope(frame.data or {}),
             )
         )
         self._logger.info("Child presented itself on %s: %s", self.socket_path.name, frame.data)
@@ -270,21 +276,34 @@ class WorkerConnector:
                 return
             if frame is None:
                 return
-            self._take_snapshot(frame)
             self._dispatch(frame)
 
-    def _take_snapshot(self, frame: Frame) -> None:
-        """Hand the handler the photo this frame carried, if it carried one."""
-        if isinstance(frame.data, dict) and WORKER_SNAPSHOT_KEY in frame.data:
-            self.worker_handler.worker_snapshot = frame.data[WORKER_SNAPSHOT_KEY]
-
     def _dispatch(self, frame: Frame) -> None:
-        """Route one inbound frame: a REPLY is resolved inline, and there is no other lane."""
+        """Route one inbound frame: a REPLY is read then resolved, and there is no other lane."""
         if frame.method == REPLY_METHOD:
+            self._take_envelope(frame)
             self._resolve_reply(frame)
         else:
             self._logger.warning(
                 "Unexpected envelope %s from the child on %s", frame.method, self.socket_path.name
+            )
+
+    def _take_envelope(self, frame: Frame) -> None:
+        """Push the envelope into the fold before the caller is answered.
+
+        Whatever it composed for the descent is dropped: nothing goes down in
+        answer to an answer. A fold that raises is denounced and the caller is
+        answered anyway — the same rule as every other thing the handler is told
+        here, because a bug one level up must not sever a wire and take a whole
+        process's users with it.
+        """
+        try:
+            self.worker_handler.read_envelope(frame.data or {})
+        except Exception:
+            self._logger.exception(
+                "The fold refused the envelope %s from the child on %s",
+                frame.id,
+                self.socket_path.name,
             )
 
     def _resolve_reply(self, frame: Frame) -> None:

@@ -60,28 +60,15 @@ from .child_stub import (
     TAKE_LOCK_OP,
     WRITE_CONNECTION_REGISTER_ITEM_OP,
 )
+from .group_stub import GroupStub
 
 CHILD_MODULE = "tests.orchestration.child_stub"
 PARKED_CONNECTION = {"cid": "c-1", "pages": ["main", "invoices"]}
 
 
-class GroupStub:
-    """The GroupHandler seen from below: the wake it gets, and what it reads at it."""
-
-    def __init__(self) -> None:
-        self.worker_handler: Any = None
-        self.wakes: list[str] = []
-        self.users_on_board: list[set[str]] = []
-
-    def ping_now(self) -> None:
-        """The wake: at this round the group reads the state and who was on board."""
-        self.wakes.append(self.worker_handler.state)
-        self.users_on_board.append(set(self.worker_handler.hosted_users))
-
-
 @pytest.fixture
-def group():
-    return GroupStub()
+def group(foundations_root):
+    return GroupStub(foundations_root / "frozen_users")
 
 
 @pytest.fixture
@@ -156,12 +143,13 @@ async def test_a_worker_is_born_works_dies_wild_and_leaves_its_traces_behind(
     }
 
     # It is alive: the beat asks that and nothing else, and the photo riding the
-    # answer is the first one that knows the store it was handed.
+    # answer is the first one that knows the store it was handed — the master's
+    # own, which came down as the answer to its presentation.
     await handler.ping_process()
     assert handler.worker_snapshot == {
         "pid": handler.process.pid,
         "name": "standard_0001",
-        "global_store": handler.global_register_item_tytx,
+        "global_store": group.spa_commander.global_register.item_tytx,
     }
 
     # It takes the semaphore of one of its users. Nothing is announced upward:

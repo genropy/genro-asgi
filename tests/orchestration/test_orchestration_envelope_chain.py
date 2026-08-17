@@ -1,0 +1,454 @@
+# Copyright 2025 Softwell S.r.l.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""The chain of the envelope: who reads what, and what goes back down.
+
+Every announcement of the census is exercised here, one test each, on the real
+three layers over a real ``SpaCommander``: the handler is a real
+``WorkerHandler`` with no process under it — construction alone builds its layer
+of the chain — and the group is the stub that stands in for the level not yet
+built, whose own verbs are the contract that level will owe.
+
+The last test is the whole thing with a REAL child process: an announcement born
+in another process lands in the vertex's indexes, a change of the master rides
+the next order down without anybody pushing it, and a fold that refuses an
+envelope is denounced without severing the wire.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import shutil
+import tempfile
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from genro_asgi.spa.orchestration import EnvelopeHandler, UserOnHold, WorkerHandler
+from genro_asgi.spa.orchestration.envelope_handler import ANNOUNCEMENTS_KEY
+from genro_asgi.spa.orchestration.worker_connector import GLOBAL_STORE_KEY, WORKER_SNAPSHOT_KEY
+
+from .child_stub import ANNOUNCE_OP
+from .group_stub import GroupStub
+
+CHILD_MODULE = "tests.orchestration.child_stub"
+WORKER_NAME = "standard_0001"
+CALL_TIMEOUT = 5.0
+
+
+def envelope(*announcements: dict[str, Any], photo: dict[str, Any] | None = None) -> dict[str, Any]:
+    """One envelope as a child composes it: its announcements, and its photo if due."""
+    made: dict[str, Any] = {ANNOUNCEMENTS_KEY: list(announcements)}
+    if photo is not None:
+        made[WORKER_SNAPSHOT_KEY] = photo
+    return made
+
+
+def photo_of(**users: str | None) -> dict[str, Any]:
+    """A photo carrying one row per user, each with the flag the shot decided."""
+    return {
+        "name": WORKER_NAME,
+        "user_count": len(users),
+        "users": {user: {"item": {}, "transfer_flag": flag} for user, flag in users.items()},
+    }
+
+
+@pytest.fixture
+def chain_root():
+    """A short root holding the deposit and the sockets of the story."""
+    root = Path(tempfile.mkdtemp(prefix="gnrchain_"))
+    yield root
+    shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.fixture
+def group(chain_root):
+    """The group of the tests, with the real chain and the real vertex above it."""
+    return GroupStub(chain_root / "frozen_users")
+
+
+@pytest.fixture
+def commander(group):
+    """The vertex the chain writes through."""
+    return group.spa_commander
+
+
+@pytest.fixture
+async def handler(chain_root, group):
+    """A real handler with no process under it: enough to own its layer of the chain."""
+    worker_handler = WorkerHandler(
+        group,
+        WORKER_NAME,
+        instance_dir=chain_root / "i",
+        frozen_users_path=chain_root / "frozen_users",
+        entry_module=CHILD_MODULE,
+        worker_kwargs={"group": "standard"},
+        process_ping_timeout=1.0,
+    )
+    group.worker_handler = worker_handler
+    yield worker_handler
+    if worker_handler.process is not None and worker_handler.process.poll() is None:
+        worker_handler.process.kill()
+        worker_handler.process.wait()
+    await worker_handler.connector.stop()
+
+
+async def test_the_photo_is_filed_by_the_bottom_layer_and_may_wait_for_its_round(handler, group):
+    photo = photo_of(mario=None)
+
+    handler.read_envelope(envelope(photo=photo))
+
+    assert handler.worker_snapshot == photo
+    assert group.wakes == []
+
+
+async def test_an_urgent_photo_brings_the_groups_round_forward(handler, group):
+    group.urgent_snapshots = True
+
+    handler.read_envelope(envelope(photo=photo_of(mario=None)))
+
+    assert group.wakes == ["starting"]
+
+
+async def test_a_user_the_photo_shows_leaving_is_put_in_the_waiting_room(handler, commander):
+    commander.resolve_user("cid-a")
+    commander.resolve_user("cid-b")
+
+    handler.read_envelope(
+        envelope(photo=photo_of(**{"guest_cid-a": "T", "guest_cid-b": None}))
+    )
+
+    with pytest.raises(UserOnHold) as refusal:
+        commander.resolve_user("cid-a")
+    assert refusal.value.user == "guest_cid-a"
+    assert "T" in refusal.value.cause
+    assert commander.resolve_user("cid-b") == "guest_cid-b"
+
+
+async def test_the_births_of_the_reception_find_the_rows_already_written(handler, commander):
+    user = commander.resolve_user("cid-a")
+    row = dict(commander.user_map[user])
+
+    handler.read_envelope(
+        envelope(
+            {"op": "new_user", "worker": WORKER_NAME, "user": user},
+            {"op": "new_connection", "worker": WORKER_NAME, "user": user, "session_id": "cid-a"},
+        )
+    )
+
+    assert commander.user_map[user] == row
+    assert commander.connection_user_map == {"cid-a": user}
+
+
+async def test_a_page_is_written_where_it_belongs_and_forgotten_one_by_one(handler, commander):
+    handler.read_envelope(
+        envelope(
+            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a"},
+            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p2", "session_id": "cid-a"},
+        )
+    )
+    assert commander.page_connection_map == {"p1": "cid-a", "p2": "cid-a"}
+
+    handler.read_envelope(
+        envelope({"op": "drop_page", "worker": WORKER_NAME, "page_id": "p1"})
+    )
+    assert commander.page_connection_map == {"p2": "cid-a"}
+
+
+async def test_a_cascade_of_pages_goes_in_one_announcement(handler, commander):
+    handler.read_envelope(
+        envelope(
+            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a"},
+            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p2", "session_id": "cid-a"},
+            {"op": "drop_pages", "worker": WORKER_NAME, "page_ids": ["p1", "p2"]},
+        )
+    )
+
+    assert commander.page_connection_map == {}
+
+
+async def test_a_connection_leaves_its_pages_and_keeps_its_identity(handler, commander):
+    user = commander.resolve_user("cid-a")
+    handler.read_envelope(
+        envelope({"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a"})
+    )
+
+    handler.read_envelope(
+        envelope({"op": "drop_connection", "worker": WORKER_NAME, "session_id": "cid-a"})
+    )
+
+    assert commander.page_connection_map == {}
+    assert commander.connection_user_map == {"cid-a": user}
+    assert commander.resolve_user("cid-a") == user
+
+
+async def test_several_connections_leave_in_one_announcement(handler, commander):
+    commander.resolve_user("cid-a")
+    commander.resolve_user("cid-b")
+    handler.read_envelope(
+        envelope(
+            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a"},
+            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p2", "session_id": "cid-b"},
+        )
+    )
+
+    handler.read_envelope(
+        envelope(
+            {"op": "drop_connections", "worker": WORKER_NAME, "session_ids": ["cid-a", "cid-b"]}
+        )
+    )
+
+    assert commander.page_connection_map == {}
+    assert sorted(commander.connection_user_map) == ["cid-a", "cid-b"]
+
+
+async def test_a_user_who_is_gone_leaves_nothing_behind(handler, commander, group):
+    user = commander.resolve_user("cid-a")
+    group.record_placement_TBD(user, WORKER_NAME)
+    handler.read_envelope(
+        envelope({"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a"})
+    )
+    commander.user_map[user]["pending_dbevents"] = [{"table": "invoices"}]
+
+    handler.read_envelope(envelope({"op": "drop_user", "worker": WORKER_NAME, "user": user}))
+
+    assert commander.user_map == {}
+    assert commander.connection_user_map == {}
+    assert commander.page_connection_map == {}
+    assert group.user_worker_map == {}
+    assert commander.counters["pendings_lost"] == 1
+
+
+async def test_a_freeze_is_a_mark_above_and_a_placement_to_assign_below(handler, commander, group):
+    user = commander.resolve_user("cid-a")
+    group.record_placement_TBD(user, WORKER_NAME)
+
+    handler.read_envelope(
+        envelope(
+            {
+                "op": "user_frozen",
+                "worker": WORKER_NAME,
+                "user": user,
+                "placement": None,
+                "occupancy_percent": 7.5,
+            }
+        )
+    )
+
+    assert commander.user_is_frozen(user) is True
+    assert commander.user_map[user]["occupancy_percent"] == 7.5
+    assert group.user_worker_map == {user: None}
+
+
+async def test_an_adoption_turns_the_mark_off_and_drains_what_was_waiting(handler, commander):
+    user = commander.resolve_user("cid-a")
+    handler.read_envelope(
+        envelope(
+            {"op": "user_frozen", "worker": WORKER_NAME, "user": user, "placement": None}
+        )
+    )
+    commander.user_map[user]["pending_datachanges"] = [{"path": "a.b"}]
+
+    handler.read_envelope(
+        envelope({"op": "user_adopted", "worker": WORKER_NAME, "user": user})
+    )
+
+    assert commander.user_is_frozen(user) is False
+    assert commander.user_map[user]["pending_datachanges"] == []
+
+
+async def test_a_hold_is_lifted_by_the_freeze_it_was_waiting_for(handler, commander):
+    user = commander.resolve_user("cid-a")
+    handler.read_envelope(envelope(photo=photo_of(**{user: "T"})))
+    with pytest.raises(UserOnHold):
+        commander.resolve_user("cid-a")
+
+    handler.read_envelope(
+        envelope({"op": "user_frozen", "worker": WORKER_NAME, "user": user, "placement": None})
+    )
+
+    assert commander.resolve_user("cid-a") == user
+
+
+async def test_an_announcement_no_layer_knows_is_ignored(handler, commander):
+    handler.read_envelope(
+        envelope({"op": "something_nobody_reads", "worker": WORKER_NAME, "user": "mario"})
+    )
+
+    assert commander.user_map == {}
+
+
+async def test_the_ordered_death_freezes_the_flagged_and_discards_the_rest(
+    handler, commander, group
+):
+    staying = commander.resolve_user("cid-a")
+    leaving = commander.resolve_user("cid-b")
+    handler.hosted_users.update({staying, leaving})
+    group.record_placement_TBD(staying, WORKER_NAME)
+    group.record_placement_TBD(leaving, WORKER_NAME)
+    handler.read_envelope(envelope(photo=photo_of(**{staying: None, leaving: "T"})))
+    handler.state = "quitted"
+
+    handler.envelope_handler.announce_death_TBD()
+
+    assert commander.user_is_frozen(leaving) is True
+    assert staying not in commander.user_map
+    assert group.user_worker_map == {leaving: None}
+    assert group.dropped_workers == [handler]
+
+
+async def test_the_wild_death_saves_nobody_and_its_parcels_are_discarded(
+    handler, commander, group, caplog
+):
+    caplog.set_level(logging.INFO)
+    user = commander.resolve_user("cid-a")
+    handler.hosted_users.add(user)
+    # What a freeze leaves on disk, written the way a worker writes it: under the
+    # semaphore of that user's own folder.
+    commander.freeze_handler.take_lock(user, WORKER_NAME)
+    commander.freeze_handler.write_user_register_item(
+        user, {"store": "whatever"}, writer=WORKER_NAME, cause="freeze", group="standard"
+    )
+    commander.freeze_handler.release_lock(user, WORKER_NAME)
+    handler.read_envelope(envelope(photo=photo_of(**{user: "T"})))
+    handler.state = "aborted"
+
+    handler.envelope_handler.announce_death_TBD()
+
+    assert commander.user_map == {}
+    assert commander.freeze_handler.user_folders == set()
+    assert commander.counters["frozen_users_discarded"] == 1
+    assert group.dropped_workers == [handler]
+    assert "order=purge_user" in caplog.text
+    assert "outcome=process_aborted" in caplog.text
+
+
+async def test_a_death_announced_for_a_living_process_is_refused(handler):
+    handler.state = "running"
+
+    with pytest.raises(ValueError, match="not dead"):
+        handler.envelope_handler.announce_death_TBD()
+
+
+async def test_what_the_chain_answers_is_the_whole_store(handler, commander):
+    register = commander.global_register
+
+    assert handler.read_envelope(envelope()) == {GLOBAL_STORE_KEY: register.item_tytx}
+
+    register.set_item("counters.invoices", 3)
+    answer = handler.read_envelope(envelope())
+
+    assert answer == {GLOBAL_STORE_KEY: register.item_tytx}
+    assert "invoices" in str(answer[GLOBAL_STORE_KEY])
+
+
+async def test_every_layer_must_say_how_it_reads_the_photo(handler):
+    bare = EnvelopeHandler()
+
+    with pytest.raises(NotImplementedError, match="EnvelopeHandler"):
+        bare.work_on_envelope(envelope(photo=photo_of(mario=None)), handler)
+
+
+async def test_a_real_child_announces_and_the_vertex_learns_it(
+    handler, commander, group, monkeypatch, caplog
+):
+    caplog.set_level(logging.INFO)
+    repo_root = Path(__file__).resolve().parents[2]
+    inherited = os.environ.get("PYTHONPATH", "")
+    monkeypatch.setenv(
+        "PYTHONPATH", os.pathsep.join([str(repo_root), inherited]).rstrip(os.pathsep)
+    )
+    commander.global_register.set_item("counters.invoices", 3)
+    user = commander.resolve_user("cid-a")
+
+    # BORN. Its own first photo cannot know the store — it travels in the
+    # presentation, and the store comes back in the answer to it, which is what
+    # the chain composed: the whole thing, because a newborn holds nothing.
+    await handler.launch_process()
+    assert handler.worker_snapshot["global_store"] is None
+
+    # IT ANNOUNCES. What happened in that process rides the answer to the order,
+    # climbs the three layers inline, and lands in the indexes of the vertex.
+    reply = await handler.connector.call(
+        ANNOUNCE_OP,
+        {
+            "announcements": [
+                {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a"},
+                {
+                    "op": "user_frozen",
+                    "worker": WORKER_NAME,
+                    "user": user,
+                    "placement": None,
+                    "occupancy_percent": 4.0,
+                },
+            ]
+        },
+        timeout=CALL_TIMEOUT,
+    )
+
+    assert reply["result"] == {"announcing": 2}
+    assert reply[WORKER_SNAPSHOT_KEY]["global_store"] == commander.global_register.item_tytx
+    assert commander.page_connection_map == {"p1": "cid-a"}
+    assert commander.user_is_frozen(user) is True
+    assert commander.user_map[user]["occupancy_percent"] == 4.0
+    assert group.user_worker_map == {user: None}
+
+    # A CHANGE MADE NOW DOES NOT REACH IT. The store it holds is the one it was
+    # answered at birth, and the beat carries no order of its own: how a change of
+    # the master reaches a process already alive is not decided yet — the write
+    # climbs, and the update is sent to everybody, in the phase that gives the
+    # vertex its groups.
+    born_with = handler.worker_snapshot["global_store"]
+    commander.global_register.set_item("counters.orders", 7)
+    beat = await handler.ping_process()
+
+    assert beat[WORKER_SNAPSHOT_KEY]["global_store"] == born_with
+    assert born_with != commander.global_register.item_tytx
+
+    # A FOLD THAT REFUSES DOES NOT SEVER THE WIRE. An announcement about somebody
+    # the vertex never wrote cannot be filed — and a bug one level up must not
+    # take a whole process's users down with it: the refusal is denounced and the
+    # caller is answered.
+    refused = await handler.connector.call(
+        ANNOUNCE_OP,
+        {"announcements": [{"op": "drop_page", "worker": WORKER_NAME, "page_id": "p1"}]},
+        timeout=CALL_TIMEOUT,
+    )
+    assert refused["result"] == {"announcing": 1}
+
+    stranger = await handler.connector.call(
+        ANNOUNCE_OP,
+        {
+            "announcements": [
+                {"op": "user_frozen", "worker": WORKER_NAME, "user": "nobody", "placement": None}
+            ]
+        },
+        timeout=CALL_TIMEOUT,
+    )
+
+    assert stranger["result"] == {"announcing": 1}
+    assert "The fold refused the envelope" in caplog.text
+    assert handler.connector.connected is True
+    assert await handler.ping_process() is not None
+
+
+async def wait_for(condition, timeout: float = CALL_TIMEOUT) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not condition():
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError("the chain never reached the awaited state")
+        await asyncio.sleep(0.01)

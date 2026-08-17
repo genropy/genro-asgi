@@ -113,12 +113,24 @@ class ChildPeer:
 
 
 class HandlerStub:
-    """The WorkerHandler seen by its wire: what it hands over, what it is told."""
+    """The WorkerHandler seen by its wire: the envelopes it takes, what it is told.
+
+    The wire reads nothing of what arrives: it hands the envelope over whole and
+    writes back down whatever comes out. So the handler of these tests is the fold
+    — it keeps the envelopes it was given, and answers with the store, which is
+    what the real chain composes for a newborn.
+    """
 
     def __init__(self, name: str = "standard_0001") -> None:
         self.name = name
         self.global_register_item_tytx = "::T::the whole store"
+        self.envelopes: list[dict[str, Any]] = []
         self.losses = 0
+
+    def read_envelope(self, envelope: dict[str, Any]) -> dict[str, Any]:
+        """Keep what arrived, and answer with what goes down."""
+        self.envelopes.append(envelope)
+        return {GLOBAL_STORE_KEY: self.global_register_item_tytx}
 
     def on_child_lost(self) -> None:
         self.losses += 1

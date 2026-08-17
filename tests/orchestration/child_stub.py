@@ -67,12 +67,19 @@ from genro_asgi.spa.orchestration.worker_handler import PING_OP_PATH, WORKER_ENV
 #: It answers this one, and nothing after it.
 GO_MUTE_OP = "/go_mute"
 
+#: The parent tells the child what to announce: the announcements it is handed
+#: come back on the reply, in the slot a real worker fills with what really
+#: happened in it. It is how a test says «a user was born in that process» without
+#: a whole worker in there.
+ANNOUNCE_OP = "/announce"
+
 #: The three deposit orders the parent drives the child through.
 TAKE_LOCK_OP = "/take_deposit_lock"
 WRITE_CONNECTION_REGISTER_ITEM_OP = "/write_connection_register_item"
 RELEASE_LOCK_OP = "/release_deposit_lock"
 
 __all__ = [
+    "ANNOUNCE_OP",
     "GO_MUTE_OP",
     "RELEASE_LOCK_OP",
     "TAKE_LOCK_OP",
@@ -92,8 +99,10 @@ class ChildStub:
         self.global_store: str | None = None
         self.answering = True
         self.stream: FrameStream | None = None
+        self.announcements: list[dict[str, Any]] = []
         self.operations = {
             PING_OP_PATH: self.answer_ping,
+            ANNOUNCE_OP: self.announce,
             TAKE_LOCK_OP: self.take_deposit_lock,
             WRITE_CONNECTION_REGISTER_ITEM_OP: self.write_connection_register_item,
             RELEASE_LOCK_OP: self.release_deposit_lock,
@@ -151,17 +160,32 @@ class ChildStub:
         Args:
             frame: the envelope as it came off the wire.
 
-        A CALL is answered with its REPLY, reusing its id; a mute process answers
-        no CALL at all, and the order that mutes it is the last thing it answers.
+        The global store is taken off the envelope first, whatever kind it is —
+        the mirror of what the parent does with the photo — so a change made up
+        there shows in the next photo taken down here. Then a CALL is answered
+        with its REPLY, reusing its id, and whatever this process was told to
+        announce rides that answer, as a real worker's own announcements do. A
+        mute process answers no CALL at all, and the order that mutes it is the
+        last thing it answers.
+
+        Sets ``global_store``, and empties ``announcements``: they are delivered
+        once.
         """
+        if isinstance(frame.data, dict) and GLOBAL_STORE_KEY in frame.data:
+            self.global_store = frame.data[GLOBAL_STORE_KEY]
         if frame.method == CALL_METHOD and self.answering:
             result = await self.operations[frame.path](frame.data)
+            announcements, self.announcements = self.announcements, []
             await self.stream.write(
                 Frame(
                     id=frame.id,
                     method=REPLY_METHOD,
                     path=frame.path,
-                    data={"result": result, WORKER_SNAPSHOT_KEY: self.photo},
+                    data={
+                        "result": result,
+                        "events": announcements,
+                        WORKER_SNAPSHOT_KEY: self.photo,
+                    },
                 )
             )
 
@@ -175,6 +199,21 @@ class ChildStub:
             Nothing of substance — the photo rides the envelope, not the result.
         """
         return {}
+
+    async def announce(self, data: Any) -> dict[str, Any]:
+        """Take the announcements the parent handed down and say them back up.
+
+        Args:
+            data: the announcements to make, under ``announcements``.
+
+        Returns:
+            How many were taken.
+
+        Sets ``announcements``: they leave on the reply to this very order, which
+        is the only road anything has out of here.
+        """
+        self.announcements.extend(data["announcements"])
+        return {"announcing": len(self.announcements)}
 
     async def take_deposit_lock(self, data: Any) -> dict[str, Any]:
         """Take the semaphore of a user.

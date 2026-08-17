@@ -62,8 +62,10 @@ from typing import Any
 
 import pytest
 
-from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker, WorkerHandler
+from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker, UserOnHold, WorkerHandler
 from genro_asgi.spa.orchestration.worker_connector import WORKER_SNAPSHOT_KEY
+
+from .group_stub import GroupStub
 
 WORKER_NAME = "standard_0001"
 GROUP = "standard"
@@ -148,20 +150,6 @@ class DrivenWorker(SpaWorker):
             await super().answer_call(frame)
 
 
-class GroupStub:
-    """The GroupHandler seen from below: the wake it gets, and what it reads at it."""
-
-    def __init__(self) -> None:
-        self.worker_handler: Any = None
-        self.wakes: list[str] = []
-        self.users_on_board: list[set[str]] = []
-
-    def ping_now(self) -> None:
-        """The wake: at this round the group reads the state and who was on board."""
-        self.wakes.append(self.worker_handler.state)
-        self.users_on_board.append(set(self.worker_handler.hosted_users))
-
-
 def http_call(cid: str, identity: str, *, path: str, **payload: Any) -> dict[str, Any]:
     """The http CALL form as the front packs it: the request, and who it is for."""
     return {
@@ -176,6 +164,17 @@ def http_call(cid: str, identity: str, *, path: str, **payload: Any) -> dict[str
         "identity": identity,
         **payload,
     }
+
+
+def known_at_the_vertex(commander: Any, cid: str, user: str) -> None:
+    """What the login will do in Macro 4: this cid is that person's, and he has a row.
+
+    The vertex mints guests from a cid on its own; a person with a name of his own
+    is the login's business, and the login is not built. So the story writes the
+    identity and lets the vertex mint the row under it.
+    """
+    commander.connection_user_map[cid] = user
+    commander.resolve_user(cid)
 
 
 def body_of(reply: dict[str, Any]) -> str:
@@ -197,8 +196,9 @@ async def wait_for(condition, timeout: float = CALL_TIMEOUT) -> None:
 
 
 @pytest.fixture
-def group():
-    return GroupStub()
+def group(story_root):
+    """The group of the story, with the real chain and the real vertex above it."""
+    return GroupStub(story_root / "frozen_users")
 
 
 @pytest.fixture
@@ -254,7 +254,12 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     handler, group, deposit, caplog
 ):
     caplog.set_level(logging.INFO)
-    # The fold is Macro 3's: the driver says who the vertex thinks is on board.
+    # The fold is REAL now — the chain of the envelope over the vertex of Macro 3 —
+    # so the two people of the story are known up there the way the login will make
+    # them known. Who the handler has on board is still the driver's word.
+    commander = group.spa_commander
+    known_at_the_vertex(commander, "cid-a", "mario")
+    known_at_the_vertex(commander, "cid-b", "anna")
     handler.hosted_users.update({"mario", "anna"})
 
     # BORN. The handler opens the wire and spawns the child, which presents
@@ -281,7 +286,8 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
 
     assert reply["result"]["status"] == 200
     assert ["X-Worker", WORKER_NAME] in reply["result"]["headers"]
-    assert ["X-Global-Store", handler.global_register_item_tytx] in reply["result"]["headers"]
+    master_store = group.spa_commander.global_register.item_tytx
+    assert ["X-Global-Store", master_store] in reply["result"]["headers"]
     assert body_of(reply) == "GET /invoices for mario"
     assert announced(reply) == ["new_user", "new_connection"]
     photo = reply[WORKER_SNAPSHOT_KEY]
@@ -290,6 +296,18 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     assert photo["users"]["mario"]["item"]["state"] == "active"
     assert photo["connections"]["cid-a"]["user"] == "mario"
     assert photo["connections"]["cid-a"]["last_rpc_ts"] >= before
+    # The fold read that envelope: the births it announced are the ones the vertex
+    # had already written at the minting, so they change nothing — and the photo is
+    # filed on the handler, which is the only thing the bottom layer does with it.
+    assert commander.user_map["mario"] == {
+        "group": None,
+        "frozen": False,
+        "on_hold": None,
+        "occupancy_percent": None,
+        "pending_dbevents": [],
+        "pending_datachanges": [],
+    }
+    assert handler.worker_snapshot == photo
 
     # A second user arrives while the first has gone quiet past the valve's
     # silence: one of them is about to be parked, the other has just spoken.
@@ -310,6 +328,12 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
         "mario": "T",
         "anna": None,
     }
+    # And the vertex read that decision off the photo: whoever is on his way out is
+    # in the waiting room, so a request of his does not get routed to a process that
+    # is emptying. The one who was kept is untouched.
+    with pytest.raises(UserOnHold):
+        commander.resolve_user("cid-a")
+    assert commander.resolve_user("cid-b") == "anna"
 
     # HE DEPARTS. Past the gate he goes to the deposit like anybody else
     # leaving: the placement the announcement carries is NOBODY'S — the vertex
@@ -323,6 +347,12 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     assert deposit.read_user_register_item("mario") is not None
     assert deposit.read_connection_register_item("mario", "cid-a") is not None
     assert deposit.get_item_header("mario")["writer"] == WORKER_NAME
+    # The fold turned that announcement into the two facts it is: at the vertex the
+    # mark says his state is on disk and the wait is over, in the group his
+    # placement is to be assigned again.
+    assert commander.user_is_frozen("mario") is True
+    assert commander.user_map["mario"]["on_hold"] is None
+    assert group.user_worker_map == {"mario": None}
     photo = parked[WORKER_SNAPSHOT_KEY]
     assert "mario" not in photo["users"]
     assert photo["users"]["anna"]["item"]["state"] == "active"
@@ -346,6 +376,9 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     assert deposit.read_connection_register_item("mario", "cid-a") is None
     assert deposit.user_folders == set()
     assert woken[WORKER_SNAPSHOT_KEY]["users"]["mario"]["item"]["state"] == "active"
+    # The vertex turned the mark off on the same announcement: he lives in a process
+    # again, so his next request is routed there and not to the deposit.
+    assert commander.user_is_frozen("mario") is False
 
     # QUITS ON ORDER. The handler asks the process to leave and waits for it to
     # be gone. The answer to that order came back AT ONCE, carrying the photo the
@@ -386,6 +419,18 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     assert group.users_on_board == [{"mario", "anna"}]
     assert "WILD death" not in caplog.text
     assert handler.connector.connected is False
+
+    # AND THE ROUND CONSUMES IT. What the group does at that round is Macro 3's
+    # own; what the CHAIN does with it exists already, so the driver plays the
+    # round: the ended state becomes the announcement, the group takes the handler
+    # out, and the vertex writes the freezer marks of the two the last photo had
+    # flagged — whose own announcements died with the wire.
+    handler.envelope_handler.announce_death_TBD()
+
+    assert group.dropped_workers == [handler]
+    assert commander.user_is_frozen("mario") is True
+    assert commander.user_is_frozen("anna") is True
+    assert group.user_worker_map == {"mario": None, "anna": None}
 
     # RELAUNCH. The same handler launches a successor on the same name and the
     # same socket: it presents itself with a fresh photo of its own process,

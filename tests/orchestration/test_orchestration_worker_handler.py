@@ -25,10 +25,10 @@ The sockets live under a short ``mkdtemp`` root: the system caps a UDS path at
 about a hundred characters and pytest's own directory is already past it, which
 is the very reason handler names are short.
 
-``GroupStub`` is the level above. The only thing the handler asks of it is
-``ping_now`` — the wake it rings when a process of its own has ended — so that is
-all it has, and the tests read the wake and the ``state`` the group would read at
-that round.
+``GroupStub`` is the level above, shared with the other tests of this package: the
+handler asks it for the wake it rings when a process of its own has ended, and for
+the layer of the chain everything the process says climbs through. The tests read
+the wake and the ``state`` the group would read at that round.
 """
 
 from __future__ import annotations
@@ -42,9 +42,10 @@ from typing import Any
 
 import pytest
 
-from genro_asgi.spa.orchestration.worker_connector import WORKER_SNAPSHOT_KEY
+from genro_asgi.spa.orchestration.worker_connector import GLOBAL_STORE_KEY, WORKER_SNAPSHOT_KEY
 from genro_asgi.spa.orchestration import WorkerHandler
 from genro_asgi.spa.orchestration import worker_handler as worker_handler_module
+from .group_stub import GroupStub
 from genro_asgi.spa.orchestration.worker_handler import (
     PING_OP_PATH,
     QUIT_OP_PATH,
@@ -110,21 +111,9 @@ asyncio.run(live())
 CHILD_MODULE = "scripted_child"
 
 
-class GroupStub:
-    """The GroupHandler seen by its handler: it is woken, and it remembers when."""
-
-    def __init__(self) -> None:
-        self.wakes: list[str] = []
-        self.worker_handler: Any = None
-
-    def ping_now(self) -> None:
-        """The wake: an anticipated round, at which the group reads the state."""
-        self.wakes.append(self.worker_handler.state)
-
-
 @pytest.fixture
-def group():
-    return GroupStub()
+def group(instance_root):
+    return GroupStub(instance_root / "frozen_users")
 
 
 @pytest.fixture
@@ -192,8 +181,12 @@ async def test_the_spawn_payload_carries_the_child_whole_configuration(make_hand
     }
 
 
-async def test_the_global_store_is_not_answerable_before_its_owner_exists(make_handler):
-    assert make_handler().global_register_item_tytx == "not yet ready --- wait next phase"
+async def test_the_store_has_an_owner_now_and_the_chain_answers_with_it(make_handler, group):
+    handler = make_handler()
+
+    assert handler.read_envelope({}) == {
+        GLOBAL_STORE_KEY: group.spa_commander.global_register.item_tytx
+    }
 
 
 async def test_a_launched_process_presents_itself_on_the_handlers_socket(make_handler):

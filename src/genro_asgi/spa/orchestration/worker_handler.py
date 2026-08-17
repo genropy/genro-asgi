@@ -54,10 +54,18 @@ writer of the maps, prunes the traces, discards the parcels and removes the
 semaphores the dead one had announced. Which is why nothing in this module
 touches the deposit.
 
+**Every envelope goes to the chain, and the chain answers what goes down.** What
+arrives from below is handed to ``envelope_handler`` — the handler's own layer of
+the fold — which reads the photo, lets the levels above read the announcements,
+and gives back the payload for the envelope going down. So this handler carries
+no knowledge of what an announcement means, and the wire carries none either:
+the wire writes what it is handed. The one thing that answer carries today is the
+global store, whole, which is what a process presenting itself is waiting for.
+
 **No counters here.** The handler holds ``worker_snapshot``, the last photo its
-process sent — written by the wire from whatever envelope carried it, so a live
-process has one from its very presentation: the gauges the judge reads are all
-in there. Counters are
+process sent — filed by its own layer of the chain from whatever envelope carried
+it, so a live process has one from its very presentation: the gauges the judge
+reads are all in there. Counters are
 aggregate and belong to the Commander, which is also the one that decides the
 orders worth counting.
 
@@ -84,6 +92,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .envelope_handler import WorkerEnvelopeHandler
 from .worker_connector import WorkerConnector
 
 #: The environment variable the spawn payload travels in, as today.
@@ -140,7 +149,9 @@ class WorkerHandler:
 
     Args:
         group_handler: the group this handler belongs to; the end of a process is
-            told to it as ``ping_now()``, and it reads ``state`` at that round.
+            told to it as ``ping_now()``, it reads ``state`` at that round, and
+            its ``envelope_handler`` is the way up for everything the process
+            announces.
         name: the handler's name, minted by the group as ``<group>_<counter>``;
             it names the socket too, so it is short.
         instance_dir: the directory holding the sockets of this installation.
@@ -190,24 +201,15 @@ class WorkerHandler:
         #: Written only here; the group reads it at its round.
         self.state = "starting"
         #: The last photo the process sent, on whatever envelope carried it:
-        #: memory, load, counts, per-connection clocks. Written by the wire.
+        #: memory, load, counts, per-connection clocks. Filed by this handler's
+        #: own layer of the chain.
         self.worker_snapshot: dict[str, Any] | None = None
+        self.envelope_handler = WorkerEnvelopeHandler(self, group_handler.envelope_handler)
         self.connector = WorkerConnector(self, self.instance_dir / f"{name}.sock")
         self._logger = logging.getLogger(__name__)
         self._hosted_users: set[str] = set()
         self._death_wait: asyncio.Future[None] | None = None
         self._listening = False
-
-    @property
-    def global_register_item_tytx(self) -> str:
-        """The whole global store, TYTX-encoded, for the presentation reply.
-
-        Returns:
-            The placeholder: the master lives on the Commander, which is built
-            in Macro 3, and the store cannot be answered before its owner
-            exists.
-        """
-        return "not yet ready --- wait next phase"
 
     @property
     def hosted_users(self) -> set[str]:
@@ -238,6 +240,22 @@ class WorkerHandler:
             "kwargs": self.worker_kwargs,
         }
 
+    def read_envelope(self, envelope: dict[str, Any]) -> dict[str, Any]:
+        """Hand an envelope that arrived from the process to the chain.
+
+        Args:
+            envelope: the payload as it came off the wire.
+
+        Returns:
+            What goes back down, as the chain composed it — the answer to a
+            presentation, and nothing at all when there is no envelope going the
+            other way.
+
+        The single door: whatever the process says arrives here, whether it rode
+        a presentation or the answer to an order, and climbs from here.
+        """
+        return self.envelope_handler(envelope)
+
     async def launch_process(self) -> None:
         """Open the wire if it is closed, spawn the child, wait for it to present itself.
 
@@ -252,7 +270,8 @@ class WorkerHandler:
         Sets ``process`` and ``state`` — ``starting`` while the child is on its
         way, ``running`` once it has presented itself — and binds the socket on
         the first launch: a successor finds the wire already listening at the
-        same address.
+        same address. The answer to the presentation carries the whole global
+        store, because a process born now holds none of it.
         """
         if self.process is not None and self.process.poll() is None:
             raise RuntimeError(
@@ -357,7 +376,7 @@ class WorkerHandler:
             answered neither beat and its process was killed for it.
 
         The photo is not asked for here — it rides whatever envelope the child
-        sends, ``worker_snapshot`` slot, and the wire files it. A missed beat is
+        sends, ``worker_snapshot`` slot, and the chain files it. A missed beat is
         repeated ONCE past the timeout, against a lost packet; a process mute to
         both is killed, and the end of the wire writes the state.
         """

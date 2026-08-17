@@ -175,7 +175,68 @@ register item, freezer, check, timeout, restart, congelamento per inattività.
     `grep -rn "_governed_death\|_wait_ordered_death_seen\|on_worker_abort\|on_child_message\|EVENT_METHOD\|user_idle_freeze_delay" src/genro_asgi/spa/orchestration/ tests/orchestration/`
     returns nothing.
 
-- [ ] **Phase 2**: The envelope chain and the vertex
+- [x] **Phase 2**: The envelope chain and the vertex
+  > Done: the chain (`EnvelopeHandler` + the three layers) reads every envelope
+  > that arrives from a child — the photo first, then the announcements in the
+  > order they were made — and gives back what goes down. The single door is the
+  > WIRE: `WorkerConnector` hands the whole envelope to
+  > `WorkerHandler.take_envelope_TBD` (presentation AND every REPLY), writes the
+  > chain's answer as the presentation reply, and reads nothing itself;
+  > `global_register_item_tytx` left the handler as declared. `SpaCommander` owns
+  > the three indexes, the minting of a cid never seen (`resolve_user`, guest rows
+  > written before anything descends), the predicates, the waiting room as
+  > `raise UserOnHold`, the mutators the fold calls, the C3 bonifica through the
+  > `FreezeHandler`, the aggregate counters and `log_order` on its own rotating
+  > file. `GlobalRegister` is a new class (no import from the legacy store): master
+  > Bag and TYTX form, and the chain answers every envelope with that store WHOLE —
+  > the wire writes it where there is an envelope going down, the presentation.
+  > How a change reaches a process already alive is NOT decided here (see the
+  > pending point below). The death climbs as `process_quitted` /
+  > `process_aborted` from `announce_death_TBD`, which splits the users ONCE into
+  > frozen and lost. Every census row of v4 §3 is covered by a test.
+  > Verified: `pytest tests/ -q` 1877 passed / 2 skipped (was 1841/2);
+  > `ruff check src/ tests/` clean; `mypy src/` unchanged and ZERO findings in the
+  > four new modules; coverage of the new code 100% (envelope_handler,
+  > spa_commander, global_register, exceptions), worker_handler 99%. The
+  > end-to-end with a REAL child shows an announcement born in the child landing
+  > in the vertex's indexes, and a fold that refuses an envelope denounced without
+  > severing the wire. The M2 story now closes on the vertex: births as no-ops, the
+  > flagged user in the waiting room, the freeze mark plus the placement to be
+  > assigned, the adoption, and the round that consumes the death.
+  > PENDING (ruled by the owner at the end of this phase, 2026-08-17): the delivery
+  > of a store CHANGE to a live replica. The mechanism dictated: the write climbs
+  > as an announcement in the envelope, the vertex updates the master, then it
+  > sends an update CALL to every worker — built when the vertex has its groups,
+  > i.e. Phase 3/4. The invented workflow of the first draft (a revision as
+  > staleness sensor on the handler and on the register, a second entry point on
+  > the chain, the change riding the beat) was REMOVED whole: Phase 2 keeps only
+  > the ratified rule, that the chain answers with the whole store.
+  > Files: src/genro_asgi/spa/orchestration/envelope_handler.py,
+  > src/genro_asgi/spa/orchestration/spa_commander.py,
+  > src/genro_asgi/spa/orchestration/global_register.py,
+  > src/genro_asgi/spa/orchestration/exceptions.py,
+  > src/genro_asgi/spa/orchestration/worker_handler.py,
+  > src/genro_asgi/spa/orchestration/worker_connector.py,
+  > src/genro_asgi/spa/orchestration/__init__.py,
+  > tests/orchestration/test_orchestration_envelope_chain.py,
+  > tests/orchestration/test_orchestration_spa_commander.py,
+  > tests/orchestration/group_stub.py,
+  > tests/orchestration/child_stub.py,
+  > tests/orchestration/test_orchestration_worker_handler.py,
+  > tests/orchestration/test_orchestration_worker_connector.py,
+  > tests/orchestration/test_orchestration_spa_worker_process.py,
+  > tests/orchestration/test_orchestration_foundations_e2e.py,
+  > tests/orchestration/test_orchestration_m2_e2e.py,
+  > .phased/active/orchestration-m3-commander-groups/notes.md
+  > Verify: now — read `spa_commander.py` and the three EnvelopeHandler as prose:
+  > does the ladder read as one mechanism, or does a layer look like it is doing
+  > somebody else's job?
+  > Verify: now — the `_TBD` round: in progress, one at a time.
+  > `take_envelope_TBD` → **`read_envelope`** (ruled 2026-08-17);
+  > `descending_payload_TBD` and `hand_up_TBD` died with the code they belonged to
+  > (the invented store workflow, and the template-method dance the owner cut);
+  > the base's own step → **`work_on_envelope`** (ruled 2026-08-17: a name that
+  > leaves a layer free to add, remove and modify, not only to read); 10 left.
   - Run: opus / high
   - Pattern: `src/genro_asgi/middleware/base.py:87` (`BaseMiddleware` — the
     callable chain, both ends handed in at construction, never discovered by
