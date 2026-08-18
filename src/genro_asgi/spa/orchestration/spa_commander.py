@@ -197,9 +197,9 @@ class SpaCommander:
         #: writer of that content is here, and a replica is replaced entire.
         self.global_register = Bag()
         self.envelope_handler = CommanderEnvelopeHandler(self)
-        #: Where the whole machine stands: ``running``, ``saturated`` (no room
-        #: for a newcomer anywhere) or ``broken``. Written by the check of the
-        #: resources, which arrives with the heartbeat.
+        #: Where the whole machine stands: ``running`` or ``saturated`` (no room
+        #: for a newcomer anywhere). Written by the check of the resources, which
+        #: arrives with the heartbeat.
         self.state = "running"
         #: The aggregate counts, one key per thing worth counting.
         self.counters: Counter[str] = Counter()

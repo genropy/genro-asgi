@@ -198,6 +198,11 @@ register item, freezer, check, timeout, restart, congelamento per inattività.
   > file. `GlobalRegister` is a new class (no import from the legacy store): master
   > Bag and TYTX form, and the chain answers every envelope with that store WHOLE —
   > the wire writes it where there is an envelope going down, the presentation.
+  > [SUPERSEDED at the simplification round, commit 36c8900, rationale in
+  > notes.md: `global_register.py` was DELETED — the master is a bare Bag on
+  > `SpaCommander.global_register`, the TYTX form is made at the consumer, and
+  > the chain answers ONLY the presentation with the store, not every envelope.
+  > The baptism `GlobalRegister` in this plan's list died with the class.]
   > How a change reaches a process already alive is NOT decided here (see the
   > pending point below). The death climbs as `process_quitted` /
   > `process_aborted` from `report_death`, which splits the users ONCE into
@@ -307,6 +312,9 @@ register item, freezer, check, timeout, restart, congelamento per inattività.
     `WorkerHandler`.
     (7) **`SpaCommander.state`**: `running` / `saturated` / `broken` — the
     machine-level crisis, written by `check_resources()` in Phase 4.
+    [Outcome, review round 2026-08-18: `check_resources()` writes `running`
+    and `saturated` only — no vertex code ever writes `broken`, so the
+    docstring says two values; the third returns with its writer.]
     (8) **`log_order(...)`**: composes ONE structured row per order (who
     decided, what, on whom, when, the numbers it had in front, the outcome)
     over a dedicated rotating handler; a wild death gets a row too. The
@@ -742,9 +750,11 @@ register item, freezer, check, timeout, restart, congelamento per inattività.
   > docs/guides/configuration.md,
   > .phased/active/orchestration-m3-commander-groups/notes.md
   > Verify: now — the guide's new section (`docs/guides/configuration.md`, "The pool
-  > section") was RUN, not only read: its recipe example builds and yields exactly
-  > the kwargs the prose claims. The log sample it prints is the real one of the e2e
-  > run.
+  > section") was exercised through `tests/test_config.py`'s `SpaPoolConfig`: the
+  > SAME recipe shape (a `commander_section(self, cfg)` method, a full group and a
+  > child-only group), with different values — the published snippet itself was
+  > not the one executed. The guide's log sample is the e2e's rows shortened of
+  > the leading timestamp the formatter prepends, one decimal rounded.
   > Verified: the Verify Phase 3 DEFERRED to this phase is answered — "with a real
   > installation, the group grows and shrinks under load in a way that looks sane in
   > the orchestration log": the M3 e2e grows it on a refused newcomer, shrinks it on
