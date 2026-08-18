@@ -340,7 +340,7 @@ async def test_the_wild_death_saves_nobody_and_its_parcels_are_discarded(
     assert commander.freeze_handler.user_folders == set()
     assert commander.counters["frozen_users_discarded"] == 1
     assert group.dropped_workers == [WORKER_NAME]
-    assert "order=purge_user" in caplog.text
+    assert "order=drop_user" in caplog.text
     assert "outcome=process_aborted" in caplog.text
 
 

@@ -291,14 +291,18 @@ class SpaCommander:
         for page_id in [page for page, owner in self.page_connection_map.items() if owner == cid]:
             del self.page_connection_map[page_id]
 
-    def drop_user(self, user: str) -> None:
-        """Forget an identity whole: his row, his connections, his pages, his waiting.
+    def drop_user(self, user: str) -> bool:
+        """Forget an identity whole: his row, his connections, his pages, his freezer state.
 
         Args:
             user: the identity that is gone; one already forgotten is that same
                 outcome.
 
-        Acts on all three indexes, and counts what was waiting for him and will
+        Returns:
+            Whether the freezer was holding anything of his.
+
+        Acts on all three indexes and on the freezer — an identity nobody answers
+        for keeps nothing on disk — and counts what was waiting for him and will
         now never be delivered.
         """
         row = self.user_map.pop(user, None) or {}
@@ -308,6 +312,10 @@ class SpaCommander:
         self.counters["pendings_lost"] += len(row.get("pending_dbevents") or ()) + len(
             row.get("pending_datachanges") or ()
         )
+        had_state = self.freeze_handler.drop_user_folder(user)
+        if had_state:
+            self.counters["frozen_users_discarded"] += 1
+        return had_state
 
     def mark_user_frozen(self, user: str, occupancy_percent: float | None) -> None:
         """Write down that a user's state is on disk, and what it is expected to cost.
@@ -351,19 +359,15 @@ class SpaCommander:
             cause: why, for the log — a wild death, or a departure that lost
                 somebody on the way.
 
-        Acts on all three indexes and on the freezer: what a process nobody can
-        question left behind cannot be trusted, so it goes, counted.
+        Acts on all three indexes and on the freezer, one user at a time: what a
+        process nobody can question left behind cannot be trusted, so it goes,
+        each departure named in the log with whether it had state to lose.
         """
-        folders = self.freeze_handler.user_folders
         for user in users:
-            had_state = self.freeze_handler.user_to_userkey(user) in folders
-            if had_state:
-                self.freeze_handler.drop_user_folder(user)
-                self.counters["frozen_users_discarded"] += 1
-            self.drop_user(user)
+            had_state = self.drop_user(user)
             self.log_order(
                 "vertex",
-                "purge_user",
+                "drop_user",
                 user,
                 numbers={"had_state": had_state},
                 outcome=cause,

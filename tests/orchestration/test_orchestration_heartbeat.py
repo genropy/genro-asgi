@@ -444,10 +444,13 @@ async def test_the_frozen_are_forgotten_each_on_the_clock_of_his_own_kind(make_c
     assert commander.counters["frozen_users_discarded"] == 1
 
 
-async def test_the_deposit_gives_up_what_no_row_of_the_vertex_claims(commander):
+async def test_the_freezer_gives_up_what_no_row_of_the_vertex_claims(commander):
     parked_state(commander, "mario")
     parked_state(commander, "nobody")
-    commander.drop_user("nobody")
+    # The row goes WITHOUT the disk being told: a server killed before its dump, a
+    # restore from a dump older than the freezer. It is the only way a folder is
+    # left unclaimed, since forgetting a user now takes his state with him.
+    del commander.user_map["nobody"]
 
     await commander.cleanup_frozen(now=True)
 

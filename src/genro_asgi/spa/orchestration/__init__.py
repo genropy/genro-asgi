@@ -43,6 +43,7 @@ from .exceptions import (
     WorkerQuittingError,
     WorkerRestartingError,
 )
+from .beats import every
 from .freeze_handler import FreezeHandler
 from .group_handler import GroupHandler
 from .spa_commander import SpaCommander
@@ -68,4 +69,5 @@ __all__ = [
     "WorkerHandler",
     "WorkerQuittingError",
     "WorkerRestartingError",
+    "every",
 ]

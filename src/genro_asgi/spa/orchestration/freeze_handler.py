@@ -277,18 +277,21 @@ class FreezeHandler:
         """
         self._connection_path(user, cid).unlink(missing_ok=True)
 
-    def drop_user_folder(self, user: str) -> None:
+    def drop_user_folder(self, user: str) -> bool:
         """Discard everything ``user`` has in the freezer, semaphore included.
 
         Args:
             user: the user leaving the freezer for good.
+
+        Returns:
+            Whether the freezer was holding anything of his.
 
         Raises:
             RuntimeError: the folder survived its own removal.
 
         Removes the folder and verifies it is gone.
         """
-        self._drop_folder(self.user_to_userkey(user))
+        return self._drop_folder(self.user_to_userkey(user))
 
     def cleanup_frozen(self, claimed: set[str]) -> list[str]:
         """Sweep the freezer of everything that belongs to nobody.
@@ -308,12 +311,14 @@ class FreezeHandler:
             self._drop_folder(userkey)
         return orphans
 
-    def _drop_folder(self, userkey: str) -> None:
-        """Remove one folder of the freezer by its key, and verify it is gone."""
+    def _drop_folder(self, userkey: str) -> bool:
+        """Remove one folder of the freezer by its key, verify it is gone, say if it was."""
         folder = self.root_path / userkey
+        was_there = folder.exists()
         shutil.rmtree(folder, ignore_errors=True)
         if folder.exists():
             raise RuntimeError(f"freezer folder {userkey}: it survived its removal")
+        return was_there
 
     def _user_folder(self, user: str) -> Path:
         return self.root_path / self.user_to_userkey(user)

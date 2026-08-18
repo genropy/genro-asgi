@@ -161,19 +161,24 @@ def test_dropping_what_is_already_gone_is_that_same_outcome(commander):
     assert commander.user_map == {}
 
 
-def test_a_user_who_is_gone_takes_his_connections_and_pages_with_him(commander):
+def test_a_user_who_is_gone_takes_his_connections_pages_and_freezer_state_with_him(commander):
     user = commander.resolve_user("cid-a")
     commander.connection_user_map["cid-b"] = user
     commander.page_connection_map["p1"] = "cid-a"
     commander.page_connection_map["p2"] = "cid-b"
     commander.user_map[user]["pending_datachanges"] = [{"path": "a.b"}, {"path": "a.c"}]
+    parked_state(commander, user)
 
-    commander.drop_user(user)
+    assert commander.drop_user(user) is True
 
     assert commander.user_map == {}
     assert commander.connection_user_map == {}
     assert commander.page_connection_map == {}
     assert commander.counters["pendings_lost"] == 2
+    # Nothing of an identity nobody answers for is left behind: what the sweep of
+    # the freezer finds later is only what a row lost WITHOUT a drop.
+    assert commander.freeze_handler.user_folders == set()
+    assert commander.counters["frozen_users_discarded"] == 1
 
 
 def test_what_a_dead_process_left_on_disk_is_discarded_and_counted(commander, caplog):
@@ -187,7 +192,7 @@ def test_what_a_dead_process_left_on_disk_is_discarded_and_counted(commander, ca
     assert commander.freeze_handler.user_folders == set()
     assert commander.user_map == {}
     assert commander.counters["frozen_users_discarded"] == 1
-    assert caplog.text.count("order=purge_user") == 2
+    assert caplog.text.count("order=drop_user") == 2
 
 
 def test_every_order_leaves_its_row_on_the_file_of_the_orders(vertex_root):
