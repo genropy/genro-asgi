@@ -35,13 +35,13 @@ import contextlib
 import os
 import shutil
 import tempfile
-from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from genro_asgi.spa.orchestration import GroupHandler, SpaCommander, group_handler, spa_commander
+from genro_asgi.spa.orchestration.beats import every
 from genro_asgi.spa.orchestration.spa_commander import GUEST_PREFIX
 
 from .child_stub import GO_MUTE_OP
@@ -181,10 +181,15 @@ def parked_state(commander: SpaCommander, user: str) -> None:
     commander.mark_user_frozen(user, None)
 
 
-def counting_check(checks: list[int]):
-    """A reading of the shape that only counts itself: the real one has its own file."""
+def counting_check(checks: list[int], beats: int):
+    """A reading of the shape that only counts itself: the real one has its own file.
 
-    async def check_occupancy() -> None:
+    It carries a cadence like the real one, because the cadence is what is under
+    test — the group only gives the turn.
+    """
+
+    @every(beats)
+    async def check_occupancy(self) -> None:
         checks.append(len(checks) + 1)
 
     return check_occupancy
@@ -325,54 +330,54 @@ async def test_each_task_of_the_vertex_runs_on_its_own_count_of_beats(
     commander, monkeypatch, clock
 ):
     monkeypatch.setattr(spa_commander, "HEARTBEAT_SECONDS", 0.001)
-    monkeypatch.setattr(spa_commander, "DROP_EXPIRED_USERS_BEATS", 1)
-    monkeypatch.setattr(spa_commander, "CHECK_RESOURCES_BEATS", 2)
-    monkeypatch.setattr(spa_commander, "CLEANUP_FROZEN_BEATS", 1000)
-    runs: Counter[str] = Counter()
+    # The cadence is read off the method at every call, so moving it here is all a
+    # test has to do — the clock knows nothing about who is due.
+    monkeypatch.setattr(SpaCommander.drop_expired_users, "every_beats", 1)
+    monkeypatch.setattr(SpaCommander.check_resources, "every_beats", 2)
+    monkeypatch.setattr(SpaCommander.cleanup_frozen, "every_beats", 1000)
 
-    def counting(task_name: str):
-        async def run() -> None:
-            runs[task_name] += 1
-
-        return run
-
-    for task_name in ("drop_expired_users", "cleanup_frozen", "check_resources"):
-        monkeypatch.setattr(commander, task_name, counting(task_name))
+    def runs_of(task_name: str) -> int:
+        return commander.beat_counts.get(task_name, {}).get("runs", 0)
 
     beating = clock()
-    await wait_for(lambda: runs["drop_expired_users"] >= 4)
+    await wait_for(lambda: runs_of("drop_expired_users") >= 4)
     beating.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await beating
 
-    beats = runs["drop_expired_users"]
-    assert runs["check_resources"] in ((beats - 1) // 2, beats // 2)
-    assert runs["cleanup_frozen"] == 0
+    beats = runs_of("drop_expired_users")
+    assert runs_of("check_resources") in ((beats - 1) // 2, beats // 2)
+    # Its turns are counted all the same: the sweep is given every beat and says no.
+    assert runs_of("cleanup_frozen") == 0
+    assert commander.beat_counts["cleanup_frozen"]["turns"] == beats
 
 
 async def test_a_task_that_raises_leaves_the_others_of_its_beat_alone(
     commander, monkeypatch, clock, caplog
 ):
     monkeypatch.setattr(spa_commander, "HEARTBEAT_SECONDS", 0.001)
-    monkeypatch.setattr(spa_commander, "DROP_EXPIRED_USERS_BEATS", 1)
-    monkeypatch.setattr(spa_commander, "CHECK_RESOURCES_BEATS", 1)
-    runs: Counter[str] = Counter()
 
-    async def failing_reaper() -> None:
-        runs["reaped"] += 1
-        raise RuntimeError("the deposit is on fire")
+    # Named as the method it stands in for: the row of a periodic method is kept
+    # under that method's own name.
+    @every(1)
+    async def drop_expired_users(self) -> None:
+        raise RuntimeError("the freezer disk is on fire")
 
-    async def counting_check() -> None:
-        runs["checked"] += 1
+    monkeypatch.setattr(SpaCommander, "drop_expired_users", drop_expired_users)
+    monkeypatch.setattr(SpaCommander.check_resources, "every_beats", 1)
 
-    monkeypatch.setattr(commander, "drop_expired_users", failing_reaper)
-    monkeypatch.setattr(commander, "check_resources", counting_check)
+    def runs_of(task_name: str) -> int:
+        return commander.beat_counts.get(task_name, {}).get("runs", 0)
 
     with caplog.at_level("ERROR"):
         clock()
-        await wait_for(lambda: runs["checked"] >= 2)
+        await wait_for(lambda: runs_of("check_resources") >= 2)
 
-    assert runs["reaped"] >= 2
+    # The bad disk is loud in the log and in its own row, and it takes nothing
+    # else of its beat down — least of all the check that reads that same disk.
+    reaper = commander.beat_counts["drop_expired_users"]
+    assert reaper["errors"] >= 2
+    assert reaper["last_error"] == "RuntimeError: the freezer disk is on fire"
     assert "failed" in caplog.text
 
 
@@ -382,10 +387,9 @@ async def test_a_task_that_raises_leaves_the_others_of_its_beat_alone(
 async def test_the_group_reads_its_shape_on_its_own_count_of_turns(
     make_group, monkeypatch
 ):
-    monkeypatch.setattr(group_handler, "CHECK_OCCUPANCY_BEATS", 3)
-    group = make_group()
     checks: list[int] = []
-    monkeypatch.setattr(group, "check_occupancy", counting_check(checks))
+    monkeypatch.setattr(group_handler.GroupHandler, "check_occupancy", counting_check(checks, 3))
+    group = make_group()
 
     await group.ping()
     await group.ping()
@@ -400,10 +404,9 @@ async def test_the_group_reads_its_shape_on_its_own_count_of_turns(
 async def test_a_woken_group_reads_its_shape_at_once_and_the_wake_is_spent(
     make_group, monkeypatch
 ):
-    monkeypatch.setattr(group_handler, "CHECK_OCCUPANCY_BEATS", 1000)
-    group = make_group()
     checks: list[int] = []
-    monkeypatch.setattr(group, "check_occupancy", counting_check(checks))
+    monkeypatch.setattr(group_handler.GroupHandler, "check_occupancy", counting_check(checks, 1000))
+    group = make_group()
     group.ping_now()
 
     await group.ping()
@@ -422,7 +425,7 @@ async def test_the_frozen_are_forgotten_each_on_the_clock_of_his_own_kind(make_c
     commander = make_commander(user_expiry_hours=0.0, guest_expiry_hours=1000.0)
 
     # Nobody frozen: the sweep does not so much as reach for a thread.
-    await commander.drop_expired_users()
+    await commander.drop_expired_users(now=True)
 
     parked_state(commander, "mario")
     parked_state(commander, f"{GUEST_PREFIX}cid-g")
@@ -432,7 +435,7 @@ async def test_the_frozen_are_forgotten_each_on_the_clock_of_his_own_kind(make_c
     commander.resolve_user("cid-p")
     commander.mark_user_frozen("paolo", None)
 
-    await commander.drop_expired_users()
+    await commander.drop_expired_users(now=True)
 
     assert "mario" not in commander.user_map
     assert commander.freeze_handler.get_item_header("mario") is None
@@ -446,7 +449,7 @@ async def test_the_deposit_gives_up_what_no_row_of_the_vertex_claims(commander):
     parked_state(commander, "nobody")
     commander.drop_user("nobody")
 
-    await commander.cleanup_frozen()
+    await commander.cleanup_frozen(now=True)
 
     assert commander.freeze_handler.user_folders == {
         commander.freeze_handler.user_to_userkey("mario")
@@ -462,7 +465,7 @@ async def test_the_memory_past_its_line_saturates_the_machine_and_asks_for_more(
     # arithmetic under test is the line, not the reading.
     monkeypatch.setattr(commander, "_machine_memory_used_percent", lambda: 42.0)
 
-    await commander.check_resources()
+    await commander.check_resources(now=True)
 
     assert commander.state == "saturated"
     assert commander.asked == 1
@@ -471,7 +474,7 @@ async def test_the_memory_past_its_line_saturates_the_machine_and_asks_for_more(
     # to say the crisis is over.
     commander.machine_memory_alarm_percent = 50.0
 
-    await commander.check_resources()
+    await commander.check_resources(now=True)
 
     assert commander.state == "running"
     assert commander.asked == 1
@@ -487,7 +490,7 @@ async def test_the_storage_under_the_reserve_is_said_out_loud_but_saturates_nobo
     # No real volume is 100% free, so the lamp is on whatever disk runs the test.
     monkeypatch.setattr(spa_commander, "STORAGE_RESERVE_PERCENT", 100.0)
 
-    await commander.check_resources()
+    await commander.check_resources(now=True)
 
     # Room on disk is not something the pool can grow into: the sysop is told,
     # the machine asks for more, and nobody is refused a seat over it.

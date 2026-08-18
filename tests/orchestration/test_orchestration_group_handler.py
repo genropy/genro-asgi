@@ -195,7 +195,7 @@ async def test_a_group_where_nobody_admits_anybody_grows_at_its_check(make_group
     group = make_group(rss_bytes=int(0.79 * MEMORY_CEILING))
     await group.start_worker()
 
-    await group.check_occupancy()
+    await group.check_occupancy(now=True)
 
     assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
     assert group.state == "running"
@@ -205,7 +205,7 @@ async def test_a_group_of_one_closes_nobody(make_group):
     group = make_group()
     reception = await group.start_worker()
 
-    await group.check_occupancy()
+    await group.check_occupancy(now=True)
 
     # Empty as it is, the reception is still the one that receives whoever
     # arrives unplaced: it is nobody's spare capacity.
@@ -222,7 +222,7 @@ async def test_a_growth_the_quota_refuses_saturates_the_group_until_there_is_roo
     reception = await group.start_worker()
     spare = await group.start_worker()
 
-    await group.check_occupancy()
+    await group.check_occupancy(now=True)
 
     assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
     assert group.memory_occupied_percent == 79.0
@@ -232,7 +232,7 @@ async def test_a_growth_the_quota_refuses_saturates_the_group_until_there_is_roo
     # without anybody having to say so.
     reception.worker_snapshot = {"rss_bytes": quota // 5}
     spare.worker_snapshot = {"rss_bytes": 3 * quota // 5}
-    await group.check_occupancy()
+    await group.check_occupancy(now=True)
 
     assert group.memory_occupied_percent == 40.0
     assert group.state == "running"
@@ -264,7 +264,7 @@ async def test_a_worker_past_the_restart_setpoint_is_replaced_by_a_fresh_one(
     doomed.hosted_users.add("mario")
     group.user_worker_map["mario"] = doomed.name
 
-    await group.check_occupancy()
+    await group.check_occupancy(now=True)
 
     assert list(group.worker_handler_map) == ["standard_0002"]
     await wait_for(lambda: doomed.process.poll() is not None)
@@ -286,7 +286,7 @@ async def test_the_closure_of_a_spare_worker_goes_through_its_six_steps(make_gro
 
     # 1. the group decides on one reading: what the spare one holds, the others
     # can hold and still admit.
-    await group.check_occupancy()
+    await group.check_occupancy(now=True)
 
     # 2-4. it answered the order at once, with the photo of everybody flagged for
     # the freezer; then it drained and ENDED BY ITSELF, and that end was awaited.
@@ -314,7 +314,7 @@ async def test_a_closure_that_would_undo_a_growth_is_not_made(make_group):
     reception.worker_snapshot = {"rss_bytes": int(0.78 * MEMORY_CEILING)}
     spare.worker_snapshot = {"rss_bytes": 0}
 
-    await group.check_occupancy()
+    await group.check_occupancy(now=True)
 
     # Alone, the reception would stand at 78 and take nobody: closing the other
     # one now would only have the next round bring it back.

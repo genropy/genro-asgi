@@ -103,6 +103,7 @@ from typing import Any
 
 from .envelope_handler import GroupEnvelopeHandler
 from .exceptions import AssignmentRefused
+from .beats import every
 from .worker_handler import WorkerHandler
 
 #: The states of a worker whose process has ended: it is in the list only until
@@ -186,7 +187,9 @@ class GroupHandler:
         self.ping_now_event = asyncio.Event()
         self._logger = logging.getLogger(__name__)
         self._worker_counter = 0
-        self._beats = 0
+        #: One row per periodic method of this group — turns seen, runs, errors
+        #: and the last one's text.
+        self.beat_counts: dict[str, dict[str, Any]] = {}
         self._closing_wires: set[asyncio.Task[None]] = set()
         spa_commander.group_map[name] = self
 
@@ -242,16 +245,14 @@ class GroupHandler:
     async def ping(self) -> None:
         """This group's turn of the round: beat the silent, read the shape when due.
 
-        Acts on the group: it counts its own turn, consumes the wake it was
-        given — which brings the reading of the shape forward, whatever the
-        count says — and lets ``check_occupancy`` take the step it calls for.
+        Acts on the group: it consumes the wake it was given — which brings the
+        reading of the shape forward, whatever its own count says — and lets
+        ``check_occupancy`` take the step that reading calls for.
         """
-        self._beats += 1
         woken = self.ping_now_event.is_set()
         self.ping_now_event.clear()
         await self.ping_workers()
-        if woken or self._beats % CHECK_OCCUPANCY_BEATS == 0:
-            await self.check_occupancy()
+        await self.check_occupancy(now=woken)
 
     async def ping_workers(self) -> None:
         """Beat every silent worker of this group at once, and wait for all of them.
@@ -334,6 +335,7 @@ class GroupHandler:
         self.ping_now()
         raise AssignmentRefused(user, f"no worker of {self.name} admits him")
 
+    @every(CHECK_OCCUPANCY_BEATS)
     async def check_occupancy(self) -> None:
         """Read the group once and take the ONE step that reading calls for.
 

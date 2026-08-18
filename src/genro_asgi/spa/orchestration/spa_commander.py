@@ -108,6 +108,7 @@ from typing import Any
 
 from genro_bag import Bag
 
+from .beats import every
 from .envelope_handler import CommanderEnvelopeHandler
 from .exceptions import UserOnHold
 from .freeze_handler import FreezeHandler
@@ -201,6 +202,9 @@ class SpaCommander:
         #: it is built, the way a worker hangs itself in its own group's map.
         self.group_map: dict[str, Any] = {}
         self._group_turns: dict[str, asyncio.Task[None]] = {}
+        #: One row per periodic method of this vertex — turns seen, runs, errors
+        #: and the last one's text: the dashboard of who is due and who is broken.
+        self.beat_counts: dict[str, dict[str, Any]] = {}
         self._logger = logging.getLogger(__name__)
         self._orders_logger = self._build_orders_logger(
             orchestration_log_path,
@@ -396,25 +400,26 @@ class SpaCommander:
         """The one clock: a round at every beat, and never a death by a bad round.
 
         Never returns — whoever starts it cancels it. A beat of the timer is a
-        full round plus whichever of the vertex's own tasks its count has come
-        round for; a wake is an anticipated round on the groups that rang, and it
-        is not a beat. A round that raises leaves its line and the next beat
-        comes anyway.
+        full round and then a turn to each of the vertex's own tasks, which decide
+        for themselves whether their cadence has come; a wake is an anticipated
+        round on the groups that rang, and it is not a beat. A round that raises
+        leaves its line and the next beat comes anyway.
 
         Acts through everything the round acts on.
         """
-        beats = 0
         while True:
             woken = await self._wait_beat()
             try:
                 if woken:
                     await self.ping_groups(woken)
-                else:
-                    beats += 1
-                    await self.ping_groups()
-                    await self._run_due_tasks(beats)
+                    continue
+                await self.ping_groups()
             except Exception:
                 self._logger.exception("Vertex: the round failed")
+                continue
+            await self.drop_expired_users()
+            await self.cleanup_frozen()
+            await self.check_resources()
 
     async def ping_groups(self, group_handlers: list[Any] | None = None) -> None:
         """Give every group its turn, all at once, and wait for all of them.
@@ -439,6 +444,7 @@ class SpaCommander:
             turns.append(running)
         await asyncio.gather(*turns, return_exceptions=True)
 
+    @every(DROP_EXPIRED_USERS_BEATS)
     async def drop_expired_users(self) -> None:
         """Forget the frozen whose age ran out — the row here, the folder on disk.
 
@@ -451,6 +457,7 @@ class SpaCommander:
         if expired:
             self.drop_users(expired, cause="expired")
 
+    @every(CLEANUP_FROZEN_BEATS)
     async def cleanup_frozen(self) -> None:
         """Discard what the freezer holds for nobody the indexes know.
 
@@ -465,6 +472,7 @@ class SpaCommander:
             self.counters["orphan_folders_discarded"] += 1
             self.log_order("vertex", "cleanup_frozen", userkey, outcome="orphan")
 
+    @every(CHECK_RESOURCES_BEATS)
     async def check_resources(self) -> None:
         """Read the machine's memory against its alarm line, the storage against the reserve.
 
@@ -510,24 +518,6 @@ class SpaCommander:
         for waiting in pending:
             waiting.cancel()
         return [group_handler for wake, group_handler in wakes.items() if wake in done]
-
-    async def _run_due_tasks(self, beats: int) -> None:
-        """Run the vertex's own tasks whose count of beats has come round.
-
-        Each one is on its own: a task that raises leaves its line and the others
-        of the same beat still run.
-        """
-        for every, task in (
-            (DROP_EXPIRED_USERS_BEATS, self.drop_expired_users),
-            (CLEANUP_FROZEN_BEATS, self.cleanup_frozen),
-            (CHECK_RESOURCES_BEATS, self.check_resources),
-        ):
-            if beats % every:
-                continue
-            try:
-                await task()
-            except Exception:
-                self._logger.exception("Vertex: %s failed", task.__name__)
 
     def _expired_users(self, users: list[str]) -> list[str]:
         """Which of these frozen users are past their own expiry; runs off the loop.
