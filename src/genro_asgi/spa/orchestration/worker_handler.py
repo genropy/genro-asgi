@@ -22,38 +22,69 @@ pointing at the handler is untouched by all of that.
 
 **Four orders, and each verb carries its object.** ``launch_process`` opens the
 wire, spawns the child and waits for it to present itself; ``terminate_process``
-kills the process group and waits for the OS to bury it; ``restart_process``
-does the two in a row, on the same name and socket; ``ping_process`` is one
-health beat. Nothing here freezes a user, closes a tap or reads a policy: those
-belong one level up, and a handler that took them would be deciding for the pool.
+kills the process group and waits for the OS to bury it; ``quit_process`` asks
+the process to leave and waits for it to be gone; ``ping_process`` is one health
+beat, and it gives back what the child answered. Nothing here freezes a user,
+closes a tap or reads a policy: those belong one level up, and a handler that
+took them would be deciding for the pool.
+
+**The refusal is the answer.** ``assign_user`` is no order: it is the judgement a
+group asks for while it walks its workers looking for one that takes a user. The
+handler judges ITSELF — its own last photo against the setpoint its group carries
+— and says no by RAISING, the class of the refusal being the reason. It writes
+nothing: where a user lives is the group's map, and who is inside a process is
+what that process announces.
 
 **Low tolerance, and never two processes.** A mute beat is repeated ONCE past
 the timeout — against a lost packet, not against a sick worker — and then the
-process group is killed and its OS death awaited. Only after that death may a
+process group is killed and its OS death awaited: SIGKILL, no escalation and no
+grace, because a grace period is the users waiting. Only after that death may a
 successor be launched: the wire is one, so a handler is never two processes. The
 declared price is that the slow-but-healthy dies and its users log in again,
 which is seconds of error instead of minutes of spinner.
 
-**A death is governed only if this handler ordered it.** ``restart_process`` marks
-the death it is about to cause; the wire's end then passes transparently and
-announces nothing. Every OTHER end of the wire is WILD: the handler says so in the
-orchestration log and calls ``on_worker_abort`` on its group, and its job ends
-there. It owns the list of its users (``hosted_users``), not the indexes of
-anybody else: the group unhooks the handler from the placement and the Commander —
-the single writer of the maps — prunes the traces, discards the parcels and
-removes the semaphores the dead one had announced. Which is why nothing in this
-module touches the deposit.
+**The death is a STATE, not a mark posed from outside.** ``state`` carries one of
+five values and nobody but this handler writes it: ``starting`` (spawned, not yet
+presented), ``running``, ``quitting`` (asked to leave, draining, not coming
+back), ``quitted`` (died as it was ordered to, and the group has yet to consume
+the fact) and ``aborted`` (died with nobody waiting for it — the wild death).
+
+**The classification is the PURE WAIT.** An order to die parks a wait; the end of
+the wire resolves it. An end of wire WITH a live wait is the death somebody
+asked for; an end of wire without one is wild — no mark to set in advance, and
+none to give back. The wait is parked ONLY when a child is really on the wire: a
+wire with nobody on it reports nothing, and a wait left behind for a report that
+never comes would make the handler read its next wild death as ordered. Either
+way the handler writes the state, rings its group's wake and stops there: the
+group learns at that round, reading the state. This
+handler owns the list of its users (``hosted_users``), not the indexes of anybody
+else — the group unhooks it from the placement and the Commander, the single
+writer of the maps, prunes the traces, discards the parcels and removes the
+semaphores the dead one had announced. Which is why nothing in this module
+touches the deposit.
+
+**Every envelope goes to the chain, and the chain answers what goes down.** What
+arrives from below is handed to ``envelope_handler`` — the handler's own layer of
+the fold — which reads the photo, lets the levels above read the worker events,
+and gives back the payload for the envelope going down. So this handler carries
+no knowledge of what a worker event means, and the wire carries none either:
+the wire writes what it is handed. The one thing that answer carries today is the
+global store, whole, and only to a process presenting itself — which is the only
+one holding none of it.
 
 **No counters here.** The handler holds ``worker_snapshot``, the last photo its
-process sent — written by the wire from whatever envelope carried it, so a live
-process has one from its very presentation: the gauges the judge reads are all
-in there. Counters are
+process sent — filed by its own layer of the chain from whatever envelope carried
+it, so a live process has one from its very presentation: the gauges the judge
+reads are all in there. Counters are
 aggregate and belong to the Commander, which is also the one that decides the
 orders worth counting.
 
 **The beat has no clock of its own.** ``ping_process`` is one beat and
 ``process_ping_interval`` is the cadence it is meant to be called at; the clock
-that calls it belongs to whoever governs the group. The handler's burial — the
+that calls it belongs to whoever governs the group. What the handler does say is
+whether it is worth beating at all: every envelope stamps the instant it
+arrived, so a process that has just answered traffic is not ``silent`` and its
+group leaves it alone. The handler's burial — the
 socket taken away — is ``WorkerConnector.stop()``, called by whoever closes the
 handler for good.
 
@@ -71,10 +102,16 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
-from ...channel.frame import Frame
+from .envelope_handler import WorkerEnvelopeHandler
+from .exceptions import (
+    AssignmentRefused,
+    NoRoomError,
+    WorkerQuittingError,
+)
 from .worker_connector import WorkerConnector
 
 #: The environment variable the spawn payload travels in, as today.
@@ -86,6 +123,22 @@ WORKER_ENV_VAR = "GENRO_ASGI_WORKER"
 #: legacy machine dies at the cutover.
 PING_OP_PATH = "/op/ping"
 
+#: The routing key of the order to leave: the process drains and ends itself.
+#: Its answer comes back at once, carrying the photo with every user flagged for
+#: cession — the level above parks them all in one read.
+QUIT_OP_PATH = "/op/quit"
+
+#: The routing key that takes one user off the process, and the one that takes
+#: off a single connection of his. Each names the verb of ``SpaWorker`` that
+#: serves it, and carries that verb's own argument.
+DROP_USER_OP_PATH = "/op/drop_user"
+DROP_CONNECTION_OP_PATH = "/op/drop_connection"
+
+#: How long an ordered departure may take before this handler stops waiting for
+#: it, in seconds. Past it the process is killed and the death that follows is an
+#: abort like any other: whoever was leaving had its time.
+QUIT_TIMEOUT_SECONDS = 30.0
+
 #: Seconds between two beats of the same process — the cadence, not a clock.
 PROCESS_PING_INTERVAL = 5.0
 
@@ -93,14 +146,18 @@ PROCESS_PING_INTERVAL = 5.0
 #: this, and the process is killed.
 PROCESS_PING_TIMEOUT = 10.0
 
-# How often a wait re-reads the thing it waits for (an OS death, the wire
-# reporting an ordered death): nothing signals either, so both poll.
+# How often the wait for an OS death re-reads the process: nothing signals that,
+# so it polls. The wait for the end of the wire does not — that one is a future.
 WAIT_POLL_INTERVAL = 0.05
 
 __all__ = [
+    "DROP_CONNECTION_OP_PATH",
+    "DROP_USER_OP_PATH",
     "PING_OP_PATH",
     "PROCESS_PING_INTERVAL",
     "PROCESS_PING_TIMEOUT",
+    "QUIT_OP_PATH",
+    "QUIT_TIMEOUT_SECONDS",
     "WORKER_ENV_VAR",
     "WorkerHandler",
 ]
@@ -110,8 +167,10 @@ class WorkerHandler:
     """One handler of a group: its wire, its process, its users, its last photo.
 
     Args:
-        group_handler: the group this handler belongs to; a wild death is told to
-            it as ``on_worker_abort(self)``.
+        group_handler: the group this handler belongs to; the end of a process is
+            told to it as ``ping_now()``, it reads ``state`` at that round, and
+            its ``envelope_handler`` is the way up for everything the process
+            announces.
         name: the handler's name, minted by the group as ``<group>_<counter>``;
             it names the socket too, so it is short.
         instance_dir: the directory holding the sockets of this installation.
@@ -156,45 +215,39 @@ class WorkerHandler:
         self.process_ping_interval = process_ping_interval
         self.process_ping_timeout = process_ping_timeout
         self.process: subprocess.Popen[bytes] | None = None
+        #: Where the process under this handler is in its life: ``starting``,
+        #: ``running``, ``quitting``, ``quitted``, ``aborted``.
+        #: Written only here; the group reads it at its round.
+        self.state = "starting"
         #: The last photo the process sent, on whatever envelope carried it:
-        #: memory, load, counts, per-connection clocks. Written by the wire.
+        #: memory, load, counts, per-connection clocks. Filed by this handler's
+        #: own layer of the chain.
         self.worker_snapshot: dict[str, Any] | None = None
+        self.envelope_handler = WorkerEnvelopeHandler(self, group_handler.envelope_handler)
         self.connector = WorkerConnector(self, self.instance_dir / f"{name}.sock")
         self._logger = logging.getLogger(__name__)
         self._hosted_users: set[str] = set()
-        self._governed_death = False
+        self._death_wait: asyncio.Future[None] | None = None
         self._listening = False
+        self._last_envelope_ts = 0.0
 
     @property
-    def global_register_item_tytx(self) -> str:
-        """The whole global store, TYTX-encoded, for the presentation reply.
+    def requires_beat_ping(self) -> bool:
+        """Whether nothing has been heard from this process for a whole cadence.
 
         Returns:
-            The placeholder: the master lives on the Commander, which is built
-            in Macro 3, and the store cannot be answered before its owner
-            exists.
+            True when the last envelope is older than ``process_ping_interval``.
         """
-        return "not yet ready --- wait next phase"
+        return time.monotonic() - self._last_envelope_ts >= self.process_ping_interval
 
     @property
     def hosted_users(self) -> set[str]:
-        """The users living on this handler's process.
-
-        Returns:
-            The live set — the group reads it to know who a death took with it.
-            Its single writer is the fold, one level up.
-        """
+        """The users living on this handler's process; the fold is its single writer."""
         return self._hosted_users
 
     @property
     def spawn_payload(self) -> dict[str, Any]:
-        """The child's whole configuration, strings and numbers only.
-
-        Returns:
-            The object that travels JSON-encoded in ``GENRO_ASGI_WORKER``: the
-            handler's name, the address of its socket, the deposit root, the two
-            pool sizes, the worker class and its grammar.
-        """
+        """The child's whole configuration, as it travels JSON-encoded in ``GENRO_ASGI_WORKER``."""
         return {
             "name": self.name,
             "uds_url": self.connector.address,
@@ -205,19 +258,57 @@ class WorkerHandler:
             "kwargs": self.worker_kwargs,
         }
 
+    def assign_user(self, user: str, occupancy_percent: float) -> None:
+        """Judge whether this worker takes one more user, and refuse by raising.
+
+        Args:
+            user: the identity being placed here.
+            occupancy_percent: what he is expected to cost, on the same scale the
+                photo is read in.
+
+        Raises:
+            WorkerQuittingError: its process is leaving or is gone.
+            AssignmentRefused: it has not presented itself yet.
+            NoRoomError: the projected count is over this worker's setpoint.
+
+        Nothing is written.
+        """
+        if self.state in ("quitting", "quitted", "aborted"):
+            raise WorkerQuittingError(user, f"{self.name} is {self.state}")
+        if self.state != "running":
+            raise AssignmentRefused(user, f"{self.name} is {self.state}")
+        projected = (
+            self.group_handler.get_occupancy_percent(self.worker_snapshot) + occupancy_percent
+        )
+        if projected > self.group_handler.get_worker_cap(self):
+            raise NoRoomError(user, f"{self.name} would stand at {projected:.1f}%")
+
+    def read_envelope(self, envelope: dict[str, Any]) -> dict[str, Any]:
+        """Hand an envelope that arrived from the process to the chain.
+
+        Args:
+            envelope: the payload as it came off the wire.
+
+        Returns:
+            What goes back down, as the chain composed it — nothing at all when
+            there is no envelope going the other way.
+
+        Stamps the instant this process was last heard from.
+        """
+        self._last_envelope_ts = time.monotonic()
+        return self.envelope_handler(envelope)
+
     async def launch_process(self) -> None:
         """Open the wire if it is closed, spawn the child, wait for it to present itself.
 
         Raises:
-            RuntimeError: a process is already alive under this handler — two of
-                them under one handler is the thing the whole surveillance exists
-                to make impossible.
+            RuntimeError: a process is already alive under this handler.
             TimeoutError: the child never presented itself within
-                ``process_ping_timeout``; it is killed before the raise, so no
-                unpresented process is left behind.
+                ``process_ping_timeout``; it is killed before the raise.
 
-        Sets ``process``, and binds the socket on the first launch — a
-        successor finds the wire already listening at the same address.
+        Sets ``process`` and ``state`` — ``starting`` while the child is on its
+        way, ``running`` once it has presented itself — and binds the socket on
+        the first launch.
         """
         if self.process is not None and self.process.poll() is None:
             raise RuntimeError(
@@ -226,6 +317,7 @@ class WorkerHandler:
         if not self._listening:
             await self.connector.start()
             self._listening = True
+        self.state = "starting"
         env = dict(os.environ)
         env[WORKER_ENV_VAR] = json.dumps(self.spawn_payload)
         self.process = subprocess.Popen(
@@ -247,14 +339,10 @@ class WorkerHandler:
             )
             await self.terminate_process()
             raise
+        self.state = "running"
 
     async def terminate_process(self) -> None:
-        """Kill the process group and wait until the OS has buried it.
-
-        SIGKILL, no escalation and no grace: a grace period is the users
-        waiting. Clears ``process``; the wire's end tells the rest of the
-        machine, which is why nothing is announced from here.
-        """
+        """Kill the process group and wait until the OS has buried it; clears ``process``."""
         process = self.process
         self._logger.info("Worker %s: killing its process (pid %s)", self.name, process.pid)
         self._kill_process_group()
@@ -262,42 +350,42 @@ class WorkerHandler:
             await asyncio.sleep(WAIT_POLL_INTERVAL)
         self.process = None
 
-    async def restart_process(self) -> None:
-        """Kill the process and launch a fresh one on the same name and socket.
+    async def quit_process(self) -> None:
+        """Ask the process to leave, and wait until it is gone.
 
-        Raises:
-            RuntimeError: the wire never reported the ordered death, so the
-                successor cannot be let in without risking two processes.
-
-        Marks the death as GOVERNED — that mark is the whole difference between
-        a transparent relaunch and a wild death — then terminates, waits for the
-        wire to report that death, and launches the successor. OS level only:
-        whoever orders a relaunch has already closed the tap and had the users
-        frozen.
-
-        The mark is set ONLY when a child is really on the wire: a wire with
-        nobody on it reports nothing, and a mark left behind for a report that
-        never comes would make the handler deaf to its next wild death.
+        Sets ``quitting`` and parks the wait its death resolves. Past
+        ``QUIT_TIMEOUT_SECONDS`` on either leg the wait is dropped and the process
+        is killed, so the death that follows is an abort.
         """
-        self._logger.info("Worker %s: restarting its process — the death is ordered", self.name)
-        self._governed_death = self.connector.connected
-        await self.terminate_process()
-        if self._governed_death:
-            await self._wait_ordered_death_seen()
-        await self.launch_process()
+        self._logger.info("Worker %s: asked to leave", self.name)
+        self.state = "quitting"
+        death = self._park_death_wait()
+        try:
+            await self.connector.call(QUIT_OP_PATH, timeout=QUIT_TIMEOUT_SECONDS)
+            await asyncio.wait_for(death, QUIT_TIMEOUT_SECONDS)
+        except TimeoutError:
+            self._death_wait = None
+            self._logger.warning(
+                "Worker %s: still here %.1fs after being asked to leave — killing its process",
+                self.name,
+                QUIT_TIMEOUT_SECONDS,
+            )
+            await self.terminate_process()
 
-    async def ping_process(self) -> None:
+    async def ping_process(self) -> dict[str, Any] | None:
         """One health beat: are you alive? Kill the process if it stays mute.
 
-        The photo is not asked for here — it rides whatever envelope the child
-        sends, ``worker_snapshot`` slot, and the wire files it. A missed beat is
-        repeated ONCE past the timeout, against a lost packet; a process mute to
-        both is killed, and the wire that dies with it denounces the death as
-        wild.
+        Returns:
+            The payload the child answered with, or None when it answered neither
+            beat and its process was killed for it.
+
+        Acts on the process when it stays mute: the end of the wire writes the state.
         """
         for beat in (1, 2):
             try:
-                await self.connector.call(PING_OP_PATH, timeout=self.process_ping_timeout)
+                return await self.connector.call(
+                    PING_OP_PATH, timeout=self.process_ping_timeout
+                )
             except TimeoutError:
                 self._logger.warning(
                     "Worker %s: beat %s of 2 unanswered after %.1fs",
@@ -305,42 +393,28 @@ class WorkerHandler:
                     beat,
                     self.process_ping_timeout,
                 )
-            else:
-                return
         self._logger.warning("Worker %s: mute to both beats — killing its process", self.name)
         await self.terminate_process()
-
-    def on_child_message(self, frame: Frame) -> None:
-        """An EVENT arrived from the process.
-
-        Args:
-            frame: the envelope as it came off the wire.
-
-        Returns nothing and changes nothing: the road that carries an
-        announcement up to the Commander is built in Macro 2, and inventing a
-        consumer here would be deciding the protocol.
-        """
-        self._logger.info(
-            "Worker %s: EVENT %s from its process, not consumed yet", self.name, frame.path
-        )
+        return None
 
     def on_child_lost(self) -> None:
-        """The wire died: transparent if this handler ordered it, denounced if not.
+        """The wire died: the parked wait says whether anybody was expecting it.
 
-        Consumes the governed mark. A wild death leaves its line in the
-        orchestration log and reaches the group as ``on_worker_abort(self)`` —
-        and the handler's part ends there.
+        Sets ``state`` — ``quitted`` when a wait was live, ``aborted`` when the
+        death was nobody's order — and rings the group's wake.
         """
-        if self._governed_death:
-            self._governed_death = False
-            self._logger.info("Worker %s: its process died as ordered", self.name)
-            return
-        self._logger.warning(
-            "Worker %s: WILD death of its process, %s users on board",
-            self.name,
-            len(self._hosted_users),
-        )
-        self.group_handler.on_worker_abort(self)
+        ordered = self._settle_death_wait()
+        if ordered:
+            self.state = "quitted"
+            self._logger.info("Worker %s: its process left as it was asked to", self.name)
+        else:
+            self.state = "aborted"
+            self._logger.warning(
+                "Worker %s: WILD death of its process, %s users on board",
+                self.name,
+                len(self._hosted_users),
+            )
+        self.group_handler.ping_now()
 
     def _kill_process_group(self) -> None:
         """SIGKILL the child's whole process group; one already gone is the same outcome."""
@@ -352,19 +426,21 @@ class WorkerHandler:
         except ProcessLookupError:
             pass
 
-    async def _wait_ordered_death_seen(self) -> None:
-        """Wait for the wire to have reported the ordered death; the successor needs it free.
+    def _park_death_wait(self) -> asyncio.Future[None]:
+        """Park the wait an ordered death resolves; its being live IS the order."""
+        self._death_wait = asyncio.get_running_loop().create_future()
+        return self._death_wait
 
-        A report that never comes gives back the mark before raising: a handler
-        left marked would swallow the denunciation of its next wild death.
+    def _settle_death_wait(self) -> bool:
+        """Resolve the parked wait if one is live, and say whether one was.
+
+        Returns:
+            True when somebody was waiting; a wait already given up counts for nobody.
         """
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + self.process_ping_timeout
-        while self._governed_death:
-            if loop.time() >= deadline:
-                self._governed_death = False
-                raise RuntimeError(
-                    f"WorkerHandler {self.name}: the wire never reported the ordered death"
-                )
-            await asyncio.sleep(WAIT_POLL_INTERVAL)
+        death = self._death_wait
+        self._death_wait = None
+        if death is None or death.done():
+            return False
+        death.set_result(None)
+        return True
 

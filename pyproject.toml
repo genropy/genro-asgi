@@ -110,6 +110,14 @@ exclude = ["tests/", ".*/tests/"]
 module = "genro_asgi.channel.client"
 disable_error_code = ["misc", "union-attr"]
 
+# @every marks its wrapper with the declared cadence (every_beats) and reads it
+# back at call time, so a test can move a cadence without touching the caller.
+# functools.wraps returns a _Wrapped mypy models as attribute-less; the pattern is
+# the ordinary function-attribute one, and only that code is silenced here.
+[[tool.mypy.overrides]]
+module = "genro_asgi.spa.orchestration.beats"
+disable_error_code = ["attr-defined"]
+
 # CommunicationMixin forwards __call__ cooperatively to the next class in
 # the MRO (mixins compose BEFORE BaseServer, D16). mypy sees the mixin's
 # static superclass as object and calls super().__call__ "undefined",

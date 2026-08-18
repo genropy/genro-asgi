@@ -22,13 +22,50 @@ Its foundations, in the order they are built: ``FreezeHandler``, the deposit on
 disk and the only place in the project that talks to the filesystem directly;
 ``WorkerConnector``, the wire of one worker; ``WorkerHandler``, which owns one
 process and its death; ``SpaWorker``, the registers that process serves from;
-``WorkerEntry``, the shell that runs one of those workers in a child process.
+``WorkerEntry``, the shell that runs one of those workers in a child process;
+the three ``EnvelopeHandler`` layers, the chain everything a process announces
+climbs; ``SpaCommander``, the vertex that owns the indexes of the whole machine
+and the master of the store every worker replicates; ``GroupHandler``, the
+workers of one grammar, where a user of theirs lands and what the group does
+about its own shape.
 """
 
+from .envelope_handler import (
+    CommanderEnvelopeHandler,
+    EnvelopeHandler,
+    GroupEnvelopeHandler,
+    WorkerEnvelopeHandler,
+)
+from .exceptions import (
+    AssignmentRefused,
+    NoRoomError,
+    UserOnHold,
+    WorkerQuittingError,
+)
+from .beats import every
 from .freeze_handler import FreezeHandler
+from .group_handler import GroupHandler
+from .spa_commander import SpaCommander
 from .spa_worker import SpaWorker
 from .worker_connector import WorkerConnector
 from .worker_entry import WorkerEntry
 from .worker_handler import WorkerHandler
 
-__all__ = ["FreezeHandler", "SpaWorker", "WorkerConnector", "WorkerEntry", "WorkerHandler"]
+__all__ = [
+    "AssignmentRefused",
+    "CommanderEnvelopeHandler",
+    "EnvelopeHandler",
+    "FreezeHandler",
+    "GroupEnvelopeHandler",
+    "GroupHandler",
+    "NoRoomError",
+    "SpaCommander",
+    "SpaWorker",
+    "UserOnHold",
+    "WorkerConnector",
+    "WorkerEntry",
+    "WorkerEnvelopeHandler",
+    "WorkerHandler",
+    "WorkerQuittingError",
+    "every",
+]

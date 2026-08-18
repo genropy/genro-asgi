@@ -1,0 +1,8 @@
+{
+  "foreman": "wf:orchestration-m3-commander-groups:foreman-3",
+  "since": "2026-08-18T05:15:51Z",
+  "history": [
+    {"foreman": "wf:orchestration-m3-commander-groups:foreman", "deposed": "2026-08-17T15:10:00Z"},
+    {"foreman": "wf:orchestration-m3-commander-groups:foreman-2", "deposed": "2026-08-18T05:15:51Z"}
+  ]
+}

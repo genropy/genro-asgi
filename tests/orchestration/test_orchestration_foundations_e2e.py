@@ -22,17 +22,17 @@ side through a FreezeHandler of its own, over the same root the child was given.
 
 The story: the handler launches its process, which presents itself — carrying
 its first photo — and is answered with the whole global store; the beat asks
-whether it is alive; the child
-takes a user's semaphore, announces it, parks that user's connection under it
-and gives the semaphore back; it takes it again, and while it holds it the
-process goes mute and the surveillance kills it.
+whether it is alive; the child takes a user's semaphore, parks that user's
+connection under it and gives the semaphore back; it takes it again, and while it
+holds it the process goes mute and the surveillance kills it.
 
-**What the death leaves is the point.** The handler denounces the wild death to
-its group, carrying itself and the users that were on board — and stops there.
-The parcel is still in the deposit, the semaphore of the interrupted operation
-is still held by a process that no longer exists. Macro 1 cleans nothing: the
-sweep of the traces belongs to the Commander, which does not exist yet, and this
-test is the picture it will inherit.
+**What the death leaves is the point.** The handler writes ``aborted`` — the
+death nobody was waiting for — rings its group's wake and stops there; the users
+that were on board are still on its list for whoever reads it at that round. The
+parcel is still in the deposit, the semaphore of the interrupted operation is
+still held by a process that no longer exists. Macro 1 cleans nothing: the sweep
+of the traces belongs to the Commander, which does not exist yet, and this test
+is the picture it will inherit.
 
 The sockets and the deposit live under a short ``mkdtemp`` root: the system caps
 a UDS path at about a hundred characters and pytest's own directory is already
@@ -41,80 +41,52 @@ past it, which is the very reason worker names are short.
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import os
-import shutil
-import tempfile
 import time
-from pathlib import Path
 from typing import Any
 
 import pytest
+from genro_tytx import to_tytx
 
 from genro_asgi.spa.orchestration import FreezeHandler, WorkerHandler
 
 from .child_stub import (
-    EMIT_EVENT_OP,
-    GO_MUTE_EVENT,
+    GO_MUTE_OP,
     RELEASE_LOCK_OP,
-    STUB_EVENT,
     TAKE_LOCK_OP,
     WRITE_CONNECTION_REGISTER_ITEM_OP,
 )
+from .group_stub import GroupStub
+from .conftest import wait_for
 
 CHILD_MODULE = "tests.orchestration.child_stub"
 PARKED_CONNECTION = {"cid": "c-1", "pages": ["main", "invoices"]}
 
 
-class GroupStub:
-    """The GroupHandler seen from below: what it is told, and who was on board when."""
-
-    def __init__(self) -> None:
-        self.aborted: list[Any] = []
-        self.users_on_board: list[set[str]] = []
-
-    def on_worker_abort(self, worker_handler: Any) -> None:
-        self.aborted.append(worker_handler)
-        self.users_on_board.append(set(worker_handler.hosted_users))
+@pytest.fixture
+def group(short_root):
+    return GroupStub(short_root / "frozen_users")
 
 
 @pytest.fixture
-def group():
-    return GroupStub()
-
-
-@pytest.fixture
-def foundations_root():
-    """The short root holding both the socket directory and the deposit."""
-    root = Path(tempfile.mkdtemp(prefix="gnre2e_"))
-    yield root
-    shutil.rmtree(root, ignore_errors=True)
-
-
-@pytest.fixture
-def deposit(foundations_root):
+def deposit(short_root):
     """The deposit as the parent reads it — the same root the child is given."""
-    return FreezeHandler(foundations_root / "frozen_users")
+    return FreezeHandler(short_root / "frozen_users")
 
 
 @pytest.fixture
-async def handler(foundations_root, group, monkeypatch):
+async def handler(short_root, group, repo_on_pythonpath):
     """The handler under test; no process and no socket of its own outlives the test."""
-    repo_root = Path(__file__).resolve().parents[2]
-    inherited = os.environ.get("PYTHONPATH", "")
-    monkeypatch.setenv(
-        "PYTHONPATH", os.pathsep.join([str(repo_root), inherited]).rstrip(os.pathsep)
-    )
     worker_handler = WorkerHandler(
         group,
         "standard_0001",
-        instance_dir=foundations_root / "i",
-        frozen_users_path=foundations_root / "frozen_users",
+        instance_dir=short_root / "i",
+        frozen_users_path=short_root / "frozen_users",
         entry_module=CHILD_MODULE,
         worker_kwargs={"group": "standard"},
         process_ping_timeout=1.0,
     )
+    group.worker_handler = worker_handler
     yield worker_handler
     if worker_handler.process is not None:
         worker_handler.process.kill()
@@ -126,14 +98,6 @@ async def order(handler: WorkerHandler, path: str, data: Any = None) -> Any:
     """Drive one order of the child through the wire and give back what it answered."""
     payload = await handler.connector.call(path, data, timeout=5.0)
     return payload["result"]
-
-
-async def wait_for(condition, timeout: float = 5.0) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while not condition():
-        if asyncio.get_running_loop().time() >= deadline:
-            raise TimeoutError("the foundations never reached the awaited state")
-        await asyncio.sleep(0.01)
 
 
 async def test_a_worker_is_born_works_dies_wild_and_leaves_its_traces_behind(
@@ -155,12 +119,13 @@ async def test_a_worker_is_born_works_dies_wild_and_leaves_its_traces_behind(
     }
 
     # It is alive: the beat asks that and nothing else, and the photo riding the
-    # answer is the first one that knows the store it was handed.
+    # answer is the first one that knows the store it was handed — the master's
+    # own, which came down as the answer to its presentation.
     await handler.ping_process()
     assert handler.worker_snapshot == {
         "pid": handler.process.pid,
         "name": "standard_0001",
-        "global_store": handler.global_register_item_tytx,
+        "global_store": to_tytx(group.spa_commander.global_register, "json"),
     }
 
     # It takes the semaphore of one of its users. Nothing is announced upward:
@@ -169,10 +134,6 @@ async def test_a_worker_is_born_works_dies_wild_and_leaves_its_traces_behind(
     assert await order(handler, TAKE_LOCK_OP, {"user": "mario"}) == {"taken": True}
     assert deposit.lock_holder("mario") == "standard_0001"
     assert deposit.read_connection_register_item("mario", "c-1") is None
-
-    # An EVENT of its own reaches the handler: the road exists and is walked.
-    assert await order(handler, EMIT_EVENT_OP, {"any": "payload"}) == {"emitted": STUB_EVENT}
-    await wait_for(lambda: STUB_EVENT in caplog.text)
 
     # It parks that user's connection under the semaphore it holds, and the
     # parent reads back from the deposit exactly what the child wrote.
@@ -199,10 +160,11 @@ async def test_a_worker_is_born_works_dies_wild_and_leaves_its_traces_behind(
     assert await order(handler, TAKE_LOCK_OP, {"user": "mario"}) == {"taken": True}
     assert deposit.lock_holder("mario") == "standard_0001"
 
-    # It goes mute: up, and no longer serving. The beat is repeated once past
-    # the timeout and then the process group is killed and its death awaited.
+    # It goes mute: up, and no longer serving. That order is the last thing it
+    # answers. The beat is repeated once past the timeout and then the process
+    # group is killed and its death awaited.
     condemned = handler.process
-    await handler.connector.send_event(GO_MUTE_EVENT)
+    assert await order(handler, GO_MUTE_OP) == {"muted": True}
     started = time.monotonic()
     await handler.ping_process()
     elapsed = time.monotonic() - started
@@ -211,9 +173,11 @@ async def test_a_worker_is_born_works_dies_wild_and_leaves_its_traces_behind(
     assert condemned.poll() is not None
     assert handler.process is None
 
-    # The death was nobody's order: the handler denounces it to its group,
-    # carrying itself and the users that were on board, and its job ends there.
-    await wait_for(lambda: group.aborted == [handler])
+    # The death was nobody's order: the handler writes `aborted`, rings its
+    # group's wake, and its job ends there — at that round the group reads the
+    # state and the users that were on board.
+    await wait_for(lambda: group.wakes == ["aborted"])
+    assert handler.state == "aborted"
     assert group.users_on_board == [{"mario", "anna"}]
     assert handler.connector.connected is False
     assert handler.worker_snapshot["pid"] == condemned.pid

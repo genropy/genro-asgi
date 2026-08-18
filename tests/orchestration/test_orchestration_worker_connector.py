@@ -29,9 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import shutil
-import tempfile
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -40,10 +37,11 @@ from genro_asgi.channel.frame import REGISTER_METHOD, REGISTER_PATH, Frame, Fram
 from genro_asgi.spa.orchestration import WorkerConnector
 from genro_asgi.spa.orchestration.worker_connector import (
     CALL_METHOD,
-    EVENT_METHOD,
     GLOBAL_STORE_KEY,
     REPLY_METHOD,
 )
+
+from .conftest import wait_for
 
 
 class ChildPeer:
@@ -108,22 +106,30 @@ class ChildPeer:
                         id=frame.id,
                         method=REPLY_METHOD,
                         path=frame.path,
-                        data={"result": self.reply_result, "events": []},
+                        data={"result": self.reply_result, "worker_events": []},
                     )
                 )
 
 
 class HandlerStub:
-    """The WorkerHandler seen by its wire: what it hands over, what it is told."""
+    """The WorkerHandler seen by its wire: the envelopes it takes, what it is told.
+
+    The wire reads nothing of what arrives: it hands the envelope over whole and
+    writes back down whatever comes out. So the handler of these tests is the fold
+    — it keeps the envelopes it was given, and answers with the store, which is
+    what the real chain composes for a newborn.
+    """
 
     def __init__(self, name: str = "standard_0001") -> None:
         self.name = name
         self.global_register_item_tytx = "::T::the whole store"
-        self.messages: list[Frame] = []
+        self.envelopes: list[dict[str, Any]] = []
         self.losses = 0
 
-    def on_child_message(self, frame: Frame) -> None:
-        self.messages.append(frame)
+    def read_envelope(self, envelope: dict[str, Any]) -> dict[str, Any]:
+        """Keep what arrived, and answer with what goes down."""
+        self.envelopes.append(envelope)
+        return {GLOBAL_STORE_KEY: self.global_register_item_tytx}
 
     def on_child_lost(self) -> None:
         self.losses += 1
@@ -135,26 +141,11 @@ def handler():
 
 
 @pytest.fixture
-def socket_root():
-    root = tempfile.mkdtemp(prefix="gnrwire_")
-    yield Path(root)
-    shutil.rmtree(root, ignore_errors=True)
-
-
-@pytest.fixture
-async def connector(socket_root, handler):
-    wire = WorkerConnector(handler, socket_root / "i" / f"{handler.name}.sock")
+async def connector(short_root, handler):
+    wire = WorkerConnector(handler, short_root / "i" / f"{handler.name}.sock")
     await wire.start()
     yield wire
     await wire.stop()
-
-
-async def wait_for(condition, timeout: float = 5.0) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while not condition():
-        if asyncio.get_running_loop().time() >= deadline:
-            raise TimeoutError("the wire never reached the awaited state")
-        await asyncio.sleep(0.01)
 
 
 async def test_the_socket_is_bound_in_a_private_directory(connector):
@@ -164,8 +155,8 @@ async def test_the_socket_is_bound_in_a_private_directory(connector):
     assert connector.connected is False
 
 
-async def test_a_stale_socket_is_unlinked_before_the_bind(socket_root, handler):
-    socket_path = socket_root / "i" / f"{handler.name}.sock"
+async def test_a_stale_socket_is_unlinked_before_the_bind(short_root, handler):
+    socket_path = short_root / "i" / f"{handler.name}.sock"
     socket_path.parent.mkdir(mode=0o700, parents=True)
     socket_path.write_bytes(b"what the crash left behind")
 
@@ -198,7 +189,7 @@ async def test_a_call_travels_and_its_reply_comes_back(connector):
 
     payload = await connector.call("/probe", {"kwargs": {}})
 
-    assert payload == {"result": {"alive": True}, "events": []}
+    assert payload == {"result": {"alive": True}, "worker_events": []}
     assert child.received[0].method == CALL_METHOD
     assert child.received[0].path == "/probe"
     assert child.received[0].data == {"kwargs": {}}
@@ -206,29 +197,18 @@ async def test_a_call_travels_and_its_reply_comes_back(connector):
     await child.close()
 
 
-async def test_an_event_from_the_child_reaches_the_handler(connector, handler):
+async def test_an_envelope_that_is_not_a_reply_has_no_lane_and_is_denounced(
+    connector, handler, caplog
+):
     child = ChildPeer(str(connector.socket_path))
     await child.present()
 
-    await child.send(EVENT_METHOD, "/lock_taken", {"user": "mario"})
-    await wait_for(lambda: len(handler.messages) == 1)
+    with caplog.at_level("WARNING"):
+        await child.send(CALL_METHOD, "/lock_taken", {"user": "mario"})
+        await wait_for(lambda: "Unexpected envelope" in caplog.text)
 
-    assert handler.messages[0].path == "/lock_taken"
-    assert handler.messages[0].data == {"user": "mario"}
-
-    await child.close()
-
-
-async def test_an_event_reaches_the_child(connector):
-    child = ChildPeer(str(connector.socket_path))
-    await child.present()
-
-    await connector.send_event("/global_store_change", {"version": 8})
-    await child.wait_frames(1)
-
-    assert child.received[0].method == EVENT_METHOD
-    assert child.received[0].path == "/global_store_change"
-    assert child.received[0].data == {"version": 8}
+    assert f"Unexpected envelope {CALL_METHOD}" in caplog.text
+    assert handler.losses == 0
 
     await child.close()
 
@@ -259,8 +239,8 @@ async def test_a_call_in_flight_dies_with_the_child(connector):
         await connector.call("/freeze_everybody")
 
 
-async def test_a_deliberate_stop_announces_no_death(socket_root, handler):
-    wire = WorkerConnector(handler, socket_root / "i" / f"{handler.name}.sock")
+async def test_a_deliberate_stop_announces_no_death(short_root, handler):
+    wire = WorkerConnector(handler, short_root / "i" / f"{handler.name}.sock")
     await wire.start()
     child = ChildPeer(str(wire.socket_path))
     await child.present()
@@ -300,7 +280,7 @@ async def test_a_second_child_on_a_taken_wire_is_refused(connector):
     assert await intruder.stream.read() is None
 
     resident.reply_result = "still here"
-    assert await connector.call("/probe") == {"result": "still here", "events": []}
+    assert await connector.call("/probe") == {"result": "still here", "worker_events": []}
 
     await resident.close()
 
@@ -308,7 +288,7 @@ async def test_a_second_child_on_a_taken_wire_is_refused(connector):
 async def test_a_child_that_does_not_present_itself_is_refused(connector):
     intruder = ChildPeer(str(connector.socket_path))
     await intruder.connect_without_presenting()
-    await intruder.stream.write(Frame(method=EVENT_METHOD, path="/whatever"))
+    await intruder.stream.write(Frame(method=CALL_METHOD, path="/whatever"))
 
     assert await intruder.stream.read() is None
     assert connector.connected is False
@@ -317,5 +297,3 @@ async def test_a_child_that_does_not_present_itself_is_refused(connector):
 async def test_calling_a_wire_with_no_child_is_an_error(connector):
     with pytest.raises(ConnectionError):
         await connector.call("/probe")
-    with pytest.raises(ConnectionError):
-        await connector.send_event("/global_store_change")

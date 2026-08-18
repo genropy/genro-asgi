@@ -37,6 +37,7 @@ import time
 import pytest
 
 from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker
+from genro_asgi.spa.orchestration.worker_connector import WORKER_SNAPSHOT_KEY
 
 WORKER_NAME = "standard_0001"
 OTHER_WORKER = "standard_0002"
@@ -102,7 +103,7 @@ def worker(deposit):
 
 def announced(worker):
     """The protocol names queued for the envelope out, in order."""
-    return [event["op"] for event in worker.events]
+    return [event["op"] for event in worker.worker_events]
 
 
 async def wait_until(condition, timeout=5.0):
@@ -178,7 +179,7 @@ async def test_a_row_that_is_not_active_is_left_to_the_vertex(worker):
 
 
 async def test_the_valve_is_one_more_reason_for_a_cession(deposit):
-    worker = build_worker(deposit, user_idle_freeze_delay=10)
+    worker = build_worker(deposit, user_idle_freeze_minutes=0.5)
     worker.add_page("page-idle", "cid-idle", "mario")
     worker.add_page("page-live", "cid-live", "anna")
     age_user(worker, "mario", 60)
@@ -191,13 +192,29 @@ async def test_the_valve_is_one_more_reason_for_a_cession(deposit):
 
 
 async def test_the_expiry_wins_over_the_valve_on_the_same_user(deposit):
-    worker = build_worker(deposit, user_idle_freeze_delay=10)
+    worker = build_worker(deposit, user_idle_freeze_minutes=0.5)
     worker.add_page("page-1", "cid-a", "mario")
     age_user(worker, "mario", 3600)
 
     transfers = worker.plan_transfers(expiry_delay=600)
 
     assert transfers["mario"][1] == "X"
+
+
+async def test_a_flag_posed_puts_the_photo_on_the_next_envelope_out(deposit):
+    # A photo that stays fresh for an hour: nothing the throttle knows about
+    # would put another one on the wire before then.
+    worker = build_worker(deposit, worker_snapshot_ttl=3600)
+    worker.add_page("page-1", "cid-a", "mario")
+    worker._outbound({})
+    assert WORKER_SNAPSHOT_KEY not in worker._outbound({})
+
+    worker.plan_transfers(transfer_users=["mario"])
+
+    # A flag is a promise the vertex has to read: without the photo carrying it,
+    # a departure settled on the last one would count this user as kept.
+    envelope = worker._outbound({})
+    assert envelope[WORKER_SNAPSHOT_KEY]["users"]["mario"]["transfer_flag"] == "T"
 
 
 # ----------------------------------------------------------------------
@@ -221,13 +238,13 @@ async def test_the_gate_holds_the_departure_until_its_delay_has_passed(worker, d
 
 async def test_a_ceded_user_leaves_with_his_placement_to_be_assigned(worker):
     worker.add_page("page-1", "cid-a", "mario")
-    worker.events.clear()
+    worker.worker_events.clear()
     worker.plan_transfers(transfer_users=["mario"])
 
     await worker.execute_transfers()
 
     assert announced(worker) == ["user_frozen"]
-    assert worker.events[0] == {
+    assert worker.worker_events[0] == {
         "op": "user_frozen",
         "worker": WORKER_NAME,
         "user": "mario",
@@ -237,10 +254,10 @@ async def test_a_ceded_user_leaves_with_his_placement_to_be_assigned(worker):
     assert worker.page_register == {}
 
 
-async def test_the_expired_are_dropped_with_their_announcements(worker, deposit):
+async def test_the_expired_are_dropped_with_their_worker_events(worker, deposit):
     worker.add_page("page-1", "cid-a", "ugo")
     age_user(worker, "ugo", 3600)
-    worker.events.clear()
+    worker.worker_events.clear()
     worker.plan_transfers(expiry_delay=600)
 
     await worker.execute_transfers()
@@ -300,7 +317,7 @@ async def test_a_call_closing_before_the_gate_takes_nobody_away(worker):
 async def test_a_call_closing_on_a_user_nobody_asked_for_changes_nothing(worker):
     worker.add_page("page-1", "cid-a", "mario")
     worker.open_request("mario")
-    worker.events.clear()
+    worker.worker_events.clear()
 
     await worker.close_request("mario")
 
@@ -314,12 +331,12 @@ async def test_a_call_closing_on_a_user_nobody_asked_for_changes_nothing(worker)
 
 
 async def test_the_valve_parks_whoever_only_beats_and_spares_the_active(deposit):
-    worker = build_worker(deposit, user_idle_freeze_delay=10)
+    worker = build_worker(deposit, user_idle_freeze_minutes=0.5)
     worker.add_page("page-idle", "cid-idle", "mario")
     worker.add_page("page-live", "cid-live", "anna")
     age_user(worker, "mario", 60)
     worker.refresh_chain("page-idle")
-    worker.events.clear()
+    worker.worker_events.clear()
 
     worker.plan_transfers()
     await worker.execute_transfers()
@@ -327,18 +344,18 @@ async def test_the_valve_parks_whoever_only_beats_and_spares_the_active(deposit)
     assert "mario" not in worker.user_register
     assert worker.user_register["anna"]["state"] == "active"
     assert worker.connection_register.keys() == {"cid-live"}
-    assert worker.events == [
+    assert worker.worker_events == [
         {"op": "user_frozen", "worker": WORKER_NAME, "user": "mario", "placement": None}
     ]
 
     worker.plan_transfers()
     await worker.execute_transfers()
 
-    assert len(worker.events) == 1
+    assert len(worker.worker_events) == 1
 
 
 async def test_the_valve_leaves_nothing_of_him_behind(deposit):
-    worker = build_worker(deposit, user_idle_freeze_delay=10)
+    worker = build_worker(deposit, user_idle_freeze_minutes=0.5)
     worker.add_page("page-1", "cid-a", "mario")
     worker.user_register["mario"]["store"]["cart.total"] = 12
     age_user(worker, "mario", 60)
@@ -357,7 +374,7 @@ async def test_the_valve_leaves_nothing_of_him_behind(deposit):
 
 
 async def test_the_valve_leaves_alone_whoever_has_a_call_in_flight(deposit):
-    worker = build_worker(deposit, user_idle_freeze_delay=10)
+    worker = build_worker(deposit, user_idle_freeze_minutes=0.5)
     worker.add_page("page-1", "cid-a", "mario")
     age_user(worker, "mario", 60)
     worker.open_request("mario")
@@ -407,7 +424,7 @@ async def test_a_deposit_that_refuses_leaves_the_user_alive(tmp_path):
     deposit = RefusingDeposit(tmp_path / "frozen_users")
     worker = build_worker(deposit)
     worker.add_page("page-1", "cid-a", "mario")
-    worker.events.clear()
+    worker.worker_events.clear()
 
     frozen = await worker.freeze_user("mario")
 
@@ -441,7 +458,7 @@ async def test_a_refused_departure_does_not_keep_coming_back(tmp_path):
 
 async def test_a_row_being_adopted_is_not_parked_under_the_adoption(worker, deposit):
     worker.add_page("page-1", "cid-a", "mario")
-    worker.events.clear()
+    worker.worker_events.clear()
     worker.user_register["mario"]["state"] = "unfreezing"
 
     assert await worker.freeze_user("mario") is False
@@ -460,7 +477,7 @@ async def test_the_cycle_and_the_hook_never_park_the_same_user_twice(tmp_path):
     deposit = SlowDeposit(tmp_path / "frozen_users")
     worker = build_worker(deposit)
     worker.add_page("page-1", "cid-a", "mario")
-    worker.events.clear()
+    worker.worker_events.clear()
     worker.plan_transfers(transfer_users=["mario"])
     cycle = asyncio.ensure_future(worker.execute_transfers())
     await wait_until(deposit.writing.is_set)
@@ -481,7 +498,7 @@ async def test_a_call_born_while_the_parcels_were_written_keeps_the_user(tmp_pat
     deposit = SlowDeposit(tmp_path / "frozen_users")
     worker = build_worker(deposit)
     worker.add_page("page-1", "cid-a", "mario")
-    worker.events.clear()
+    worker.worker_events.clear()
     worker.plan_transfers(transfer_users=["mario"])
     cycle = asyncio.ensure_future(worker.execute_transfers())
     await wait_until(deposit.writing.is_set)
@@ -592,7 +609,7 @@ async def test_a_held_folder_says_once_who_is_holding_it(worker, deposit, caplog
 async def test_a_folder_nobody_gives_back_ends_the_departure_loud(deposit):
     worker = build_worker(deposit, deposit_lock_wait_limit=0.05)
     worker.add_page("page-1", "cid-a", "mario")
-    worker.events.clear()
+    worker.worker_events.clear()
     deposit.take_lock("mario", OTHER_WORKER)
 
     assert await asyncio.wait_for(worker.freeze_user("mario"), 2.0) is False
@@ -622,7 +639,7 @@ async def test_a_folder_nobody_gives_back_makes_the_adoption_raise(deposit):
 
 async def test_a_call_born_while_the_semaphore_was_waited_for_keeps_the_user(worker, deposit):
     worker.add_page("page-1", "cid-a", "mario")
-    worker.events.clear()
+    worker.worker_events.clear()
     deposit.take_lock("mario", OTHER_WORKER)
     worker.plan_transfers(transfer_users=["mario"])
     cycle = asyncio.ensure_future(worker.execute_transfers())
@@ -671,7 +688,7 @@ async def test_the_mass_cycle_gives_the_loop_back_between_two_users(worker, depo
 async def test_quit_parks_everybody_and_reaches_the_exit(worker, deposit):
     worker.add_page("page-1", "cid-a", "mario")
     worker.add_page("page-2", "cid-b", "anna")
-    worker.events.clear()
+    worker.worker_events.clear()
 
     await worker.quit()
 
@@ -680,7 +697,7 @@ async def test_quit_parks_everybody_and_reaches_the_exit(worker, deposit):
     assert deposit.read_user_register_item("mario") is not None
     assert deposit.read_user_register_item("anna") is not None
     assert announced(worker) == ["user_frozen", "user_frozen"]
-    assert all(event["placement"] is None for event in worker.events)
+    assert all(event["placement"] is None for event in worker.worker_events)
 
 
 async def test_quit_drops_the_expired_instead_of_parking_them(worker, deposit):

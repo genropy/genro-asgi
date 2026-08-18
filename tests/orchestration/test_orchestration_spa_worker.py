@@ -80,7 +80,7 @@ def freeze_connection(deposit, user, cid, parcel):
 
 def announced(worker):
     """The protocol names queued for the envelope out, in order."""
-    return [event["op"] for event in worker.events]
+    return [event["op"] for event in worker.worker_events]
 
 
 # ----------------------------------------------------------------------
@@ -93,7 +93,7 @@ def test_a_connection_arriving_anonymous_is_a_user_in_full(worker):
 
     assert item["user"] == GUEST_PREFIX + "cid-a"
     assert announced(worker) == ["new_user", "new_connection"]
-    assert worker.events[0] == {
+    assert worker.worker_events[0] == {
         "op": "new_user",
         "worker": WORKER_NAME,
         "user": GUEST_PREFIX + "cid-a",
@@ -120,12 +120,12 @@ def test_a_page_brings_the_whole_chain_into_being_bottom_up(worker):
 
 def test_a_second_page_of_a_known_connection_announces_only_itself(worker):
     worker.add_page("page-1", "cid-a", "mario")
-    worker.events.clear()
+    worker.worker_events.clear()
 
     worker.add_page("page-2", "cid-a")
 
     assert announced(worker) == ["new_page"]
-    assert worker.events[0]["user"] == "mario"
+    assert worker.worker_events[0]["user"] == "mario"
     assert worker.connection_register["cid-a"]["pages"] == {"page-1", "page-2"}
 
 
@@ -220,7 +220,7 @@ async def test_a_user_announced_frozen_with_no_parcel_still_wakes(worker, deposi
 async def test_a_second_authorised_request_finds_the_row_already_home(worker, deposit):
     freeze_store(deposit, "mario", Bag())
     await worker.adopt_user("mario")
-    worker.events.clear()
+    worker.worker_events.clear()
 
     await worker.adopt_user("mario")
 
@@ -328,7 +328,7 @@ async def test_a_parcel_no_envelope_authorises_is_never_touched(worker, deposit)
 
 async def test_a_connection_found_in_the_deposit_arrives_with_its_pages(worker, deposit):
     worker.add_page("page-1", "cid-a", "mario")
-    worker.events.clear()
+    worker.worker_events.clear()
     freeze_connection(
         deposit,
         "mario",
@@ -347,7 +347,7 @@ async def test_a_connection_found_in_the_deposit_arrives_with_its_pages(worker, 
 
 async def test_a_connection_the_deposit_never_had_starts_empty(worker, deposit):
     worker.add_page("page-1", "cid-a", "mario")
-    worker.events.clear()
+    worker.worker_events.clear()
 
     item = await worker.adopt_connection("mario", "cid-b")
 
@@ -366,7 +366,7 @@ async def test_the_first_connection_of_a_stranger_brings_its_user_with_it(worker
 
 async def test_a_connection_already_held_costs_no_trip(worker, deposit):
     worker.add_connection("cid-a", "mario")
-    worker.events.clear()
+    worker.worker_events.clear()
 
     item = await worker.adopt_connection("mario", "cid-a")
 
@@ -382,7 +382,7 @@ async def test_a_connection_already_held_costs_no_trip(worker, deposit):
 
 def test_dropping_a_page_takes_what_it_was_the_last_of(worker):
     worker.add_page("page-1", "cid-a", "mario")
-    worker.events.clear()
+    worker.worker_events.clear()
 
     worker.drop_page("page-1")
 
@@ -395,7 +395,7 @@ def test_dropping_a_page_takes_what_it_was_the_last_of(worker):
 def test_dropping_a_page_with_a_sister_leaves_the_chain_standing(worker):
     worker.add_page("page-1", "cid-a", "mario")
     worker.add_page("page-2", "cid-a")
-    worker.events.clear()
+    worker.worker_events.clear()
 
     worker.drop_page("page-1")
 
@@ -407,12 +407,12 @@ def test_dropping_a_connection_speaks_the_plural_for_its_pages(worker):
     worker.add_page("page-1", "cid-a", "mario")
     worker.add_page("page-2", "cid-a")
     worker.add_connection("cid-b", "mario")
-    worker.events.clear()
+    worker.worker_events.clear()
 
     worker.drop_connection("cid-a")
 
     assert announced(worker) == ["drop_pages", "drop_connection"]
-    assert worker.events[0]["page_ids"] == ["page-1", "page-2"]
+    assert worker.worker_events[0]["page_ids"] == ["page-1", "page-2"]
     assert worker.page_register == {}
     assert worker.user_register["mario"]["connections"] == {"cid-b"}
 
@@ -420,13 +420,13 @@ def test_dropping_a_connection_speaks_the_plural_for_its_pages(worker):
 def test_dropping_a_user_takes_everything_under_him(worker):
     worker.add_page("page-1", "cid-a", "mario")
     worker.add_page("page-2", "cid-b", "mario")
-    worker.events.clear()
+    worker.worker_events.clear()
 
     worker.drop_user("mario")
 
     assert announced(worker) == ["drop_pages", "drop_connections", "drop_user"]
-    assert worker.events[0]["page_ids"] == ["page-1", "page-2"]
-    assert worker.events[1]["session_ids"] == ["cid-a", "cid-b"]
+    assert worker.worker_events[0]["page_ids"] == ["page-1", "page-2"]
+    assert worker.worker_events[1]["session_ids"] == ["cid-a", "cid-b"]
     assert worker.page_register == {}
     assert worker.connection_register == {}
     assert worker.user_register == {}
@@ -434,7 +434,7 @@ def test_dropping_a_user_takes_everything_under_him(worker):
 
 def test_dropping_a_bare_user_says_only_that(worker):
     worker.add_user("mario")
-    worker.events.clear()
+    worker.worker_events.clear()
 
     worker.drop_user("mario")
 
@@ -450,7 +450,7 @@ def test_a_drop_asks_for_absence(worker):
 
     worker.add_page("page-1", "cid-a", "mario")
     worker.drop_page("page-1")
-    worker.events.clear()
+    worker.worker_events.clear()
 
     worker.drop_page("page-1")
     worker.drop_connection("cid-a")

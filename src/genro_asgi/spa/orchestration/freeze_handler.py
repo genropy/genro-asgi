@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""FreezeHandler: the deposit on disk, and the only direct filesystem access.
+"""FreezeHandler: the freezer on disk, and the only direct filesystem access.
 
 A user who leaves memory leaves it here. One DIRECTORY per user — named by
 ``user_to_userkey``, which goes ONE WAY: every reader starts from the identity
@@ -21,7 +21,7 @@ directory name. Inside: ``user_register_item.pickle`` for the user's own store, 
 ``connection_register_item_<cid>.pickle`` per connection, carrying that connection AND
 its pages. Beside them the semaphore, ``.lock``.
 
-**The deposit only via the deposit node.** The house rule says the filesystem
+**The freezer only through this surface.** The house rule says the filesystem
 is reached through storage nodes; this class is the declared exception, and the
 exception is what buys it: the semaphore needs real exclusive creation
 (``O_CREAT|O_EXCL``), which no logical-volume surface offers. The deal is that
@@ -33,7 +33,12 @@ and no rename: whoever holds the lock writes DIRECTLY over the destination.
 Nobody can read half a file, because a reader waits for the lock before
 looking; the half file a crash leaves behind is covered elsewhere — the dead
 worker's folder is discarded by the cleanup that follows its death, and every
-server start wipes the working deposit anyway.
+server start wipes the working freezer anyway. ONE declared exception, accepted
+by weighed probability (2026-08-18): the vertex reads headers and drops folders
+WITHOUT the lock. A parcel is complete before the vertex ever marks its user
+frozen, so the only collision left is a drop (expiry, forget) against a lazy
+wake in flight — and it ends in a loud error on a user the machine was
+forgetting anyway, never in silent corruption.
 
 **Waiting is the caller's, on its own loop.** ``take_lock`` tries once and says
 yes or no. Whoever finds it taken retries as a coroutine — never holding a
@@ -74,10 +79,10 @@ __all__ = ["CONNECTION_REGISTER_ITEM_PREFIX", "LOCK_NAME", "USER_REGISTER_ITEM_N
 
 
 class FreezeHandler:
-    """The deposit: one directory per frozen user, under one root.
+    """The freezer: one directory per frozen user, under one root.
 
     Args:
-        root_path: the deposit root, created private (0700) if missing.
+        root_path: the freezer root, created private (0700) if missing.
     """
 
     def __init__(self, root_path: str | Path):
@@ -97,8 +102,20 @@ class FreezeHandler:
         return urllib.parse.quote(user, safe="")
 
     @property
+    def storage_free_percent(self) -> float:
+        """How much of the storage the freezer lives on is still free, in percent.
+
+        Returns:
+            The free share of the whole filesystem, not the room the freezer
+            takes: what runs out is the storage, and the freezer is only one of
+            the things filling it.
+        """
+        usage = shutil.disk_usage(self.root_path)
+        return 100.0 * usage.free / usage.total
+
+    @property
     def user_folders(self) -> set[str]:
-        """The keys of every folder in the deposit, as one set.
+        """The keys of every folder in the freezer, as one set.
 
         Returns:
             The folder names, unopened. The sweep subtracts the keys of the
@@ -265,21 +282,48 @@ class FreezeHandler:
         """
         self._connection_path(user, cid).unlink(missing_ok=True)
 
-    def drop_user_folder(self, user: str) -> None:
-        """Discard everything ``user`` has in the deposit, semaphore included.
+    def drop_user_folder(self, user: str) -> bool:
+        """Discard everything ``user`` has in the freezer, semaphore included.
 
         Args:
-            user: the user leaving the deposit for good.
+            user: the user leaving the freezer for good.
+
+        Returns:
+            Whether the freezer was holding anything of his.
 
         Raises:
             RuntimeError: the folder survived its own removal.
 
         Removes the folder and verifies it is gone.
         """
-        folder = self._user_folder(user)
+        return self._drop_folder(self.user_to_userkey(user))
+
+    def cleanup_frozen(self, claimed: set[str]) -> list[str]:
+        """Sweep the freezer of everything that belongs to nobody.
+
+        Args:
+            claimed: the keys somebody still answers for — the caller computes
+                them forward from its own identities, since no identity ever
+                comes back from a folder name.
+
+        Returns:
+            The keys swept away, so the caller can count and name them.
+
+        Removes those folders, each verified gone.
+        """
+        orphans = sorted(self.user_folders - claimed)
+        for userkey in orphans:
+            self._drop_folder(userkey)
+        return orphans
+
+    def _drop_folder(self, userkey: str) -> bool:
+        """Remove one folder of the freezer by its key, verify it is gone, say if it was."""
+        folder = self.root_path / userkey
+        was_there = folder.exists()
         shutil.rmtree(folder, ignore_errors=True)
         if folder.exists():
-            raise RuntimeError(f"deposit of {user}: the folder survived its removal")
+            raise RuntimeError(f"freezer folder {userkey}: it survived its removal")
+        return was_there
 
     def _user_folder(self, user: str) -> Path:
         return self.root_path / self.user_to_userkey(user)

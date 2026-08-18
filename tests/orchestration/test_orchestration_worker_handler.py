@@ -25,8 +25,10 @@ The sockets live under a short ``mkdtemp`` root: the system caps a UDS path at
 about a hundred characters and pytest's own directory is already past it, which
 is the very reason handler names are short.
 
-``GroupStub`` is the level above. The only thing the handler asks of it is
-``on_worker_abort``, so that is all it has, and the tests read what reached it.
+``GroupStub`` is the level above, shared with the other tests of this package: the
+handler asks it for the wake it rings when a process of its own has ended, and for
+the layer of the chain everything the process says climbs through. The tests read
+the wake and the ``state`` the group would read at that round.
 """
 
 from __future__ import annotations
@@ -40,13 +42,22 @@ from typing import Any
 
 import pytest
 
-from genro_asgi.channel.frame import Frame
-from genro_asgi.spa.orchestration.worker_connector import WORKER_SNAPSHOT_KEY
+from genro_tytx import to_tytx
+
+from genro_asgi.spa.orchestration.envelope_handler import PRESENTATION_KEY
+from genro_asgi.spa.orchestration.worker_connector import GLOBAL_STORE_KEY, WORKER_SNAPSHOT_KEY
 from genro_asgi.spa.orchestration import WorkerHandler
-from genro_asgi.spa.orchestration.worker_handler import PING_OP_PATH, WORKER_ENV_VAR
+from genro_asgi.spa.orchestration import worker_handler as worker_handler_module
+from .group_stub import GroupStub
+from .conftest import wait_for
+from genro_asgi.spa.orchestration.worker_handler import (
+    PING_OP_PATH,
+    QUIT_OP_PATH,
+    WORKER_ENV_VAR,
+)
 
 CHILD_SCRIPT = '''
-"""A scripted worker process: presents itself, answers with a photo, nothing else."""
+"""A scripted worker process: presents itself, answers with a photo, leaves when asked."""
 
 import asyncio
 import json
@@ -79,37 +90,34 @@ async def live() -> None:
         frame = await stream.read()
         if frame is None:
             return
-        if frame.method == "CALL" and behaviour == "answer":
+        if frame.method == "CALL" and behaviour != "mute":
             photo = {{"pid": os.getpid(), "asked_on": frame.path, "rss_mb": 42}}
             await stream.write(
                 Frame(
                     id=frame.id,
                     method="REPLY",
                     path=frame.path,
-                    data={{"result": {{}}, "{snapshot_key}": photo}},
+                    data={{"result": {{"answered": frame.path}}, "{snapshot_key}": photo}},
                 )
             )
+            # Asked to leave, it leaves — after answering, like a real worker:
+            # the answer is what carries the photo of everybody departing. Unless
+            # it is the one that answers and then stays, which is what a
+            # departure nobody can wait for any longer looks like.
+            if frame.path == "{quit_path}" and behaviour == "answer":
+                await stream.close()
+                return
 
 
 asyncio.run(live())
-'''.format(env_var=WORKER_ENV_VAR, snapshot_key=WORKER_SNAPSHOT_KEY)
+'''.format(env_var=WORKER_ENV_VAR, snapshot_key=WORKER_SNAPSHOT_KEY, quit_path=QUIT_OP_PATH)
 
 CHILD_MODULE = "scripted_child"
 
 
-class GroupStub:
-    """The GroupHandler seen by its handler: it is told, and it remembers."""
-
-    def __init__(self) -> None:
-        self.aborted: list[Any] = []
-
-    def on_worker_abort(self, worker_handler: Any) -> None:
-        self.aborted.append(worker_handler)
-
-
 @pytest.fixture
-def group():
-    return GroupStub()
+def group(instance_root):
+    return GroupStub(instance_root / "frozen_users")
 
 
 @pytest.fixture
@@ -140,6 +148,7 @@ async def make_handler(instance_root, group):
             **kwargs,
         )
         handlers.append(handler)
+        group.worker_handler = handler
         return handler
 
     yield build
@@ -148,14 +157,6 @@ async def make_handler(instance_root, group):
             handler.process.kill()
             handler.process.wait()
         await handler.connector.stop()
-
-
-async def wait_for(condition, timeout: float = 5.0) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while not condition():
-        if asyncio.get_running_loop().time() >= deadline:
-            raise TimeoutError("the handler never reached the awaited state")
-        await asyncio.sleep(0.01)
 
 
 async def test_the_spawn_payload_carries_the_child_whole_configuration(make_handler, instance_root):
@@ -176,18 +177,27 @@ async def test_the_spawn_payload_carries_the_child_whole_configuration(make_hand
     }
 
 
-async def test_the_global_store_is_not_answerable_before_its_owner_exists(make_handler):
-    assert make_handler().global_register_item_tytx == "not yet ready --- wait next phase"
+async def test_the_store_has_an_owner_now_and_the_presentation_is_answered_with_it(
+    make_handler, group
+):
+    handler = make_handler()
+
+    assert handler.read_envelope({PRESENTATION_KEY: 4242}) == {
+        GLOBAL_STORE_KEY: to_tytx(group.spa_commander.global_register, "json")
+    }
+    assert handler.read_envelope({}) == {}
 
 
 async def test_a_launched_process_presents_itself_on_the_handlers_socket(make_handler):
     handler = make_handler()
+    assert handler.state == "starting"
 
     await handler.launch_process()
 
     assert handler.process.poll() is None
     assert handler.connector.connected is True
     assert handler.connector.socket_path.exists()
+    assert handler.state == "running"
 
 
 async def test_the_photo_arrives_with_the_presentation_and_every_envelope_after(make_handler):
@@ -210,62 +220,118 @@ async def test_the_photo_arrives_with_the_presentation_and_every_envelope_after(
     assert PING_OP_PATH == "/op/ping"
 
 
+async def test_the_beat_gives_back_what_the_process_answered(make_handler):
+    handler = make_handler()
+    await handler.launch_process()
+
+    answered = await handler.ping_process()
+
+    assert answered["result"] == {"answered": PING_OP_PATH}
+    assert answered[WORKER_SNAPSHOT_KEY]["pid"] == handler.process.pid
+
+
 async def test_a_mute_process_is_killed_after_one_repeated_beat(make_handler, group, caplog):
     handler = make_handler(behaviour="mute")
     await handler.launch_process()
     process = handler.process
 
     with caplog.at_level("WARNING"):
-        await handler.ping_process()
+        answered = await handler.ping_process()
 
+    assert answered is None
     assert "beat 1 of 2 unanswered" in caplog.text
     assert "beat 2 of 2 unanswered" in caplog.text
     assert process.poll() is not None
     assert handler.process is None
     assert handler.worker_snapshot["pid"] == process.pid
-    await wait_for(lambda: group.aborted == [handler])
+    await wait_for(lambda: group.wakes == ["aborted"])
 
 
-async def test_a_wild_death_reaches_the_group_with_the_handler_and_its_users(make_handler, group):
+async def test_a_wild_death_wakes_the_group_with_the_state_that_says_so(make_handler, group):
     handler = make_handler()
     await handler.launch_process()
     handler.hosted_users.update({"mario", "anna"})
 
     handler.process.kill()
-    await wait_for(lambda: len(group.aborted) == 1)
+    await wait_for(lambda: len(group.wakes) == 1)
 
-    assert group.aborted[0] is handler
-    assert group.aborted[0].hosted_users == {"mario", "anna"}
+    assert group.wakes == ["aborted"]
+    assert handler.state == "aborted"
+    assert handler.hosted_users == {"mario", "anna"}
     assert handler.connector.connected is False
 
 
-async def test_a_bare_termination_is_not_a_governed_death(make_handler, group):
+async def test_a_bare_termination_is_an_abort_nobody_was_waiting_for(make_handler, group):
     handler = make_handler()
     await handler.launch_process()
 
     await handler.terminate_process()
 
     assert handler.process is None
-    await wait_for(lambda: group.aborted == [handler])
+    await wait_for(lambda: group.wakes == ["aborted"])
 
 
-async def test_a_governed_restart_announces_nothing_and_keeps_the_address(make_handler, group):
+async def test_the_process_asked_to_leave_leaves_and_the_state_says_it_was_ordered(
+    make_handler, group
+):
     handler = make_handler()
     await handler.launch_process()
-    first = handler.process
-    address = handler.connector.address
+    leaving = handler.process
 
-    await handler.restart_process()
+    await handler.quit_process()
 
-    assert first.poll() is not None
-    assert handler.process.pid != first.pid
+    # The end of the WIRE is what the order waits for — the process itself is
+    # already on its way out, and the OS catches up an instant later.
+    assert handler.state == "quitted"
+    await wait_for(lambda: leaving.poll() is not None)
+    assert group.wakes == ["quitted"]
+    assert handler.connector.connected is False
+
+
+async def test_the_state_says_quitting_from_the_order_on_not_from_the_death(make_handler):
+    handler = make_handler(behaviour="stay")
+    await handler.launch_process()
+
+    leaving = asyncio.ensure_future(handler.quit_process())
+    await wait_for(lambda: handler.state == "quitting")
+
+    # Still there, still draining as far as anybody knows: the state is what a
+    # group asked to place somebody reads, and it says do not send him here.
     assert handler.process.poll() is None
-    assert handler.connector.address == address
-    assert handler.connector.connected is True
-    assert group.aborted == []
+    leaving.cancel()
 
-    await handler.ping_process()
-    assert handler.worker_snapshot["pid"] == handler.process.pid
+
+async def test_a_process_that_answers_the_order_and_stays_is_killed_and_the_abort_is_loud(
+    make_handler, group, caplog, monkeypatch
+):
+    monkeypatch.setattr(worker_handler_module, "QUIT_TIMEOUT_SECONDS", 0.3)
+    handler = make_handler(behaviour="stay")
+    await handler.launch_process()
+    condemned = handler.process
+
+    with caplog.at_level("WARNING"):
+        await handler.quit_process()
+
+    assert "still here 0.3s after being asked to leave" in caplog.text
+    assert condemned.poll() is not None
+    assert handler.process is None
+    await wait_for(lambda: group.wakes == ["aborted"])
+    assert handler.state == "aborted"
+
+
+async def test_a_process_mute_to_the_order_to_leave_is_killed_too(
+    make_handler, group, caplog, monkeypatch
+):
+    monkeypatch.setattr(worker_handler_module, "QUIT_TIMEOUT_SECONDS", 0.3)
+    handler = make_handler(behaviour="mute")
+    await handler.launch_process()
+    condemned = handler.process
+
+    with caplog.at_level("WARNING"):
+        await handler.quit_process()
+
+    assert condemned.poll() is not None
+    await wait_for(lambda: group.wakes == ["aborted"])
 
 
 async def test_a_second_launch_over_a_living_process_is_refused(make_handler):
@@ -280,28 +346,6 @@ async def test_a_second_launch_over_a_living_process_is_refused(make_handler):
     assert resident.poll() is None
 
 
-async def test_a_restart_of_a_handler_whose_process_already_died_stays_hearing(make_handler, group):
-    handler = make_handler()
-    await handler.launch_process()
-    handler.process.kill()
-    await wait_for(lambda: group.aborted == [handler])
-
-    await handler.restart_process()
-    assert handler.connector.connected is True
-
-    handler.process.kill()
-    await wait_for(lambda: group.aborted == [handler, handler])
-
-
-async def test_the_death_after_a_governed_one_is_wild_again(make_handler, group):
-    handler = make_handler()
-    await handler.launch_process()
-    await handler.restart_process()
-
-    handler.process.kill()
-    await wait_for(lambda: group.aborted == [handler])
-
-
 async def test_a_process_that_never_presents_itself_is_killed_and_the_wait_raises(
     make_handler, group
 ):
@@ -311,14 +355,4 @@ async def test_a_process_that_never_presents_itself_is_killed_and_the_wait_raise
         await handler.launch_process()
 
     assert handler.process is None
-    assert group.aborted == []
-
-
-async def test_an_event_from_the_process_is_logged_and_consumed_by_nobody(make_handler, caplog):
-    handler = make_handler()
-
-    with caplog.at_level("INFO"):
-        handler.on_child_message(Frame(method="EVENT", path="/lock_taken", data={"user": "mario"}))
-
-    assert "/lock_taken" in caplog.text
-    assert "not consumed yet" in caplog.text
+    assert group.wakes == []
