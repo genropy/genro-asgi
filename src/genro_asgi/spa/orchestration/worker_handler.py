@@ -20,11 +20,10 @@ socket. The process under it is replaceable: it can be killed, it can die on its
 own, it can be reborn on the same name and the same socket — and every placement
 pointing at the handler is untouched by all of that.
 
-**Five orders, and each verb carries its object.** ``launch_process`` opens the
+**Four orders, and each verb carries its object.** ``launch_process`` opens the
 wire, spawns the child and waits for it to present itself; ``terminate_process``
-kills the process group and waits for the OS to bury it; ``restart_process``
-does the two in a row, on the same name and socket; ``quit_process`` asks the
-process to leave and waits for it to be gone; ``ping_process`` is one health
+kills the process group and waits for the OS to bury it; ``quit_process`` asks
+the process to leave and waits for it to be gone; ``ping_process`` is one health
 beat, and it gives back what the child answered. Nothing here freezes a user,
 closes a tap or reads a policy: those belong one level up, and a handler that
 took them would be deciding for the pool.
@@ -45,11 +44,10 @@ declared price is that the slow-but-healthy dies and its users log in again,
 which is seconds of error instead of minutes of spinner.
 
 **The death is a STATE, not a mark posed from outside.** ``state`` carries one of
-six values and nobody but this handler writes it: ``starting`` (spawned, not yet
+five values and nobody but this handler writes it: ``starting`` (spawned, not yet
 presented), ``running``, ``quitting`` (asked to leave, draining, not coming
-back), ``restarting`` (dead with its successor already on the way), ``quitted``
-(died as it was ordered to, and the group has yet to consume the fact) and
-``aborted`` (died with nobody waiting for it — the wild death).
+back), ``quitted`` (died as it was ordered to, and the group has yet to consume
+the fact) and ``aborted`` (died with nobody waiting for it — the wild death).
 
 **The classification is the PURE WAIT.** An order to die parks a wait; the end of
 the wire resolves it. An end of wire WITH a live wait is the death somebody
@@ -113,7 +111,6 @@ from .exceptions import (
     AssignmentRefused,
     NoRoomError,
     WorkerQuittingError,
-    WorkerRestartingError,
 )
 from .worker_connector import WorkerConnector
 
@@ -219,7 +216,7 @@ class WorkerHandler:
         self.process_ping_timeout = process_ping_timeout
         self.process: subprocess.Popen[bytes] | None = None
         #: Where the process under this handler is in its life: ``starting``,
-        #: ``running``, ``quitting``, ``restarting``, ``quitted``, ``aborted``.
+        #: ``running``, ``quitting``, ``quitted``, ``aborted``.
         #: Written only here; the group reads it at its round.
         self.state = "starting"
         #: The last photo the process sent, on whatever envelope carried it:
@@ -270,15 +267,12 @@ class WorkerHandler:
                 photo is read in.
 
         Raises:
-            WorkerRestartingError: its process died, its successor is on the way.
             WorkerQuittingError: its process is leaving or is gone.
             AssignmentRefused: it has not presented itself yet.
             NoRoomError: the projected count is over this worker's setpoint.
 
         Nothing is written.
         """
-        if self.state == "restarting":
-            raise WorkerRestartingError(user, f"{self.name} is restarting")
         if self.state in ("quitting", "quitted", "aborted"):
             raise WorkerQuittingError(user, f"{self.name} is {self.state}")
         if self.state != "running":
@@ -356,23 +350,6 @@ class WorkerHandler:
             await asyncio.sleep(WAIT_POLL_INTERVAL)
         self.process = None
 
-    async def restart_process(self) -> None:
-        """Kill the process and launch a fresh one on the same name and socket.
-
-        Raises:
-            TimeoutError: the wire never reported the ordered death.
-
-        Sets ``restarting`` — the state that says this death has a successor
-        already on the way — then terminates, waits for that end, and launches.
-        """
-        self._logger.info("Worker %s: restarting its process — the death is ordered", self.name)
-        self.state = "restarting"
-        death = self._park_death_wait() if self.connector.connected else None
-        await self.terminate_process()
-        if death is not None:
-            await asyncio.wait_for(death, self.process_ping_timeout)
-        await self.launch_process()
-
     async def quit_process(self) -> None:
         """Ask the process to leave, and wait until it is gone.
 
@@ -424,15 +401,10 @@ class WorkerHandler:
         """The wire died: the parked wait says whether anybody was expecting it.
 
         Sets ``state`` — ``quitted`` when a wait was live, ``aborted`` when the
-        death was nobody's order, and nothing at all under a restart — and rings
-        the group's wake.
+        death was nobody's order — and rings the group's wake.
         """
         ordered = self._settle_death_wait()
-        if self.state == "restarting":
-            self._logger.info(
-                "Worker %s: its process died as ordered, the successor is on its way", self.name
-            )
-        elif ordered:
+        if ordered:
             self.state = "quitted"
             self._logger.info("Worker %s: its process left as it was asked to", self.name)
         else:

@@ -31,8 +31,8 @@ workers from the FULLEST down — filling what is already warm rather than
 spreading everybody thin — and asks each one to take the user;
 ``WorkerHandler.assign_user`` judges itself on its own last photo and refuses by
 RAISING, so the reason is a class and never a flag somebody has to remember to
-read: over the setpoint is ``NoRoomError``, a process on its way back is
-``WorkerRestartingError``, one on its way out ``WorkerQuittingError``. Candidates
+read: over the setpoint is ``NoRoomError``, one on its way out
+``WorkerQuittingError``. Candidates
 exhausted, the base rises — whoever asked answers 503 — and the wake rings on the
 way out, so the group grows before he tries again. Two placements in a row are
 judged on the same photo, so a group can overshoot by one newcomer: accepted, and
@@ -430,8 +430,8 @@ class GroupHandler:
             The count, summed worker by worker against each one's own cap — a
             newcomer lands on ONE worker, so room split across many is not room.
             A worker in ``quitting`` counts zero: it refuses everybody on its way
-            out. One in ``starting`` or ``restarting`` counts: it is capacity
-            arriving, and counting it keeps the group from growing twice.
+            out. One in ``starting`` counts: it is capacity arriving, and
+            counting it keeps the group from growing twice.
         """
         placeable = 0
         for name, occupancy_percent in picture.items():

@@ -38,7 +38,6 @@ __all__ = [
     "NoRoomError",
     "UserOnHold",
     "WorkerQuittingError",
-    "WorkerRestartingError",
 ]
 
 
@@ -73,10 +72,6 @@ class AssignmentRefused(Exception):
 
 class NoRoomError(AssignmentRefused):
     """He does not fit: this worker plus what he is expected to cost is over the setpoint."""
-
-
-class WorkerRestartingError(AssignmentRefused):
-    """This worker's process died and its successor is on the way: it will come back, later."""
 
 
 class WorkerQuittingError(AssignmentRefused):

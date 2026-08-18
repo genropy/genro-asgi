@@ -41,7 +41,6 @@ from .exceptions import (
     NoRoomError,
     UserOnHold,
     WorkerQuittingError,
-    WorkerRestartingError,
 )
 from .beats import every
 from .freeze_handler import FreezeHandler
@@ -68,6 +67,5 @@ __all__ = [
     "WorkerEnvelopeHandler",
     "WorkerHandler",
     "WorkerQuittingError",
-    "WorkerRestartingError",
     "every",
 ]

@@ -37,7 +37,6 @@ from genro_asgi.spa.orchestration import (
     SpaCommander,
     WorkerHandler,
     WorkerQuittingError,
-    WorkerRestartingError,
 )
 
 #: What one worker of these groups reads as full.
@@ -165,13 +164,6 @@ async def test_a_worker_with_no_room_refuses_with_the_class_that_says_so(group):
     worker_at(group, "standard_0001", 0.0)
 
     with pytest.raises(NoRoomError, match="would stand at 83.0%"):
-        worker_handler.assign_user("mario", 5.0)
-
-
-async def test_a_restarting_worker_refuses_with_the_class_that_says_it_comes_back(group):
-    worker_handler = worker_at(group, "standard_0001", 0.0, state="restarting")
-
-    with pytest.raises(WorkerRestartingError):
         worker_handler.assign_user("mario", 5.0)
 
 

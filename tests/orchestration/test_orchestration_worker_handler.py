@@ -271,26 +271,6 @@ async def test_a_bare_termination_is_an_abort_nobody_was_waiting_for(make_handle
     await wait_for(lambda: group.wakes == ["aborted"])
 
 
-async def test_a_restart_keeps_the_address_and_ends_running_not_aborted(make_handler, group):
-    handler = make_handler()
-    await handler.launch_process()
-    first = handler.process
-    address = handler.connector.address
-
-    await handler.restart_process()
-
-    assert first.poll() is not None
-    assert handler.process.pid != first.pid
-    assert handler.process.poll() is None
-    assert handler.connector.address == address
-    assert handler.connector.connected is True
-    assert handler.state == "running"
-    assert group.wakes == ["restarting"]
-
-    await handler.ping_process()
-    assert handler.worker_snapshot["pid"] == handler.process.pid
-
-
 async def test_the_process_asked_to_leave_leaves_and_the_state_says_it_was_ordered(
     make_handler, group
 ):
@@ -364,30 +344,6 @@ async def test_a_second_launch_over_a_living_process_is_refused(make_handler):
 
     assert handler.process is resident
     assert resident.poll() is None
-
-
-async def test_a_restart_of_a_handler_whose_process_already_died_stays_hearing(make_handler, group):
-    handler = make_handler()
-    await handler.launch_process()
-    handler.process.kill()
-    await wait_for(lambda: group.wakes == ["aborted"])
-
-    await handler.restart_process()
-    assert handler.connector.connected is True
-    assert handler.state == "running"
-
-    handler.process.kill()
-    await wait_for(lambda: group.wakes == ["aborted", "aborted"])
-
-
-async def test_the_death_after_an_ordered_one_is_wild_again(make_handler, group):
-    handler = make_handler()
-    await handler.launch_process()
-    await handler.restart_process()
-
-    handler.process.kill()
-    await wait_for(lambda: group.wakes == ["restarting", "aborted"])
-    assert handler.state == "aborted"
 
 
 async def test_a_process_that_never_presents_itself_is_killed_and_the_wait_raises(
