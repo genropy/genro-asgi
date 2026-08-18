@@ -28,12 +28,7 @@ without severing the wire.
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import os
-import shutil
-import tempfile
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -75,17 +70,9 @@ def photo_of(**users: str | None) -> dict[str, Any]:
 
 
 @pytest.fixture
-def chain_root():
-    """A short root holding the deposit and the sockets of the story."""
-    root = Path(tempfile.mkdtemp(prefix="gnrchain_"))
-    yield root
-    shutil.rmtree(root, ignore_errors=True)
-
-
-@pytest.fixture
-def group(chain_root):
+def group(short_root):
     """The group of the tests, with the real chain and the real vertex above it."""
-    return GroupStub(chain_root / "frozen_users")
+    return GroupStub(short_root / "frozen_users")
 
 
 @pytest.fixture
@@ -95,13 +82,13 @@ def commander(group):
 
 
 @pytest.fixture
-async def handler(chain_root, group):
+async def handler(short_root, group):
     """A real handler with no process under it: enough to own its layer of the chain."""
     worker_handler = WorkerHandler(
         group,
         WORKER_NAME,
-        instance_dir=chain_root / "i",
-        frozen_users_path=chain_root / "frozen_users",
+        instance_dir=short_root / "i",
+        frozen_users_path=short_root / "frozen_users",
         entry_module=CHILD_MODULE,
         worker_kwargs={"group": "standard"},
         process_ping_timeout=1.0,
@@ -388,14 +375,9 @@ async def test_an_answer_is_not_answered_and_carries_no_store(handler, commander
 
 
 async def test_a_real_child_announces_and_the_vertex_learns_it(
-    handler, commander, group, monkeypatch, caplog
+    handler, commander, group, repo_on_pythonpath, caplog
 ):
     caplog.set_level(logging.INFO)
-    repo_root = Path(__file__).resolve().parents[2]
-    inherited = os.environ.get("PYTHONPATH", "")
-    monkeypatch.setenv(
-        "PYTHONPATH", os.pathsep.join([str(repo_root), inherited]).rstrip(os.pathsep)
-    )
     commander.global_register.set_item("counters.invoices", 3)
     user = commander.resolve_user("cid-a")
 
@@ -463,11 +445,3 @@ async def test_a_real_child_announces_and_the_vertex_learns_it(
     assert "The fold refused the envelope" in caplog.text
     assert handler.connector.connected is True
     assert await handler.ping_process() is not None
-
-
-async def wait_for(condition, timeout: float = CALL_TIMEOUT) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while not condition():
-        if asyncio.get_running_loop().time() >= deadline:
-            raise TimeoutError("the chain never reached the awaited state")
-        await asyncio.sleep(0.01)

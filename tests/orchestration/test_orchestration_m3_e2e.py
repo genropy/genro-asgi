@@ -68,7 +68,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -86,6 +85,8 @@ from genro_asgi.spa.orchestration import (
     UserOnHold,
 )
 from genro_asgi.spa.orchestration.spa_commander import GUEST_PREFIX
+
+from .conftest import wait_for
 
 GROUP = "std"
 ENTRY_MODULE = "genro_asgi.spa.orchestration.worker_entry"
@@ -246,14 +247,6 @@ async def serve(group: GroupHandler, user: str, cid: str, path: str, **payload: 
     )
 
 
-async def wait_for(condition, timeout: float = CALL_TIMEOUT) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while not condition():
-        if asyncio.get_running_loop().time() >= deadline:
-            raise TimeoutError("the story never reached the awaited state")
-        await asyncio.sleep(0.01)
-
-
 def orders_text(story_root: Path) -> str:
     """The orchestration log the config file named, as it stands on disk."""
     return (story_root / "orchestration.log").read_text()
@@ -265,7 +258,7 @@ def orders_of(story_root: Path) -> list[str]:
 
 
 @pytest.fixture
-def story_root(monkeypatch):
+def story_root(repo_on_pythonpath):
     """The short root holding the config file, the sockets and the freezer."""
     root = Path(tempfile.mkdtemp(prefix="gnrm3_"))
     (root / "pool_config.py").write_text(
@@ -278,11 +271,6 @@ def story_root(monkeypatch):
             rss_bytes=STORY_RSS_BYTES,
             gate_delay=GATE_DELAY,
         )
-    )
-    repo_root = Path(__file__).resolve().parents[2]
-    inherited = os.environ.get("PYTHONPATH", "")
-    monkeypatch.setenv(
-        "PYTHONPATH", os.pathsep.join([str(repo_root), inherited]).rstrip(os.pathsep)
     )
     yield root
     shutil.rmtree(root, ignore_errors=True)

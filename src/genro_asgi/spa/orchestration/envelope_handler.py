@@ -131,11 +131,9 @@ class EnvelopeHandler:
         """This layer's part of what the envelope carries: the photo, then the worker events.
 
         Args:
-            envelope: the payload as it came off the wire — the photo in its own
-                slot, the worker events in theirs, the primary answer beside them.
+            envelope: the payload as it came off the wire.
 
-        Acts through the ``on_`` methods this layer carries, and skips whatever it
-        carries none for.
+        Acts through the ``on_`` methods this layer carries.
         """
         photo = envelope.get(WORKER_SNAPSHOT_KEY)
         if photo is not None:
@@ -159,14 +157,7 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
         self.group_envelope_handler = group_envelope_handler
 
     def __call__(self, envelope: dict[str, Any]) -> dict[str, Any]:
-        """Work on the envelope for this handler, then hand it up.
-
-        Args:
-            envelope: the payload as it came off the wire.
-
-        Returns:
-            The payload that goes down, as the chain composed it.
-        """
+        """Work on the envelope for this handler, then hand it up; returns what goes down."""
         self.work_on_envelope(envelope)
         return self.group_envelope_handler(envelope)
 
@@ -178,8 +169,7 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
             be sent, since the wire this envelope speaks of is gone.
 
         Raises:
-            ValueError: the process has not ended, and a death reported for a
-                living process would take its users away from it.
+            ValueError: the process has not ended.
         """
         state = self.worker_handler.state
         if state not in ("quitted", "aborted"):
@@ -251,14 +241,7 @@ class GroupEnvelopeHandler(EnvelopeHandler):
         self.commander_envelope_handler = commander_envelope_handler
 
     def __call__(self, envelope: dict[str, Any]) -> dict[str, Any]:
-        """Work on the envelope for this group, then hand it to the vertex.
-
-        Args:
-            envelope: the payload as it came off the wire.
-
-        Returns:
-            The payload that goes down, as the vertex composed it.
-        """
+        """Work on the envelope for this group, then hand it up; returns what goes down."""
         self.work_on_envelope(envelope)
         return self.commander_envelope_handler(envelope)
 
@@ -305,12 +288,9 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
     def __call__(self, envelope: dict[str, Any]) -> dict[str, Any]:
         """Work on the envelope for the vertex, and answer a presentation with the store.
 
-        Args:
-            envelope: the payload as it came off the wire.
-
         Returns:
             The whole store in the form it travels in when this envelope is a
-            presentation; nothing at all otherwise — an answer is not answered.
+            presentation; nothing at all otherwise.
         """
         self.work_on_envelope(envelope)
         if PRESENTATION_KEY not in envelope:

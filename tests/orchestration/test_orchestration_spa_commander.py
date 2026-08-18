@@ -25,9 +25,6 @@ left on disk, and writing the account of every order.
 from __future__ import annotations
 
 import logging
-import shutil
-import tempfile
-from pathlib import Path
 
 import pytest
 
@@ -40,16 +37,8 @@ WORKER_NAME = "standard_0001"
 
 
 @pytest.fixture
-def vertex_root():
-    """A root holding the deposit and, where a test asks for it, the log."""
-    root = Path(tempfile.mkdtemp(prefix="gnrvertex_"))
-    yield root
-    shutil.rmtree(root, ignore_errors=True)
-
-
-@pytest.fixture
-def commander(vertex_root):
-    return SpaCommander(vertex_root / "frozen_users")
+def commander(short_root):
+    return SpaCommander(short_root / "frozen_users")
 
 
 def parked_state(commander: SpaCommander, user: str) -> None:
@@ -195,9 +184,9 @@ def test_what_a_dead_process_left_on_disk_is_discarded_and_counted(commander, ca
     assert caplog.text.count("order=drop_user") == 2
 
 
-def test_every_order_leaves_its_row_on_the_file_of_the_orders(vertex_root):
-    log_path = vertex_root / "orchestration.log"
-    commander = SpaCommander(vertex_root / "frozen_users", orchestration_log_path=log_path)
+def test_every_order_leaves_its_row_on_the_file_of_the_orders(short_root):
+    log_path = short_root / "orchestration.log"
+    commander = SpaCommander(short_root / "frozen_users", orchestration_log_path=log_path)
 
     commander.log_order(
         "standard",
@@ -215,11 +204,11 @@ def test_every_order_leaves_its_row_on_the_file_of_the_orders(vertex_root):
     assert "outcome=quitted" in row
 
 
-def test_one_process_has_one_vertex_and_the_log_is_its_own(vertex_root):
-    first_path = vertex_root / "first.log"
-    second_path = vertex_root / "second.log"
-    SpaCommander(vertex_root / "frozen_users", orchestration_log_path=first_path)
-    second = SpaCommander(vertex_root / "frozen_users", orchestration_log_path=second_path)
+def test_one_process_has_one_vertex_and_the_log_is_its_own(short_root):
+    first_path = short_root / "first.log"
+    second_path = short_root / "second.log"
+    SpaCommander(short_root / "frozen_users", orchestration_log_path=first_path)
+    second = SpaCommander(short_root / "frozen_users", orchestration_log_path=second_path)
 
     second.log_order("standard", "quit_process", WORKER_NAME, outcome="quitted")
 

@@ -41,13 +41,8 @@ past it, which is the very reason worker names are short.
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import os
-import shutil
-import tempfile
 import time
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -62,43 +57,31 @@ from .child_stub import (
     WRITE_CONNECTION_REGISTER_ITEM_OP,
 )
 from .group_stub import GroupStub
+from .conftest import wait_for
 
 CHILD_MODULE = "tests.orchestration.child_stub"
 PARKED_CONNECTION = {"cid": "c-1", "pages": ["main", "invoices"]}
 
 
 @pytest.fixture
-def group(foundations_root):
-    return GroupStub(foundations_root / "frozen_users")
+def group(short_root):
+    return GroupStub(short_root / "frozen_users")
 
 
 @pytest.fixture
-def foundations_root():
-    """The short root holding both the socket directory and the deposit."""
-    root = Path(tempfile.mkdtemp(prefix="gnre2e_"))
-    yield root
-    shutil.rmtree(root, ignore_errors=True)
-
-
-@pytest.fixture
-def deposit(foundations_root):
+def deposit(short_root):
     """The deposit as the parent reads it — the same root the child is given."""
-    return FreezeHandler(foundations_root / "frozen_users")
+    return FreezeHandler(short_root / "frozen_users")
 
 
 @pytest.fixture
-async def handler(foundations_root, group, monkeypatch):
+async def handler(short_root, group, repo_on_pythonpath):
     """The handler under test; no process and no socket of its own outlives the test."""
-    repo_root = Path(__file__).resolve().parents[2]
-    inherited = os.environ.get("PYTHONPATH", "")
-    monkeypatch.setenv(
-        "PYTHONPATH", os.pathsep.join([str(repo_root), inherited]).rstrip(os.pathsep)
-    )
     worker_handler = WorkerHandler(
         group,
         "standard_0001",
-        instance_dir=foundations_root / "i",
-        frozen_users_path=foundations_root / "frozen_users",
+        instance_dir=short_root / "i",
+        frozen_users_path=short_root / "frozen_users",
         entry_module=CHILD_MODULE,
         worker_kwargs={"group": "standard"},
         process_ping_timeout=1.0,
@@ -115,14 +98,6 @@ async def order(handler: WorkerHandler, path: str, data: Any = None) -> Any:
     """Drive one order of the child through the wire and give back what it answered."""
     payload = await handler.connector.call(path, data, timeout=5.0)
     return payload["result"]
-
-
-async def wait_for(condition, timeout: float = 5.0) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while not condition():
-        if asyncio.get_running_loop().time() >= deadline:
-            raise TimeoutError("the foundations never reached the awaited state")
-        await asyncio.sleep(0.01)
 
 
 async def test_a_worker_is_born_works_dies_wild_and_leaves_its_traces_behind(

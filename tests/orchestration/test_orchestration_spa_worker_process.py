@@ -38,8 +38,6 @@ import base64
 import json
 import logging
 import os
-import shutil
-import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -57,6 +55,7 @@ from genro_asgi.spa.orchestration.worker_connector import (
 from genro_asgi.spa.orchestration.worker_entry import DEFAULT_WORKER_CLASS
 
 from .group_stub import GroupStub
+from .conftest import wait_for
 from genro_asgi.spa.orchestration.worker_handler import (
     DROP_CONNECTION_OP_PATH,
     DROP_USER_OP_PATH,
@@ -254,14 +253,6 @@ class ParentWire:
             )
 
 
-async def wait_for(condition, timeout: float = 5.0) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while not condition():
-        if asyncio.get_running_loop().time() >= deadline:
-            raise TimeoutError("the worker never reached the awaited state")
-        await asyncio.sleep(0.01)
-
-
 def http_call(
     cid: str, identity: str | None = None, *, path: str = "/invoices", **payload: Any
 ) -> dict[str, Any]:
@@ -303,30 +294,22 @@ def age_user(worker: SpaWorker, user: str, seconds: float) -> None:
 
 
 @pytest.fixture
-def wire_root():
-    """The short root holding the socket directory and the deposit."""
-    root = Path(tempfile.mkdtemp(prefix="gnrwire_"))
-    yield root
-    shutil.rmtree(root, ignore_errors=True)
-
-
-@pytest.fixture
-def deposit(wire_root):
+def deposit(short_root):
     """The deposit as the parent side reads it — the same root the worker is given."""
-    return FreezeHandler(wire_root / "frozen_users")
+    return FreezeHandler(short_root / "frozen_users")
 
 
 @pytest.fixture
-async def wire(wire_root, deposit):
-    one = Wire(wire_root / "w.sock", wire_root / "frozen_users")
+async def wire(short_root, deposit):
+    one = Wire(short_root / "w.sock", short_root / "frozen_users")
     await one.start()
     yield one
     await one.stop()
 
 
 @pytest.fixture
-async def parent_wire(wire_root, deposit):
-    parent = ParentWire(wire_root / "p.sock", wire_root / "frozen_users")
+async def parent_wire(short_root, deposit):
+    parent = ParentWire(short_root / "p.sock", short_root / "frozen_users")
     await parent.start()
     yield parent
     await parent.stop()
@@ -708,14 +691,14 @@ def test_a_payload_short_of_a_key_says_which_one(monkeypatch):
         WorkerEntry()
 
 
-def test_the_payload_is_read_from_the_environment_the_handler_wrote(monkeypatch, wire_root):
+def test_the_payload_is_read_from_the_environment_the_handler_wrote(monkeypatch, short_root):
     monkeypatch.setenv(
         WORKER_ENV_VAR,
         json.dumps(
             {
                 "name": WORKER_NAME,
                 "uds_url": "uds:/nowhere.sock",
-                "frozen_users_path": str(wire_root / "frozen_users"),
+                "frozen_users_path": str(short_root / "frozen_users"),
                 "main_threadpool_size": 8,
                 "aux_threadpool_size": 2,
                 "worker_class": None,
@@ -732,12 +715,12 @@ def test_the_payload_is_read_from_the_environment_the_handler_wrote(monkeypatch,
     assert entry.worker_class == DEFAULT_WORKER_CLASS
 
 
-def test_a_worker_class_that_is_not_a_reference_is_refused(wire_root):
+def test_a_worker_class_that_is_not_a_reference_is_refused(short_root):
     entry = WorkerEntry(
         config={
             "name": WORKER_NAME,
             "uds_url": "uds:/nowhere.sock",
-            "frozen_users_path": str(wire_root / "frozen_users"),
+            "frozen_users_path": str(short_root / "frozen_users"),
             "worker_class": "genro_asgi.spa.orchestration.spa_worker.SpaWorker",
         }
     )
@@ -746,12 +729,12 @@ def test_a_worker_class_that_is_not_a_reference_is_refused(wire_root):
         entry.build_worker()
 
 
-def test_the_payload_naming_no_class_builds_the_worker_of_the_house(wire_root):
+def test_the_payload_naming_no_class_builds_the_worker_of_the_house(short_root):
     entry = WorkerEntry(
         config={
             "name": WORKER_NAME,
             "uds_url": "uds:/nowhere.sock",
-            "frozen_users_path": str(wire_root / "frozen_users"),
+            "frozen_users_path": str(short_root / "frozen_users"),
             "kwargs": {"group": GROUP},
         }
     )
@@ -760,7 +743,7 @@ def test_the_payload_naming_no_class_builds_the_worker_of_the_house(wire_root):
 
     assert type(worker) is SpaWorker
     assert worker.group == GROUP
-    assert worker.freeze_handler.root_path == wire_root / "frozen_users"
+    assert worker.freeze_handler.root_path == short_root / "frozen_users"
 
 
 # ----------------------------------------------------------------------
@@ -769,18 +752,13 @@ def test_the_payload_naming_no_class_builds_the_worker_of_the_house(wire_root):
 
 
 @pytest.fixture
-async def handler(wire_root, monkeypatch):
+async def handler(short_root, repo_on_pythonpath):
     """A real WorkerHandler spawning the real entry; nothing of it outlives the test."""
-    repo_root = Path(__file__).resolve().parents[2]
-    inherited = os.environ.get("PYTHONPATH", "")
-    monkeypatch.setenv(
-        "PYTHONPATH", os.pathsep.join([str(repo_root), inherited]).rstrip(os.pathsep)
-    )
     worker_handler = WorkerHandler(
-        GroupStub(wire_root / "frozen_users"),
+        GroupStub(short_root / "frozen_users"),
         WORKER_NAME,
-        instance_dir=wire_root / "i",
-        frozen_users_path=wire_root / "frozen_users",
+        instance_dir=short_root / "i",
+        frozen_users_path=short_root / "frozen_users",
         entry_module=ENTRY_MODULE,
         main_threadpool_size=4,
         aux_threadpool_size=1,

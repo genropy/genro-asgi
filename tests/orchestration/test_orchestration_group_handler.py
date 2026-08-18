@@ -32,7 +32,6 @@ the very reason worker names are short.
 
 from __future__ import annotations
 
-import asyncio
 import os
 import shutil
 import tempfile
@@ -44,6 +43,8 @@ import pytest
 from genro_asgi.spa.orchestration import GroupHandler, SpaCommander
 from genro_asgi.spa.orchestration.worker_connector import WORKER_SNAPSHOT_KEY
 from genro_asgi.spa.orchestration.worker_handler import QUIT_OP_PATH, WORKER_ENV_VAR
+
+from .conftest import wait_for
 
 CHILD_SCRIPT = '''
 """A scripted worker of a group: one photo, one answer, one departure."""
@@ -168,14 +169,6 @@ def known_at_the_vertex(commander, cid: str, user: str) -> None:
     """What the login will do in Macro 4: this cid is that person's, and he has a row."""
     commander.connection_user_map[cid] = user
     commander.resolve_user(cid)
-
-
-async def wait_for(condition, timeout: float = 10.0) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while not condition():
-        if asyncio.get_running_loop().time() >= deadline:
-            raise TimeoutError("the group never reached the awaited state")
-        await asyncio.sleep(0.01)
 
 
 async def test_the_first_worker_of_a_group_is_its_reception(make_group):

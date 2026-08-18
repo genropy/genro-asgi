@@ -240,8 +240,6 @@ class WorkerHandler:
 
         Returns:
             True when the last envelope is older than ``process_ping_interval``.
-            A process answering traffic photographs itself on every envelope, so
-            beating it would ask what it has just said.
         """
         return time.monotonic() - self._last_envelope_ts >= self.process_ping_interval
 
@@ -272,16 +270,12 @@ class WorkerHandler:
                 photo is read in.
 
         Raises:
-            WorkerRestartingError: this handler's process died and its successor
-                is on the way — it will take users again, later.
-            WorkerQuittingError: this handler's process is leaving or is gone.
-            AssignmentRefused: it has not presented itself yet, so there is
-                nobody down there to serve him.
-            NoRoomError: the projected count is over this worker's placement
-                setpoint.
+            WorkerRestartingError: its process died, its successor is on the way.
+            WorkerQuittingError: its process is leaving or is gone.
+            AssignmentRefused: it has not presented itself yet.
+            NoRoomError: the projected count is over this worker's setpoint.
 
-        Nothing is written: who lives where is the group's map, and who is in a
-        process is what that process announces.
+        Nothing is written.
         """
         if self.state == "restarting":
             raise WorkerRestartingError(user, f"{self.name} is restarting")
@@ -302,12 +296,10 @@ class WorkerHandler:
             envelope: the payload as it came off the wire.
 
         Returns:
-            What goes back down, as the chain composed it — the answer to a
-            presentation, and nothing at all when there is no envelope going the
-            other way.
+            What goes back down, as the chain composed it — nothing at all when
+            there is no envelope going the other way.
 
-        Stamps the instant this process was last heard from, which is what makes
-        it silent or not when the round comes.
+        Stamps the instant this process was last heard from.
         """
         self._last_envelope_ts = time.monotonic()
         return self.envelope_handler(envelope)
@@ -316,12 +308,9 @@ class WorkerHandler:
         """Open the wire if it is closed, spawn the child, wait for it to present itself.
 
         Raises:
-            RuntimeError: a process is already alive under this handler — two of
-                them under one handler is the thing the whole surveillance exists
-                to make impossible.
+            RuntimeError: a process is already alive under this handler.
             TimeoutError: the child never presented itself within
-                ``process_ping_timeout``; it is killed before the raise, so no
-                unpresented process is left behind.
+                ``process_ping_timeout``; it is killed before the raise.
 
         Sets ``process`` and ``state`` — ``starting`` while the child is on its
         way, ``running`` once it has presented itself — and binds the socket on
@@ -371,8 +360,7 @@ class WorkerHandler:
         """Kill the process and launch a fresh one on the same name and socket.
 
         Raises:
-            TimeoutError: the wire never reported the ordered death, so the
-                successor cannot be let in without risking two processes.
+            TimeoutError: the wire never reported the ordered death.
 
         Sets ``restarting`` — the state that says this death has a successor
         already on the way — then terminates, waits for that end, and launches.
@@ -475,8 +463,7 @@ class WorkerHandler:
         """Resolve the parked wait if one is live, and say whether one was.
 
         Returns:
-            True when somebody was waiting for this death; a wait already given
-            up on past its deadline counts for nobody.
+            True when somebody was waiting; a wait already given up counts for nobody.
         """
         death = self._death_wait
         self._death_wait = None

@@ -249,9 +249,7 @@ class SpaCommander:
             guest just minted for a cid never seen before.
 
         Raises:
-            UserOnHold: the row says this user is between two homes; whoever
-                asked for him waits rather than being routed to an address that
-                is being emptied.
+            UserOnHold: this user is between two homes.
 
         Acts on the indexes when the cid or the row is missing.
         """
@@ -287,8 +285,7 @@ class SpaCommander:
             user: the identity on his way out of the process he lives on.
             cause: what put him there, kept for the log.
 
-        Acts on his row; a hold already there keeps its first cause, which is
-        the one that explains the wait.
+        Acts on his row; a hold already there keeps its first cause.
         """
         row = self.user_map[user]
         if row["on_hold"] is None:
@@ -327,9 +324,8 @@ class SpaCommander:
         Returns:
             Whether the freezer was holding anything of his.
 
-        Acts on all three indexes and on the freezer — an identity nobody answers
-        for keeps nothing on disk — and counts what was waiting for him and will
-        now never be delivered.
+        Acts on all three indexes and on the freezer, and counts what was
+        waiting for him and will now never be delivered.
         """
         row = self.user_map.pop(user, None) or {}
         for cid in [cid for cid, owner in self.connection_user_map.items() if owner == user]:
@@ -348,13 +344,10 @@ class SpaCommander:
 
         Args:
             user: the identity that left his process.
-            occupancy_percent: what he occupied where he was, normalised — the
-                estimate whoever places him next reads. None leaves the estimate
-                as it was, which is the case of a user whose own worker event
-                died with the wire.
+            occupancy_percent: what he occupied where he was, normalised; None
+                leaves the estimate as it was.
 
-        Acts on his row: the mark goes on and the wait he may have been in is
-        over — his next request is routed by the mark itself.
+        Acts on his row: the mark goes on and the wait he may have been in is over.
         """
         row = self.user_map[user]
         row["frozen"] = True
@@ -382,12 +375,10 @@ class SpaCommander:
 
         Args:
             users: the identities to forget.
-            cause: why, for the log — a wild death, or a departure that lost
-                somebody on the way.
+            cause: why, for the log.
 
-        Acts on all three indexes and on the freezer, one user at a time: what a
-        process nobody can question left behind cannot be trusted, so it goes,
-        each departure named in the log with whether it had state to lose.
+        Acts on all three indexes and on the freezer, one user at a time, each
+        departure named in the log with whether it had state to lose.
         """
         for user in users:
             had_state = self.drop_user(user)
@@ -429,13 +420,8 @@ class SpaCommander:
     async def heartbeat_loop(self) -> None:
         """The one clock: a round at every beat, and never a death by a bad round.
 
-        Never returns — whoever starts it cancels it. A beat of the timer is a
-        full round and then a turn to each of the vertex's own tasks, which decide
-        for themselves whether their cadence has come; a wake is an anticipated
-        round on the groups that rang, and it is not a beat. A round that raises
-        leaves its line and the next beat comes anyway.
-
-        Acts through everything the round acts on.
+        Never returns — whoever starts it cancels it. Acts through everything
+        the round acts on.
         """
         while True:
             woken = await self._wait_beat()
@@ -458,10 +444,8 @@ class SpaCommander:
             group_handlers: the groups to give a turn to; all of them when None,
                 which is what the timer asks for.
 
-        Acts through the groups. One whose previous turn is still open is skipped
-        rather than given a second one, so a mute process spends its timeouts
-        inside its own group and delays nobody else; a turn that raises is a
-        value here, and cancels no sibling.
+        Acts through the groups: one still in its turn is skipped, and a turn
+        that raises is a value here and cancels no sibling.
         """
         turns = []
         for group_handler in group_handlers or list(self.group_map.values()):
@@ -478,9 +462,7 @@ class SpaCommander:
     async def drop_expired_users(self) -> None:
         """Forget the frozen whose age ran out — the row here, the folder on disk.
 
-        Acts on the indexes and on the freezer. It is the declared exception to
-        pruning layer by layer: a frozen user lives in no process, so nobody
-        below the vertex can notice that his time is up.
+        Acts on the indexes and on the freezer; the disk is opened off the loop.
         """
         frozen_users = [user for user in self.user_map if self.user_is_frozen(user)]
         expired = await asyncio.to_thread(self._expired_users, frozen_users)
@@ -491,10 +473,8 @@ class SpaCommander:
     async def cleanup_frozen(self) -> None:
         """Discard what the freezer holds for nobody the indexes know.
 
-        Acts on the freezer: the folders left over — a user forgotten while his
-        process was writing, the leavings of a machine that stopped badly — are
-        the set the disk carries less the set the vertex claims, and they go
-        counted and named. The disk is opened off the loop.
+        Acts on the freezer, counting and naming each folder it discards; the
+        disk is opened off the loop.
         """
         claimed = {self.freeze_handler.user_to_userkey(user) for user in self.user_map}
         sweep = self.freeze_handler.cleanup_frozen
@@ -506,13 +486,9 @@ class SpaCommander:
     async def check_resources(self) -> None:
         """Read the machine's memory against its alarm line, the storage against the reserve.
 
-        Acts on ``state`` — the MEMORY alone decides it, ``saturated`` past the
-        line and ``running`` back under: room on disk is not something the pool
-        can grow into. Storage under the reserve is said out loud instead, since
-        what answers it is a sysop who makes room or a bigger volume. Either way
-        ``need_resources`` is called for as long as it stands. A gauge the
-        platform does not offer alarms nobody: an unmeasured machine is not a
-        full one. The gauges are read off the loop.
+        Acts on ``state`` — the MEMORY alone decides it — and calls
+        ``need_resources`` for as long as either alarm stands. A gauge the
+        platform does not offer alarms nobody. The gauges are read off the loop.
         """
         memory_percent, storage_free_percent = await asyncio.to_thread(self._read_resources)
         over = memory_percent is not None and memory_percent > self.machine_memory_alarm_percent
@@ -527,9 +503,7 @@ class SpaCommander:
     def need_resources(self) -> None:
         """Ask the world outside this process for more room; here that is nothing.
 
-        A commander that can grow its own machine — a Kubernetes one, an
-        autoscaler's — says so by overriding this. Called at every check for as
-        long as the alarm stands.
+        A commander that can grow its own machine says so by overriding this.
         """
 
     async def _wait_beat(self) -> list[Any]:
@@ -561,9 +535,8 @@ class SpaCommander:
     def _expired_users(self, users: list[str]) -> list[str]:
         """Which of these frozen users are past their own expiry; runs off the loop.
 
-        It OPENS one item per user to read when it was written, which is the
-        expensive half of the sweep. A frozen row with nothing on disk has no age
-        to judge and is left to ``cleanup_frozen``.
+        A frozen row with nothing on disk has no age to judge, and is left to
+        ``cleanup_frozen``.
         """
         now = time.time()
         expired = []
@@ -576,12 +549,7 @@ class SpaCommander:
         return expired
 
     def _read_resources(self) -> tuple[float | None, float]:
-        """The machine's memory used and the freezer's storage free, in percent; off the loop.
-
-        The memory is None where the platform does not say — the same honesty the
-        worker's own resident size has, and no dependency taken for a gauge a
-        machine may simply not offer.
-        """
+        """The machine's memory used and the freezer's storage free, in percent; off the loop."""
         return self._machine_memory_used_percent(), self.freeze_handler.storage_free_percent
 
     def _machine_memory_used_percent(self) -> float | None:
@@ -625,12 +593,7 @@ class SpaCommander:
     def _build_orders_logger(
         self, path: str | Path | None, max_bytes: int, backup_count: int
     ) -> logging.Logger:
-        """The dedicated logger of the orders, with its own file when there is one.
-
-        The file is attached in place of whatever was there: a second commander
-        in the same process replaces the first rather than writing every row
-        twice into somebody else's file.
-        """
+        """The dedicated logger of the orders, with its own file in place of whatever was there."""
         logger = logging.getLogger(ORDERS_LOGGER_NAME)
         if path is None:
             return logger

@@ -53,11 +53,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-import os
-import shutil
-import tempfile
 import time
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -67,6 +63,7 @@ from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker, UserOnHold, W
 from genro_asgi.spa.orchestration.worker_connector import WORKER_SNAPSHOT_KEY
 
 from .group_stub import GroupStub
+from .conftest import wait_for
 
 WORKER_NAME = "standard_0001"
 GROUP = "standard"
@@ -188,47 +185,26 @@ def announced(reply: dict[str, Any]) -> list[str]:
     return [event["op"] for event in reply["worker_events"]]
 
 
-async def wait_for(condition, timeout: float = CALL_TIMEOUT) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while not condition():
-        if asyncio.get_running_loop().time() >= deadline:
-            raise TimeoutError("the story never reached the awaited state")
-        await asyncio.sleep(0.01)
-
-
 @pytest.fixture
-def group(story_root):
+def group(short_root):
     """The group of the story, with the real chain and the real vertex above it."""
-    return GroupStub(story_root / "frozen_users")
+    return GroupStub(short_root / "frozen_users")
 
 
 @pytest.fixture
-def story_root():
-    """The short root holding both the socket directory and the deposit."""
-    root = Path(tempfile.mkdtemp(prefix="gnrm2_"))
-    yield root
-    shutil.rmtree(root, ignore_errors=True)
-
-
-@pytest.fixture
-def deposit(story_root):
+def deposit(short_root):
     """The deposit as the parent reads it — the same root the child is given."""
-    return FreezeHandler(story_root / "frozen_users")
+    return FreezeHandler(short_root / "frozen_users")
 
 
 @pytest.fixture
-async def handler(story_root, group, monkeypatch):
+async def handler(short_root, group, repo_on_pythonpath):
     """The handler under test; no process and no socket of its own outlives the test."""
-    repo_root = Path(__file__).resolve().parents[2]
-    inherited = os.environ.get("PYTHONPATH", "")
-    monkeypatch.setenv(
-        "PYTHONPATH", os.pathsep.join([str(repo_root), inherited]).rstrip(os.pathsep)
-    )
     worker_handler = WorkerHandler(
         group,
         WORKER_NAME,
-        instance_dir=story_root / "i",
-        frozen_users_path=story_root / "frozen_users",
+        instance_dir=short_root / "i",
+        frozen_users_path=short_root / "frozen_users",
         entry_module=ENTRY_MODULE,
         main_threadpool_size=4,
         aux_threadpool_size=1,

@@ -32,10 +32,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os
-import shutil
-import tempfile
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -45,25 +41,18 @@ from genro_asgi.spa.orchestration.beats import every
 from genro_asgi.spa.orchestration.spa_commander import GUEST_PREFIX
 
 from .child_stub import GO_MUTE_OP
+from .conftest import wait_for
 
 CHILD_MODULE = "tests.orchestration.child_stub"
 WORKER_NAME = "standard_0001"
 
 
 @pytest.fixture
-def heartbeat_root():
-    """The short root holding the sockets and the deposit."""
-    root = Path(tempfile.mkdtemp(prefix="gnrhb_"))
-    yield root
-    shutil.rmtree(root, ignore_errors=True)
-
-
-@pytest.fixture
-def make_commander(heartbeat_root):
+def make_commander(short_root):
     """Build a vertex with the policies a test wants, over its own deposit."""
 
     def build(commander_class: type[SpaCommander] = SpaCommander, **policies: Any) -> SpaCommander:
-        return commander_class(heartbeat_root / "frozen_users", **policies)
+        return commander_class(short_root / "frozen_users", **policies)
 
     return build
 
@@ -74,13 +63,8 @@ def commander(make_commander):
 
 
 @pytest.fixture
-async def make_group(heartbeat_root, commander, monkeypatch):
+async def make_group(short_root, commander, repo_on_pythonpath):
     """Build real groups over the scripted child; no process or socket outlives the test."""
-    repo_root = Path(__file__).resolve().parents[2]
-    inherited = os.environ.get("PYTHONPATH", "")
-    monkeypatch.setenv(
-        "PYTHONPATH", os.pathsep.join([str(repo_root), inherited]).rstrip(os.pathsep)
-    )
     groups: list[GroupHandler] = []
 
     def build(name: str = "standard", **policies: Any) -> GroupHandler:
@@ -88,8 +72,8 @@ async def make_group(heartbeat_root, commander, monkeypatch):
         group = GroupHandler(
             commander,
             name,
-            instance_dir=heartbeat_root / "i",
-            frozen_users_path=heartbeat_root / "frozen_users",
+            instance_dir=short_root / "i",
+            frozen_users_path=short_root / "frozen_users",
             entry_module=CHILD_MODULE,
             worker_kwargs={"group": name},
             process_ping_timeout=1.0,
@@ -194,14 +178,6 @@ def counting_check(checks: list[int], beats: int):
         checks.append(len(checks) + 1)
 
     return check_occupancy
-
-
-async def wait_for(condition, timeout: float = 10.0) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while not condition():
-        if asyncio.get_running_loop().time() >= deadline:
-            raise TimeoutError("the clock never reached the awaited state")
-        await asyncio.sleep(0.01)
 
 
 # -- the round, over real processes --
@@ -531,11 +507,11 @@ async def test_the_memory_past_its_line_saturates_the_machine_and_asks_for_more(
 
 
 async def test_the_storage_under_the_reserve_is_said_out_loud_but_saturates_nobody(
-    heartbeat_root, monkeypatch
+    short_root, monkeypatch
 ):
-    log_path = heartbeat_root / "orders.log"
+    log_path = short_root / "orders.log"
     commander = CountingCommander(
-        heartbeat_root / "frozen_users", orchestration_log_path=log_path
+        short_root / "frozen_users", orchestration_log_path=log_path
     )
     # No real volume is 100% free, so the lamp is on whatever disk runs the test.
     monkeypatch.setattr(spa_commander, "STORAGE_RESERVE_PERCENT", 100.0)

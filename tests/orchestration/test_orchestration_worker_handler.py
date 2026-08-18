@@ -49,6 +49,7 @@ from genro_asgi.spa.orchestration.worker_connector import GLOBAL_STORE_KEY, WORK
 from genro_asgi.spa.orchestration import WorkerHandler
 from genro_asgi.spa.orchestration import worker_handler as worker_handler_module
 from .group_stub import GroupStub
+from .conftest import wait_for
 from genro_asgi.spa.orchestration.worker_handler import (
     PING_OP_PATH,
     QUIT_OP_PATH,
@@ -156,14 +157,6 @@ async def make_handler(instance_root, group):
             handler.process.kill()
             handler.process.wait()
         await handler.connector.stop()
-
-
-async def wait_for(condition, timeout: float = 5.0) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while not condition():
-        if asyncio.get_running_loop().time() >= deadline:
-            raise TimeoutError("the handler never reached the awaited state")
-        await asyncio.sleep(0.01)
 
 
 async def test_the_spawn_payload_carries_the_child_whole_configuration(make_handler, instance_root):

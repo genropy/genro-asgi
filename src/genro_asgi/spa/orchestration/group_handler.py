@@ -144,11 +144,7 @@ class GroupHandler:
             bytes — the total every percentage below is read against.
         memory_max_percent: this group's share of that concession.
         worker_memory_max_percent: what ONE worker of this group may hold, as a
-            share of the group's own quota. In the grammar this rung carries the
-            same key as the one above it (``memory_max_percent``): the cascade is
-            the vertex's percentage of the machine, the group's of the
-            concession, the worker's of the quota, and the prefix is here only
-            because two rungs meet in one constructor.
+            share of the group's own quota.
         worker_settings: what every ``WorkerHandler`` of this group is built
             with — the child's identity and the installation's paths — handed
             over verbatim.
@@ -243,9 +239,8 @@ class GroupHandler:
         """This group's turn of the round: bury the dead, beat the silent, read the shape.
 
         Acts on the group: it consumes the wake it was given — which brings the
-        reading of the shape forward, whatever its own count says — settles every
-        process whose end has not been read yet, and lets ``check_occupancy`` take
-        the step that reading calls for.
+        reading of the shape forward — settles every process whose end has not
+        been read yet, and lets ``check_occupancy`` take its step.
         """
         woken = self.ping_now_event.is_set()
         self.ping_now_event.clear()
@@ -259,8 +254,7 @@ class GroupHandler:
         """Beat every silent worker of this group at once, and wait for all of them.
 
         Acts on the processes: a mute one is killed by its own handler, and a
-        beat that raises is that worker's business and nobody else's — they are
-        all awaited, and none of them cancels a sibling.
+        beat that raises cancels no sibling.
         """
         beats = [
             worker_handler.ping_process()
@@ -277,9 +271,7 @@ class GroupHandler:
 
         Returns:
             The fullest of the components the photo carries, each clamped to its
-            own full — 0.0 when nothing in it is measurable. The memory component
-            is read against what one worker of this group may hold, which is
-            ``worker_memory_max_percent`` of the group's own quota.
+            own full — 0.0 when nothing in it is measurable.
         """
         ceiling = self.memory_quota_bytes * self.worker_memory_max_percent / 100.0
         rss_bytes = (worker_snapshot or {}).get("rss_bytes")
@@ -293,8 +285,7 @@ class GroupHandler:
             worker_handler: the worker being judged.
 
         Returns:
-            The setpoint, less the reserve when that worker is the reception: it
-            keeps room for what only it does, receiving whoever arrives unplaced.
+            The setpoint, less the reserve when that worker is the reception.
         """
         if worker_handler is self.reception:
             return self.occupancy_max_percent - self.reception_reserved_percent
@@ -312,8 +303,7 @@ class GroupHandler:
             The name of the worker that took him.
 
         Raises:
-            AssignmentRefused: every worker refused. The wake is rung on the way
-                out, so the group grows before he comes back.
+            AssignmentRefused: every worker refused; the wake is rung on the way out.
 
         Acts on ``user_worker_map``.
         """
@@ -339,10 +329,9 @@ class GroupHandler:
     async def check_occupancy(self) -> None:
         """Read the group once and take the ONE step that reading calls for.
 
-        Acts on the group: it restarts a worker past the restart setpoint, brings
-        one into being when nobody has room for a newcomer left, or closes one
-        whose share the others can absorb — and writes ``state`` when the memory
-        quota refuses the growth.
+        Acts on the group: restart past the restart setpoint, growth when nobody
+        has room left, closure of a worker the others can absorb — and ``state``
+        when the memory quota refuses the growth.
         """
         picture = {
             worker_handler.name: self.get_occupancy_percent(worker_handler.worker_snapshot)
@@ -393,9 +382,7 @@ class GroupHandler:
         """Ask a worker to leave for good and put a fresh one in its place.
 
         Args:
-            worker_handler: the worker that is not coming back — its users go to
-                the freezer as it drains, and come home wherever they are next
-                placed.
+            worker_handler: the worker that is not coming back.
 
         Returns:
             The worker born in its place, or None when that one could not start.
@@ -414,8 +401,7 @@ class GroupHandler:
             name: the worker that has ended.
 
         Raises:
-            KeyError: this group has no worker of that name — a death reported
-                for somebody else's worker is a bug, not a thing to swallow.
+            KeyError: this group has no worker of that name.
 
         Acts on ``worker_handler_map`` and ``user_worker_map``; the socket is
         taken away detached, since whoever calls this is the fold and cannot wait.

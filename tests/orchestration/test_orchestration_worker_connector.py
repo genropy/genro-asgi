@@ -29,9 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import shutil
-import tempfile
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -43,6 +40,8 @@ from genro_asgi.spa.orchestration.worker_connector import (
     GLOBAL_STORE_KEY,
     REPLY_METHOD,
 )
+
+from .conftest import wait_for
 
 
 class ChildPeer:
@@ -142,26 +141,11 @@ def handler():
 
 
 @pytest.fixture
-def socket_root():
-    root = tempfile.mkdtemp(prefix="gnrwire_")
-    yield Path(root)
-    shutil.rmtree(root, ignore_errors=True)
-
-
-@pytest.fixture
-async def connector(socket_root, handler):
-    wire = WorkerConnector(handler, socket_root / "i" / f"{handler.name}.sock")
+async def connector(short_root, handler):
+    wire = WorkerConnector(handler, short_root / "i" / f"{handler.name}.sock")
     await wire.start()
     yield wire
     await wire.stop()
-
-
-async def wait_for(condition, timeout: float = 5.0) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while not condition():
-        if asyncio.get_running_loop().time() >= deadline:
-            raise TimeoutError("the wire never reached the awaited state")
-        await asyncio.sleep(0.01)
 
 
 async def test_the_socket_is_bound_in_a_private_directory(connector):
@@ -171,8 +155,8 @@ async def test_the_socket_is_bound_in_a_private_directory(connector):
     assert connector.connected is False
 
 
-async def test_a_stale_socket_is_unlinked_before_the_bind(socket_root, handler):
-    socket_path = socket_root / "i" / f"{handler.name}.sock"
+async def test_a_stale_socket_is_unlinked_before_the_bind(short_root, handler):
+    socket_path = short_root / "i" / f"{handler.name}.sock"
     socket_path.parent.mkdir(mode=0o700, parents=True)
     socket_path.write_bytes(b"what the crash left behind")
 
@@ -255,8 +239,8 @@ async def test_a_call_in_flight_dies_with_the_child(connector):
         await connector.call("/freeze_everybody")
 
 
-async def test_a_deliberate_stop_announces_no_death(socket_root, handler):
-    wire = WorkerConnector(handler, socket_root / "i" / f"{handler.name}.sock")
+async def test_a_deliberate_stop_announces_no_death(short_root, handler):
+    wire = WorkerConnector(handler, short_root / "i" / f"{handler.name}.sock")
     await wire.start()
     child = ChildPeer(str(wire.socket_path))
     await child.present()
