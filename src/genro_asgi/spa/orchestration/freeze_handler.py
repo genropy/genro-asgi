@@ -97,6 +97,18 @@ class FreezeHandler:
         return urllib.parse.quote(user, safe="")
 
     @property
+    def disk_used_percent_TBD(self) -> float:
+        """How full the disk the deposit lives on is, in percent.
+
+        Returns:
+            The used share of the whole filesystem, not the weight of the
+            deposit: what runs out is the disk, and the deposit is only one of
+            the things filling it.
+        """
+        usage = shutil.disk_usage(self.root_path)
+        return 100.0 * usage.used / usage.total
+
+    @property
     def user_folders(self) -> set[str]:
         """The keys of every folder in the deposit, as one set.
 
@@ -276,10 +288,32 @@ class FreezeHandler:
 
         Removes the folder and verifies it is gone.
         """
-        folder = self._user_folder(user)
+        self._drop_folder(self.user_to_userkey(user))
+
+    def drop_unclaimed_folders_TBD(self, claimed: set[str]) -> list[str]:
+        """Sweep the deposit of everything that belongs to nobody.
+
+        Args:
+            claimed: the keys somebody still answers for — the caller computes
+                them forward from its own identities, since no identity ever
+                comes back from a folder name.
+
+        Returns:
+            The keys swept away, so the caller can count and name them.
+
+        Removes those folders, each verified gone.
+        """
+        orphans = sorted(self.user_folders - claimed)
+        for userkey in orphans:
+            self._drop_folder(userkey)
+        return orphans
+
+    def _drop_folder(self, userkey: str) -> None:
+        """Remove one folder of the deposit by its key, and verify it is gone."""
+        folder = self.root_path / userkey
         shutil.rmtree(folder, ignore_errors=True)
         if folder.exists():
-            raise RuntimeError(f"deposit of {user}: the folder survived its removal")
+            raise RuntimeError(f"deposit folder {userkey}: it survived its removal")
 
     def _user_folder(self, user: str) -> Path:
         return self.root_path / self.user_to_userkey(user)

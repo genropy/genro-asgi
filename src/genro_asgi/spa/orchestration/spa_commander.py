@@ -71,11 +71,35 @@ nobody's decision.
 **The counters are aggregate, so they are here.** How many parcels were
 discarded, how much was waiting for somebody who is gone: numbers the level below
 cannot know because each of them sees only its own share.
+
+**There is ONE clock in the machine, and it is here.** ``heartbeat_loop`` waits
+for its timer OR for any group's wake, whichever comes first: the timer gives a
+full round — every group a turn, and the vertex's own tasks each on its own count
+of beats — while a wake gives an anticipated round on THAT group alone, which is
+how the end of a wire is answered in milliseconds whatever the cadence. There is
+no caretaker object anywhere: the probe IS the beat, and the monitor gets a fresh
+photo by ringing the wake like everybody else. A group whose previous turn is
+still open is skipped rather than given a second one, so a mute process delays
+its own group and never the machine; every turn is awaited, an exception is a
+value and not a cancellation, and a round that fails is written down and
+followed by the next beat.
+
+**Three tasks are the vertex's own, because nobody below can do them.** The
+frozen whose age ran out have no process to notice them, so ``drop_expired_users``
+prunes the row and the disk itself — the declared exception to the rule that the
+levels below prune themselves. ``disk_cleanup`` discards what the deposit holds
+for nobody the indexes know. ``check_resources`` reads the machine's memory and
+the deposit's disk against their alarm lines, writes ``state`` and calls
+``need_resources``, which does nothing here and is where a commander that can
+grow its own machine says so. All three open the disk, so they read it OFF the
+loop: the vertex must never be the reason a healthy child reads as mute.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from collections import Counter
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -97,7 +121,23 @@ GUEST_PREFIX = "guest_"
 #: attached to it.
 ORDERS_LOGGER_NAME = "genro_asgi.orchestration.orders"
 
-__all__ = ["GUEST_PREFIX", "ORDERS_LOGGER_NAME", "SpaCommander"]
+#: Seconds between two beats of the one clock — the twin of
+#: ``PROCESS_PING_INTERVAL``, which is the cadence a single process is beaten at.
+HEARTBEAT_SECONDS = 5.0
+
+# Beats between two rounds of each task of the vertex — the cadences, each where
+# its own knowledge is: an expiry is hours away, so the frozen are read every few
+# minutes; the sweep of the deposit opens the disk over everything ever frozen,
+# which F18 measured in seconds at scale, so it goes hourly; the machine's gauges
+# are trends and not emergencies, and a minute is soon enough for a trend.
+FROZEN_EXPIRY_EVERY_TBD = 60
+DISK_CLEANUP_EVERY_TBD = 720
+RESOURCES_CHECK_EVERY_TBD = 12
+
+# The conversion the expiry hours of the grammar meet the clock through.
+SECONDS_PER_HOUR = 3600.0
+
+__all__ = ["GUEST_PREFIX", "HEARTBEAT_SECONDS", "ORDERS_LOGGER_NAME", "SpaCommander"]
 
 
 class SpaCommander:
@@ -110,6 +150,14 @@ class SpaCommander:
             on the logger alone, which is what a test wants.
         orchestration_log_max_bytes: the size at which that file rotates.
         orchestration_log_backup_count: how many rotations are kept.
+        user_expiry_hours: how long a frozen user is kept before the machine
+            forgets him whole.
+        guest_expiry_hours: the same for somebody who never logged in, and it is
+            shorter — a guest is a browser, not a person the machine knows.
+        machine_memory_alarm_percent: the health line of the WHOLE machine, not
+            of what this server was conceded: past it nothing grows.
+        frozen_users_disk_alarm_percent: the same line for the disk the deposit
+            lives on.
     """
 
     def __init__(
@@ -119,8 +167,16 @@ class SpaCommander:
         orchestration_log_path: str | Path | None = None,
         orchestration_log_max_bytes: int = 10 * 1024 * 1024,
         orchestration_log_backup_count: int = 5,
+        user_expiry_hours: float = 720.0,
+        guest_expiry_hours: float = 24.0,
+        machine_memory_alarm_percent: float = 90.0,
+        frozen_users_disk_alarm_percent: float = 90.0,
     ) -> None:
         self.freeze_handler = FreezeHandler(frozen_users_path)
+        self.user_expiry_hours = user_expiry_hours
+        self.guest_expiry_hours = guest_expiry_hours
+        self.machine_memory_alarm_percent = machine_memory_alarm_percent
+        self.frozen_users_disk_alarm_percent = frozen_users_disk_alarm_percent
         #: The master of the store every worker holds a replica of: the only
         #: writer of that content is here, and a replica is replaced entire.
         self.global_register = Bag()
@@ -139,6 +195,10 @@ class SpaCommander:
         self.connection_user_map: dict[str, str] = {}
         #: Which connection each page belongs to; written once, only ever removed.
         self.page_connection_map: dict[str, str] = {}
+        #: The groups of this machine, by name — a group hangs itself here when
+        #: it is built, the way a worker hangs itself in its own group's map.
+        self.group_handler_map_TBD: dict[str, Any] = {}
+        self._group_turns: dict[str, asyncio.Task[None]] = {}
         self._logger = logging.getLogger(__name__)
         self._orders_logger = self._build_orders_logger(
             orchestration_log_path,
@@ -329,6 +389,181 @@ class SpaCommander:
             numbers,
             outcome,
         )
+
+    async def heartbeat_loop(self) -> None:
+        """The one clock: a round at every beat, and never a death by a bad round.
+
+        Never returns — whoever starts it cancels it. A beat of the timer is a
+        full round plus whichever of the vertex's own tasks its count has come
+        round for; a wake is an anticipated round on the groups that rang, and it
+        is not a beat. A round that raises leaves its line and the next beat
+        comes anyway.
+
+        Acts through everything the round acts on.
+        """
+        beats = 0
+        while True:
+            woken = await self._wait_beat()
+            try:
+                if woken:
+                    await self.ping_groups(woken)
+                else:
+                    beats += 1
+                    await self.ping_groups()
+                    await self._run_due_tasks(beats)
+            except Exception:
+                self._logger.exception("Vertex: the round failed")
+
+    async def ping_groups(self, group_handlers: list[Any] | None = None) -> None:
+        """Give every group its turn, all at once, and wait for all of them.
+
+        Args:
+            group_handlers: the groups to give a turn to; all of them when None,
+                which is what the timer asks for.
+
+        Acts through the groups. One whose previous turn is still open is skipped
+        rather than given a second one, so a mute process spends its timeouts
+        inside its own group and delays nobody else; a turn that raises is a
+        value here, and cancels no sibling.
+        """
+        turns = []
+        for group_handler in group_handlers or list(self.group_handler_map_TBD.values()):
+            running = self._group_turns.get(group_handler.name)
+            if running is not None and not running.done():
+                self._logger.warning("Vertex: group %s is still in its turn", group_handler.name)
+                continue
+            running = asyncio.get_running_loop().create_task(group_handler.ping())
+            self._group_turns[group_handler.name] = running
+            turns.append(running)
+        await asyncio.gather(*turns, return_exceptions=True)
+
+    async def drop_expired_users(self) -> None:
+        """Forget the frozen whose age ran out — the row here, the folder on disk.
+
+        Acts on the indexes and on the deposit. It is the declared exception to
+        pruning layer by layer: a frozen user lives in no process, so nobody
+        below the vertex can notice that his time is up.
+        """
+        frozen_users = [user for user in self.user_map if self.user_is_frozen(user)]
+        expired = await asyncio.to_thread(self._expired_users, frozen_users)
+        if expired:
+            self.purge_users_TBD(expired, cause="expired")
+
+    async def disk_cleanup(self) -> None:
+        """Discard what the deposit holds for nobody the indexes know.
+
+        Acts on the deposit: the folders left over — a user forgotten while his
+        process was writing, the leavings of a machine that stopped badly — are
+        the set the disk carries less the set the vertex claims, and they go
+        counted and named. The disk is opened off the loop.
+        """
+        claimed = {self.freeze_handler.user_to_userkey(user) for user in self.user_map}
+        sweep = self.freeze_handler.drop_unclaimed_folders_TBD
+        for userkey in await asyncio.to_thread(sweep, claimed):
+            self.counters["orphan_folders_discarded"] += 1
+            self.log_order("vertex", "disk_cleanup", userkey, outcome="orphan")
+
+    async def check_resources(self) -> None:
+        """Read the machine's memory and the deposit's disk against their alarm lines.
+
+        Acts on ``state`` — ``saturated`` while either gauge is over its line,
+        ``running`` when both are back under — and calls ``need_resources`` for
+        as long as the alarm stands. A gauge the platform does not offer alarms
+        nobody: an unmeasured machine is not a full one. The gauges are read off
+        the loop.
+        """
+        memory_percent, disk_percent = await asyncio.to_thread(self._read_resources)
+        over = disk_percent > self.frozen_users_disk_alarm_percent or (
+            memory_percent is not None and memory_percent > self.machine_memory_alarm_percent
+        )
+        self.state = "saturated" if over else "running"
+        if over:
+            numbers = {"memory_percent": memory_percent, "disk_percent": disk_percent}
+            self.log_order("vertex", "check_resources", numbers=numbers, outcome="saturated")
+            self.need_resources()
+
+    def need_resources(self) -> None:
+        """Ask the world outside this process for more room; here that is nothing.
+
+        A commander that can grow its own machine — a Kubernetes one, an
+        autoscaler's — says so by overriding this. Called at every check for as
+        long as the alarm stands.
+        """
+
+    async def _wait_beat(self) -> list[Any]:
+        """Wait for the timer or for any group's wake, whichever comes first.
+
+        Returns:
+            The groups that rang, and an empty list when the timer came first —
+            which is the full round.
+        """
+        wakes = {
+            asyncio.ensure_future(group_handler.ping_now_event.wait()): group_handler
+            for group_handler in self.group_handler_map_TBD.values()
+        }
+        timer = asyncio.ensure_future(asyncio.sleep(HEARTBEAT_SECONDS))
+        done, pending = await asyncio.wait([timer, *wakes], return_when=asyncio.FIRST_COMPLETED)
+        for waiting in pending:
+            waiting.cancel()
+        return [group_handler for wake, group_handler in wakes.items() if wake in done]
+
+    async def _run_due_tasks(self, beats: int) -> None:
+        """Run the vertex's own tasks whose count of beats has come round.
+
+        Each one is on its own: a task that raises leaves its line and the others
+        of the same beat still run.
+        """
+        for every, task in (
+            (FROZEN_EXPIRY_EVERY_TBD, self.drop_expired_users),
+            (DISK_CLEANUP_EVERY_TBD, self.disk_cleanup),
+            (RESOURCES_CHECK_EVERY_TBD, self.check_resources),
+        ):
+            if beats % every:
+                continue
+            try:
+                await task()
+            except Exception:
+                self._logger.exception("Vertex: %s failed", task.__name__)
+
+    def _expired_users(self, users: list[str]) -> list[str]:
+        """Which of these frozen users are past their own expiry; runs off the loop.
+
+        It OPENS one item per user to read when it was written, which is the
+        expensive half of the sweep. A frozen row with nothing on disk has no age
+        to judge and is left to ``disk_cleanup``.
+        """
+        now = time.time()
+        expired = []
+        for user in users:
+            header = self.freeze_handler.get_item_header(user)
+            guest = user.startswith(GUEST_PREFIX)
+            hours = self.guest_expiry_hours if guest else self.user_expiry_hours
+            if header and now - header["ts"] > hours * SECONDS_PER_HOUR:
+                expired.append(user)
+        return expired
+
+    def _read_resources(self) -> tuple[float | None, float]:
+        """The machine's memory and the deposit's disk, in percent; runs off the loop.
+
+        The memory is None where the platform does not say — the same honesty the
+        worker's own resident size has, and no dependency taken for a gauge a
+        machine may simply not offer.
+        """
+        return self._machine_memory_used_percent(), self.freeze_handler.disk_used_percent_TBD
+
+    def _machine_memory_used_percent(self) -> float | None:
+        """How much of the WHOLE machine's memory is in use, in percent, or None."""
+        gauges: dict[str, float] = {}
+        try:
+            with open("/proc/meminfo", encoding="ascii") as meminfo:
+                for row in meminfo:
+                    name, _, value = row.partition(":")
+                    if name in ("MemTotal", "MemAvailable"):
+                        gauges[name] = float(value.split()[0])
+        except OSError:
+            return None
+        total, available = gauges.get("MemTotal"), gauges.get("MemAvailable")
+        return 100.0 * (total - available) / total if total and available is not None else None
 
     def _new_row(self) -> dict[str, Any]:
         """The row of an identity nobody knows anything about yet."""

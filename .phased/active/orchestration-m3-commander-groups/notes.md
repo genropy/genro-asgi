@@ -4,6 +4,96 @@
 rejected. The `_TBD` names each phase brought to the owner, and the name they
 got, belong here too.)
 
+## Phase 4
+
+**The skip of a group still in its turn cannot happen from the loop, and it was
+built anyway because the plan ratifies it.** With ONE loop that awaits every
+round, a turn is always finished before the next round starts: the overlap needs
+a caller firing rounds out of band — the monitor asking for a fresh photo, the
+request chain of Macro 4. So the guard is proved by calling `ping_groups()` twice
+CONCURRENTLY, which is the shape those callers will have, and it is LOUD (a
+warning line) rather than silent, since a group skipped twice running is a group
+whose process is stuck. Its second reason is the wake: the group clears its own
+event at the start of its turn, so an event still set while a turn runs is a
+fresh ring and gets its own round — but only because a skipped group keeps its
+event, which without the guard would be a tight loop of rounds nobody serves.
+
+**The wake is consumed by the GROUP, not by the clock.** `_wait_beat` only
+WAITS on the events; `GroupHandler.ping()` reads and clears its own. Two things
+follow, both wanted: the group knows it was woken (which is what overrides its
+count of beats and reads the shape at once) without the vertex having to tell it,
+and a wake rung DURING a turn survives that turn — the event was already cleared
+when the turn began, so the ring stands and the next `_wait_beat` returns at
+once. Rejected: clearing in the vertex and passing a `woken=True` down to
+`ping()`, which would have put a second road to the same fact into the signature.
+
+**The vertex's own tasks are isolated one by one, over and above the loop's own
+guard.** The scheduler pattern isolates at the LOOP; here each task is wrapped
+too, for a case that is not hypothetical: a disk that has gone bad makes
+`drop_expired_users` raise at every beat, and with a single guard that would take
+the resource ALARM down with it — the one thing that would have said what is
+happening. Four lines, one test (`test_a_task_that_raises_leaves_the_others_of_its_beat_alone`).
+
+**The expiry hours are held by the VERTEX, and the grammar says group.** F44.5
+puts `user_expiry_hours`/`guest_expiry_hours` in the group's grammar — the worker
+judges the ACTIVE users with them — while the FROZEN are the vertex's, and a
+frozen user's row does not say which group he came from (`user_map[user]["group"]`
+is written by nobody yet). Reading the group off the header on disk was rejected:
+a policy would then be chosen by a file, and the file is diagnostic by ratified
+rule. So the vertex carries the two numbers as its own kwargs, and the guest is
+told apart by the `GUEST_PREFIX` it already owns. Phase 5, which writes the
+grammar, is where the two rungs are reconciled — the same key on two rungs is the
+cascade this workflow already uses for `memory_max_percent`.
+
+**The age of a frozen user is read from the header, so the reaper opens the
+disk.** There is no timestamp in the ratified row (§6 fixes its six fields) and
+inventing one would have been a schema change smuggled into a phase. The header
+already carries `ts`, written by whoever froze him, and F18 measured exactly this
+— opening the packets — as the expensive part, which is why the reaper has the
+slowest cadence of the three and runs `_expired_users` on a thread. A row marked
+frozen with nothing on disk has no age to judge: it is left alone here and
+answered by `disk_cleanup`, which is the sweep that owns the disagreements
+between the indexes and the deposit.
+
+**The sweep of the folders went into the `FreezeHandler`.** The first draft had
+the vertex compute the set difference and call a `drop_userkey_folder` per
+orphan; but the deposit is the object that talks to the filesystem, and a
+set-difference over its own folders is its own work. So it exposes
+`drop_unclaimed_folders_TBD(claimed)` — the caller says who is still answered
+for, computed FORWARD from its identities, since no identity comes back from a
+folder name — and the removal by key is private, shared with `drop_user_folder`.
+One public name fewer, four lines fewer at the vertex, and the rule that nobody
+else computes a path under the root is kept whole.
+
+**The machine's memory is read from `/proc/meminfo`, and is None where there is
+no `/proc`.** The exact precedent is `SpaWorker.rss_bytes`: no dependency is
+taken for a gauge a platform may simply not have, and a gauge nobody can read
+alarms nobody — an unmeasured machine is not a full one. `os.sysconf` was
+examined because it answers on macOS too, and rejected: it gives FREE pages, not
+AVAILABLE ones, so a healthy Linux box full of page cache would read as ~95% used
+and saturate the pool for ever. The price is six lines this laptop cannot cover;
+the ubuntu CI runs them, and the disk half of the same check is proved on every
+platform (the alarm line is put at 0.0%, which any real disk is over).
+
+**The line cap, itemised.** 127 executable lines against ~120 for the two files
+of the plan. The clock itself is 31 (loop 12, `ping_groups` 10, `_wait_beat` 9);
+the three tasks and what they read are 52, of which 14 are the two gauges and 9
+the expiry arithmetic; the plumbing (imports, five constants, the four grammar
+kwargs and their assignments, the two new maps) is 18; the group's turn is 17.
+Cut on the way, after a first draft measured 177: `__all__` back to one line with
+the cadence constants left out of it (the `WAIT_POLL_INTERVAL` precedent, an
+internal knob nobody imports), the four `#:` blocks of the cadences merged into
+one comment over the three numbers, `check_resources` down from 18 lines to 9
+(the state written as one expression instead of two branches, the log's numbers
+under short keys), `_expired_users` from 14 to 9, the folder sweep moved out to
+its owner, and the group's `gather` de-nested. What is left is irreducible
+without dropping something the plan asks for.
+
+**`clock` is the fixture and not a method.** The tests create and cancel
+`heartbeat_loop` exactly as a lifespan will, which is also the proof that no
+`start`/`stop` pair is missing: the coroutine is the whole thing, and whoever
+owns the lifespan owns the task.
+
 ## Phase 3
 
 **The occupancy formula was transplanted over the gauges that really travel, and

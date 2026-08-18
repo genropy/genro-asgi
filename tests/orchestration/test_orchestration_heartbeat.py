@@ -1,0 +1,472 @@
+# Copyright 2025 Softwell S.r.l.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""The one clock: the round, the wake that anticipates it, and the vertex's own tasks.
+
+Two kinds of subject live here, because the clock has two kinds of claim to make.
+What the round DOES is proved on real child processes — a group over
+``child_stub``, its own socket, its own beat down the wire and the answer climbing
+the chain back into the handler. What the clock DECIDES — who gets a turn, whose
+turn is skipped, which task has come round, what a failing turn does to its
+siblings — is proved on a group double that does nothing but record the turn it
+was given: driving those with real processes would prove the same thing more
+slowly and less exactly.
+
+The sockets and the deposit live under a short ``mkdtemp`` root: the system caps a
+UDS path at about a hundred characters, and pytest's own directory is already
+past it.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import os
+import shutil
+import tempfile
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from genro_asgi.spa.orchestration import GroupHandler, SpaCommander, group_handler, spa_commander
+from genro_asgi.spa.orchestration.spa_commander import GUEST_PREFIX
+
+from .child_stub import GO_MUTE_OP
+
+CHILD_MODULE = "tests.orchestration.child_stub"
+WORKER_NAME = "standard_0001"
+
+
+@pytest.fixture
+def heartbeat_root():
+    """The short root holding the sockets and the deposit."""
+    root = Path(tempfile.mkdtemp(prefix="gnrhb_"))
+    yield root
+    shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.fixture
+def make_commander(heartbeat_root):
+    """Build a vertex with the policies a test wants, over its own deposit."""
+
+    def build(commander_class: type[SpaCommander] = SpaCommander, **policies: Any) -> SpaCommander:
+        return commander_class(heartbeat_root / "frozen_users", **policies)
+
+    return build
+
+
+@pytest.fixture
+def commander(make_commander):
+    return make_commander()
+
+
+@pytest.fixture
+async def make_group(heartbeat_root, commander, monkeypatch):
+    """Build real groups over the scripted child; no process or socket outlives the test."""
+    repo_root = Path(__file__).resolve().parents[2]
+    inherited = os.environ.get("PYTHONPATH", "")
+    monkeypatch.setenv(
+        "PYTHONPATH", os.pathsep.join([str(repo_root), inherited]).rstrip(os.pathsep)
+    )
+    groups: list[GroupHandler] = []
+
+    def build(name: str = "standard", **policies: Any) -> GroupHandler:
+        group = GroupHandler(
+            commander,
+            name,
+            instance_dir=heartbeat_root / "i",
+            frozen_users_path=heartbeat_root / "frozen_users",
+            entry_module=CHILD_MODULE,
+            worker_kwargs={"group": name},
+            process_ping_timeout=1.0,
+            **policies,
+        )
+        groups.append(group)
+        return group
+
+    yield build
+    for group in groups:
+        for worker_handler in list(group.worker_handler_map.values()):
+            if worker_handler.process is not None and worker_handler.process.poll() is None:
+                worker_handler.process.kill()
+                worker_handler.process.wait()
+            await worker_handler.connector.stop()
+
+
+@pytest.fixture
+async def clock(commander):
+    """Start the one clock of this vertex, and let it beat no longer than the test."""
+    beating: list[asyncio.Task[None]] = []
+
+    def start() -> asyncio.Task[None]:
+        task = asyncio.get_running_loop().create_task(commander.heartbeat_loop())
+        beating.append(task)
+        return task
+
+    yield start
+    for task in beating:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
+class GroupDouble:
+    """A group seen from the clock alone: its wake, its turns, and how long each takes.
+
+    Args:
+        name: the group's name, which is what the vertex files its turn under.
+        delay: how long a turn of it takes.
+        failing: whether its turn ends by raising.
+    """
+
+    def __init__(self, name: str, *, delay: float = 0.0, failing: bool = False) -> None:
+        self.name = name
+        self.ping_now_event = asyncio.Event()
+        self.delay = delay
+        self.failing = failing
+        #: One entry per turn taken, saying whether the wake was rung for it.
+        self.turns: list[bool] = []
+
+    async def ping(self) -> None:
+        """The turn, taken as the real group takes it: consume the wake, then work."""
+        self.turns.append(self.ping_now_event.is_set())
+        self.ping_now_event.clear()
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        if self.failing:
+            raise RuntimeError(f"the turn of {self.name} blew up")
+
+
+class CountingCommander(SpaCommander):
+    """A vertex that keeps the count of the times it asked the world for more room."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.asked = 0
+
+    def need_resources(self) -> None:
+        """Count the ask: this is the seam a Kubernetes commander really overrides."""
+        self.asked += 1
+
+
+def group_double(commander: SpaCommander, name: str, **shape: Any) -> GroupDouble:
+    """One group double, hung under the vertex the way a real group hangs itself."""
+    double = GroupDouble(name, **shape)
+    commander.group_handler_map_TBD[name] = double
+    return double
+
+
+def parked_state(commander: SpaCommander, user: str) -> None:
+    """What a freeze leaves on disk and in the indexes, written as the machine writes it."""
+    commander.connection_user_map[f"cid-{user}"] = user
+    commander.resolve_user(f"cid-{user}")
+    commander.freeze_handler.take_lock(user, WORKER_NAME)
+    commander.freeze_handler.write_user_register_item(
+        user, {"store": "whatever"}, writer=WORKER_NAME, cause="freeze", group="standard"
+    )
+    commander.freeze_handler.release_lock(user, WORKER_NAME)
+    commander.record_user_frozen_TBD(user, None)
+
+
+def counting_check(checks: list[int]):
+    """A reading of the shape that only counts itself: the real one has its own file."""
+
+    async def check_occupancy() -> None:
+        checks.append(len(checks) + 1)
+
+    return check_occupancy
+
+
+async def wait_for(condition, timeout: float = 10.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not condition():
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError("the clock never reached the awaited state")
+        await asyncio.sleep(0.01)
+
+
+# -- the round, over real processes --
+
+
+async def test_one_round_beats_a_real_child_and_its_answer_climbs_the_chain(
+    make_group, commander
+):
+    group = make_group(process_ping_interval=0.0)
+    worker_handler = await group.start_worker()
+    worker_handler.worker_snapshot = None
+
+    await commander.ping_groups()
+
+    assert worker_handler.worker_snapshot["pid"] == worker_handler.process.pid
+    assert worker_handler.state == "running"
+
+
+async def test_only_the_workers_nobody_has_heard_from_are_beaten(make_group):
+    group = make_group()
+    worker_handler = await group.start_worker()
+    worker_handler.worker_snapshot = None
+
+    await group.ping_workers()
+
+    # Its presentation arrived a moment ago: beating it would ask a process what
+    # it has just said.
+    assert not worker_handler.silent_TBD
+    assert worker_handler.worker_snapshot is None
+
+    worker_handler.process_ping_interval = 0.0
+
+    await group.ping_workers()
+
+    assert worker_handler.silent_TBD
+    assert worker_handler.worker_snapshot["pid"] == worker_handler.process.pid
+
+
+async def test_a_mute_process_delays_its_own_group_and_not_the_others(make_group, commander):
+    mute_group = make_group(name="mute", process_ping_interval=0.0)
+    live_group = make_group(name="live", process_ping_interval=0.0)
+    mute = await mute_group.start_worker()
+    live = await live_group.start_worker()
+    await mute.connector.call(GO_MUTE_OP, timeout=5.0)
+    live.worker_snapshot = None
+
+    round_task = asyncio.get_running_loop().create_task(commander.ping_groups())
+    await wait_for(lambda: live.worker_snapshot is not None)
+
+    # The live group has already been served while the mute one is still
+    # spending its two timeouts: the round is one turn per group, in parallel.
+    assert not round_task.done()
+
+    await round_task
+
+    assert mute.state == "aborted"
+    assert live.state == "running"
+
+
+# -- the clock's decisions --
+
+
+async def test_a_wake_brings_the_round_forward_on_that_group_only(
+    commander, monkeypatch, clock
+):
+    monkeypatch.setattr(spa_commander, "HEARTBEAT_SECONDS", 30.0)
+    first = group_double(commander, "first")
+    second = group_double(commander, "second")
+    clock()
+
+    first.ping_now_event.set()
+    await wait_for(lambda: first.turns)
+    await asyncio.sleep(0.05)
+
+    assert first.turns == [True]
+    assert second.turns == []
+
+
+async def test_a_round_that_raises_leaves_its_line_and_the_clock_beats_on(
+    commander, monkeypatch, clock, caplog
+):
+    monkeypatch.setattr(spa_commander, "HEARTBEAT_SECONDS", 0.001)
+    rounds: list[Any] = []
+
+    async def failing_round(group_handlers: Any = None) -> None:
+        rounds.append(group_handlers)
+        raise RuntimeError("the round blew up")
+
+    monkeypatch.setattr(commander, "ping_groups", failing_round)
+
+    with caplog.at_level("ERROR"):
+        beating = clock()
+        await wait_for(lambda: len(rounds) >= 3)
+
+    assert not beating.done()
+    assert "the round failed" in caplog.text
+
+
+async def test_a_group_still_in_its_turn_is_not_given_a_second_one(commander, caplog):
+    slow = group_double(commander, "slow", delay=0.2)
+
+    with caplog.at_level("WARNING"):
+        await asyncio.gather(commander.ping_groups(), commander.ping_groups())
+
+    assert slow.turns == [False]
+    assert "still in its turn" in caplog.text
+
+
+async def test_the_turns_of_a_round_run_together_and_a_failing_one_takes_nobody_with_it(
+    commander,
+):
+    first = group_double(commander, "first", delay=0.2)
+    second = group_double(commander, "second", delay=0.2)
+    failing = group_double(commander, "failing", failing=True)
+
+    started = asyncio.get_running_loop().time()
+    await commander.ping_groups()
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert elapsed < 0.4
+    assert first.turns == [False]
+    assert second.turns == [False]
+    assert failing.turns == [False]
+
+
+async def test_each_task_of_the_vertex_runs_on_its_own_count_of_beats(
+    commander, monkeypatch, clock
+):
+    monkeypatch.setattr(spa_commander, "HEARTBEAT_SECONDS", 0.001)
+    monkeypatch.setattr(spa_commander, "FROZEN_EXPIRY_EVERY_TBD", 1)
+    monkeypatch.setattr(spa_commander, "RESOURCES_CHECK_EVERY_TBD", 2)
+    monkeypatch.setattr(spa_commander, "DISK_CLEANUP_EVERY_TBD", 1000)
+    runs: Counter[str] = Counter()
+
+    def counting(task_name: str):
+        async def run() -> None:
+            runs[task_name] += 1
+
+        return run
+
+    for task_name in ("drop_expired_users", "disk_cleanup", "check_resources"):
+        monkeypatch.setattr(commander, task_name, counting(task_name))
+
+    beating = clock()
+    await wait_for(lambda: runs["drop_expired_users"] >= 4)
+    beating.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await beating
+
+    beats = runs["drop_expired_users"]
+    assert runs["check_resources"] in ((beats - 1) // 2, beats // 2)
+    assert runs["disk_cleanup"] == 0
+
+
+async def test_a_task_that_raises_leaves_the_others_of_its_beat_alone(
+    commander, monkeypatch, clock, caplog
+):
+    monkeypatch.setattr(spa_commander, "HEARTBEAT_SECONDS", 0.001)
+    monkeypatch.setattr(spa_commander, "FROZEN_EXPIRY_EVERY_TBD", 1)
+    monkeypatch.setattr(spa_commander, "RESOURCES_CHECK_EVERY_TBD", 1)
+    runs: Counter[str] = Counter()
+
+    async def failing_reaper() -> None:
+        runs["reaped"] += 1
+        raise RuntimeError("the deposit is on fire")
+
+    async def counting_check() -> None:
+        runs["checked"] += 1
+
+    monkeypatch.setattr(commander, "drop_expired_users", failing_reaper)
+    monkeypatch.setattr(commander, "check_resources", counting_check)
+
+    with caplog.at_level("ERROR"):
+        clock()
+        await wait_for(lambda: runs["checked"] >= 2)
+
+    assert runs["reaped"] >= 2
+    assert "failed" in caplog.text
+
+
+# -- the group's own count of turns --
+
+
+async def test_the_group_reads_its_shape_on_its_own_count_of_turns(
+    make_group, monkeypatch
+):
+    monkeypatch.setattr(group_handler, "CHECK_OCCUPANCY_EVERY_TBD", 3)
+    group = make_group()
+    checks: list[int] = []
+    monkeypatch.setattr(group, "check_occupancy", counting_check(checks))
+
+    await group.ping()
+    await group.ping()
+
+    assert checks == []
+
+    await group.ping()
+
+    assert checks == [1]
+
+
+async def test_a_woken_group_reads_its_shape_at_once_and_the_wake_is_spent(
+    make_group, monkeypatch
+):
+    monkeypatch.setattr(group_handler, "CHECK_OCCUPANCY_EVERY_TBD", 1000)
+    group = make_group()
+    checks: list[int] = []
+    monkeypatch.setattr(group, "check_occupancy", counting_check(checks))
+    group.ping_now()
+
+    await group.ping()
+
+    assert checks == [1]
+
+    await group.ping()
+
+    assert checks == [1]
+
+
+# -- the tasks nobody below the vertex can do --
+
+
+async def test_the_frozen_are_forgotten_each_on_the_clock_of_his_own_kind(make_commander):
+    commander = make_commander(user_expiry_hours=0.0, guest_expiry_hours=1000.0)
+
+    # Nobody frozen: the sweep does not so much as reach for a thread.
+    await commander.drop_expired_users()
+
+    parked_state(commander, "mario")
+    parked_state(commander, f"{GUEST_PREFIX}cid-g")
+    # A row marked frozen whose parcel never reached the disk has no age to
+    # judge: the sweep of the deposit is what answers for him, not the reaper.
+    commander.connection_user_map["cid-p"] = "paolo"
+    commander.resolve_user("cid-p")
+    commander.record_user_frozen_TBD("paolo", None)
+
+    await commander.drop_expired_users()
+
+    assert "mario" not in commander.user_map
+    assert commander.freeze_handler.get_item_header("mario") is None
+    assert f"{GUEST_PREFIX}cid-g" in commander.user_map
+    assert "paolo" in commander.user_map
+    assert commander.counters["frozen_users_discarded"] == 1
+
+
+async def test_the_deposit_gives_up_what_no_row_of_the_vertex_claims(commander):
+    parked_state(commander, "mario")
+    parked_state(commander, "nobody")
+    commander.drop_user("nobody")
+
+    await commander.disk_cleanup()
+
+    assert commander.freeze_handler.user_folders == {
+        commander.freeze_handler.user_to_userkey("mario")
+    }
+    assert commander.counters["orphan_folders_discarded"] == 1
+
+
+async def test_a_gauge_over_its_line_saturates_the_machine_and_asks_for_more(make_commander):
+    commander = make_commander(CountingCommander, frozen_users_disk_alarm_percent=0.0)
+
+    await commander.check_resources()
+
+    assert commander.state == "saturated"
+    assert commander.asked == 1
+
+    # The line moved out of the way is the same as the disk emptying: nobody has
+    # to say the crisis is over.
+    commander.frozen_users_disk_alarm_percent = 100.0
+
+    await commander.check_resources()
+
+    assert commander.state == "running"
+    assert commander.asked == 1

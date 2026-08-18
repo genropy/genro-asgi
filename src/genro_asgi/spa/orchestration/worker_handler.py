@@ -83,7 +83,10 @@ orders worth counting.
 
 **The beat has no clock of its own.** ``ping_process`` is one beat and
 ``process_ping_interval`` is the cadence it is meant to be called at; the clock
-that calls it belongs to whoever governs the group. The handler's burial — the
+that calls it belongs to whoever governs the group. What the handler does say is
+whether it is worth beating at all: every envelope stamps the instant it
+arrived, so a process that has just answered traffic is not ``silent`` and its
+group leaves it alone. The handler's burial — the
 socket taken away — is ``WorkerConnector.stop()``, called by whoever closes the
 handler for good.
 
@@ -101,6 +104,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -228,6 +232,18 @@ class WorkerHandler:
         self._hosted_users: set[str] = set()
         self._death_wait: asyncio.Future[None] | None = None
         self._listening = False
+        self._last_envelope_ts = 0.0
+
+    @property
+    def silent_TBD(self) -> bool:
+        """Whether nothing has been heard from this process for a whole cadence.
+
+        Returns:
+            True when the last envelope is older than ``process_ping_interval``.
+            A process answering traffic photographs itself on every envelope, so
+            beating it would ask what it has just said.
+        """
+        return time.monotonic() - self._last_envelope_ts >= self.process_ping_interval
 
     @property
     def hosted_users(self) -> set[str]:
@@ -289,7 +305,11 @@ class WorkerHandler:
             What goes back down, as the chain composed it — the answer to a
             presentation, and nothing at all when there is no envelope going the
             other way.
+
+        Stamps the instant this process was last heard from, which is what makes
+        it silent or not when the round comes.
         """
+        self._last_envelope_ts = time.monotonic()
         return self.envelope_handler(envelope)
 
     async def launch_process(self) -> None:

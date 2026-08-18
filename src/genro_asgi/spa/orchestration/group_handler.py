@@ -56,6 +56,14 @@ concession, with ``memory_max_percent``: percent against percent, never a byte
 count against a byte count. A concession nobody has measured makes every reading
 0, which leaves the growth ungated by construction rather than by a special case.
 
+**The clock is the vertex's, the counting is the group's.** ``ping`` is this
+group's turn of the one round there is: it beats the workers nobody has heard
+from — a process fresh from traffic has just photographed itself — and it reads
+its own shape only when its own count of turns says so, or when its wake was
+rung, which is what a death or a placement nobody admitted does. The wake is
+consumed HERE, at the start of the turn, so the group that rings while its turn
+runs is given another one.
+
 **The shape is decided on ONE picture, and one step per round.**
 ``check_occupancy`` takes the occupancy of every living worker once and then does
 the FIRST thing that reading calls for: restart the worker past
@@ -100,6 +108,11 @@ from .worker_handler import WorkerHandler
 #: The states of a worker whose process has ended: it is in the list only until
 #: the round that reads it, and it is nobody's candidate.
 DEAD_STATES = ("quitted", "aborted")
+
+# How many turns of the group pass between two readings of its own shape. The
+# health of a process is every turn's business; the shape of the group is a
+# slower thing, and the number lives here because the knowledge does.
+CHECK_OCCUPANCY_EVERY_TBD = 6
 
 __all__ = ["DEAD_STATES", "GroupHandler"]
 
@@ -173,7 +186,9 @@ class GroupHandler:
         self.ping_now_event = asyncio.Event()
         self._logger = logging.getLogger(__name__)
         self._worker_counter = 0
+        self._beats = 0
         self._closing_wires: set[asyncio.Task[None]] = set()
+        spa_commander.group_handler_map_TBD[name] = self
 
     @property
     def living_workers(self) -> list[WorkerHandler]:
@@ -223,6 +238,34 @@ class GroupHandler:
     def ping_now(self) -> None:
         """Ring this group's wake: its round comes now instead of at its cadence."""
         self.ping_now_event.set()
+
+    async def ping(self) -> None:
+        """This group's turn of the round: beat the silent, read the shape when due.
+
+        Acts on the group: it counts its own turn, consumes the wake it was
+        given — which brings the reading of the shape forward, whatever the
+        count says — and lets ``check_occupancy`` take the step it calls for.
+        """
+        self._beats += 1
+        woken = self.ping_now_event.is_set()
+        self.ping_now_event.clear()
+        await self.ping_workers()
+        if woken or self._beats % CHECK_OCCUPANCY_EVERY_TBD == 0:
+            await self.check_occupancy()
+
+    async def ping_workers(self) -> None:
+        """Beat every silent worker of this group at once, and wait for all of them.
+
+        Acts on the processes: a mute one is killed by its own handler, and a
+        beat that raises is that worker's business and nobody else's — they are
+        all awaited, and none of them cancels a sibling.
+        """
+        beats = [
+            worker_handler.ping_process()
+            for worker_handler in self.living_workers
+            if worker_handler.silent_TBD
+        ]
+        await asyncio.gather(*beats, return_exceptions=True)
 
     def get_occupancy_percent(self, worker_snapshot: dict[str, Any] | None) -> float:
         """How full the worker of this photo is, in percent.

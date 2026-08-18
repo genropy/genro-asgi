@@ -493,7 +493,62 @@ register item, freezer, check, timeout, restart, congelamento per inattività.
     grows and shrinks under load in a way that looks sane in the
     orchestration log.
 
-- [ ] **Phase 4**: The heartbeat — one clock, counters below
+- [x] **Phase 4**: The heartbeat — one clock, counters below
+  > Done: the machine has ONE clock. `heartbeat_loop` waits on `timer OR any
+  > wake`: the timer is a full round (`ping_groups()` — one turn per group, all
+  > at once, `gather(..., return_exceptions=True)`, a group whose previous turn
+  > is still open skipped and said so out loud) plus whichever of the vertex's
+  > own tasks its count of beats has come round for; a wake is an anticipated
+  > round on THAT group alone and is not a beat. `GroupHandler.ping()` is the
+  > turn: it counts its own beats, consumes its own wake (which is what lets a
+  > group that rings during its turn be given another one), calls `ping_workers()`
+  > on the SILENT ones only — `WorkerHandler.silent_TBD`, read off the instant
+  > every envelope stamps — and runs `check_occupancy()` when its own count says
+  > so or the wake said now. The three tasks nobody below can do:
+  > `drop_expired_users` (the frozen judged each on the clock of his own kind,
+  > `guest_expiry_hours` for a guest and `user_expiry_hours` for a person, then
+  > `purge_users_TBD` — row and disk with verification, the declared F24
+  > exception), `disk_cleanup` (the deposit swept of every folder no row claims,
+  > counted and named in the log) and `check_resources` (machine memory against
+  > `machine_memory_alarm_percent`, the deposit's disk against
+  > `frozen_users_disk_alarm_percent` → `state`, and `need_resources()`, base
+  > empty, which a subclass really overrides). Each task is isolated: one that
+  > raises leaves its line and the others of that beat still run. Every reading of
+  > the disk goes through `asyncio.to_thread` (F17), and the sweep of the folders
+  > moved INTO the `FreezeHandler`, which is the only object that talks to the
+  > filesystem. No caretaker object was born: the probe IS the beat.
+  > Verified: `pytest tests/ -q` 1917 passed / 2 skipped (was 1903/2, +14 tests);
+  > `ruff check src/ tests/` clean; `mypy src/` unchanged (94, the baseline) and
+  > ZERO findings in `spa_commander.py` and `group_handler.py`; coverage
+  > `group_handler` 100%, `spa_commander` 97% (the six lines are the
+  > `/proc/meminfo` parse, which no macOS runs and the ubuntu CI does),
+  > `freeze_handler` 99%, `worker_handler` 99%. FIVE NEUTRALIZATION PROBES, each
+  > breaking its own test: the wake serving only the group that rang
+  > (`ping_groups(woken)` → `ping_groups()`: the second group takes a turn it was
+  > never given), the loop surviving a raising round (the `try` removed: the clock
+  > dies at the first beat and the test times out), the skip of a group still in
+  > its turn, the beating of the silent only, and the wake consumed at the turn.
+  > EXECUTABLE LINES ADDED: 110 `spa_commander.py` + 17 `group_handler.py` = 127
+  > against the ~120 cap of the two files (13 `freeze_handler.py` + 6
+  > `worker_handler.py` besides); the itemisation and what was cut is in notes.md.
+  > Files: src/genro_asgi/spa/orchestration/spa_commander.py,
+  > src/genro_asgi/spa/orchestration/group_handler.py,
+  > src/genro_asgi/spa/orchestration/freeze_handler.py,
+  > src/genro_asgi/spa/orchestration/worker_handler.py,
+  > tests/orchestration/test_orchestration_heartbeat.py (new),
+  > .phased/active/orchestration-m3-commander-groups/notes.md
+  > Verified: DECLARED DEVIATION — `applications/spa_app.py` is NOT touched, and
+  > `start`/`stop` were not born. That front owns the LEGACY commander, which
+  > dies at Macro 6; wiring the new vertex into it is the Macro 4 the plan's own
+  > Notes reserve, and a lifecycle pair whose only caller would have been a test
+  > fixture is code without a requester (the same judgement Phase 3 made on
+  > `GroupHandler.start`). `heartbeat_loop` is the plain coroutine a lifespan
+  > creates and cancels, which is exactly what the tests do to it.
+  > Verify: now — the `_TBD` round of this phase: `group_handler_map_TBD`,
+  > `silent_TBD`, `drop_unclaimed_folders_TBD`, `disk_used_percent_TBD`,
+  > `CHECK_OCCUPANCY_EVERY_TBD`, `FROZEN_EXPIRY_EVERY_TBD`,
+  > `DISK_CLEANUP_EVERY_TBD`, `RESOURCES_CHECK_EVERY_TBD` — one at a time,
+  > semantics plus candidates.
   - Run: opus / high
   - Pattern: `src/genro_asgi/tasks/scheduler.py:100` (`start` / `stop` /
     `_run_loop` — the periodic loop owned by the lifespan, the tick isolated
