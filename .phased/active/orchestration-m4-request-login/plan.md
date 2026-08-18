@@ -69,7 +69,55 @@ item, freezer, check, timeout, restart, congelamento per inattività.
 
 ## Work Plan
 
-- [ ] **Phase 1**: The vertex takes its groups, the barrier and the lifecycle
+- [x] **Phase 1**: The vertex takes its groups, the barrier and the lifecycle
+  > Done: the vertex builds its own groups — `SpaCommander(..., groups={name:
+  > kwargs})` instantiates one `GroupHandler` per entry and hands each
+  > `memory_concession_bytes` from its own property, so the hand-off the M3 review
+  > caught wrong cannot be forgotten; building a group by hand stays public and the
+  > M3 tests keep using it. `default_group` answers which group receives whoever
+  > arrives with no past — the elected name or the first declared, and a KeyError
+  > when there is no group to receive anybody. The grammar grew ONE attribute,
+  > `groups(default=...)`, folded into `commander_kwargs()` because the vertex is
+  > what reads it. The waiting room got its door: `user_hold_event_map`, one Event
+  > per user on hold, raised by `hold_user` and released by `mark_user_frozen`,
+  > `mark_user_adopted` and `drop_user` — the same mutators, no other writer — and
+  > `await_user_release(user, timeout)` is what a request parks on. `record_user_group`
+  > is called by `GroupHandler.assign_user` in the same breath in which it writes
+  > `user_worker_map`, so a refused placement writes no group anywhere. `start`
+  > brings the base group's reception up and only then starts the clock (READY is
+  > the reception having presented itself); `stop` stops the clock and takes every
+  > group down dry, and each kill is DECLARED first through `expect_death` — a
+  > shutdown is an order, and N "WILD death" alarms per clean stop would be a false
+  > account in the one log that says what the machine chose to do.
+  > Verified: `pytest tests/ -q` 1949 passed / 2 skipped (was 1934/2 — the 16 tests
+  > this phase adds); `ruff check src/ tests/` clean; 49 executable lines added to
+  > `src/` against the phase cap of 108; coverage spa_commander 98%, group_handler
+  > 99%, elements 100%, and not one line of this phase uncovered (what is missing in
+  > those modules is the pre-existing `/proc/meminfo` read and two branches of
+  > `_grow`/`_order_quit`); no `_TBD` name survives the phase; the four contract
+  > files of the legacy front pass untouched.
+  > Behaviours covered by the new tests: a vertex built from a recipe owns its
+  > groups with the concession already inside them; the elected base group, the
+  > first-declared fallback and the vertex that can receive nobody; a group built
+  > without the concession is a `TypeError`; a hold raised and released wakes its
+  > waiter at once, from all three mutators, and a wait that outlives its deadline
+  > raises while the hold stays up; a second hold keeps the first cause and the same
+  > door; nobody waits on a user who is not held; the group written where the
+  > placement decided it, and nothing written when nobody took him; start brings the
+  > reception up and stop leaves no child alive AND no wild death.
+  > Declared: `test_each_task_of_the_vertex_runs_on_its_own_count_of_beats`
+  > (implementation test, rule 10) was rewritten on the round boundary — it used to
+  > cancel the clock mid-round and assert a whole-round relation, and the code was
+  > absolved (`every` counts `runs` before awaiting the body). Rationale and the
+  > owner's ruling in notes.md.
+  > Files: src/genro_asgi/spa/orchestration/spa_commander.py,
+  > src/genro_asgi/spa/orchestration/group_handler.py,
+  > src/genro_asgi/spa/orchestration/worker_handler.py,
+  > src/genro_asgi/config/elements.py, src/genro_asgi/config/handler.py,
+  > tests/orchestration/test_orchestration_spa_commander.py,
+  > tests/orchestration/test_orchestration_group_handler.py,
+  > tests/orchestration/test_orchestration_heartbeat.py, tests/test_config.py,
+  > .phased/active/orchestration-m4-request-login/notes.md
   - Run: opus / medium
   - Pattern: `.phased/done/orchestration-m3-commander-groups/plan.md` Phase 2
     (the vertex as it stands) and Phase 4 (the heartbeat it already owns);

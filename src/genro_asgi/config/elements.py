@@ -358,10 +358,15 @@ class AsgiServerGrammar(TaskGrammar):
         to ``router.plug(code, **options)``."""
 
     @element(parent_tags="commander", sub_tags="group", collection_key="name")
-    def groups(self) -> None:
+    def groups(self, default: str = None) -> None:
         """Collection of worker groups, each labelled by its ``name`` — stable paths
         ``commander.groups.<name>``. A group is the workers built from ONE grammar:
-        the same child, the same policies."""
+        the same child, the same policies.
+
+        The optional ``default`` ELECTS the group that receives whoever arrives
+        with no past; omitted, the first group declared is the one. Unlike
+        ``applications.default``, which is a redirect destination and elects
+        nothing, this one decides where a newcomer is born."""
 
     @element(parent_tags="groups", sub_tags="")
     def group(

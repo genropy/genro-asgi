@@ -55,6 +55,28 @@ chain of the envelope, which turns what the processes announce into these
 indexes, one worker event at a time, synchronously. The mutators live on this
 class because the data does, and the chain calls them by name.
 
+**The groups are its own.** The grammar of the machine arrives as
+``groups={name: kwargs}`` and one ``GroupHandler`` per entry is built right here,
+each handed ``memory_concession_bytes`` — the total it is a share of — so the one
+number of the cascade is never carried by hand from outside. Building a group by
+hand stays legitimate and is what the tests do; either way the group hangs itself
+in ``group_map``, in the order it was named. ``default_group`` is the group
+that receives whoever arrives with no past: the elected one, or the first
+declared.
+
+**The waiting room has a door.** ``on_hold`` on a row is what ``resolve_user``
+raises ``UserOnHold`` on; ``user_hold_event_map`` is what a request PARKS on while
+that lasts. One Event per user on hold, born with the hold and gone with its
+release — the same mutators, in the same breath: ``hold_user`` raises both,
+``mark_user_frozen``, ``mark_user_adopted`` and ``drop_user`` let both go. Nobody
+else writes either, so the row and the door cannot say different things.
+
+**Up and down.** ``start`` brings the base group's reception into being and
+only then starts the clock: a reception that has presented itself is what READY
+means, and the front serves from that instant. ``stop`` stops the clock and
+takes every group down dry — no mass freeze on the way out, because without the
+soft boot those files would be read by nobody.
+
 **The freezer is not on the ladder.** A worker parks a user's state on disk
 itself and announces it; the vertex only writes the mark. The one time the vertex
 touches the freezer is when nobody below can: pruning the traces of a wild death
@@ -120,6 +142,7 @@ from .beats import every
 from .envelope_handler import CommanderEnvelopeHandler
 from .exceptions import UserOnHold
 from .freeze_handler import FreezeHandler
+from .group_handler import GroupHandler
 
 #: What a user with no name of his own is called: the prefix plus his cid. The
 #: name itself carries the rule — whoever reads it knows nobody logged in here.
@@ -161,6 +184,12 @@ class SpaCommander:
     Args:
         frozen_users_path: the freezer root — the same one the workers are given,
             since a parcel written on one side is read on the other.
+        groups: the grammar of this machine's groups, ``{name: kwargs}`` — one
+            ``GroupHandler`` per entry, each built with the concession this
+            vertex owns. Building one by hand stays legitimate: it hangs itself
+            here the same way.
+        default_group: which group receives whoever arrives with no past;
+            None elects the first declared.
         orchestration_log_path: where the log of the orders goes; None keeps them
             on the logger alone, which is what a test wants.
         orchestration_log_max_bytes: the size at which that file rotates.
@@ -180,6 +209,8 @@ class SpaCommander:
         self,
         frozen_users_path: str | Path,
         *,
+        groups: dict[str, dict[str, Any]] | None = None,
+        default_group: str | None = None,
         orchestration_log_path: str | Path | None = None,
         orchestration_log_max_bytes: int = 10 * 1024 * 1024,
         orchestration_log_backup_count: int = 5,
@@ -219,12 +250,25 @@ class SpaCommander:
         #: One row per periodic method of this vertex — turns seen, runs, errors
         #: and the last one's text: the dashboard of who is due and who is broken.
         self.beat_counts: dict[str, dict[str, Any]] = {}
+        #: Whoever is waiting for a user to have a home again, one Event per user
+        #: on hold. An entry is born with the hold and dies with its release, so
+        #: outside that window this map is empty.
+        self.user_hold_event_map: dict[str, asyncio.Event] = {}
+        self._default_group = default_group
+        self._heartbeat_task: asyncio.Task[None] | None = None
         self._logger = logging.getLogger(__name__)
         self._orders_logger = self._build_orders_logger(
             orchestration_log_path,
             orchestration_log_max_bytes,
             orchestration_log_backup_count,
         )
+        for name, group_settings in (groups or {}).items():
+            GroupHandler(
+                self,
+                name,
+                memory_concession_bytes=self.memory_concession_bytes,
+                **group_settings,
+            )
 
     @property
     def memory_concession_bytes(self) -> int:
@@ -237,6 +281,23 @@ class SpaCommander:
         """
         total = self._machine_memory_gauges()["MemTotal"]
         return int(total * self.memory_max_percent / 100.0)
+
+    @property
+    def default_group(self) -> str:
+        """The group that receives whoever arrives with no past.
+
+        Returns:
+            The elected name, or the first group declared when none was elected —
+            ``group_map`` keeps them in the order the recipe named them.
+
+        Raises:
+            KeyError: the elected name is nobody's, or there is no group at all;
+                either way a newcomer has nowhere to go.
+        """
+        name = self._default_group or next(iter(self.group_map), None)
+        if name not in self.group_map:
+            raise KeyError(f"Vertex: no group to receive a newcomer ({name!r})")
+        return name
 
     def resolve_user(self, cid: str) -> str:
         """The reception desk: whose cid this is, minting him if he is new.
@@ -285,11 +346,36 @@ class SpaCommander:
             user: the identity on his way out of the process he lives on.
             cause: what put him there, kept for the log.
 
-        Acts on his row; a hold already there keeps its first cause.
+        Acts on his row AND on the barrier whoever asks for him will wait on;
+        a hold already there keeps its first cause and its own Event.
         """
         row = self.user_map[user]
         if row["on_hold"] is None:
             row["on_hold"] = cause
+            self.user_hold_event_map[user] = asyncio.Event()
+
+    async def await_user_release(self, user: str, timeout: float) -> None:
+        """Wait until this user has a home again, or give up at the deadline.
+
+        Args:
+            user: the identity somebody's request found on hold.
+            timeout: how long that request may wait — the caller's own patience.
+
+        Raises:
+            TimeoutError: the hold outlived the deadline.
+
+        Nothing is written. A user whose hold fell between the raise and this
+        call has no barrier left and is not waited for at all.
+        """
+        event = self.user_hold_event_map.get(user)
+        if event is not None:
+            await asyncio.wait_for(event.wait(), timeout)
+
+    def _release_hold(self, user: str) -> None:
+        """Let go of whoever was waiting for this user, and forget his barrier."""
+        event = self.user_hold_event_map.pop(user, None)
+        if event is not None:
+            event.set()
 
     def drop_page(self, page_id: str) -> None:
         """Forget a page.
@@ -324,10 +410,12 @@ class SpaCommander:
         Returns:
             Whether the freezer was holding anything of his.
 
-        Acts on all three indexes and on the freezer, and counts what was
-        waiting for him and will now never be delivered.
+        Acts on all three indexes, on his barrier — whoever waited for him is
+        woken to find him gone and starts over — and on the freezer, counting
+        what was waiting for him and will now never be delivered.
         """
         row = self.user_map.pop(user, None) or {}
+        self._release_hold(user)
         for cid in [cid for cid, owner in self.connection_user_map.items() if owner == user]:
             self.drop_connection(cid)
             del self.connection_user_map[cid]
@@ -339,6 +427,18 @@ class SpaCommander:
             self.counters["frozen_users_discarded"] += 1
         return had_state
 
+    def record_user_group(self, user: str, group: str) -> None:
+        """Write down which group a user was placed on.
+
+        Args:
+            user: the identity that has just been given a home.
+            group: the group that took him.
+
+        Acts on his row. Called by the group in the same breath in which it
+        writes its own map, so the two can never say different things.
+        """
+        self.user_map[user]["group"] = group
+
     def mark_user_frozen(self, user: str, occupancy_percent: float | None) -> None:
         """Write down that a user's state is on disk, and what it is expected to cost.
 
@@ -347,11 +447,13 @@ class SpaCommander:
             occupancy_percent: what he occupied where he was, normalised; None
                 leaves the estimate as it was.
 
-        Acts on his row: the mark goes on and the wait he may have been in is over.
+        Acts on his row and on his barrier: the mark goes on and the wait he may
+        have been in is over.
         """
         row = self.user_map[user]
         row["frozen"] = True
         row["on_hold"] = None
+        self._release_hold(user)
         if occupancy_percent is not None:
             row["occupancy_percent"] = occupancy_percent
 
@@ -361,12 +463,13 @@ class SpaCommander:
         Args:
             user: the identity now living in a process again.
 
-        Acts on his row: the mark goes off, the wait is over, the slots of what
-        was waiting are emptied.
+        Acts on his row and on his barrier: the mark goes off, the wait is over,
+        the slots of what was waiting are emptied.
         """
         row = self.user_map[user]
         row["frozen"] = False
         row["on_hold"] = None
+        self._release_hold(user)
         row["pending_dbevents"] = []
         row["pending_datachanges"] = []
 
@@ -416,6 +519,31 @@ class SpaCommander:
             numbers,
             outcome,
         )
+
+    async def start(self) -> None:
+        """Bring the machine up: the reception of the base group, then the beat.
+
+        Acts on the base group — its reception is launched and awaited, so this
+        returns when the machine is READY to be served through — and on this
+        vertex, whose clock starts last. A reception that would not start leaves
+        its group ``broken``: the beat is running by then, and the group tries
+        again at its own round.
+        """
+        await self.group_map[self.default_group].start_worker()
+        self._heartbeat_task = asyncio.ensure_future(self.heartbeat_loop())
+
+    async def stop(self) -> None:
+        """Take the machine down dry: the clock off, then every group.
+
+        Acts on this vertex and, through each group, on every process it holds.
+        Nothing is frozen on the way out: without the soft boot those files
+        would be read by nobody, and the next boot wipes the working folder.
+        """
+        if self._heartbeat_task is not None:
+            self._heartbeat_task.cancel()
+            self._heartbeat_task = None
+        for group_handler in list(self.group_map.values()):
+            await group_handler.stop()
 
     async def heartbeat_loop(self) -> None:
         """The one clock: a round at every beat, and never a death by a bad round.

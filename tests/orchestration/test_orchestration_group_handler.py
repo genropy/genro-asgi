@@ -40,7 +40,7 @@ from typing import Any
 
 import pytest
 
-from genro_asgi.spa.orchestration import GroupHandler, SpaCommander
+from genro_asgi.spa.orchestration import AssignmentRefused, GroupHandler, SpaCommander
 from genro_asgi.spa.orchestration.worker_connector import WORKER_SNAPSHOT_KEY
 from genro_asgi.spa.orchestration.worker_handler import QUIT_OP_PATH, WORKER_ENV_VAR
 
@@ -125,7 +125,24 @@ def commander(instance_root):
 
 
 @pytest.fixture
-async def make_group(instance_root, commander):
+def group_settings(instance_root):
+    """What a group of this file is built with: the child's identity and the paths."""
+    return {
+        "instance_dir": instance_root / "i",
+        "frozen_users_path": instance_root / "frozen_users",
+        "entry_module": CHILD_MODULE,
+        "worker_kwargs": {
+            "behaviour": "answer",
+            "users": [],
+            "rss_bytes": 0,
+            "photo_on_quit": True,
+        },
+        "process_ping_timeout": 2.0,
+    }
+
+
+@pytest.fixture
+async def make_group(commander, group_settings):
     """Build groups, and let no process or socket of theirs outlive the test."""
     groups: list[GroupHandler] = []
 
@@ -137,20 +154,18 @@ async def make_group(instance_root, commander):
         photo_on_quit: bool = True,
         **policies: Any,
     ) -> GroupHandler:
+        settings = dict(group_settings)
+        settings["worker_kwargs"] = {
+            "behaviour": behaviour,
+            "users": users or [],
+            "rss_bytes": rss_bytes,
+            "photo_on_quit": photo_on_quit,
+        }
         group = GroupHandler(
             commander,
             "standard",
             memory_concession_bytes=MEMORY_CEILING,
-            instance_dir=instance_root / "i",
-            frozen_users_path=instance_root / "frozen_users",
-            entry_module=CHILD_MODULE,
-            worker_kwargs={
-                "behaviour": behaviour,
-                "users": users or [],
-                "rss_bytes": rss_bytes,
-                "photo_on_quit": photo_on_quit,
-            },
-            process_ping_timeout=2.0,
+            **settings,
             **policies,
         )
         groups.append(group)
@@ -465,3 +480,66 @@ async def test_every_order_of_the_group_leaves_its_row_in_the_orchestration_log(
     assert any("order=drop_worker subject=standard_0001 numbers=None outcome=quitted" in row
                for row in rows)
     assert any("order=start_worker subject=standard_0002" in row for row in rows)
+
+
+async def test_the_vertex_builds_its_groups_with_the_concession_already_inside(
+    instance_root, group_settings
+):
+    vertex = SpaCommander(instance_root / "frozen_users", groups={"standard": group_settings})
+
+    group = vertex.group_map["standard"]
+    assert isinstance(group, GroupHandler)
+    assert group.spa_commander is vertex
+    assert group.memory_concession_bytes == vertex.memory_concession_bytes
+    assert vertex.default_group == "standard"
+
+
+async def test_a_group_built_without_the_concession_says_so_at_once(commander, group_settings):
+    with pytest.raises(TypeError):
+        GroupHandler(commander, "standard", **group_settings)
+
+
+async def test_start_brings_the_reception_up_and_stop_leaves_no_child_alive(
+    instance_root, group_settings
+):
+    vertex = SpaCommander(instance_root / "frozen_users", groups={"standard": group_settings})
+    group = vertex.group_map["standard"]
+    try:
+        await vertex.start()
+
+        # READY is the reception having presented itself: start returns there.
+        reception = group.reception
+        assert reception is not None
+        assert reception.state == "running"
+        process = reception.process
+        assert process.poll() is None
+    finally:
+        await vertex.stop()
+
+    assert process.poll() is not None
+    assert not reception.connector.connected
+    # The death of a shutdown is ORDERED: no alarm is owed for it, and the log
+    # of a clean stop must not read like N processes died on their own.
+    assert reception.state == "quitted"
+
+
+async def test_the_group_of_a_user_is_written_where_he_is_placed(make_group, commander):
+    group = make_group()
+    await group.start_worker()
+    known_at_the_vertex(commander, "cid-a", "mario")
+
+    group.assign_user("mario")
+
+    assert group.user_worker_map["mario"] == "standard_0001"
+    assert commander.user_map["mario"]["group"] == "standard"
+
+
+async def test_a_placement_nobody_took_writes_no_group(make_group, commander):
+    group = make_group()
+    known_at_the_vertex(commander, "cid-a", "mario")
+
+    with pytest.raises(AssignmentRefused):
+        group.assign_user("mario")
+
+    assert "mario" not in group.user_worker_map
+    assert commander.user_map["mario"]["group"] is None

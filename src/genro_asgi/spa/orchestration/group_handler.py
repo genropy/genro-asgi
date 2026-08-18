@@ -305,7 +305,8 @@ class GroupHandler:
         Raises:
             AssignmentRefused: every worker refused; the wake is rung on the way out.
 
-        Acts on ``user_worker_map``.
+        Acts on ``user_worker_map`` and, in the same breath, on the row at the
+        vertex that says which group he is on.
         """
         occupancy_percent = self.spa_commander.user_map[user]["occupancy_percent"]
         if occupancy_percent is None:
@@ -321,6 +322,7 @@ class GroupHandler:
                 self._logger.debug("Group %s: %s", self.name, refusal)
                 continue
             self.user_worker_map[user] = worker_handler.name
+            self.spa_commander.record_user_group(user, self.name)
             return worker_handler.name
         self.ping_now()
         raise AssignmentRefused(user, f"no worker of {self.name} admits him")
@@ -377,6 +379,21 @@ class GroupHandler:
             self.name, "start_worker", name, numbers={"workers": len(self.living_workers)}
         )
         return worker_handler
+
+    async def stop(self) -> None:
+        """Take every process of this group down and close their wires.
+
+        Acts on each of its workers: the death is DECLARED before it is dealt —
+        the wait an order parks is what tells an ordered death from a wild one,
+        and a shutdown is an order — then the process is killed and buried and
+        the socket is closed. One that has already died is left alone: there is
+        nothing to kill and its wire went with it.
+        """
+        for worker_handler in list(self.worker_handler_map.values()):
+            if worker_handler.process is not None:
+                worker_handler.expect_death()
+                await worker_handler.terminate_process()
+            await worker_handler.connector.stop()
 
     async def restart_worker(self, worker_handler: WorkerHandler) -> WorkerHandler | None:
         """Ask a worker to leave for good and put a fresh one in its place.

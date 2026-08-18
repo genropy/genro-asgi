@@ -736,8 +736,23 @@ class SpaPoolConfig(AsgiConfigBuilder):
         groups.group(name="canary", entry_module="genro_asgi.spa.orchestration.worker_entry")
 
 
+class ElectedGroupConfig(SpaPoolConfig):
+    """The same pool, with the group that receives a newcomer elected by name."""
+
+    def commander_section(self, cfg: Any) -> None:
+        commander = cfg.commander(frozen_users_path="/srv/shop/frozen_users")
+        groups = commander.groups(default="canary")
+        groups.group(name="stable", entry_module="genro_asgi.spa.orchestration.worker_entry")
+        groups.group(name="canary", entry_module="genro_asgi.spa.orchestration.worker_entry")
+
+
 class TestCommanderSection:
     """``commander`` → the vertex's kwargs, and one kwargs set per group."""
+
+    def test_the_recipe_elects_the_group_that_receives_a_newcomer(self) -> None:
+        kwargs = ConfigurationHandler(ElectedGroupConfig).commander_kwargs()
+
+        assert kwargs["default_group"] == "canary"
 
     def test_the_vertex_reads_its_own_policies_and_not_the_workers_path(self) -> None:
         handler = ConfigurationHandler(SpaPoolConfig)

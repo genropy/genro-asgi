@@ -304,10 +304,13 @@ class ConfigurationHandler(ConfigHandler):
         """The ``commander`` section as the vertex's own constructor kwargs.
 
         ``instance_dir`` is NOT among them: the sockets are the workers' business,
-        so that path is folded into every group instead (``group_kwargs``). What
-        the recipe leaves out is left out, and the vertex's own default answers.
+        so that path is folded into every group instead (``group_kwargs``). The
+        group ELECTED to receive a newcomer is declared one level down, on the
+        collection, and is folded in here because the vertex is what reads it.
+        What the recipe leaves out is left out, and the vertex's own default
+        answers.
         """
-        return self.closed_attrs(
+        kwargs = self.closed_attrs(
             "commander",
             "frozen_users_path",
             "memory_max_percent",
@@ -318,6 +321,10 @@ class ConfigurationHandler(ConfigHandler):
             "user_expiry_hours",
             "guest_expiry_hours",
         )
+        elected = self("commander.groups.default", default=None)
+        if elected is not None:
+            kwargs["default_group"] = elected
+        return kwargs
 
     def group_kwargs(self) -> dict[str, dict[str, Any]]:
         """The declared groups as ``{name: kwargs}``, ready for one ``GroupHandler`` each.

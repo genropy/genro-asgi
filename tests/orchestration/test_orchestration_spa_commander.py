@@ -24,6 +24,7 @@ left on disk, and writing the account of every order.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import pytest
@@ -253,3 +254,99 @@ def test_the_machine_total_is_read_off_the_platform_itself(commander):
     # No monkeypatch: os.sysconf answers on every platform this suite runs on,
     # /proc/meminfo or not.
     assert commander.memory_concession_bytes > 0
+
+
+def test_the_elected_group_receives_the_newcomer(commander):
+    commander.group_map["stable"] = object()
+    commander.group_map["canary"] = object()
+
+    # Nobody elected: the first declared is the one the recipe named first.
+    assert commander.default_group == "stable"
+
+    commander._default_group = "canary"
+    assert commander.default_group == "canary"
+
+
+def test_a_vertex_with_nowhere_to_put_a_newcomer_says_so(commander):
+    with pytest.raises(KeyError):
+        commander.default_group
+
+    commander._default_group = "nobody"
+    commander.group_map["stable"] = object()
+    with pytest.raises(KeyError):
+        commander.default_group
+
+
+def test_the_group_of_a_user_is_recorded_where_the_placement_decided_it(commander):
+    user = commander.resolve_user("cid-a")
+
+    commander.record_user_group(user, "stable")
+
+    assert commander.user_map[user]["group"] == "stable"
+
+
+async def test_a_request_for_a_user_on_hold_waits_for_his_release(commander):
+    user = commander.resolve_user("cid-a")
+    commander.hold_user(user, "transfer_flag T")
+
+    waiting = asyncio.ensure_future(commander.await_user_release(user, timeout=5.0))
+    await asyncio.sleep(0)
+    assert not waiting.done()
+
+    commander.mark_user_adopted(user)
+
+    await waiting
+    assert commander.user_hold_event_map == {}
+    assert commander.resolve_user("cid-a") == user
+
+
+async def test_the_freezer_mark_releases_the_wait_too(commander):
+    user = commander.resolve_user("cid-a")
+    commander.hold_user(user, "transfer_flag F")
+    waiting = asyncio.ensure_future(commander.await_user_release(user, timeout=5.0))
+    await asyncio.sleep(0)
+
+    commander.mark_user_frozen(user, 4.0)
+
+    await waiting
+    assert commander.user_hold_event_map == {}
+
+
+async def test_a_user_dropped_while_held_wakes_whoever_waited_for_him(commander):
+    user = commander.resolve_user("cid-a")
+    commander.hold_user(user, "transfer_flag T")
+    waiting = asyncio.ensure_future(commander.await_user_release(user, timeout=5.0))
+    await asyncio.sleep(0)
+
+    commander.drop_users([user], cause="expired")
+
+    await waiting
+    assert commander.user_hold_event_map == {}
+
+
+async def test_a_wait_that_outlives_its_own_deadline_gives_up(commander):
+    user = commander.resolve_user("cid-a")
+    commander.hold_user(user, "transfer_flag T")
+
+    with pytest.raises(TimeoutError):
+        await commander.await_user_release(user, timeout=0.01)
+
+    # The hold is still up: giving up on a wait decides nothing about the user.
+    assert user in commander.user_hold_event_map
+
+
+async def test_nobody_waits_on_a_user_who_is_not_held(commander):
+    user = commander.resolve_user("cid-a")
+
+    await commander.await_user_release(user, timeout=0.01)
+
+
+def test_a_hold_already_up_keeps_its_first_cause_and_its_own_door(commander):
+    user = commander.resolve_user("cid-a")
+    commander.hold_user(user, "transfer_flag T")
+    door = commander.user_hold_event_map[user]
+
+    commander.hold_user(user, "transfer_flag X")
+
+    assert commander.user_map[user]["on_hold"] == "transfer_flag T"
+    assert commander.user_hold_event_map[user] is door
