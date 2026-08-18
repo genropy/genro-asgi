@@ -33,7 +33,12 @@ and no rename: whoever holds the lock writes DIRECTLY over the destination.
 Nobody can read half a file, because a reader waits for the lock before
 looking; the half file a crash leaves behind is covered elsewhere — the dead
 worker's folder is discarded by the cleanup that follows its death, and every
-server start wipes the working freezer anyway.
+server start wipes the working freezer anyway. ONE declared exception, accepted
+by weighed probability (2026-08-18): the vertex reads headers and drops folders
+WITHOUT the lock. A parcel is complete before the vertex ever marks its user
+frozen, so the only collision left is a drop (expiry, forget) against a lazy
+wake in flight — and it ends in a loud error on a user the machine was
+forgetting anyway, never in silent corruption.
 
 **Waiting is the caller's, on its own loop.** ``take_lock`` tries once and says
 yes or no. Whoever finds it taken retries as a coroutine — never holding a

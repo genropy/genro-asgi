@@ -343,7 +343,15 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     parked = await handler.connector.call(EXECUTE_ORDER, timeout=CALL_TIMEOUT)
 
     assert parked["worker_events"] == [
-        {"op": "user_frozen", "worker": WORKER_NAME, "user": "mario", "placement": None}
+        {
+            "op": "user_frozen",
+            "worker": WORKER_NAME,
+            "user": "mario",
+            "placement": None,
+            # Stamped by the bottom rung on the way up: what he absorbed of the
+            # worker he left, as the group's gauge read it.
+            "occupancy_percent": 0.0,
+        }
     ]
     assert deposit.read_user_register_item("mario") is not None
     assert deposit.read_connection_register_item("mario", "cid-a") is not None

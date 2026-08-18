@@ -212,12 +212,28 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
     on_user_adopted = on_new_user
 
     def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
-        """A user has left this process: he is not one of its own any more."""
-        self.worker_handler.hosted_users.discard(worker_event["user"])
+        """A user has left this process for the freezer, with what he absorbed.
 
-    #: Leaving for good says the same thing at this rung: he is not in this
-    #: process's memory. Where he went is read one layer up.
-    on_drop_user = on_user_frozen
+        Acts on ``hosted_users`` and on the worker event: the estimate stamped
+        here is the ABSTRACT occupancy of the worker he left — the photo of this
+        same envelope, read by the group's own gauge — split evenly over
+        everybody it held, him included. This rung composes it because it is the
+        one that knows whose photo that is; the vertex files it in his row.
+        """
+        worker_handler = self.worker_handler
+        worker_handler.hosted_users.discard(worker_event["user"])
+        photo = worker_handler.worker_snapshot or {}
+        population = len(photo.get("users") or {}) + 1  # the photo he already left
+        worker_event["occupancy_percent"] = (
+            worker_handler.group_handler.get_occupancy_percent(photo) / population
+        )
+
+
+    def on_drop_user(self, worker_event: dict[str, Any]) -> None:
+        """Leaving for good says the same at this rung: he is not in this
+        process's memory. Where he went is read one layer up, and a row about to
+        die needs no estimate."""
+        self.worker_handler.hosted_users.discard(worker_event["user"])
 
 
 class GroupEnvelopeHandler(EnvelopeHandler):

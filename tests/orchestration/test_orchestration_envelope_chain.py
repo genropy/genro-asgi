@@ -243,21 +243,20 @@ async def test_a_user_who_is_gone_leaves_nothing_behind(handler, commander, grou
 async def test_a_freeze_is_a_mark_above_and_a_placement_to_assign_below(handler, commander, group):
     user = commander.resolve_user("cid-a")
     group.user_worker_map[user] = WORKER_NAME
+    # The estimate is COMPOSED by the bottom rung, never sent by the child: the
+    # worker's abstract occupancy (the group's gauge reads this envelope's own
+    # photo, filed first) split over everybody it held, the leaver included.
+    group.urgent_snapshots = True  # the stub's gauge reads 100.0
 
     handler.read_envelope(
         envelope(
-            {
-                "op": "user_frozen",
-                "worker": WORKER_NAME,
-                "user": user,
-                "placement": None,
-                "occupancy_percent": 7.5,
-            }
+            {"op": "user_frozen", "worker": WORKER_NAME, "user": user, "placement": None},
+            photo={"users": {"somebody-else": {}}},
         )
     )
 
     assert commander.user_is_frozen(user) is True
-    assert commander.user_map[user]["occupancy_percent"] == 7.5
+    assert commander.user_map[user]["occupancy_percent"] == 50.0
     assert group.user_worker_map == {user: None}
 
 
@@ -395,13 +394,7 @@ async def test_a_real_child_announces_and_the_vertex_learns_it(
         {
             "worker_events": [
                 {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a"},
-                {
-                    "op": "user_frozen",
-                    "worker": WORKER_NAME,
-                    "user": user,
-                    "placement": None,
-                    "occupancy_percent": 4.0,
-                },
+                {"op": "user_frozen", "worker": WORKER_NAME, "user": user, "placement": None},
             ]
         },
         timeout=CALL_TIMEOUT,
@@ -411,7 +404,8 @@ async def test_a_real_child_announces_and_the_vertex_learns_it(
     assert reply[WORKER_SNAPSHOT_KEY]["global_store"] == to_tytx(commander.global_register, "json")
     assert commander.page_connection_map == {"p1": "cid-a"}
     assert commander.user_is_frozen(user) is True
-    assert commander.user_map[user]["occupancy_percent"] == 4.0
+    # The estimate was composed on this side of the wire, off the last photo.
+    assert commander.user_map[user]["occupancy_percent"] == 0.0
     assert group.user_worker_map == {user: None}
 
     # A CHANGE MADE NOW DOES NOT REACH IT. The store it holds is the one it was
