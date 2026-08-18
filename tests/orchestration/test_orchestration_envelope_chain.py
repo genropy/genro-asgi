@@ -265,6 +265,25 @@ async def test_a_freeze_is_a_mark_above_and_a_placement_to_assign_below(handler,
     assert group.user_worker_map == {user: None}
 
 
+async def test_a_batch_of_freezes_shares_the_worker_they_left(handler, commander, group):
+    first = commander.resolve_user("cid-a")
+    second = commander.resolve_user("cid-b")
+    group.urgent_snapshots = True  # the stub's gauge reads 100.0
+
+    handler.read_envelope(
+        envelope(
+            {"op": "user_frozen", "worker": WORKER_NAME, "user": first, "placement": None},
+            {"op": "user_frozen", "worker": WORKER_NAME, "user": second, "placement": None},
+            photo={"users": {"somebody-else": {}}},
+        )
+    )
+
+    # One photo excludes them BOTH: the divisor is its population plus every
+    # leaver of this same envelope, or each would wear the worker whole.
+    assert commander.user_map[first]["occupancy_percent"] == 100.0 / 3
+    assert commander.user_map[second]["occupancy_percent"] == 100.0 / 3
+
+
 async def test_an_adoption_turns_the_mark_off_and_drains_what_was_waiting(handler, commander):
     user = commander.resolve_user("cid-a")
     handler.read_envelope(

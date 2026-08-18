@@ -323,6 +323,22 @@ async def test_the_turns_of_a_round_run_together_and_a_failing_one_takes_nobody_
     assert failing.turns == [False]
 
 
+async def test_a_beat_that_expired_during_an_anticipated_round_is_owed(
+    commander, monkeypatch
+):
+    monkeypatch.setattr(spa_commander, "HEARTBEAT_SECONDS", 0.01)
+    noisy = group_double(commander, "noisy")
+    noisy.ping_now_event.set()
+
+    woken = await commander._wait_beat()
+    assert [group.name for group in woken] == ["noisy"]
+
+    # The anticipated round outlives the beat: the timer expires OUTSIDE the
+    # wait, and the next pass owes a full round instead of re-arming in silence.
+    await asyncio.sleep(0.05)
+    assert await commander._wait_beat() == []
+
+
 async def test_a_group_ringing_at_every_breath_cannot_postpone_the_full_round(
     commander, monkeypatch, clock
 ):

@@ -449,15 +449,23 @@ class GroupHandler:
         then asked THE SAME question the growth asks — each against its own cap,
         the reserve still whole — so a closure can never undo a growth.
         """
+        # A quitting worker is nobody's spare — its closure is already
+        # somebody's order — and nobody's absorber: its room counts for nobody.
         candidates = [
             worker_handler
             for worker_handler in self.living_workers
-            if worker_handler is not self.reception
+            if worker_handler is not self.reception and worker_handler.state != "quitting"
         ]
         if not candidates:
             return None
         spare = min(candidates, key=lambda worker_handler: picture[worker_handler.name])
-        remaining = {name: pct for name, pct in picture.items() if name != spare.name}
+        remaining = {
+            name: pct
+            for name, pct in picture.items()
+            if name != spare.name and self.worker_handler_map[name].state != "quitting"
+        }
+        if not remaining:
+            return None
         shared = picture[spare.name] / len(remaining)
         after = {name: pct + shared for name, pct in remaining.items()}
         if self._placeable_newcomers(after) < self.newcomer_reserve_count:
@@ -492,6 +500,8 @@ class GroupHandler:
         death got there first — before the order, or under that very beat — is
         ordered nothing: the death is already written, and the round buries it.
         """
+        if worker_handler.state in DEAD_STATES:
+            return
         if worker_handler.worker_snapshot is None:
             await worker_handler.ping_process()
         if worker_handler.state in DEAD_STATES:

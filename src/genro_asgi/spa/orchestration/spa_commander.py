@@ -516,7 +516,12 @@ class SpaCommander:
             likes, but cannot postpone the full round — the beat every group and
             every task of the vertex is owed — past its own due.
         """
-        if self._beat_timer is None or self._beat_timer.done():
+        if self._beat_timer is not None and self._beat_timer.done():
+            # The beat expired while an anticipated round was running: it is
+            # owed as a full round, never discarded.
+            self._beat_timer = None
+            return []
+        if self._beat_timer is None:
             self._beat_timer = asyncio.ensure_future(asyncio.sleep(HEARTBEAT_SECONDS))
         wakes = {
             asyncio.ensure_future(group_handler.ping_now_event.wait()): group_handler
@@ -529,6 +534,7 @@ class SpaCommander:
             if wake not in done:
                 wake.cancel()
         if self._beat_timer in done:
+            self._beat_timer = None
             return []
         return [group_handler for wake, group_handler in wakes.items() if wake in done]
 

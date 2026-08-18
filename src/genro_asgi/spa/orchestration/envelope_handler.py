@@ -201,29 +201,39 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
     #: freezer instead of from a login, and the process holds him either way.
     on_user_adopted = on_new_user
 
-    def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
-        """A user has left this process for the freezer, with what he absorbed.
+    def work_on_envelope(self, envelope: dict[str, Any]) -> None:
+        """The estimate of every leaver is stamped first: it needs the WHOLE envelope.
 
-        Acts on ``hosted_users`` and on the worker event: the estimate stamped
-        here is the ABSTRACT occupancy of the worker he left — the photo of this
-        same envelope, read by the group's own gauge — split evenly over
-        everybody it held, him included. This rung composes it because it is the
-        one that knows whose photo that is; the vertex files it in his row.
+        Args:
+            envelope: the payload as it came off the wire.
+
+        Acts on the ``user_frozen`` worker events: each is stamped with the
+        ABSTRACT occupancy of the worker — the group's own gauge over this
+        envelope's photo — split evenly over everybody it held: the photo's
+        population plus ALL the leavers of this same envelope, because an
+        idleness sweep freezes many between two beats and they travel together.
+        Then the base reading: the photo, the events.
         """
-        worker_handler = self.worker_handler
-        worker_handler.hosted_users.discard(worker_event["user"])
-        photo = worker_handler.worker_snapshot or {}
-        population = len(photo.get("users") or {}) + 1  # the photo he already left
-        worker_event["occupancy_percent"] = (
-            worker_handler.group_handler.get_occupancy_percent(photo) / population
-        )
+        worker_events = envelope.get(WORKER_EVENTS_KEY) or ()
+        leavers = sum(1 for we in worker_events if we["op"] == "user_frozen")
+        if leavers:
+            photo = envelope.get(WORKER_SNAPSHOT_KEY) or self.worker_handler.worker_snapshot or {}
+            estimate = self.worker_handler.group_handler.get_occupancy_percent(photo) / (
+                len(photo.get("users") or {}) + leavers
+            )
+            for worker_event in worker_events:
+                if worker_event["op"] == "user_frozen":
+                    worker_event["occupancy_percent"] = estimate
+        super().work_on_envelope(envelope)
 
-
-    def on_drop_user(self, worker_event: dict[str, Any]) -> None:
-        """Leaving for good says the same at this rung: he is not in this
-        process's memory. Where he went is read one layer up, and a row about to
-        die needs no estimate."""
+    def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
+        """A user has left this process: he is not one of its own any more."""
         self.worker_handler.hosted_users.discard(worker_event["user"])
+
+    #: Leaving for good says the same thing at this rung: he is not in this
+    #: process's memory. Where he went is read one layer up, and a row about to
+    #: die needs no estimate — the stamp above touches the frozen alone.
+    on_drop_user = on_user_frozen
 
 
 class GroupEnvelopeHandler(EnvelopeHandler):

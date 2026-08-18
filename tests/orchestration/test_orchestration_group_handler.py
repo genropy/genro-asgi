@@ -318,6 +318,33 @@ async def test_a_death_that_outruns_the_close_order_leaves_no_zombie(make_group,
     assert group.user_worker_map == {}
 
 
+async def test_a_dead_worker_never_photographed_is_ordered_nothing(make_group):
+    group = make_group()
+    doomed = await group.start_worker()
+    doomed.process.kill()
+    await wait_for(lambda: doomed.state == "aborted")
+    doomed.worker_snapshot = None
+
+    # The state is read BEFORE the photo beat: no beat is thrown at a dead wire.
+    fresh = await group.restart_worker(doomed)
+
+    assert doomed.state == "aborted"
+    assert list(group.worker_handler_map) == [fresh.name]
+
+
+async def test_a_worker_on_its_way_out_is_nobodys_spare(make_group):
+    group = make_group()
+    await group.start_worker()
+    leaving = await group.start_worker()
+    leaving.state = "quitting"
+
+    await group.check_occupancy(now=True)
+
+    # Its closure is already somebody's order: it is not a candidate for a
+    # second one, and its room counts for nobody.
+    assert leaving.state == "quitting"
+
+
 async def test_the_closure_of_a_spare_worker_goes_through_its_six_steps(make_group, commander):
     group = make_group(users=["mario"])
     known_at_the_vertex(commander, "cid-a", "mario")
