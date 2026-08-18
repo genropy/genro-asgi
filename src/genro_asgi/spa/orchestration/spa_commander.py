@@ -64,6 +64,23 @@ in ``group_map``, in the order it was named. ``default_group`` is the group
 that receives whoever arrives with no past: the elected one, or the first
 declared.
 
+**A request walks the whole chain from here.** ``serve_request`` takes a
+cookie and gives back what the site answered: the cid becomes an identity, the
+identity names a group (his own, or the elected one when he has none yet), the
+group names the worker — placing him NOW if he has no home — and the request
+travels as the ``http`` form with the identity and the freezer verdict beside it.
+The front hands over a cid and a request and nothing else: it never names a
+group, a worker or a wire, and it keeps no state to name them with. What comes
+back is the child's whole REPLY, folded by the chain before this returns.
+
+The refusals travel as CLASSES, because the caller's next step is written in
+which one arrives: nobody could take him is ``AssignmentRefused`` carrying the
+seconds to come back in; a site that failed inside its process is
+``SiteFailedRequest``; a wire that is gone is ``ConnectionError``. The
+waiting is the one that does not travel: a user between two homes is waited for
+here, on the budget the request gave, and the walk starts over at the top — the
+map is the authority at every step, so nothing is remembered across the wait.
+
 **The waiting room has a door.** ``on_hold`` on a row is what ``resolve_user``
 raises ``UserOnHold`` on; ``user_hold_event_map`` is what a request PARKS on while
 that lasts. One Event per user on hold, born with the hold and gone with its
@@ -140,9 +157,9 @@ from genro_bag import Bag
 
 from .beats import every
 from .envelope_handler import CommanderEnvelopeHandler
-from .exceptions import UserOnHold
+from .exceptions import AssignmentRefused, UserOnHold, SiteFailedRequest
 from .freeze_handler import FreezeHandler
-from .group_handler import GroupHandler
+from .group_handler import CHECK_OCCUPANCY_BEATS, GroupHandler
 
 #: What a user with no name of his own is called: the prefix plus his cid. The
 #: name itself carries the rule — whoever reads it knows nobody logged in here.
@@ -174,6 +191,18 @@ STORAGE_RESERVE_PERCENT = 10.0
 
 # The conversion the expiry hours of the grammar meet the clock through.
 SECONDS_PER_HOUR = 3600.0
+
+#: What a refused request is told to wait, in seconds. DERIVED and never a number
+#: of its own: it is exactly when the pool will have re-read its own shape and
+#: decided again, so what is promised to a browser stays true the day the beat
+#: changes.
+SHAPE_REVIEW_SECONDS = HEARTBEAT_SECONDS * CHECK_OCCUPANCY_BEATS
+
+#: The routing key every request of the hosted site travels under. Nothing routes
+#: on it — the child tells the http form by its payload — but it is what a human
+#: reads in a log, and it keeps a site page called ``/op/something`` from looking
+#: like one of the contract ops.
+SITE_PATH_PREFIX = "/site"
 
 __all__ = ["GUEST_PREFIX", "HEARTBEAT_SECONDS", "ORDERS_LOGGER_NAME", "SpaCommander"]
 
@@ -298,6 +327,74 @@ class SpaCommander:
         if name not in self.group_map:
             raise KeyError(f"Vertex: no group to receive a newcomer ({name!r})")
         return name
+
+    async def serve_request(
+        self, cid: str, http: dict[str, Any], *, hold_timeout: float
+    ) -> dict[str, Any]:
+        """Serve one request of the hosted site, from the cookie to the answer.
+
+        Args:
+            cid: the connection the request carries.
+            http: the request in the form the child reads, without the cid.
+            hold_timeout: the WHOLE time this request may spend waiting for a user
+                who is between two homes, however many times it has to wait.
+
+        Returns:
+            The child's REPLY payload, untouched — reading it is the front's job.
+
+        Raises:
+            AssignmentRefused: nobody can take him now, and ``retry_after`` says
+                when the machine will have decided again.
+            SiteFailedRequest: his worker answered with a failure.
+            ConnectionError: the wire of his worker is gone.
+
+        Acts on the indexes through every step it walks — a cid never seen is
+        minted, a user with no home is placed — and, on the way back, through the
+        chain, which folds what the child announced before this returns.
+        """
+        deadline = asyncio.get_running_loop().time() + hold_timeout
+        while True:
+            try:
+                user = self.resolve_user(cid)
+                break
+            except UserOnHold as waiting:
+                await self._wait_out_hold(waiting.user, deadline)
+        group_handler = self.group_map[self.user_map[user]["group"] or self.default_group]
+        try:
+            worker_name = group_handler.user_worker_map.get(user) or group_handler.assign_user(user)
+        except AssignmentRefused as refusal:
+            raise self._refused(refusal) from None
+        worker_handler = group_handler.worker_handler_map[worker_name]
+        reply = await worker_handler.connector.call(
+            f"{SITE_PATH_PREFIX}{http['path']}",
+            {
+                "http": {**http, "cid": cid},
+                "identity": user,
+                "user_frozen": self.user_is_frozen(user),
+            },
+        )
+        if "error" in reply:
+            raise SiteFailedRequest(user, str(reply["error"]))
+        return reply
+
+    async def _wait_out_hold(self, user: str, deadline: float) -> None:
+        """Wait for a user to have a home again, inside what is left of the budget.
+
+        A budget already spent is a wait of no seconds, which is the refusal
+        itself: the request has waited as long as it said it would.
+        """
+        try:
+            await self.await_user_release(user, deadline - asyncio.get_running_loop().time())
+        except TimeoutError:
+            raise self._refused(
+                AssignmentRefused(user, "he is still between two homes")
+            ) from None
+
+    def _refused(self, refusal: AssignmentRefused) -> AssignmentRefused:
+        """Count one request the pool could not take, and tell it when to come back."""
+        self.counters["requests_refused"] += 1
+        refusal.retry_after = SHAPE_REVIEW_SECONDS
+        return refusal
 
     def resolve_user(self, cid: str) -> str:
         """The reception desk: whose cid this is, minting him if he is new.

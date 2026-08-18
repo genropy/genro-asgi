@@ -179,7 +179,57 @@ item, freezer, check, timeout, restart, congelamento per inattività.
     stop leaves no child alive.
   - Verify: now — the `_TBD` round of this phase.
 
-- [ ] **Phase 2**: The request chain at the vertex
+- [x] **Phase 2**: The request chain at the vertex
+  > Done: `SpaCommander.serve_request(cid, http, *, hold_timeout)` is the ONE
+  > surface the front speaks to. It walks the whole chain — the cid becomes an
+  > identity, the identity names his group (his own row, or `default_group`), the
+  > group names the worker or places him NOW, and the request goes down as
+  > `{"http": {..., "cid"}, "identity", "user_frozen"}` under the `/site` prefix.
+  > The waiting is here and travels nowhere: `UserOnHold` is caught, waited out on
+  > the barrier of Phase 1 against a budget computed ONCE (each round gets what is
+  > left of it), and the walk starts over at the top, the map being the authority
+  > at every step. The refusals leave as classes: `AssignmentRefused` carrying
+  > `retry_after` — composed here and derived, `SHAPE_REVIEW_SECONDS` =
+  > `HEARTBEAT_SECONDS` x `CHECK_OCCUPANCY_BEATS`, so the promise made to a browser
+  > stays true the day the beat changes — `SiteFailedRequest` when the child
+  > answered with a failure (the placement is sound and the wire is up: what broke
+  > is the hosted site), and `ConnectionError` untouched when the wire is gone.
+  > Every refusal counts itself in `counters["requests_refused"]`.
+  > Ratified at the walkthrough (9 answers, temp/domande_fase2_m4_2026-08-18.md):
+  > the single surface (the front never names a `WorkerHandler` or a wire); the
+  > failure raises instead of being returned; NO deadline on the CALL in this macro
+  > — declared absence, a child running a long query is not mute and the patience
+  > belongs to the browser and its proxies; the hold budget is TOTAL; the
+  > `Retry-After` derived and composed by the vertex inside the refusal; a counter
+  > and not a log row per refusal; a woken user keeps the group he was frozen on
+  > (his parcel was written by THAT group's code); the `/site` prefix so a site page
+  > called `/op/something` cannot look like a contract op; a worker already dead but
+  > still in the map falls through to a 502 rather than being re-placed, the round
+  > that buries it being already rung by `on_child_lost`.
+  > Verified: `pytest tests/ -q` 1960 passed / 2 skipped (was 1949/2 — the 11 tests
+  > of the new file); `ruff check src/ tests/` clean; 74 executable lines added to
+  > `src/` against the phase cap of 70 — the four over are the `SiteFailedRequest`
+  > class, which the walkthrough created and the cap predates; coverage
+  > spa_commander 99%, exceptions 100%, with no line of this phase uncovered.
+  > NEUTRALIZATION PROBE run on the finest point: replacing the remaining budget
+  > with a fixed per-wait timeout makes
+  > `test_the_budget_is_the_whole_wait_and_not_one_of_them` FAIL — the total budget
+  > is proved and not merely asserted. (Its first draft was vacuous: the keeper let
+  > go three times and then left the hold up, so both readings refused. It now lets
+  > go for a whole second and the clock is what tells them apart.)
+  > Behaviours covered: a newcomer minted, placed on the base group and served,
+  > with the exact payload on the wire; a resident routed to his own worker while
+  > the fullest-first walk would have chosen another; the freezer verdict travelling
+  > with the request; a woken user landing in his own group and not in the elected
+  > one; the pool that takes nobody refusing with `retry_after` and counting it; a
+  > held user's request leaving the instant the hold falls; a hold that outlives the
+  > budget becoming a refusal; the site's own failure raising a class of its own and
+  > counting as no refusal; a dead wire falling through; two simultaneous requests
+  > of the same unknown landing on ONE worker.
+  > Files: src/genro_asgi/spa/orchestration/spa_commander.py,
+  > src/genro_asgi/spa/orchestration/exceptions.py,
+  > src/genro_asgi/spa/orchestration/__init__.py,
+  > tests/orchestration/test_orchestration_request_chain.py
   - Run: opus / medium
   - Pattern: the legacy front face — `UserStickyCommander.forward_envelope`
     (commander.py:2245) for WHAT a forward does, never for how it is built;

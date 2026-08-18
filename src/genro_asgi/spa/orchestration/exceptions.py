@@ -28,7 +28,12 @@ field is read is by catching this.
 one at a time and each of them answers by taking the user or by RAISING, so a
 walk is a ``try`` and the reason a worker said no is its class. The base is what
 the group itself raises when it has asked everybody — nobody took him, and
-whoever asked answers 503.
+whoever asked answers 503. On its way out to a request it carries ``retry_after``,
+composed where the clocks are so that whoever writes the header has none.
+
+``SiteFailedRequest`` is the other end: the placement was sound and the wire
+is up, but the site inside the process failed the request. A refusal says come
+back later; this one says the upstream is broken, which is a different answer.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ __all__ = [
     "AssignmentRefused",
     "NoRoomError",
     "UserOnHold",
+    "SiteFailedRequest",
     "WorkerQuittingError",
 ]
 
@@ -62,12 +68,17 @@ class AssignmentRefused(Exception):
     Args:
         user: the identity that was not placed.
         cause: who refused and why, for the log — the branching is on the class.
+        retry_after: how many seconds before the machine will have decided again;
+            None on the refusals of a single worker, which the walk catches and
+            never lets out. Whoever answers requests reads it off the class and
+            has no clock of its own to consult.
     """
 
-    def __init__(self, user: str, cause: str) -> None:
+    def __init__(self, user: str, cause: str, retry_after: float | None = None) -> None:
         super().__init__(f"{user} was not placed: {cause}")
         self.user = user
         self.cause = cause
+        self.retry_after = retry_after
 
 
 class NoRoomError(AssignmentRefused):
@@ -76,3 +87,21 @@ class NoRoomError(AssignmentRefused):
 
 class WorkerQuittingError(AssignmentRefused):
     """This worker's process is leaving, or has left: it will never take anybody again."""
+
+
+class SiteFailedRequest(Exception):
+    """The worker answered a request of the site with a failure instead of an answer.
+
+    Args:
+        user: whose request it was.
+        cause: what the child said went wrong.
+
+    The placement is sound and the wire is up: what failed is the site inside the
+    process. It is the upstream's failure and never the client's, which is why it
+    is a class of its own and not one of the refusals.
+    """
+
+    def __init__(self, user: str, cause: str) -> None:
+        super().__init__(f"the worker of {user} failed the request: {cause}")
+        self.user = user
+        self.cause = cause
