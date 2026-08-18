@@ -69,7 +69,15 @@ Inherited from F42–F47 and still valid: `SpaCommander` · `user_map` /
 `WorkerRestartingError` · `UserOnHold` · `quit_process` · `restart_worker` ·
 `drop_worker` · `process_quitted` / `process_aborted` · `/op/quit`,
 `/op/drop_user`, `/op/drop_connection` · `user_is_frozen(user)` ·
-`occupancy_percent` · `disk_cleanup` · `need_resources`.
+`occupancy_percent` · `need_resources`.
+Baptised at the close of Phase 4 (round of 2026-08-18, foreman-3): `group_map` ·
+`requires_beat_ping` · `hold_user` · `mark_user_frozen` / `mark_user_adopted` ·
+`drop_users` · `cleanup_frozen` (the freezer's sweep AND the vertex task that
+calls it — homonymy in cascade, and it replaces the `disk_cleanup` of the
+register: the medium does not belong in the name) · `CHECK_OCCUPANCY_BEATS` /
+`CHECK_RESOURCES_BEATS` / `DROP_EXPIRED_USERS_BEATS` / `CLEANUP_FROZEN_BEATS` ·
+`storage_free_percent` · `STORAGE_RESERVE_PERCENT` · `every(beats)` /
+`every_beats` / `beat_counts` / `now=` (the decorator, the owner's own coinage).
 
 **Excluded words** (from names AND prose): parcel, deposit, judgment, budget,
 valvola, relaunch, seat/posto, and the names of the dead. Say instead:
@@ -544,11 +552,38 @@ register item, freezer, check, timeout, restart, congelamento per inattività.
   > fixture is code without a requester (the same judgement Phase 3 made on
   > `GroupHandler.start`). `heartbeat_loop` is the plain coroutine a lifespan
   > creates and cancels, which is exactly what the tests do to it.
-  > Verify: now — the `_TBD` round of this phase: `group_handler_map_TBD`,
-  > `silent_TBD`, `drop_unclaimed_folders_TBD`, `disk_used_percent_TBD`,
-  > `CHECK_OCCUPANCY_EVERY_TBD`, `FROZEN_EXPIRY_EVERY_TBD`,
-  > `DISK_CLEANUP_EVERY_TBD`, `RESOURCES_CHECK_EVERY_TBD` — one at a time,
-  > semantics plus candidates.
+  > Verified: the `_TBD` round CLOSED on 2026-08-18 (12 names, one at a time), and
+  > on the way it brought THREE amendments the owner ratified — each landed as its
+  > own commit, suite green at every step, rationale in notes.md:
+  > (a) **the storage left the quotas** — a disk is nothing the pool can grow into,
+  > so the MEMORY alone writes `state`; the gauge is flipped to the free share
+  > (`storage_free_percent`) and a level under `STORAGE_RESERVE_PERCENT` (10.0, a
+  > constant: a full disk is full for every installation) is said out loud and calls
+  > `need_resources`. The grammar key `frozen_users_disk_alarm_percent` is never
+  > born — "too many parameters do harm; it is enough that somebody is told when
+  > less than 10% is left".
+  > (b) **the cadence is declared on the method** — `@every(beats)`
+  > (`spa/orchestration/beats.py`, exported from the package) counts the turns of a
+  > periodic method on the INSTANCE (`beat_counts`, one row per method: `turns`,
+  > `runs`, `errors`, `last_error`), logs and swallows what it raises, and runs
+  > regardless when called with `now=True`. With it die `_run_due_tasks` and the
+  > group's `_beats`: ONE mechanism for the three rungs, instead of a table at the
+  > vertex and a modulo in the group's body.
+  > (c) **forgetting a user takes his freezer state with him** — the disk entered
+  > `drop_user`, so `drop_users` is genuinely its plural and the one-letter
+  > difference hides no wider reach; the orphan sweep keeps its population, which is
+  > a row lost WITHOUT a drop (a server killed before its dump, a restore older than
+  > the freezer).
+  > Verified: 1918 passed / 2 skipped; ruff clean; mypy 94 (the baseline, plus one
+  > scoped `attr-defined` override for the wrapper's own marker); `beats.py` 100%,
+  > `group_handler` 100%, `spa_commander` 97%. FOUR MORE NEUTRALIZATION PROBES, each
+  > breaking its own tests: the reserve lamp pinned off, the cadence pinned open, the
+  > wake no longer overriding the count, the disk call pinned out of `drop_user`.
+  > Files: src/genro_asgi/spa/orchestration/beats.py (new), spa_commander.py,
+  > group_handler.py, freeze_handler.py, __init__.py, pyproject.toml,
+  > tests/orchestration/test_orchestration_heartbeat.py,
+  > test_orchestration_spa_commander.py, test_orchestration_group_handler.py,
+  > test_orchestration_envelope_chain.py
   - Run: opus / high
   - Pattern: `src/genro_asgi/tasks/scheduler.py:100` (`start` / `stop` /
     `_run_loop` — the periodic loop owned by the lifespan, the tick isolated
@@ -630,8 +665,13 @@ register item, freezer, check, timeout, restart, congelamento per inattività.
     Units in the name, always.
     (2) **Vertex grammar**: `memory_max_percent` (the server's concession on
     the machine; None = all of it, or the container limit) ·
-    `machine_memory_alarm_percent` · `frozen_users_disk_alarm_percent` ·
-    `orchestration_log_path` (+ `_max_bytes` / `_backup_count`).
+    `machine_memory_alarm_percent` · `orchestration_log_path` (+ `_max_bytes` /
+    `_backup_count`) · `user_expiry_hours` / `guest_expiry_hours`, which Phase 4
+    put HERE and not on the group (a frozen row does not say which group he came
+    from) — to be reconciled with F44.5, where the group judges the ACTIVE users by
+    the same two keys, through the cascade the percentages already use.
+    NO `frozen_users_disk_alarm_percent`: the storage left the quotas (see the
+    Phase 4 record) and answers to `STORAGE_RESERVE_PERCENT`, a constant.
     (3) **Group grammar**: `memory_max_percent` (the group's quota, a
     percentage of the concession — homonymy cascading on purpose) ·
     `occupancy_max_percent` · `restart_occupancy_max_percent` ·
@@ -641,7 +681,8 @@ register item, freezer, check, timeout, restart, congelamento per inattività.
     `worker_class`, `kwargs`, `main_threadpool_size`, `aux_threadpool_size`).
     NO `target_workers`, NO `max_workers`.
     (4) **Constants**: `HEARTBEAT_SECONDS` · `QUIT_TIMEOUT_SECONDS` ·
-    `USER_PENDING_MAX_ITEMS` · the group's own check cadence in beats ·
+    `USER_PENDING_MAX_ITEMS` · `STORAGE_RESERVE_PERCENT` · the four cadences in
+    beats (`CHECK_OCCUPANCY_BEATS` in the group, the other three at the vertex) ·
     (existing: `PROCESS_PING_INTERVAL`, `PROCESS_PING_TIMEOUT`,
     `TRANSFER_START_DELAY`, `DEPOSIT_LOCK_WAIT_LIMIT`).
   - Details: the keys are wired into the existing config grammar (M1's

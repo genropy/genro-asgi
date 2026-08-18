@@ -4,6 +4,71 @@
 rejected. The `_TBD` names each phase brought to the owner, and the name they
 got, belong here too.)
 
+## Phase 4 — the round of the names, and the three amendments it brought
+
+*(2026-08-18, foreman-3. The 12 `_TBD` names of Phases 2 and 4 were put to the
+owner one at a time; three of them turned into changes of behaviour.)*
+
+**The names, and why they are these.** `group_map` over `group_handler_map` (the
+owner's call: the column of `worker_handler_map` was not worth the length) ·
+`requires_beat_ping` over `is_silent` — silence read as a fault, and there is
+nothing wrong with a worker nobody has spoken to; `beat` circumscribes the claim
+to the round, which answers the objection that `ping_process` has a second caller
+(the departure, which beats a worker with no photo whatever its silence) ·
+`cleanup_frozen` on both rungs, after `folder` and `disk` were both refused for
+naming the MEDIUM: "if tomorrow it were Redis they would not be folders" ·
+`mark_user_frozen` / `mark_user_adopted`, after `set_` was judged to read as one
+boolean setter with a flag and `record_` as a customer record in a business
+application · `drop_users`, because `drop` is the verb of the family (three rungs
+plus the ops) and the objection to it — that the plural reached further than the
+singular — was answered by removing the difference, not the word.
+
+**The four thin mutators of the vertex stay.** They were weighed against the cost
+of a call and of the maintenance ("every call slows things down"): they are not on
+the hot path — freeze, adoption, the death of a process, events measured in
+minutes — and they buy the single writer, which is what keeps every write of a
+row inside `spa_commander.py` and lets the envelope chain not know how a row is
+made.
+
+**The storage left the quotas because a disk is not something a pool can grow
+into.** A separate quota for the freezer's volume would have been a number to
+tune for a resource whose answer is a sysop making room or a bigger volume, not a
+placement decision — so the memory alone writes `state`, and the storage gets a
+lamp: under `STORAGE_RESERVE_PERCENT` the log says so and `need_resources` is
+called (the owner wanted the ask kept, which is what a Kubernetes commander
+overrides). It is a constant and not grammar because a full disk is full for
+every installation. The gauge measures the FREE share, as the fuel gauge of the
+image that named it — and it stays a number rather than a boolean lamp because
+the log must carry the figure: "7.4% free tells the sysop how far he can run, «on
+reserve» does not".
+
+**The cadence went onto the method because the table presupposed one executor.**
+The vertex kept a table of (cadence, task) and the group a modulo in its own body:
+the same idea in two shapes, with a third rung still to come. `@every` makes it
+one — the number where the knowledge is, each rung giving its periodic methods a
+turn. The count could not live on the function: a function object is one per
+class, so N groups would share one clock and be checked in a rotation nobody
+designed (measured in the shell: `a.m is a.m` is False, writes to a bound method
+raise, and `A.m.count` is read by every instance). It lives in `beat_counts`,
+one row per method, and the row is also the dashboard — the owner's own addition:
+"if I look at the counters table I see who is in error". The wrapper swallows and
+logs rather than letting the caller guard, because the isolation must be a
+property of the mechanism and not a rule to remember: the case that made it is a
+bad disk raising in `drop_expired_users` at every beat, which without isolation
+would take down `check_resources` — the one thing that would have said the disk
+is bad. The price, accepted: a bare call runs only if due, so a test or a monitor
+that wants it now says `now=True` (eight call sites moved).
+
+**The disk entered `drop_user` because that path only ever runs on users who are
+leaving for good.** Verified before touching it: the vertex forgets a user when
+the worker ANNOUNCES he is gone, and the worker announces it in two cases only —
+the `/op/drop_user` order from above and a departure with flag `X`, the user who
+leaves without being frozen. In both, the only process that could hold his lock is
+the worker doing the announcing. The residual case is an `/op/drop_user` landing
+mid-transfer, a window of fractions of a second on an order nobody issues from
+outside, and it ends in the loud error the removal already raises when a folder
+survives itself.
+
 ## Phase 4
 
 **The skip of a group still in its turn cannot happen from the loop, and it was
