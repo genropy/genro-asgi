@@ -24,6 +24,7 @@ uvicorn), the same style as ``test_session.py``.
 from __future__ import annotations
 
 import base64
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,7 @@ from genro_asgi import (
 from genro_asgi.__main__ import AppsRegistry
 from genro_asgi.config import HOME_ENV, BaseConfiguration, DefaultConfig
 from genro_asgi.exceptions import HTTPUnauthorized
+from genro_asgi.spa.orchestration.spa_commander import ORDERS_LOGGER_NAME
 from genro_asgi.middleware.base import BaseMiddleware
 from genro_asgi.spa.orchestration import GroupHandler, SpaCommander
 from genro_asgi.storage_mixin import DEFAULT_SITE_MOUNT
@@ -810,6 +812,12 @@ class TestCommanderSection:
         assert commander.memory_max_percent == 75.0
         assert commander.machine_memory_alarm_percent == 85.0
         assert commander.user_expiry_hours == 480.0
+        assert commander.guest_expiry_hours == 12.0
+        # The three log keys land on the rotating handler itself, not just in
+        # the kwargs dict: the file, its size, how many are kept.
+        attached, = logging.getLogger(ORDERS_LOGGER_NAME).handlers
+        assert attached.maxBytes == 2_000_000
+        assert attached.backupCount == 3
         assert group.occupancy_max_percent == 70.0
         assert group.restart_occupancy_max_percent == 90.0
         assert group.reception_reserved_percent == 30.0

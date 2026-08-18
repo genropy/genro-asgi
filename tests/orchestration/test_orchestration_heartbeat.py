@@ -240,6 +240,26 @@ async def test_only_the_workers_nobody_has_heard_from_are_beaten(make_group):
     assert worker_handler.worker_snapshot["pid"] == worker_handler.process.pid
 
 
+async def test_a_beat_that_raises_takes_no_sibling_beat_with_it(make_group):
+    group = make_group()
+    broken = await group.start_worker()
+    healthy = await group.start_worker()
+    for worker_handler in (broken, healthy):
+        worker_handler.process_ping_interval = 0.0
+        worker_handler.worker_snapshot = None
+
+    async def failing_beat() -> None:
+        raise ConnectionError("the wire is a stump")
+
+    broken.ping_process = failing_beat
+
+    await group.ping_workers()
+
+    # The broken one's beat is its own business and nobody else's: the sibling
+    # was beaten all the same, and its photo arrived.
+    assert healthy.worker_snapshot["pid"] == healthy.process.pid
+
+
 async def test_a_mute_process_delays_its_own_group_and_not_the_others(make_group, commander):
     mute_group = make_group(name="mute", process_ping_interval=0.0)
     live_group = make_group(name="live", process_ping_interval=0.0)

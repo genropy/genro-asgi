@@ -240,6 +240,24 @@ async def test_a_user_who_is_gone_leaves_nothing_behind(handler, commander, grou
     assert commander.counters["pendings_lost"] == 1
 
 
+async def test_the_photo_is_read_before_the_worker_events_of_its_own_envelope(
+    handler, commander
+):
+    user = commander.resolve_user("cid-a")
+
+    handler.read_envelope(
+        envelope(
+            {"op": "user_frozen", "worker": WORKER_NAME, "user": user, "placement": None},
+            photo={"users": {user: {"transfer_flag": "T"}}},
+        )
+    )
+
+    # One envelope, taken in the order it was shot: the photo parks him first,
+    # the event that follows settles him — nobody is left waiting for ever.
+    assert commander.user_map[user]["on_hold"] is None
+    assert commander.user_is_frozen(user) is True
+
+
 async def test_a_freeze_is_a_mark_above_and_a_placement_to_assign_below(handler, commander, group):
     user = commander.resolve_user("cid-a")
     group.user_worker_map[user] = WORKER_NAME
