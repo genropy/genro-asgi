@@ -454,19 +454,43 @@ async def test_the_deposit_gives_up_what_no_row_of_the_vertex_claims(commander):
     assert commander.counters["orphan_folders_discarded"] == 1
 
 
-async def test_a_gauge_over_its_line_saturates_the_machine_and_asks_for_more(make_commander):
-    commander = make_commander(CountingCommander, frozen_users_disk_alarm_percent=0.0)
+async def test_the_memory_past_its_line_saturates_the_machine_and_asks_for_more(
+    make_commander, monkeypatch
+):
+    commander = make_commander(CountingCommander, machine_memory_alarm_percent=40.0)
+    # The gauge is read from /proc, which this platform may not have at all: the
+    # arithmetic under test is the line, not the reading.
+    monkeypatch.setattr(commander, "_machine_memory_used_percent", lambda: 42.0)
 
     await commander.check_resources()
 
     assert commander.state == "saturated"
     assert commander.asked == 1
 
-    # The line moved out of the way is the same as the disk emptying: nobody has
+    # The line moved out of the way is the same as the memory freeing: nobody has
     # to say the crisis is over.
-    commander.frozen_users_disk_alarm_percent = 100.0
+    commander.machine_memory_alarm_percent = 50.0
 
     await commander.check_resources()
 
     assert commander.state == "running"
     assert commander.asked == 1
+
+
+async def test_the_storage_under_the_reserve_is_said_out_loud_but_saturates_nobody(
+    heartbeat_root, monkeypatch
+):
+    log_path = heartbeat_root / "orders.log"
+    commander = CountingCommander(
+        heartbeat_root / "frozen_users", orchestration_log_path=log_path
+    )
+    # No real volume is 100% free, so the lamp is on whatever disk runs the test.
+    monkeypatch.setattr(spa_commander, "STORAGE_RESERVE_PERCENT", 100.0)
+
+    await commander.check_resources()
+
+    # Room on disk is not something the pool can grow into: the sysop is told,
+    # the machine asks for more, and nobody is refused a seat over it.
+    assert commander.state == "running"
+    assert commander.asked == 1
+    assert "outcome=on_reserve" in log_path.read_text()

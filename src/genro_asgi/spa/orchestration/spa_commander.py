@@ -57,7 +57,7 @@ class because the data does, and the chain calls them by name.
 
 **The freezer is not on the ladder.** A worker parks a user's state on disk
 itself and announces it; the vertex only writes the mark. The one time the vertex
-touches the deposit is when nobody below can: pruning the traces of a wild death
+touches the freezer is when nobody below can: pruning the traces of a wild death
 (what a dead process left behind is not to be trusted, so it is discarded and
 counted) and reaping what expired. Both go through the ``FreezeHandler``, which
 is the only thing in the project that talks to the filesystem.
@@ -87,11 +87,12 @@ followed by the next beat.
 **Three tasks are the vertex's own, because nobody below can do them.** The
 frozen whose age ran out have no process to notice them, so ``drop_expired_users``
 prunes the row and the disk itself — the declared exception to the rule that the
-levels below prune themselves. ``cleanup_frozen`` discards what the deposit holds
-for nobody the indexes know. ``check_resources`` reads the machine's memory and
-the deposit's disk against their alarm lines, writes ``state`` and calls
-``need_resources``, which does nothing here and is where a commander that can
-grow its own machine says so. All three open the disk, so they read it OFF the
+levels below prune themselves. ``cleanup_frozen`` discards what the freezer holds
+for nobody the indexes know. ``check_resources`` reads the machine's memory
+against its alarm line and the freezer's storage against the reserve — the
+memory alone writes ``state``, a storage under reserve is said out loud — and
+calls ``need_resources``, which does nothing here and is where a commander that
+can grow its own machine says so. All three open the disk, so they read it OFF the
 loop: the vertex must never be the reason a healthy child reads as mute.
 """
 
@@ -127,12 +128,17 @@ HEARTBEAT_SECONDS = 5.0
 
 # Beats between two rounds of each task of the vertex — the cadences, each where
 # its own knowledge is: an expiry is hours away, so the frozen are read every few
-# minutes; the sweep of the deposit opens the disk over everything ever frozen,
+# minutes; the sweep of the freezer opens the disk over everything ever frozen,
 # which F18 measured in seconds at scale, so it goes hourly; the machine's gauges
 # are trends and not emergencies, and a minute is soon enough for a trend.
 DROP_EXPIRED_USERS_BEATS = 60
 CLEANUP_FROZEN_BEATS = 720
 CHECK_RESOURCES_BEATS = 12
+
+# The reserve line of the storage the freezer lives on: under this much free
+# room the sysop is told, and the machine asks the world outside for more. It is
+# a technical line and not a policy — a full disk is full for every installation.
+STORAGE_RESERVE_PERCENT = 10.0
 
 # The conversion the expiry hours of the grammar meet the clock through.
 SECONDS_PER_HOUR = 3600.0
@@ -144,7 +150,7 @@ class SpaCommander:
     """The vertex of the pool: the indexes, the minting, the master store, the log.
 
     Args:
-        frozen_users_path: the deposit root — the same one the workers are given,
+        frozen_users_path: the freezer root — the same one the workers are given,
             since a parcel written on one side is read on the other.
         orchestration_log_path: where the log of the orders goes; None keeps them
             on the logger alone, which is what a test wants.
@@ -156,8 +162,6 @@ class SpaCommander:
             shorter — a guest is a browser, not a person the machine knows.
         machine_memory_alarm_percent: the health line of the WHOLE machine, not
             of what this server was conceded: past it nothing grows.
-        frozen_users_disk_alarm_percent: the same line for the disk the deposit
-            lives on.
     """
 
     def __init__(
@@ -170,13 +174,11 @@ class SpaCommander:
         user_expiry_hours: float = 720.0,
         guest_expiry_hours: float = 24.0,
         machine_memory_alarm_percent: float = 90.0,
-        frozen_users_disk_alarm_percent: float = 90.0,
     ) -> None:
         self.freeze_handler = FreezeHandler(frozen_users_path)
         self.user_expiry_hours = user_expiry_hours
         self.guest_expiry_hours = guest_expiry_hours
         self.machine_memory_alarm_percent = machine_memory_alarm_percent
-        self.frozen_users_disk_alarm_percent = frozen_users_disk_alarm_percent
         #: The master of the store every worker holds a replica of: the only
         #: writer of that content is here, and a replica is replaced entire.
         self.global_register = Bag()
@@ -345,7 +347,7 @@ class SpaCommander:
             cause: why, for the log — a wild death, or a departure that lost
                 somebody on the way.
 
-        Acts on all three indexes and on the deposit: what a process nobody can
+        Acts on all three indexes and on the freezer: what a process nobody can
         question left behind cannot be trusted, so it goes, counted.
         """
         folders = self.freeze_handler.user_folders
@@ -440,7 +442,7 @@ class SpaCommander:
     async def drop_expired_users(self) -> None:
         """Forget the frozen whose age ran out — the row here, the folder on disk.
 
-        Acts on the indexes and on the deposit. It is the declared exception to
+        Acts on the indexes and on the freezer. It is the declared exception to
         pruning layer by layer: a frozen user lives in no process, so nobody
         below the vertex can notice that his time is up.
         """
@@ -450,9 +452,9 @@ class SpaCommander:
             self.drop_users(expired, cause="expired")
 
     async def cleanup_frozen(self) -> None:
-        """Discard what the deposit holds for nobody the indexes know.
+        """Discard what the freezer holds for nobody the indexes know.
 
-        Acts on the deposit: the folders left over — a user forgotten while his
+        Acts on the freezer: the folders left over — a user forgotten while his
         process was writing, the leavings of a machine that stopped badly — are
         the set the disk carries less the set the vertex claims, and they go
         counted and named. The disk is opened off the loop.
@@ -464,22 +466,24 @@ class SpaCommander:
             self.log_order("vertex", "cleanup_frozen", userkey, outcome="orphan")
 
     async def check_resources(self) -> None:
-        """Read the machine's memory and the deposit's disk against their alarm lines.
+        """Read the machine's memory against its alarm line, the storage against the reserve.
 
-        Acts on ``state`` — ``saturated`` while either gauge is over its line,
-        ``running`` when both are back under — and calls ``need_resources`` for
-        as long as the alarm stands. A gauge the platform does not offer alarms
-        nobody: an unmeasured machine is not a full one. The gauges are read off
-        the loop.
+        Acts on ``state`` — the MEMORY alone decides it, ``saturated`` past the
+        line and ``running`` back under: room on disk is not something the pool
+        can grow into. Storage under the reserve is said out loud instead, since
+        what answers it is a sysop who makes room or a bigger volume. Either way
+        ``need_resources`` is called for as long as it stands. A gauge the
+        platform does not offer alarms nobody: an unmeasured machine is not a
+        full one. The gauges are read off the loop.
         """
-        memory_percent, disk_percent = await asyncio.to_thread(self._read_resources)
-        over = disk_percent > self.frozen_users_disk_alarm_percent or (
-            memory_percent is not None and memory_percent > self.machine_memory_alarm_percent
-        )
+        memory_percent, storage_free_percent = await asyncio.to_thread(self._read_resources)
+        over = memory_percent is not None and memory_percent > self.machine_memory_alarm_percent
         self.state = "saturated" if over else "running"
-        if over:
-            numbers = {"memory_percent": memory_percent, "disk_percent": disk_percent}
-            self.log_order("vertex", "check_resources", numbers=numbers, outcome="saturated")
+        on_reserve = storage_free_percent < STORAGE_RESERVE_PERCENT
+        if over or on_reserve:
+            numbers = {"memory": memory_percent, "storage_free": storage_free_percent}
+            outcome = "saturated" if over else "on_reserve"
+            self.log_order("vertex", "check_resources", numbers=numbers, outcome=outcome)
             self.need_resources()
 
     def need_resources(self) -> None:
@@ -543,13 +547,13 @@ class SpaCommander:
         return expired
 
     def _read_resources(self) -> tuple[float | None, float]:
-        """The machine's memory and the deposit's disk, in percent; runs off the loop.
+        """The machine's memory used and the freezer's storage free, in percent; off the loop.
 
         The memory is None where the platform does not say — the same honesty the
         worker's own resident size has, and no dependency taken for a gauge a
         machine may simply not offer.
         """
-        return self._machine_memory_used_percent(), self.freeze_handler.disk_used_percent_TBD
+        return self._machine_memory_used_percent(), self.freeze_handler.storage_free_percent
 
     def _machine_memory_used_percent(self) -> float | None:
         """How much of the WHOLE machine's memory is in use, in percent, or None."""
