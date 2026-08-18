@@ -262,7 +262,9 @@ CLOCK_NAMES = ("last_refresh_ts", "last_user_ts", "last_rpc_ts")
 
 # The worker events that mean the population changed — a user entering or
 # leaving — and therefore that the next envelope out owes a fresh photo.
-POPULATION_WORKER_EVENTS = frozenset({"new_user", "drop_user", "user_frozen", "user_adopted"})
+POPULATION_WORKER_EVENTS = frozenset(
+    {"new_user", "drop_user", "user_frozen", "user_adopted", "connection_relabeled"}
+)
 
 __all__ = [
     "CLOCK_NAMES",
@@ -346,6 +348,10 @@ class SpaWorker:
         self._unfreeze_waits: dict[str, asyncio.Event] = {}
         self._pendings: dict[str, int] = {}
         self._transfer_flags: dict[str, str] = {}
+        #: One entry per connection that logged in during a call and is
+        #: waiting for that call's tail to carry it away: the identity it
+        #: belonged to BEFORE, which is the only fact the tail needs.
+        self._login_previous_user_map: dict[str, str] = {}
         self._departing_users: set[str] = set()
         self._transfers_start_ts = 0.0
         self._transfers_done = asyncio.Event()
@@ -914,10 +920,71 @@ class SpaWorker:
         with self.dispatch_lock:
             item = self._connection_register.get(cid)
             if item is None:
+                resident = user in self._user_register
                 item = self.add_connection(cid, user, **parcel.get("connection", {}))
                 for page_id, fields in parcel.get("pages", {}).items():
                     self.add_page(page_id, cid, user, **fields)
+                self._install_carried_store(user, parcel.get("store"), resident)
             return item
+
+    def _install_carried_store(self, user: str, store: Any, resident: bool) -> None:
+        """Give a login's store to the row it belongs to, or let it die out loud.
+
+        A connection that logged in carries what its guest had accumulated. It
+        becomes the user's own store when the row was born a moment ago with
+        this very connection; when a row of his was already here — his own state
+        came home first, or he is living on this worker already — the RESIDENT
+        wins and what the guest did before logging in dies, said out loud rather
+        than silently dropped. The caller holds the lock.
+        """
+        if store is None:
+            return
+        if resident:
+            self._logger.info(
+                "Worker %s: %s was already here, so what his guest accumulated is dropped",
+                self.name,
+                user,
+            )
+            return
+        self._user_register[user]["store"] = store
+
+    def relabel_connection(self, cid: str, user: str, **fields: Any) -> None:
+        """The login: this connection stops being anonymous and becomes his.
+
+        Args:
+            cid: the connection that logged in.
+            user: the identity it belongs to from now on.
+            fields: whatever else the site puts on the connection row, stored
+                verbatim.
+
+        Raises:
+            ValueError: the target carries ``GUEST_PREFIX`` — nobody logs in as a
+                guest, and the value crosses a border of trust to get here.
+            KeyError: this worker holds no such connection.
+
+        Acts on the registers AT ONCE — the row changes owner, the user is born
+        here if he was unknown, and the pages follow their connection without
+        being touched, their owner being derived through it — on the flag the
+        tail of this call reads, and on the departure the previous identity may
+        have been promised: a guest that is ceasing to exist is not carried to
+        the deposit, so that flag is dropped in this same breath. Announces the
+        login, which is what the vertex folds.
+        """
+        if user.startswith(GUEST_PREFIX):
+            raise ValueError(f"{user!r} is reserved: nobody logs in as a guest")
+        with self.dispatch_lock:
+            item = self._connection_register[cid]
+            previous_user = item["user"]
+            if user not in self._user_register:
+                self._add_user_item(user)
+            self._user_register[previous_user]["connections"].discard(cid)
+            self._user_register[user]["connections"].add(cid)
+            item.update(user=user, **fields)
+            self._login_previous_user_map[cid] = previous_user
+            self._transfer_flags.pop(previous_user, None)
+            self.add_worker_event(
+                "connection_relabeled", user=user, previous_user=previous_user, session_id=cid
+            )
 
     def open_request(self, user: str) -> None:
         """Write one live call under the user it is for.
@@ -1033,6 +1100,82 @@ class SpaWorker:
             return False
         finally:
             self.freeze_handler.release_lock(user, self.name)
+        return True
+
+    async def freeze_connection(self, cid: str) -> bool | None:
+        """Carry one logged-in connection to the deposit, under its new identity.
+
+        Args:
+            cid: the connection whose call has just ended.
+
+        Returns:
+            None when this connection did not log in — the ordinary tail of an
+            ordinary call; True when it went to the deposit; False when it stayed
+            (somebody else is already taking the previous identity away, or the
+            deposit refused the parcel, which is counted).
+
+        Writes ONE parcel under the identity the connection now belongs to — the
+        connection, its pages, and the store the previous identity accumulated
+        when that identity was a guest, which is the only thing that makes an
+        anonymous visit survive its own login — then takes the rows out of memory:
+        the connection, its pages, the guest left behind, and the new identity
+        too when this was all it had here, so that his own next request finds a
+        row just born and installs the carried store instead of discarding it.
+        A refused write leaves EVERYTHING alive and announces nothing: the
+        identity stays resident on this worker with its connection attached,
+        which is a legitimate shape of the machine, and the failure is counted.
+        """
+        with self.dispatch_lock:
+            previous_user = self._login_previous_user_map.get(cid)
+            if previous_user is None:
+                return None
+            user = self._connection_register[cid]["user"]
+        if not self._claim_departure(previous_user):
+            return False
+        try:
+            await self._take_folder_lock(user)
+        except TimeoutError:
+            self._freeze_failures += 1
+            self._logger.error(
+                "Worker %s: the folder of %s never came free; the connection of his "
+                "login stays here",
+                self.name,
+                user,
+            )
+            return False
+        try:
+            with self.dispatch_lock:
+                parcel = self._connection_parcel(cid)
+                if previous_user.startswith(GUEST_PREFIX):
+                    parcel["store"] = self._user_register[previous_user]["store"]
+                parcel = copy.deepcopy(parcel)
+            await self._run_in_pool(
+                self.service_pool,
+                functools.partial(
+                    self.freeze_handler.write_connection_register_item,
+                    user,
+                    cid,
+                    parcel,
+                    writer=self.name,
+                    cause="login",
+                    group=self.group,
+                ),
+            )
+        except Exception:
+            self._freeze_failures += 1
+            self._logger.exception(
+                "Worker %s: the deposit refused the connection of %s; he stays here",
+                self.name,
+                user,
+            )
+            return False
+        finally:
+            self.freeze_handler.release_lock(user, self.name)
+            with self.dispatch_lock:
+                del self._login_previous_user_map[cid]
+            self._release_departure(previous_user)
+        with self.dispatch_lock:
+            self._release_login_rows(cid, user, previous_user)
         return True
 
     async def freeze_all_users(self) -> None:
@@ -1261,6 +1404,7 @@ class SpaWorker:
             return await self._run_in_pool(self.traffic_pool, work)
         finally:
             await self.close_request(user)
+            await self.freeze_connection(cid)
 
     async def _resolve_row(self, user: str, cid: str, payload: dict[str, Any]) -> None:
         """Put the row of an incoming request in order.
@@ -1488,6 +1632,28 @@ class SpaWorker:
                 for page_id in sorted(item["pages"])
             },
         }
+
+    def _release_login_rows(self, cid: str, user: str, previous_user: str) -> None:
+        """Take out of memory what the login left here: the caller holds the lock.
+
+        The connection and its pages are gone to the deposit; the guest that used
+        to own it has nothing left anywhere and goes with them; and the identity
+        that received it goes too when this connection was all he had here — a
+        row left empty would make his own next request look like a resident and
+        throw away the store his connection is carrying. A previous identity that
+        is NOT a guest STAYS, empty if this was his last connection: he is a
+        person the machine knows, and the idleness sweep is what parks him.
+        """
+        item = self._connection_register.pop(cid)
+        for page_id in item["pages"]:
+            del self._page_register[page_id]
+        if previous_user.startswith(GUEST_PREFIX):
+            self._user_register.pop(previous_user, None)
+        resident = self._user_register.get(user)
+        if resident is not None:
+            resident["connections"].discard(cid)
+            if not resident["connections"]:
+                del self._user_register[user]
 
     def _release_rows(self, user: str) -> None:
         """Take a user's rows out of memory, saying nothing: his departure said it.

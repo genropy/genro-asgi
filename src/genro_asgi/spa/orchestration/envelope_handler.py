@@ -226,6 +226,16 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
                     worker_event["occupancy_percent"] = estimate
         super().work_on_envelope(envelope)
 
+    def on_connection_relabeled(self, worker_event: dict[str, Any]) -> None:
+        """A login swaps one of its own for another: the guest goes, the person arrives.
+
+        Who is on board is what a wild death is judged on, so a process that dies
+        between a login and the tail of its call must not be read as still
+        holding a guest the surface has already forgotten.
+        """
+        self.worker_handler.hosted_users.discard(worker_event["previous_user"])
+        self.worker_handler.hosted_users.add(worker_event["user"])
+
     def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
         """A user has left this process: he is not one of its own any more."""
         self.worker_handler.hosted_users.discard(worker_event["user"])
@@ -261,6 +271,10 @@ class GroupEnvelopeHandler(EnvelopeHandler):
         occupancy_percent = group_handler.get_occupancy_percent(photo)
         if occupancy_percent > group_handler.restart_occupancy_max_percent:
             group_handler.ping_now()
+
+    def on_connection_relabeled(self, worker_event: dict[str, Any]) -> None:
+        """A guest logged in: the placement was his alone, and it goes with him."""
+        self.group_handler.user_worker_map.pop(worker_event["previous_user"], None)
 
     def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
         """A user has left for the freezer: his placement is to be assigned again."""
@@ -341,6 +355,12 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
     def on_drop_user(self, worker_event: dict[str, Any]) -> None:
         """A user is gone: his row, his connections and whatever was waiting for him."""
         self.spa_commander.drop_user(worker_event["user"])
+
+    def on_connection_relabeled(self, worker_event: dict[str, Any]) -> None:
+        """A connection changed owner: the surface says so, and decides nothing."""
+        self.spa_commander.relabel_connection(
+            worker_event["session_id"], worker_event["user"], worker_event["previous_user"]
+        )
 
     def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
         """A user is in the freezer: the mark goes on, with what he is expected to cost."""

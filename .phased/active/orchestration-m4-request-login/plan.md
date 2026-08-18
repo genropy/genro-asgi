@@ -274,7 +274,71 @@ item, freezer, check, timeout, restart, congelamento per inattività.
     same unknown user land on ONE worker (the single mutator).
   - Verify: now — the `_TBD` round of this phase.
 
-- [ ] **Phase 3**: The login — the worker's verb and the vertex's fold
+- [x] **Phase 3**: The login — the worker's verb and the vertex's fold
+  > Done: `SpaWorker.relabel_connection(cid, user, **fields)` is what the hosted
+  > site calls in-process. It relabels the connection AT ONCE — the caller reads
+  > the row back in the same breath and must see the new identity — brings the
+  > user into being here if he was unknown, raises the flag the tail of the call
+  > reads (`_login_previous_user_map`, cid → who it belonged to), drops any
+  > departure the guest had been promised (a guest ceasing to exist is not carried
+  > to the deposit) and announces `connection_relabeled`. The pages are not
+  > touched: their owner is derived through the connection. A target carrying
+  > `GUEST_PREFIX` raises, because the value crosses a border of trust to get here.
+  > `SpaWorker.freeze_connection(cid)` is the tail, in the very place where
+  > `close_request` and the deferred departure already live: it claims the
+  > departure of the previous identity through the ONE claim the other three roads
+  > use, writes ONE parcel under the new identity — the connection, its pages, and
+  > the guest's store when the previous identity was a guest — and takes the rows
+  > out: the connection, its pages, the guest, and the new identity too when this
+  > connection was all he had here, so his own next request finds a row just born
+  > and installs the carried store instead of discarding it. A refused write
+  > leaves EVERYTHING alive and announces nothing: he stays resident here with his
+  > connection attached, which is the legitimate degraded shape, and the failure is
+  > counted in `freeze_failures`.
+  > At the destination `adopt_connection` installs the carried store only onto a
+  > row born a moment ago (`_install_carried_store`): a resident's own state wins
+  > and what the guest accumulated dies OUT LOUD. The chain folds the announcement
+  > at all three rungs: the handler swaps who it holds, the group forgets the
+  > guest's placement, and `SpaCommander.relabel_connection` writes the three
+  > ratified things — the cid points at its new owner, his row is born if missing,
+  > the guest goes. Nothing is placed and the freezer is never opened.
+  > Verified: `pytest tests/ -q` 1977 passed / 2 skipped (was 1960/2 — the 17 tests
+  > of the new file); `ruff check src/ tests/` clean; 113 executable lines added
+  > against the phase cap of 135.
+  > TWO DEFECTS FOUND WHILE WRITING, both fixed with their test: the first draft of
+  > `_release_login_rows` unmounted the previous identity ALWAYS, which deleted a
+  > real resident on an avatar switch (caught by its own test, `KeyError: 'mario'`)
+  > — R8 to the letter: only a guest is unmounted, a person keeps his row and the
+  > idleness sweep parks it; and the announcement bypassed `hosted_users`, so a
+  > process dying between a login and the tail of its call would have reported the
+  > loss of a guest the surface had already forgotten and not of the person who
+  > exists — the bottom rung of the chain now swaps them.
+  > Ratified during the phase: `connection_relabeled` belongs in
+  > `POPULATION_WORKER_EVENTS`. The population is a list of NAMES, not a count:
+  > the login changes which names are on board even though the count does not move,
+  > and every reader of the photo hangs on the names.
+  > NEUTRALIZATION PROBE on that rule: taking the op out of the set must make
+  > `test_a_login_makes_the_photo_due` fail. The FIRST draft of that test passed
+  > under neutralization — `_snapshot_due` is an OR with the staleness leg, and a
+  > fresh worker carries `_snapshot_sent_ts = 0.0`, so it was true anyway. Rewritten
+  > from a photo just sent, asserting first that none is due; it now falls when
+  > neutralized.
+  > Behaviours covered: the relabel readable in the same breath, with the pages
+  > following and the new row born empty; a guest target refused; an unknown
+  > connection loud; the guest's promised departure dropped; the announcement's
+  > exact shape; nothing leaving before the call is over; the tail carrying the
+  > connection, its pages and the guest's store, and leaving nothing behind; an
+  > avatar switch carrying no store and leaving the person his own; a refused
+  > deposit leaving everything alive and announcing nothing; the carried store
+  > becoming his own on a row just born and dying against a resident; THE RATIFIED
+  > INVARIANT (the user parcel installed before the connection one, which is what
+  > makes a wake win over a login's leftovers); the fold repointing the cookie and
+  > forgetting the guest while keeping a real previous identity; the handler
+  > swapping who it holds.
+  > Files: src/genro_asgi/spa/orchestration/spa_worker.py,
+  > src/genro_asgi/spa/orchestration/spa_commander.py,
+  > src/genro_asgi/spa/orchestration/envelope_handler.py,
+  > tests/orchestration/test_orchestration_login.py
   - Run: opus / medium
   - Pattern: `spa/worker.py:1936` + `register_registry.py:340-413` for WHAT the
     legacy relabel does (read it, do not transcribe it: the new registers are

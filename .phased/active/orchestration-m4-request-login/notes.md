@@ -64,3 +64,35 @@ HEARTBEAT x BEATS` would one day "simplify" it to 30.0 and the promise to the
 browser would start lying; the HTTP word stays on the exception's `retry_after`
 field, which is where HTTP begins) · `SITE_PATH_PREFIX` (the exact twin of the
 legacy `OP_PATH_PREFIX`: two prefixes, two families of paths on one wire).
+
+## Phase 3
+
+**The eight clarifications** are in `temp/domande_fase3_m4_2026-08-18.md`. Three of
+them settle things a future reader will look for:
+
+- **The verb drops the guest's transfer flag in its own synchronous breath**
+  (question 4), so the race never happens: at the tail of the call there is ONE
+  departure, not two. Freezing a guest who is ceasing to exist would write a
+  parcel only the reaper will ever read.
+- **A refused write is a legitimate degraded shape** (question 5), not a failure
+  to repair: the person stays resident on the worker he logged in on, with his
+  connection attached — the legacy's own "prior == worker: nothing to do". The
+  flag is dropped either way, so there is no retry on the next request. Declared
+  residue: if his next request places him on ANOTHER worker, the rows left here
+  are orphans and the guest's store is lost; the disk failure that caused it is
+  already an alarm, and the machine stays correct.
+- **The empty round when the target is already here** (question 6) is ACCEPTED:
+  the connection goes to the deposit and comes back on the next click, on the same
+  process. "For everybody, no branch" is ratified to the letter, and a login onto
+  a worker where the person is already living is a coincidence, not the common
+  case.
+
+**The five `_TBD`, baptised 2026-08-18**: `relabel_connection` — the SAME word at
+two rungs (the worker relabels in its registers, the vertex in its indexes), which
+is the cascade homonymy `add_user` already has · `connection_relabeled`, the
+participle of that verb, in the family `<subject>_<participle>` · `freeze_connection`,
+the exact brother of `freeze_user` (`settle_login` was rejected: in the legacy it
+is the vertex's DECISION, and reusing it would be homonymy by drift) ·
+`_login_previous_user_map`, whose value is an identity and says so ·
+`_release_login_rows` and `_install_carried_store` aligned to the two above without
+a round of their own.

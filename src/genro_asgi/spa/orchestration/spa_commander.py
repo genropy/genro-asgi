@@ -524,6 +524,28 @@ class SpaCommander:
             self.counters["frozen_users_discarded"] += 1
         return had_state
 
+    def relabel_connection(self, cid: str, user: str, previous_user: str) -> None:
+        """The login, as the surface sees it: a connection changes owner.
+
+        Args:
+            cid: the connection that logged in.
+            user: the identity it belongs to from now on.
+            previous_user: who it belonged to a moment ago.
+
+        Acts on two indexes and on nothing else: the cid points at its new owner,
+        whose row is brought into being when he is unknown here, and the guest
+        left behind goes — he had this one connection and nothing else, by
+        construction. A previous identity that is NOT a guest keeps his row: he
+        is a person with a life of his own, and losing a connection is not losing
+        him. Nothing is placed: where the user lives is his next request's
+        business, and the freezer is not touched — a guest never had a folder.
+        """
+        self.connection_user_map[cid] = user
+        if user not in self.user_map:
+            self.user_map[user] = self._new_row()
+        if previous_user.startswith(GUEST_PREFIX):
+            self.user_map.pop(previous_user, None)
+
     def record_user_group(self, user: str, group: str) -> None:
         """Write down which group a user was placed on.
 
