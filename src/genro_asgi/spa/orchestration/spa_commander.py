@@ -107,6 +107,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from collections import Counter
 from logging.handlers import RotatingFileHandler
@@ -226,18 +227,16 @@ class SpaCommander:
         )
 
     @property
-    def memory_concession_bytes(self) -> int | None:
+    def memory_concession_bytes(self) -> int:
         """What this server may hold of the machine's memory, in bytes.
 
         Returns:
             The concession — the machine's whole memory times
-            ``memory_max_percent`` — or None where the platform does not say how
-            much memory it has, and then nothing under this vertex is measurable
-            either. It is the ONE total of the cascade: a group's quota and a
-            worker's ceiling are shares of it.
+            ``memory_max_percent``. It is the ONE total of the cascade: a
+            group's quota and a worker's ceiling are shares of it.
         """
-        total = self._machine_memory_gauges().get("MemTotal")
-        return int(total * self.memory_max_percent / 100.0) if total else None
+        total = self._machine_memory_gauges()["MemTotal"]
+        return int(total * self.memory_max_percent / 100.0)
 
     def resolve_user(self, cid: str) -> str:
         """The reception desk: whose cid this is, minting him if he is new.
@@ -592,21 +591,24 @@ class SpaCommander:
         return 100.0 * (total - available) / total if total and available is not None else None
 
     def _machine_memory_gauges(self) -> dict[str, float]:
-        """The machine's whole and available memory in BYTES; empty where it does not say.
+        """The machine's whole and available memory in BYTES; the whole is always there.
 
-        No dependency is taken for a gauge a platform may simply not offer — the
-        same honesty a worker's own resident size has — so a machine with no
-        ``/proc`` reads as unmeasured, which is not the same as full.
+        ``MemTotal`` is answered by every platform (``os.sysconf``), so the
+        cascade of percentages is always anchored. ``MemAvailable`` is a
+        capability only ``/proc/meminfo`` offers — where it lacks, how much of
+        the machine is in use is simply not judged, which is not the same as full.
         """
-        gauges: dict[str, float] = {}
+        gauges: dict[str, float] = {
+            "MemTotal": float(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"))
+        }
         try:
             with open("/proc/meminfo", encoding="ascii") as meminfo:
                 for row in meminfo:
                     name, _, value = row.partition(":")
-                    if name in ("MemTotal", "MemAvailable"):
+                    if name == "MemAvailable":
                         gauges[name] = float(value.split()[0]) * 1024
         except OSError:
-            return {}
+            pass
         return gauges
 
     def _new_row(self) -> dict[str, Any]:

@@ -330,8 +330,9 @@ bytes.** `memory_max_percent` on `commander` is the server's concession on the
 machine; `memory_max_percent` on a `group` is that group's share of the
 concession; `worker_memory_max_percent` is what ONE of its workers may hold of
 the group's share. The same word on each rung is deliberate — it always means
-"my share of the rung above" — and a machine that does not report its memory (no
-`/proc`) leaves the cascade unmeasured, which simply leaves the growth ungated.
+"my share of the rung above". The machine's total is read off the platform
+itself, so the cascade is always anchored; a machine that does not say how much
+of it is IN USE (a `/proc/meminfo` capability) simply alarms nobody.
 
 **The occupancy keys are how full is full.** `occupancy_max_percent` is where a
 worker stops admitting new users; `restart_occupancy_max_percent` is where a
@@ -339,7 +340,9 @@ process is replaced rather than kept; `reception_reserved_percent` is what the
 reception keeps free for the one job only it has (receiving whoever arrives
 unplaced), so its own admission setpoint is the difference;
 `new_user_occupancy_percent` is what somebody nobody has ever measured is
-expected to cost.
+expected to cost, and `newcomer_reserve_count` is how many of that size must
+always find room: the group grows at its own round before anybody is refused,
+and no closure may eat into that reserve (default 1).
 
 **The ages are the vertex's.** `user_expiry_hours` / `guest_expiry_hours` on
 `commander` are how long a FROZEN user is kept before the machine forgets him

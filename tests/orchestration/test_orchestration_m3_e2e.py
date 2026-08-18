@@ -298,7 +298,12 @@ def pool_config(story_root):
 async def group(pool_config):
     """The vertex and the group, built from nothing but what the config file says."""
     vertex = SpaCommander(**pool_config.commander_kwargs())
-    group_handler = GroupHandler(vertex, GROUP, **pool_config.group_kwargs()[GROUP])
+    group_handler = GroupHandler(
+        vertex,
+        GROUP,
+        memory_concession_bytes=vertex.memory_concession_bytes,
+        **pool_config.group_kwargs()[GROUP],
+    )
     yield group_handler
     for worker_handler in list(group_handler.worker_handler_map.values()):
         if worker_handler.process is not None and worker_handler.process.poll() is None:

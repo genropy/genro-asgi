@@ -247,10 +247,20 @@ def test_the_concession_is_this_servers_share_of_the_whole_machine(commander, mo
     assert commander._machine_memory_used_percent() == 25.0
 
 
-def test_a_machine_that_does_not_say_how_much_memory_it_has_concedes_nothing(
+def test_a_machine_that_does_not_say_its_use_still_concedes_its_whole(
     commander, monkeypatch
 ):
-    monkeypatch.setattr(commander, "_machine_memory_gauges", dict)
+    # MemAvailable is the capability: where it lacks, the machine's use is not
+    # judged — but the total is always answered, so the concession stands.
+    monkeypatch.setattr(
+        commander, "_machine_memory_gauges", lambda: {"MemTotal": 8_000_000_000.0}
+    )
 
-    assert commander.memory_concession_bytes is None
+    assert commander.memory_concession_bytes == 8_000_000_000
     assert commander._machine_memory_used_percent() is None
+
+
+def test_the_machine_total_is_read_off_the_platform_itself(commander):
+    # No monkeypatch: os.sysconf answers on every platform this suite runs on,
+    # /proc/meminfo or not.
+    assert commander.memory_concession_bytes > 0

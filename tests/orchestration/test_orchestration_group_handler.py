@@ -276,6 +276,34 @@ async def test_a_worker_past_the_restart_setpoint_is_replaced_by_a_fresh_one(
     assert group.state == "running"
 
 
+async def test_a_closure_that_would_eat_the_reserve_is_not_ordered(make_group):
+    # Both at 30%: the spare's share would put the reception at 60, past its own
+    # cap (80 less the 50 it reserves) — the flat-average reading would close it,
+    # the per-worker question keeps it.
+    group = make_group(rss_bytes=int(0.30 * MEMORY_CEILING))
+    await group.start_worker()
+    await group.start_worker()
+
+    await group.check_occupancy(now=True)
+
+    # The map alone is blind here — an ordered quit leaves the map to the next
+    # round — so the states say whether a closure was ordered at all.
+    assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
+    assert [wh.state for wh in group.worker_handler_map.values()] == ["running", "running"]
+
+
+async def test_a_worker_on_its_way_out_counts_no_room(make_group):
+    group = make_group()
+    worker_handler = await group.start_worker()
+    worker_handler.state = "quitting"
+
+    await group.check_occupancy(now=True)
+
+    # Empty as it reads, a quitting worker refuses everybody: the reserve is
+    # gone and the group grows at its own round.
+    assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
+
+
 async def test_a_death_that_outruns_the_close_order_leaves_no_zombie(make_group, commander):
     group = make_group()
     known_at_the_vertex(commander, "cid-a", "mario")

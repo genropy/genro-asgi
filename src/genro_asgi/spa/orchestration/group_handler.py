@@ -47,8 +47,8 @@ resident memory against what a worker of this group may hold; a photo carrying
 none reads 0, which is what a worker nobody has measured yet honestly is.
 
 **The memory is a CASCADE of percentages, and only the bottom of it is bytes.**
-One total is handed in — ``memory_concession_bytes``, what the machine concedes —
-and everything below it is a share: ``memory_max_percent`` is this group's share
+One total is always handed in — ``memory_concession_bytes``, what the machine
+concedes — and everything below it is a share: ``memory_max_percent`` is this group's share
 of the concession, and ``worker_memory_max_percent`` is what ONE worker may hold
 of the group's own quota. So the gate on the growth compares
 ``memory_occupied_percent``, what the living workers hold read against the
@@ -137,9 +137,11 @@ class GroupHandler:
             only it has; its own placement setpoint is the difference.
         new_user_occupancy_percent: what a user nobody has ever measured is
             expected to cost.
+        newcomer_reserve_count: how many newcomers of that size must ALWAYS find
+            room — the group grows at its own round before anybody is refused,
+            and no closure may eat into it.
         memory_concession_bytes: what the machine concedes the whole pool, in
-            bytes — the total every percentage below is read against. None until
-            somebody has measured it, and then nothing here is measurable.
+            bytes — the total every percentage below is read against.
         memory_max_percent: this group's share of that concession.
         worker_memory_max_percent: what ONE worker of this group may hold, as a
             share of the group's own quota. In the grammar this rung carries the
@@ -161,7 +163,8 @@ class GroupHandler:
         restart_occupancy_max_percent: float = 95.0,
         reception_reserved_percent: float = 50.0,
         new_user_occupancy_percent: float = 5.0,
-        memory_concession_bytes: int | None = None,
+        newcomer_reserve_count: int = 1,
+        memory_concession_bytes: int,
         memory_max_percent: float = 100.0,
         worker_memory_max_percent: float = 100.0,
         **worker_settings: Any,
@@ -172,6 +175,7 @@ class GroupHandler:
         self.restart_occupancy_max_percent = restart_occupancy_max_percent
         self.reception_reserved_percent = reception_reserved_percent
         self.new_user_occupancy_percent = new_user_occupancy_percent
+        self.newcomer_reserve_count = newcomer_reserve_count
         self.memory_concession_bytes = memory_concession_bytes
         self.memory_max_percent = memory_max_percent
         self.worker_memory_max_percent = worker_memory_max_percent
@@ -212,15 +216,8 @@ class GroupHandler:
         return living[0] if living else None
 
     @property
-    def memory_quota_bytes(self) -> float | None:
-        """What this group may hold: its share of the concession, in bytes.
-
-        Returns:
-            The quota, or None while nobody has measured the concession — and
-            then nothing of this group is measurable either.
-        """
-        if not self.memory_concession_bytes:
-            return None
+    def memory_quota_bytes(self) -> float:
+        """What this group may hold: its share of the concession, in bytes."""
         return self.memory_concession_bytes * self.memory_max_percent / 100.0
 
     @property
@@ -229,12 +226,9 @@ class GroupHandler:
 
         Returns:
             The summed resident memory of their last photos over the concession,
-            in percent — 0.0 when the concession is unknown, which is what an
-            unmeasured group honestly is. Read against ``memory_max_percent``,
-            so the gate on the growth is percent against percent.
+            in percent. Read against ``memory_max_percent``, so the gate on the
+            growth is percent against percent.
         """
-        if not self.memory_concession_bytes:
-            return 0.0
         rss_bytes = sum(
             (worker_handler.worker_snapshot or {}).get("rss_bytes") or 0
             for worker_handler in self.living_workers
@@ -287,10 +281,9 @@ class GroupHandler:
             is read against what one worker of this group may hold, which is
             ``worker_memory_max_percent`` of the group's own quota.
         """
-        quota_bytes = self.memory_quota_bytes
-        ceiling = quota_bytes * self.worker_memory_max_percent / 100.0 if quota_bytes else None
+        ceiling = self.memory_quota_bytes * self.worker_memory_max_percent / 100.0
         rss_bytes = (worker_snapshot or {}).get("rss_bytes")
-        components = [rss_bytes / ceiling] if ceiling and rss_bytes is not None else []
+        components = [rss_bytes / ceiling] if rss_bytes is not None else []
         return 100.0 * min(max(components, default=0.0), 1.0)
 
     def get_worker_cap(self, worker_handler: WorkerHandler) -> float:
@@ -438,19 +431,37 @@ class GroupHandler:
         )
 
     def _has_room(self, picture: dict[str, float]) -> bool:
-        """Whether any living worker would still take a newcomer of the default size."""
-        return any(
-            occupancy_percent + self.new_user_occupancy_percent
-            <= self.get_worker_cap(self.worker_handler_map[name])
-            for name, occupancy_percent in picture.items()
-        )
+        """Whether the standing reserve of newcomers is still whole."""
+        return self._placeable_newcomers(picture) >= self.newcomer_reserve_count
+
+    def _placeable_newcomers(self, picture: dict[str, float]) -> int:
+        """How many newcomers of the default size this picture still takes.
+
+        Args:
+            picture: occupancy percent by worker name.
+
+        Returns:
+            The count, summed worker by worker against each one's own cap — a
+            newcomer lands on ONE worker, so room split across many is not room.
+            A worker in ``quitting`` counts zero: it refuses everybody on its way
+            out. One in ``starting`` or ``restarting`` counts: it is capacity
+            arriving, and counting it keeps the group from growing twice.
+        """
+        placeable = 0
+        for name, occupancy_percent in picture.items():
+            worker_handler = self.worker_handler_map[name]
+            if worker_handler.state == "quitting":
+                continue
+            room = self.get_worker_cap(worker_handler) - occupancy_percent
+            placeable += max(0, int(room / self.new_user_occupancy_percent))
+        return placeable
 
     def _spare_worker(self, picture: dict[str, float]) -> WorkerHandler | None:
-        """The emptiest worker the others could absorb and still admit; None when there is none.
+        """The emptiest worker whose closure leaves the reserve whole; None when there is none.
 
-        The others are read as if they shared what this one holds: the group
-        closes a worker only while what is left of it would still take a
-        newcomer, which is also what keeps a closure from undoing a growth.
+        The remaining workers are read as if they shared what this one holds,
+        then asked THE SAME question the growth asks — each against its own cap,
+        the reserve still whole — so a closure can never undo a growth.
         """
         candidates = [
             worker_handler
@@ -459,10 +470,13 @@ class GroupHandler:
         ]
         if not candidates:
             return None
-        shared = sum(picture.values()) / (len(picture) - 1)
-        if shared + self.new_user_occupancy_percent > self.occupancy_max_percent:
+        spare = min(candidates, key=lambda worker_handler: picture[worker_handler.name])
+        remaining = {name: pct for name, pct in picture.items() if name != spare.name}
+        shared = picture[spare.name] / len(remaining)
+        after = {name: pct + shared for name, pct in remaining.items()}
+        if self._placeable_newcomers(after) < self.newcomer_reserve_count:
             return None
-        return min(candidates, key=lambda worker_handler: picture[worker_handler.name])
+        return spare
 
     async def _grow(self, picture: dict[str, float]) -> None:
         """Bring a worker into being if the memory affords it; the saturation when it does not."""

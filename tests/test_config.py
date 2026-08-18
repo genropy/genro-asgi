@@ -722,6 +722,7 @@ class SpaPoolConfig(AsgiConfigBuilder):
             restart_occupancy_max_percent=90.0,
             reception_reserved_percent=30.0,
             new_user_occupancy_percent=4.0,
+            newcomer_reserve_count=2,
             user_idle_freeze_minutes=45.0,
             entry_module="genro_asgi.spa.orchestration.worker_entry",
             executable="/srv/shop/.venvs/stable/bin/python",
@@ -763,6 +764,7 @@ class TestCommanderSection:
             "restart_occupancy_max_percent": 90.0,
             "reception_reserved_percent": 30.0,
             "new_user_occupancy_percent": 4.0,
+            "newcomer_reserve_count": 2,
             "entry_module": "genro_asgi.spa.orchestration.worker_entry",
             "executable": "/srv/shop/.venvs/stable/bin/python",
             "worker_class": "myshop.app:ShopWorker",
@@ -812,6 +814,7 @@ class TestCommanderSection:
         assert group.restart_occupancy_max_percent == 90.0
         assert group.reception_reserved_percent == 30.0
         assert group.new_user_occupancy_percent == 4.0
+        assert group.newcomer_reserve_count == 2
         assert group.memory_max_percent == 80.0
         assert group.worker_memory_max_percent == 40.0
         # And what the group hands its workers is what a WorkerHandler is built

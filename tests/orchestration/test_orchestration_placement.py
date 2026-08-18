@@ -105,17 +105,6 @@ async def test_a_worker_reads_as_full_at_its_own_share_of_the_group_quota(comman
     assert group.get_occupancy_percent({"rss_bytes": MEMORY_CEILING // 8}) == 50.0
 
 
-async def test_a_group_that_measures_nothing_reads_every_worker_as_empty(commander, tmp_path):
-    group = GroupHandler(
-        commander, "standard", instance_dir=tmp_path / "i",
-        frozen_users_path=tmp_path / "f", entry_module="never.launched",
-    )
-
-    assert group.get_occupancy_percent({"rss_bytes": 10**9}) == 0.0
-    assert group.memory_quota_bytes is None
-    assert group.memory_occupied_percent == 0.0
-
-
 async def test_the_fullest_worker_that_still_takes_him_is_the_one_that_gets_him(group, commander):
     worker_at(group, "standard_0001", 10.0)
     worker_at(group, "standard_0002", 20.0)

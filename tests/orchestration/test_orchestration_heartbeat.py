@@ -84,6 +84,7 @@ async def make_group(heartbeat_root, commander, monkeypatch):
     groups: list[GroupHandler] = []
 
     def build(name: str = "standard", **policies: Any) -> GroupHandler:
+        policies.setdefault("memory_concession_bytes", 4 * 1024**3)
         group = GroupHandler(
             commander,
             name,

@@ -373,6 +373,7 @@ class AsgiServerGrammar(TaskGrammar):
         restart_occupancy_max_percent: float | BagResolver = None,
         reception_reserved_percent: float | BagResolver = None,
         new_user_occupancy_percent: float | BagResolver = None,
+        newcomer_reserve_count: int | BagResolver = None,
         user_idle_freeze_minutes: float | BagResolver = None,
         entry_module: str = None,
         executable: str | BagResolver = None,
@@ -398,7 +399,9 @@ class AsgiServerGrammar(TaskGrammar):
         a process is replaced instead of kept; ``reception_reserved_percent`` is
         what the reception keeps free for the trade only it has;
         ``new_user_occupancy_percent`` is what a user nobody has ever measured is
-        expected to cost. ``user_idle_freeze_minutes`` is the silence past which a
+        expected to cost, and ``newcomer_reserve_count`` how many of that size
+        must always find room — the group grows at its own round before anybody
+        is refused. ``user_idle_freeze_minutes`` is the silence past which a
         worker parks a user in the freezer.
 
         The IDENTITY of the child: ``entry_module`` (what ``python -m`` runs),
