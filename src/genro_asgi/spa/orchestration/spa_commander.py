@@ -214,6 +214,7 @@ class SpaCommander:
         #: it is built, the way a worker hangs itself in its own group's map.
         self.group_map: dict[str, Any] = {}
         self._group_turns: dict[str, asyncio.Task[None]] = {}
+        self._beat_timer: asyncio.Task[None] | None = None
         #: One row per periodic method of this vertex — turns seen, runs, errors
         #: and the last one's text: the dashboard of who is due and who is broken.
         self.beat_counts: dict[str, dict[str, Any]] = {}
@@ -536,17 +537,26 @@ class SpaCommander:
         """Wait for the timer or for any group's wake, whichever comes first.
 
         Returns:
-            The groups that rang, and an empty list when the timer came first —
-            which is the full round.
+            The groups that rang, and an empty list when the timer came — which
+            is the full round. The timer SURVIVES the wakes it loses to: a group
+            ringing at every breath anticipates its own round as often as it
+            likes, but cannot postpone the full round — the beat every group and
+            every task of the vertex is owed — past its own due.
         """
+        if self._beat_timer is None or self._beat_timer.done():
+            self._beat_timer = asyncio.ensure_future(asyncio.sleep(HEARTBEAT_SECONDS))
         wakes = {
             asyncio.ensure_future(group_handler.ping_now_event.wait()): group_handler
             for group_handler in self.group_map.values()
         }
-        timer = asyncio.ensure_future(asyncio.sleep(HEARTBEAT_SECONDS))
-        done, pending = await asyncio.wait([timer, *wakes], return_when=asyncio.FIRST_COMPLETED)
-        for waiting in pending:
-            waiting.cancel()
+        done, _pending = await asyncio.wait(
+            [self._beat_timer, *wakes], return_when=asyncio.FIRST_COMPLETED
+        )
+        for wake in wakes:
+            if wake not in done:
+                wake.cancel()
+        if self._beat_timer in done:
+            return []
         return [group_handler for wake, group_handler in wakes.items() if wake in done]
 
     def _expired_users(self, users: list[str]) -> list[str]:

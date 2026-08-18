@@ -326,6 +326,32 @@ async def test_the_turns_of_a_round_run_together_and_a_failing_one_takes_nobody_
     assert failing.turns == [False]
 
 
+async def test_a_group_ringing_at_every_breath_cannot_postpone_the_full_round(
+    commander, monkeypatch, clock
+):
+    monkeypatch.setattr(spa_commander, "HEARTBEAT_SECONDS", 0.05)
+    monkeypatch.setattr(SpaCommander.check_resources, "every_beats", 1)
+    noisy = group_double(commander, "noisy")
+    quiet = group_double(commander, "quiet")
+
+    async def ring() -> None:
+        while True:
+            noisy.ping_now_event.set()
+            await asyncio.sleep(0.005)
+
+    ringing = asyncio.get_running_loop().create_task(ring())
+    clock()
+    # The timer survives the wakes it loses to: the quiet group still gets its
+    # full rounds, and the vertex's own tasks still get their turns.
+    await wait_for(lambda: len(quiet.turns) >= 2)
+    ringing.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await ringing
+
+    assert commander.beat_counts["check_resources"]["runs"] >= 1
+    assert len(noisy.turns) >= len(quiet.turns)
+
+
 async def test_each_task_of_the_vertex_runs_on_its_own_count_of_beats(
     commander, monkeypatch, clock
 ):

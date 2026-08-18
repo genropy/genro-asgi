@@ -488,10 +488,14 @@ class GroupHandler:
         The departure of everybody on board is settled on the LAST photo — who
         was flagged for the freezer — so a worker that has never answered
         anything is photographed first: without that, an ordered quit would purge
-        its users as if nobody had promised them the freezer.
+        its users as if nobody had promised them the freezer. A worker whose
+        death got there first — before the order, or under that very beat — is
+        ordered nothing: the death is already written, and the round buries it.
         """
         if worker_handler.worker_snapshot is None:
             await worker_handler.ping_process()
+        if worker_handler.state in DEAD_STATES:
+            return
         self.spa_commander.log_order(
             self.name,
             order,

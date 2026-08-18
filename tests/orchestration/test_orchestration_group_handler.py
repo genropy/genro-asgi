@@ -276,6 +276,27 @@ async def test_a_worker_past_the_restart_setpoint_is_replaced_by_a_fresh_one(
     assert group.state == "running"
 
 
+async def test_a_death_that_outruns_the_close_order_leaves_no_zombie(make_group, commander):
+    group = make_group()
+    known_at_the_vertex(commander, "cid-a", "mario")
+    doomed = await group.start_worker()
+    doomed.hosted_users.add("mario")
+    group.user_worker_map["mario"] = doomed.name
+    await wait_for(lambda: doomed.worker_snapshot is not None)
+    doomed.process.kill()
+    await wait_for(lambda: doomed.state == "aborted")
+
+    fresh = await group.restart_worker(doomed)
+
+    # The order found the death already written and ordered nothing: the wild
+    # death was not overwritten into a departure nobody would ever settle, the
+    # dead one is buried with the users it held, and the fresh one serves.
+    assert doomed.state == "aborted"
+    assert list(group.worker_handler_map) == [fresh.name]
+    assert group.reception is fresh
+    assert group.user_worker_map == {}
+
+
 async def test_the_closure_of_a_spare_worker_goes_through_its_six_steps(make_group, commander):
     group = make_group(users=["mario"])
     known_at_the_vertex(commander, "cid-a", "mario")
