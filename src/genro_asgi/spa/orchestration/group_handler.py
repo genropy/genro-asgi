@@ -112,7 +112,7 @@ DEAD_STATES = ("quitted", "aborted")
 # How many turns of the group pass between two readings of its own shape. The
 # health of a process is every turn's business; the shape of the group is a
 # slower thing, and the number lives here because the knowledge does.
-CHECK_OCCUPANCY_EVERY_TBD = 6
+CHECK_OCCUPANCY_BEATS = 6
 
 __all__ = ["DEAD_STATES", "GroupHandler"]
 
@@ -188,7 +188,7 @@ class GroupHandler:
         self._worker_counter = 0
         self._beats = 0
         self._closing_wires: set[asyncio.Task[None]] = set()
-        spa_commander.group_handler_map_TBD[name] = self
+        spa_commander.group_map[name] = self
 
     @property
     def living_workers(self) -> list[WorkerHandler]:
@@ -250,7 +250,7 @@ class GroupHandler:
         woken = self.ping_now_event.is_set()
         self.ping_now_event.clear()
         await self.ping_workers()
-        if woken or self._beats % CHECK_OCCUPANCY_EVERY_TBD == 0:
+        if woken or self._beats % CHECK_OCCUPANCY_BEATS == 0:
             await self.check_occupancy()
 
     async def ping_workers(self) -> None:
@@ -263,7 +263,7 @@ class GroupHandler:
         beats = [
             worker_handler.ping_process()
             for worker_handler in self.living_workers
-            if worker_handler.silent_TBD
+            if worker_handler.requires_beat_ping
         ]
         await asyncio.gather(*beats, return_exceptions=True)
 

@@ -165,7 +165,7 @@ class CountingCommander(SpaCommander):
 def group_double(commander: SpaCommander, name: str, **shape: Any) -> GroupDouble:
     """One group double, hung under the vertex the way a real group hangs itself."""
     double = GroupDouble(name, **shape)
-    commander.group_handler_map_TBD[name] = double
+    commander.group_map[name] = double
     return double
 
 
@@ -178,7 +178,7 @@ def parked_state(commander: SpaCommander, user: str) -> None:
         user, {"store": "whatever"}, writer=WORKER_NAME, cause="freeze", group="standard"
     )
     commander.freeze_handler.release_lock(user, WORKER_NAME)
-    commander.record_user_frozen_TBD(user, None)
+    commander.mark_user_frozen(user, None)
 
 
 def counting_check(checks: list[int]):
@@ -223,14 +223,14 @@ async def test_only_the_workers_nobody_has_heard_from_are_beaten(make_group):
 
     # Its presentation arrived a moment ago: beating it would ask a process what
     # it has just said.
-    assert not worker_handler.silent_TBD
+    assert not worker_handler.requires_beat_ping
     assert worker_handler.worker_snapshot is None
 
     worker_handler.process_ping_interval = 0.0
 
     await group.ping_workers()
 
-    assert worker_handler.silent_TBD
+    assert worker_handler.requires_beat_ping
     assert worker_handler.worker_snapshot["pid"] == worker_handler.process.pid
 
 
@@ -325,9 +325,9 @@ async def test_each_task_of_the_vertex_runs_on_its_own_count_of_beats(
     commander, monkeypatch, clock
 ):
     monkeypatch.setattr(spa_commander, "HEARTBEAT_SECONDS", 0.001)
-    monkeypatch.setattr(spa_commander, "FROZEN_EXPIRY_EVERY_TBD", 1)
-    monkeypatch.setattr(spa_commander, "RESOURCES_CHECK_EVERY_TBD", 2)
-    monkeypatch.setattr(spa_commander, "DISK_CLEANUP_EVERY_TBD", 1000)
+    monkeypatch.setattr(spa_commander, "DROP_EXPIRED_USERS_BEATS", 1)
+    monkeypatch.setattr(spa_commander, "CHECK_RESOURCES_BEATS", 2)
+    monkeypatch.setattr(spa_commander, "CLEANUP_FROZEN_BEATS", 1000)
     runs: Counter[str] = Counter()
 
     def counting(task_name: str):
@@ -336,7 +336,7 @@ async def test_each_task_of_the_vertex_runs_on_its_own_count_of_beats(
 
         return run
 
-    for task_name in ("drop_expired_users", "disk_cleanup", "check_resources"):
+    for task_name in ("drop_expired_users", "cleanup_frozen", "check_resources"):
         monkeypatch.setattr(commander, task_name, counting(task_name))
 
     beating = clock()
@@ -347,15 +347,15 @@ async def test_each_task_of_the_vertex_runs_on_its_own_count_of_beats(
 
     beats = runs["drop_expired_users"]
     assert runs["check_resources"] in ((beats - 1) // 2, beats // 2)
-    assert runs["disk_cleanup"] == 0
+    assert runs["cleanup_frozen"] == 0
 
 
 async def test_a_task_that_raises_leaves_the_others_of_its_beat_alone(
     commander, monkeypatch, clock, caplog
 ):
     monkeypatch.setattr(spa_commander, "HEARTBEAT_SECONDS", 0.001)
-    monkeypatch.setattr(spa_commander, "FROZEN_EXPIRY_EVERY_TBD", 1)
-    monkeypatch.setattr(spa_commander, "RESOURCES_CHECK_EVERY_TBD", 1)
+    monkeypatch.setattr(spa_commander, "DROP_EXPIRED_USERS_BEATS", 1)
+    monkeypatch.setattr(spa_commander, "CHECK_RESOURCES_BEATS", 1)
     runs: Counter[str] = Counter()
 
     async def failing_reaper() -> None:
@@ -382,7 +382,7 @@ async def test_a_task_that_raises_leaves_the_others_of_its_beat_alone(
 async def test_the_group_reads_its_shape_on_its_own_count_of_turns(
     make_group, monkeypatch
 ):
-    monkeypatch.setattr(group_handler, "CHECK_OCCUPANCY_EVERY_TBD", 3)
+    monkeypatch.setattr(group_handler, "CHECK_OCCUPANCY_BEATS", 3)
     group = make_group()
     checks: list[int] = []
     monkeypatch.setattr(group, "check_occupancy", counting_check(checks))
@@ -400,7 +400,7 @@ async def test_the_group_reads_its_shape_on_its_own_count_of_turns(
 async def test_a_woken_group_reads_its_shape_at_once_and_the_wake_is_spent(
     make_group, monkeypatch
 ):
-    monkeypatch.setattr(group_handler, "CHECK_OCCUPANCY_EVERY_TBD", 1000)
+    monkeypatch.setattr(group_handler, "CHECK_OCCUPANCY_BEATS", 1000)
     group = make_group()
     checks: list[int] = []
     monkeypatch.setattr(group, "check_occupancy", counting_check(checks))
@@ -430,7 +430,7 @@ async def test_the_frozen_are_forgotten_each_on_the_clock_of_his_own_kind(make_c
     # judge: the sweep of the deposit is what answers for him, not the reaper.
     commander.connection_user_map["cid-p"] = "paolo"
     commander.resolve_user("cid-p")
-    commander.record_user_frozen_TBD("paolo", None)
+    commander.mark_user_frozen("paolo", None)
 
     await commander.drop_expired_users()
 
@@ -446,7 +446,7 @@ async def test_the_deposit_gives_up_what_no_row_of_the_vertex_claims(commander):
     parked_state(commander, "nobody")
     commander.drop_user("nobody")
 
-    await commander.disk_cleanup()
+    await commander.cleanup_frozen()
 
     assert commander.freeze_handler.user_folders == {
         commander.freeze_handler.user_to_userkey("mario")

@@ -235,7 +235,7 @@ class WorkerHandler:
         self._last_envelope_ts = 0.0
 
     @property
-    def silent_TBD(self) -> bool:
+    def requires_beat_ping(self) -> bool:
         """Whether nothing has been heard from this process for a whole cadence.
 
         Returns:

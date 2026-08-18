@@ -290,7 +290,7 @@ class FreezeHandler:
         """
         self._drop_folder(self.user_to_userkey(user))
 
-    def drop_unclaimed_folders_TBD(self, claimed: set[str]) -> list[str]:
+    def cleanup_frozen(self, claimed: set[str]) -> list[str]:
         """Sweep the deposit of everything that belongs to nobody.
 
         Args:

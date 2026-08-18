@@ -93,7 +93,7 @@ def test_a_cookie_that_outlived_its_row_is_still_that_person(commander):
 
 def test_a_user_on_his_way_out_is_not_routed_but_raised(commander):
     user = commander.resolve_user("cid-a")
-    commander.hold_user_TBD(user, "transfer_flag T")
+    commander.hold_user(user, "transfer_flag T")
 
     with pytest.raises(UserOnHold) as refusal:
         commander.resolve_user("cid-a")
@@ -105,8 +105,8 @@ def test_a_user_on_his_way_out_is_not_routed_but_raised(commander):
 
 def test_the_cause_of_a_hold_is_the_one_that_explains_the_wait(commander):
     user = commander.resolve_user("cid-a")
-    commander.hold_user_TBD(user, "transfer_flag T")
-    commander.hold_user_TBD(user, "transfer_flag X")
+    commander.hold_user(user, "transfer_flag T")
+    commander.hold_user(user, "transfer_flag X")
 
     assert commander.user_map[user]["on_hold"] == "transfer_flag T"
 
@@ -117,35 +117,35 @@ def test_nobody_is_frozen_until_it_is_written_down(commander):
     assert commander.user_is_frozen("somebody nobody knows") is False
     assert commander.user_is_frozen(user) is False
 
-    commander.record_user_frozen_TBD(user, 6.0)
+    commander.mark_user_frozen(user, 6.0)
 
     assert commander.user_is_frozen(user) is True
 
 
 def test_a_freeze_that_carries_no_estimate_leaves_the_last_one_alone(commander):
     user = commander.resolve_user("cid-a")
-    commander.record_user_frozen_TBD(user, 6.0)
+    commander.mark_user_frozen(user, 6.0)
 
-    commander.record_user_frozen_TBD(user, None)
+    commander.mark_user_frozen(user, None)
 
     assert commander.user_map[user]["occupancy_percent"] == 6.0
 
 
 def test_a_freeze_ends_the_wait_it_was_the_reason_for(commander):
     user = commander.resolve_user("cid-a")
-    commander.hold_user_TBD(user, "transfer_flag T")
+    commander.hold_user(user, "transfer_flag T")
 
-    commander.record_user_frozen_TBD(user, 6.0)
+    commander.mark_user_frozen(user, 6.0)
 
     assert commander.resolve_user("cid-a") == user
 
 
 def test_an_adoption_empties_the_row_of_what_was_waiting(commander):
     user = commander.resolve_user("cid-a")
-    commander.record_user_frozen_TBD(user, 6.0)
+    commander.mark_user_frozen(user, 6.0)
     commander.user_map[user]["pending_dbevents"] = [{"table": "invoices"}]
 
-    commander.record_user_adopted_TBD(user)
+    commander.mark_user_adopted(user)
 
     assert commander.user_map[user]["pending_dbevents"] == []
     assert commander.user_map[user]["pending_datachanges"] == []
@@ -182,7 +182,7 @@ def test_what_a_dead_process_left_on_disk_is_discarded_and_counted(commander, ca
     parked_state(commander, user)
     without_state = commander.resolve_user("cid-b")
 
-    commander.purge_users_TBD([user, without_state], cause="process_aborted")
+    commander.drop_users([user, without_state], cause="process_aborted")
 
     assert commander.freeze_handler.user_folders == set()
     assert commander.user_map == {}

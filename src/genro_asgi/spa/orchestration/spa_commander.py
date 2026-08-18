@@ -87,7 +87,7 @@ followed by the next beat.
 **Three tasks are the vertex's own, because nobody below can do them.** The
 frozen whose age ran out have no process to notice them, so ``drop_expired_users``
 prunes the row and the disk itself — the declared exception to the rule that the
-levels below prune themselves. ``disk_cleanup`` discards what the deposit holds
+levels below prune themselves. ``cleanup_frozen`` discards what the deposit holds
 for nobody the indexes know. ``check_resources`` reads the machine's memory and
 the deposit's disk against their alarm lines, writes ``state`` and calls
 ``need_resources``, which does nothing here and is where a commander that can
@@ -130,9 +130,9 @@ HEARTBEAT_SECONDS = 5.0
 # minutes; the sweep of the deposit opens the disk over everything ever frozen,
 # which F18 measured in seconds at scale, so it goes hourly; the machine's gauges
 # are trends and not emergencies, and a minute is soon enough for a trend.
-FROZEN_EXPIRY_EVERY_TBD = 60
-DISK_CLEANUP_EVERY_TBD = 720
-RESOURCES_CHECK_EVERY_TBD = 12
+DROP_EXPIRED_USERS_BEATS = 60
+CLEANUP_FROZEN_BEATS = 720
+CHECK_RESOURCES_BEATS = 12
 
 # The conversion the expiry hours of the grammar meet the clock through.
 SECONDS_PER_HOUR = 3600.0
@@ -197,7 +197,7 @@ class SpaCommander:
         self.page_connection_map: dict[str, str] = {}
         #: The groups of this machine, by name — a group hangs itself here when
         #: it is built, the way a worker hangs itself in its own group's map.
-        self.group_handler_map_TBD: dict[str, Any] = {}
+        self.group_map: dict[str, Any] = {}
         self._group_turns: dict[str, asyncio.Task[None]] = {}
         self._logger = logging.getLogger(__name__)
         self._orders_logger = self._build_orders_logger(
@@ -248,7 +248,7 @@ class SpaCommander:
         row = self.user_map.get(user)
         return bool(row and row["frozen"])
 
-    def hold_user_TBD(self, user: str, cause: str) -> None:
+    def hold_user(self, user: str, cause: str) -> None:
         """Put a user in the waiting room: his next request waits instead of routing.
 
         Args:
@@ -303,7 +303,7 @@ class SpaCommander:
             row.get("pending_datachanges") or ()
         )
 
-    def record_user_frozen_TBD(self, user: str, occupancy_percent: float | None) -> None:
+    def mark_user_frozen(self, user: str, occupancy_percent: float | None) -> None:
         """Write down that a user's state is on disk, and what it is expected to cost.
 
         Args:
@@ -322,7 +322,7 @@ class SpaCommander:
         if occupancy_percent is not None:
             row["occupancy_percent"] = occupancy_percent
 
-    def record_user_adopted_TBD(self, user: str) -> None:
+    def mark_user_adopted(self, user: str) -> None:
         """Write down that a user came home from the freezer.
 
         Args:
@@ -337,7 +337,7 @@ class SpaCommander:
         row["pending_dbevents"] = []
         row["pending_datachanges"] = []
 
-    def purge_users_TBD(self, users: list[str], *, cause: str) -> None:
+    def drop_users(self, users: list[str], *, cause: str) -> None:
         """Take these users out of the machine and discard whatever they left on disk.
 
         Args:
@@ -427,7 +427,7 @@ class SpaCommander:
         value here, and cancels no sibling.
         """
         turns = []
-        for group_handler in group_handlers or list(self.group_handler_map_TBD.values()):
+        for group_handler in group_handlers or list(self.group_map.values()):
             running = self._group_turns.get(group_handler.name)
             if running is not None and not running.done():
                 self._logger.warning("Vertex: group %s is still in its turn", group_handler.name)
@@ -447,9 +447,9 @@ class SpaCommander:
         frozen_users = [user for user in self.user_map if self.user_is_frozen(user)]
         expired = await asyncio.to_thread(self._expired_users, frozen_users)
         if expired:
-            self.purge_users_TBD(expired, cause="expired")
+            self.drop_users(expired, cause="expired")
 
-    async def disk_cleanup(self) -> None:
+    async def cleanup_frozen(self) -> None:
         """Discard what the deposit holds for nobody the indexes know.
 
         Acts on the deposit: the folders left over — a user forgotten while his
@@ -458,10 +458,10 @@ class SpaCommander:
         counted and named. The disk is opened off the loop.
         """
         claimed = {self.freeze_handler.user_to_userkey(user) for user in self.user_map}
-        sweep = self.freeze_handler.drop_unclaimed_folders_TBD
+        sweep = self.freeze_handler.cleanup_frozen
         for userkey in await asyncio.to_thread(sweep, claimed):
             self.counters["orphan_folders_discarded"] += 1
-            self.log_order("vertex", "disk_cleanup", userkey, outcome="orphan")
+            self.log_order("vertex", "cleanup_frozen", userkey, outcome="orphan")
 
     async def check_resources(self) -> None:
         """Read the machine's memory and the deposit's disk against their alarm lines.
@@ -499,7 +499,7 @@ class SpaCommander:
         """
         wakes = {
             asyncio.ensure_future(group_handler.ping_now_event.wait()): group_handler
-            for group_handler in self.group_handler_map_TBD.values()
+            for group_handler in self.group_map.values()
         }
         timer = asyncio.ensure_future(asyncio.sleep(HEARTBEAT_SECONDS))
         done, pending = await asyncio.wait([timer, *wakes], return_when=asyncio.FIRST_COMPLETED)
@@ -514,9 +514,9 @@ class SpaCommander:
         of the same beat still run.
         """
         for every, task in (
-            (FROZEN_EXPIRY_EVERY_TBD, self.drop_expired_users),
-            (DISK_CLEANUP_EVERY_TBD, self.disk_cleanup),
-            (RESOURCES_CHECK_EVERY_TBD, self.check_resources),
+            (DROP_EXPIRED_USERS_BEATS, self.drop_expired_users),
+            (CLEANUP_FROZEN_BEATS, self.cleanup_frozen),
+            (CHECK_RESOURCES_BEATS, self.check_resources),
         ):
             if beats % every:
                 continue
@@ -530,7 +530,7 @@ class SpaCommander:
 
         It OPENS one item per user to read when it was written, which is the
         expensive half of the sweep. A frozen row with nothing on disk has no age
-        to judge and is left to ``disk_cleanup``.
+        to judge and is left to ``cleanup_frozen``.
         """
         now = time.time()
         expired = []

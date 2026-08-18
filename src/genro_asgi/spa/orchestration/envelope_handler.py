@@ -285,7 +285,7 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
         for user, row in (photo.get("users") or {}).items():
             flag = row.get("transfer_flag")
             if flag is not None:
-                self.spa_commander.hold_user_TBD(user, f"transfer_flag {flag}")
+                self.spa_commander.hold_user(user, f"transfer_flag {flag}")
 
     def on_new_page(self, worker_event: dict[str, Any]) -> None:
         """A page was born: it belongs to the connection that asked for it, for good."""
@@ -317,20 +317,20 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
 
     def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
         """A user is in the freezer: the mark goes on, with what he is expected to cost."""
-        self.spa_commander.record_user_frozen_TBD(
+        self.spa_commander.mark_user_frozen(
             worker_event["user"], worker_event.get("occupancy_percent")
         )
 
     def on_user_adopted(self, worker_event: dict[str, Any]) -> None:
         """A user came home from the freezer: the mark goes off, his waiting is drained."""
-        self.spa_commander.record_user_adopted_TBD(worker_event["user"])
+        self.spa_commander.mark_user_adopted(worker_event["user"])
 
     def on_process_quitted(self, worker_event: dict[str, Any]) -> None:
         """The users of a dead process: the frozen are marked — whether their own
         worker event survived the closing wire or not — and the lost are purged."""
         for user in worker_event["frozen_users"]:
-            self.spa_commander.record_user_frozen_TBD(user, None)
-        self.spa_commander.purge_users_TBD(worker_event["lost_users"], cause=worker_event["op"])
+            self.spa_commander.mark_user_frozen(user, None)
+        self.spa_commander.drop_users(worker_event["lost_users"], cause=worker_event["op"])
 
     #: The wild death is read exactly as the ordered one, and it names nobody as
     #: saved: whoever was on board is purged, which is the price of it.
