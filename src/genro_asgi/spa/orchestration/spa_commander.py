@@ -72,6 +72,13 @@ nobody's decision.
 discarded, how much was waiting for somebody who is gone: numbers the level below
 cannot know because each of them sees only its own share.
 
+**The memory cascade starts here.** ``memory_max_percent`` is what this server
+may hold of the machine, and ``memory_concession_bytes`` is that share in bytes:
+the ONE total of the machine, from which a group takes its quota and a worker its
+ceiling, each as a percentage of the rung above. A machine that does not say how
+much memory it has leaves the whole cascade unmeasured, which is what an ungated
+pool honestly is.
+
 **There is ONE clock in the machine, and it is here.** ``heartbeat_loop`` waits
 for its timer OR for any group's wake, whichever comes first: the timer gives a
 full round — every group a turn, and the vertex's own tasks each on its own count
@@ -163,6 +170,9 @@ class SpaCommander:
             shorter — a guest is a browser, not a person the machine knows.
         machine_memory_alarm_percent: the health line of the WHOLE machine, not
             of what this server was conceded: past it nothing grows.
+        memory_max_percent: what this server may hold OF THE MACHINE — the
+            concession every percentage below it is a share of. All of it by
+            default.
     """
 
     def __init__(
@@ -175,11 +185,13 @@ class SpaCommander:
         user_expiry_hours: float = 720.0,
         guest_expiry_hours: float = 24.0,
         machine_memory_alarm_percent: float = 90.0,
+        memory_max_percent: float = 100.0,
     ) -> None:
         self.freeze_handler = FreezeHandler(frozen_users_path)
         self.user_expiry_hours = user_expiry_hours
         self.guest_expiry_hours = guest_expiry_hours
         self.machine_memory_alarm_percent = machine_memory_alarm_percent
+        self.memory_max_percent = memory_max_percent
         #: The master of the store every worker holds a replica of: the only
         #: writer of that content is here, and a replica is replaced entire.
         self.global_register = Bag()
@@ -211,6 +223,20 @@ class SpaCommander:
             orchestration_log_max_bytes,
             orchestration_log_backup_count,
         )
+
+    @property
+    def memory_concession_bytes(self) -> int | None:
+        """What this server may hold of the machine's memory, in bytes.
+
+        Returns:
+            The concession — the machine's whole memory times
+            ``memory_max_percent`` — or None where the platform does not say how
+            much memory it has, and then nothing under this vertex is measurable
+            either. It is the ONE total of the cascade: a group's quota and a
+            worker's ceiling are shares of it.
+        """
+        total = self._machine_memory_gauges().get("MemTotal")
+        return int(total * self.memory_max_percent / 100.0) if total else None
 
     def resolve_user(self, cid: str) -> str:
         """The reception desk: whose cid this is, minting him if he is new.
@@ -551,17 +577,27 @@ class SpaCommander:
 
     def _machine_memory_used_percent(self) -> float | None:
         """How much of the WHOLE machine's memory is in use, in percent, or None."""
+        gauges = self._machine_memory_gauges()
+        total, available = gauges.get("MemTotal"), gauges.get("MemAvailable")
+        return 100.0 * (total - available) / total if total and available is not None else None
+
+    def _machine_memory_gauges(self) -> dict[str, float]:
+        """The machine's whole and available memory in BYTES; empty where it does not say.
+
+        No dependency is taken for a gauge a platform may simply not offer — the
+        same honesty a worker's own resident size has — so a machine with no
+        ``/proc`` reads as unmeasured, which is not the same as full.
+        """
         gauges: dict[str, float] = {}
         try:
             with open("/proc/meminfo", encoding="ascii") as meminfo:
                 for row in meminfo:
                     name, _, value = row.partition(":")
                     if name in ("MemTotal", "MemAvailable"):
-                        gauges[name] = float(value.split()[0])
+                        gauges[name] = float(value.split()[0]) * 1024
         except OSError:
-            return None
-        total, available = gauges.get("MemTotal"), gauges.get("MemAvailable")
-        return 100.0 * (total - available) / total if total and available is not None else None
+            return {}
+        return gauges
 
     def _new_row(self) -> dict[str, Any]:
         """The row of an identity nobody knows anything about yet."""

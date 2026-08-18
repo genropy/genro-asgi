@@ -4,6 +4,129 @@
 rejected. The `_TBD` names each phase brought to the owner, and the name they
 got, belong here too.)
 
+## Phase 5
+
+**The section is `commander` under `configuration`, and it is the site grammar's,
+not an app's.** The 2026-07-31 examples document (unratified, 🔴) proposed the
+opposite — the pool vocabulary mounted through the `application` element's
+`subbuilder` seam, "the commander is an app like the others" — and that shape is
+still the right one the day the SPA front of Macro 4 exists to carry it. Today no
+class carries it: the front that owns a vertex is not written, `applications/
+spa_app.py` owns the LEGACY commander and dies at Macro 6. Writing the keys into a
+grammar nobody mounts would have made the phase's own `Done` unverifiable, so the
+section went where the plan's Files list points, on `configuration`, beside
+`server` and `storage` — which is also where a reader of the recipe expects
+something declared once per server (one vertex, one clock, one freezer root). The
+move to a mounted grammar, if it happens, is a change of PARENT on three
+`@element` declarations and one prefix in two reader methods.
+
+**Every grammar key is spelled exactly like the constructor parameter it feeds.**
+That rule was chosen instead of inventing recipe-side names, and it is what keeps
+the read door free of translation: `commander_kwargs()` IS `SpaCommander`'s
+signature and `group_kwargs()[name]` IS a `GroupHandler`'s. It also answers the
+`_TBD` rule without a single placeholder — a key that echoes a ratified parameter
+is not a new name. Three consequences worth stating: the plan's list writes the
+child's kwargs as `kwargs` and the key is `worker_kwargs`, because in a recipe
+line `kwargs=` reads as "the kwargs of this element", which it is not; the group's
+collection keys on `name` where every other collection of this dialect keys on
+`code`, because the object's own attribute is `name` and the label becomes
+`group_map`'s key; and the two paths are declared on `commander` and folded into
+every group, because a group is what builds the workers that need them while the
+freezer must be ONE root for the whole machine.
+
+**The defaults are not repeated in the grammar.** Every attribute defaults to
+None, which the read stack reads as absent, so the numbers live where they always
+lived — in `SpaCommander.__init__` and `GroupHandler.__init__` — and there is one
+source of truth per policy. It is the discipline `BaseConfiguration.server_section`
+already states for the listener ("the defaults stay where they live, in the
+constructor"). The guide names them in prose where they matter; a test that
+declares a group with nothing but its child asserts that the objects' own defaults
+answer for the rest.
+
+**The two expiry ages stop on the VERTEX: the group's rung waits for its reader.**
+The phase first built them on both rungs, as amendment (d) reads, and declared it
+for what it was — a column nobody in `src/` reads, the group's ages being for the
+worker's own shot, which gets its clock in Macro 4. Put to the owner at the
+closing round (2026-08-18), the answer was that they are not born yet: the ages
+live on `SpaCommander`, where `drop_expired_users` judges the FROZEN, and the
+group's pair comes back in Macro 4 together with the code that reads it. The
+alternatives are recorded because they stay true when that day comes: folding
+them into the child's `worker_kwargs` kills the child at boot (`SpaWorker`'s
+signature is closed and `WorkerEntry` builds `worker_class(name, **kwargs)`), and
+teaching `SpaWorker` the two would also need a per-kind judgement `plan_transfers`
+does not have — it takes ONE `expiry_delay`. So the rung the pair belongs to is
+`GroupHandler`, and the phase that gives it a reader is the phase that declares
+it.
+
+**The concession is the cascade's missing top, and it is read off the machine.**
+Phase 3 left `memory_concession_bytes` as "the only total handed in" with nobody
+to hand it in; the vertex's grammar key `memory_max_percent` is what computes it,
+so `SpaCommander.memory_concession_bytes` is `MemTotal` times that share. The
+`/proc/meminfo` read was split into `_machine_memory_gauges` (bytes, empty where
+the platform does not say) so the alarm percentage and the concession come from
+ONE parse; the existing test that pins `_machine_memory_used_percent` is untouched
+by the split. Whoever builds a group hands the property to it: the group keeps its
+constructor kwarg (Phase 3's ratified shape, and its tests pass a number) rather
+than reaching up for it.
+
+**Two gaps of the upper phases were closed, and the e2e is why they were found.**
+Neither is an invention; both are written in the design and were simply never
+implemented, and both are invisible to a test that drives the machine by hand:
+- **the round did not bury the dead.** Nothing in `src/` called `report_death`
+  except `restart_worker`; Phase 3's own closure test and the M2 story both play
+  that step from the test ("the driver plays the round"). Phase 1 decision (3)
+  ratifies the opposite — `on_child_lost` writes the state and rings the wake, and
+  "the group learns at its round, reading the state" — so the three lines went at
+  the top of `ping()`, before the beats and the shape: a dead worker must not be
+  beaten and must not be counted in a picture. Proved by neutralization: removed,
+  only the new e2e fails, which is exactly the point (no other test lets the
+  machine run itself).
+- **`hosted_users` had no writer.** `worker_handler.py` says "the fold is its
+  single writer" and the fold never wrote it: every test adds the users by hand.
+  A death is settled on that list, so a wild death in a machine nobody drove
+  purged nobody. The four readers went on `WorkerEnvelopeHandler` — the rung that
+  holds both the list and the death — with the arrival/departure pairs aliased the
+  way `on_process_aborted` aliases `on_process_quitted`. An adoption ADDS: a user
+  coming home from the freezer is an arrival like a birth, and without that line
+  the M2 story's own death assertion would have changed meaning.
+
+**What the e2e doubles, and what it refuses to double.** The driver stands in for
+the request chain of Macro 4 and for nothing else: one helper, `serve()`, which
+reads where a user lives, asks the group to place him if nowhere, and carries the
+call to that process — it decides nothing (the identity is the vertex's, the
+placement the group's). The two orders `plan_transfers` / `execute_transfers` are
+reached through the `StoryWorker` subclass exactly as the M2 story reaches them,
+because in the machine proper nobody orders a shot: it is taken by whoever
+composes a due photo, and giving it a clock is Macro 4. The one thing the story
+declares rather than measures is the memory of a child (`declared_rss_bytes`
+overriding `rss_bytes`): macOS has no `/proc/self/status`, so a story whose
+subject is occupancy would be unreadable on this laptop — the same reason Phase
+3's scripted child reports the rss it was told to. The concession is likewise set
+by the story (a machine reading, not a config value): tight, so the reception
+reads 70% full and refuses a newcomer with its reserve; then ten times roomier,
+which is what makes the second worker's share absorbable and the closure the right
+decision.
+
+**The log rows were read, not only asserted.** The account of the day is eight
+rows and each one says who decided (`std`, `vertex`), what, on whom, the numbers in
+front of it (`workers`, `occupancy_percent`, `had_state`) and how it ended
+(`quitted`, `aborted`, `process_aborted`). Two observations, neither a defect:
+`outcome=None` on the orders that simply worked (`start_worker`, `close_worker`) —
+the outcome is where a failure goes, and the numbers carry the rest; and the
+occupancy in a row is the raw float (`7.000000000000001`), which the test asserts
+by computing it the way the group does rather than by rounding, since the row must
+carry the figure the decision was taken on.
+
+**The line count, itemised.** 36 executable statements added in `src/`: the read
+door 17 (the two readers, of which 8 are the fold of the child's own kwargs and
+the loop over the collection), the three `@element` declarations 3 (their ~95
+other lines are the documented signatures and the docstrings that ARE the
+grammar's documentation), the vertex 7 (one kwarg, the concession property, the
+split of the meminfo parse), the group 3 (the three-line burial), the chain 6
+(four readers, two of them aliases). Nothing was written that a consumer does not
+call: the one exception the phase had declared — the group's two expiry ages —
+was removed at the closing round.
+
 ## Phase 4 — the round of the names, and the three amendments it brought
 
 *(2026-08-18, foreman-3. The 12 `_TBD` names of Phases 2 and 4 were put to the
@@ -108,7 +231,9 @@ a policy would then be chosen by a file, and the file is diagnostic by ratified
 rule. So the vertex carries the two numbers as its own kwargs, and the guest is
 told apart by the `GUEST_PREFIX` it already owns. Phase 5, which writes the
 grammar, is where the two rungs are reconciled — the same key on two rungs is the
-cascade this workflow already uses for `memory_max_percent`.
+cascade this workflow already uses for `memory_max_percent`. (Outcome, at Phase
+5's closing round: the vertex keeps the two, and the group's rung is deferred to
+Macro 4 with the reader that justifies it. See the Phase 5 section.)
 
 **The age of a frozen user is read from the header, so the reaper opens the
 disk.** There is no timestamp in the ratified row (§6 fixes its six fields) and

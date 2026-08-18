@@ -232,3 +232,25 @@ def test_the_machine_starts_running_and_holds_the_master_of_the_store(commander)
     assert commander.state == "running"
     assert isinstance(commander.global_register, Bag)
     assert commander.global_register.keys() == []
+
+
+def test_the_concession_is_this_servers_share_of_the_whole_machine(commander, monkeypatch):
+    monkeypatch.setattr(
+        commander,
+        "_machine_memory_gauges",
+        lambda: {"MemTotal": 8_000_000_000.0, "MemAvailable": 6_000_000_000.0},
+    )
+    commander.memory_max_percent = 25.0
+
+    assert commander.memory_concession_bytes == 2_000_000_000
+    # And the alarm line is read against the machine, not against the concession.
+    assert commander._machine_memory_used_percent() == 25.0
+
+
+def test_a_machine_that_does_not_say_how_much_memory_it_has_concedes_nothing(
+    commander, monkeypatch
+):
+    monkeypatch.setattr(commander, "_machine_memory_gauges", dict)
+
+    assert commander.memory_concession_bytes is None
+    assert commander._machine_memory_used_percent() is None

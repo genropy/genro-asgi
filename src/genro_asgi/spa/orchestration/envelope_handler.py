@@ -71,6 +71,11 @@ handler files it as its latest, the group judges whether it needs a round NOW,
 the Commander parks the users it shows on their way out. It is read BEFORE the
 worker events of the same envelope, which is the order it was taken in.
 
+**Who is on board is kept by the bottom layer.** A handler's ``hosted_users`` is
+written HERE and nowhere else: an arrival — a birth or a homecoming from the
+freezer — adds him, a departure — the freezer, or gone for good — takes him off.
+It is the list a death is settled on, so it is kept where the deaths are read.
+
 **The death is the one worker event born on this side of the wire.** A process
 that has ended announces nothing — it is gone. What the handler has instead is
 its ``state``, and ``WorkerEnvelopeHandler.report_death()`` turns that
@@ -197,6 +202,22 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
     def on_worker_snapshot(self, photo: dict[str, Any]) -> None:
         """File the photo as this handler's latest: the gauges everybody judges on."""
         self.worker_handler.worker_snapshot = photo
+
+    def on_new_user(self, worker_event: dict[str, Any]) -> None:
+        """A user is in this process now: he is one of this handler's own."""
+        self.worker_handler.hosted_users.add(worker_event["user"])
+
+    #: An adoption is an arrival like any other: the state came home from the
+    #: freezer instead of from a login, and the process holds him either way.
+    on_user_adopted = on_new_user
+
+    def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
+        """A user has left this process: he is not one of its own any more."""
+        self.worker_handler.hosted_users.discard(worker_event["user"])
+
+    #: Leaving for good says the same thing at this rung: he is not in this
+    #: process's memory. Where he went is read one layer up.
+    on_drop_user = on_user_frozen
 
 
 class GroupEnvelopeHandler(EnvelopeHandler):

@@ -47,6 +47,9 @@ Section → constructor kwarg:
   cooperative chain has run.
 - ``plugins`` → ``plugins`` ({code: bool | dict} switches).
 - ``openapi`` → no core-1a consumer; read and skipped.
+- ``commander`` → the SPA pool: the vertex's own kwargs, and one kwargs set per
+  declared group (the two installation paths folded in, the child's own keys
+  gathered into its ``worker_kwargs``).
 """
 
 from __future__ import annotations
@@ -296,6 +299,64 @@ class ConfigurationHandler(ConfigHandler):
                 }
             )
         return descriptors
+
+    def commander_kwargs(self) -> dict[str, Any]:
+        """The ``commander`` section as the vertex's own constructor kwargs.
+
+        ``instance_dir`` is NOT among them: the sockets are the workers' business,
+        so that path is folded into every group instead (``group_kwargs``). What
+        the recipe leaves out is left out, and the vertex's own default answers.
+        """
+        return self.closed_attrs(
+            "commander",
+            "frozen_users_path",
+            "memory_max_percent",
+            "machine_memory_alarm_percent",
+            "orchestration_log_path",
+            "orchestration_log_max_bytes",
+            "orchestration_log_backup_count",
+            "user_expiry_hours",
+            "guest_expiry_hours",
+        )
+
+    def group_kwargs(self) -> dict[str, dict[str, Any]]:
+        """The declared groups as ``{name: kwargs}``, ready for one ``GroupHandler`` each.
+
+        The two paths of the installation live on ``commander`` and are folded in
+        here, because a group is what builds the workers that need them. The keys
+        the CHILD reads travel in its own ``worker_kwargs`` — the group's name,
+        which stamps every item it writes, and ``user_idle_freeze_minutes``, the
+        silence the worker itself measures — so a recipe writes each policy once,
+        on the rung it belongs to, and the child is handed what is his.
+        """
+        node = self.node("commander.groups")
+        if node is None:
+            return {}
+        shared = self.closed_attrs("commander", "frozen_users_path", "instance_dir")
+        groups: dict[str, dict[str, Any]] = {}
+        for child in node.value:
+            path = f"commander.groups.{child.label}"
+            kwargs = self.closed_attrs(
+                path,
+                "memory_max_percent",
+                "worker_memory_max_percent",
+                "occupancy_max_percent",
+                "restart_occupancy_max_percent",
+                "reception_reserved_percent",
+                "new_user_occupancy_percent",
+                "entry_module",
+                "executable",
+                "worker_class",
+                "main_threadpool_size",
+                "aux_threadpool_size",
+                "worker_kwargs",
+            )
+            worker_kwargs = dict(kwargs.pop("worker_kwargs", None) or {}, group=child.label)
+            idle_minutes = self(f"{path}.user_idle_freeze_minutes", default=None)
+            if idle_minutes is not None:
+                worker_kwargs["user_idle_freeze_minutes"] = idle_minutes
+            groups[child.label] = {**shared, **kwargs, "worker_kwargs": worker_kwargs}
+        return groups
 
     def node(self, path: str) -> Any:
         """The node at ``path`` (relative to the root element), or ``None``."""

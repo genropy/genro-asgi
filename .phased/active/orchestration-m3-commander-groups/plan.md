@@ -646,7 +646,131 @@ register item, freezer, check, timeout, restart, congelamento per inattività.
     surviving a round that raises.
   - Verify: now — the `_TBD` round of this phase.
 
-- [ ] **Phase 5**: The grammar and the whole machine end to end
+- [x] **Phase 5**: The grammar and the whole machine end to end
+  > Done: the pool is WRITABLE. One new section of the site grammar — `commander`,
+  > with its `groups` collection keyed by `name` — carries the two paths of the
+  > installation (`frozen_users_path`, `instance_dir`, declared once and shared by
+  > every group), the vertex's policies (`memory_max_percent`,
+  > `machine_memory_alarm_percent`, the three `orchestration_log_*`,
+  > `user_expiry_hours` / `guest_expiry_hours`) and, one rung down, the group's own
+  > (the five occupancy percentages, `memory_max_percent` /
+  > `worker_memory_max_percent`, `user_idle_freeze_minutes`) plus the identity of
+  > its child (`entry_module`,
+  > `executable`, `worker_class`, the two pool sizes, `worker_kwargs`). NO key says
+  > how many workers there are, and no key names the freezer's disk. Every grammar
+  > key is spelled exactly like the constructor parameter it feeds, so the read door
+  > translates nothing: `ConfigurationHandler.commander_kwargs()` is the vertex's
+  > signature and `group_kwargs()` is `{name: kwargs}`, one `GroupHandler` each,
+  > with the two paths folded in and the keys the CHILD reads gathered into its own
+  > `worker_kwargs` (its group's name, and the silence it measures itself). The
+  > cascade got its missing top: `SpaCommander.memory_max_percent` +
+  > `memory_concession_bytes` (the machine's `MemTotal` times that share, None where
+  > the platform does not say), which is the ONE total a group's quota and a
+  > worker's ceiling are percentages of. RECONCILIATION of amendment (d), decided
+  > at the closing round of this phase: the ages live on the VERTEX only, where
+  > `drop_expired_users` reads them to judge the FROZEN. The group's rung — the
+  > ages of its ACTIVE users — is deferred to Macro 4 together with its reader,
+  > the worker's own shot: born here it would have been two kwargs, two
+  > assignments, a grammar key and a `group_kwargs()` entry that nobody in `src/`
+  > reads, and what has no reader does not get born.
+  > TWO GAPS OF THE UPPER PHASES CLOSED, both ratified design that no phase had
+  > implemented and both without which "the whole machine end to end" cannot run
+  > unattended: (a) `GroupHandler.ping()` now settles every process whose end has
+  > not been read yet — `report_death()` on a handler in a `DEAD_STATES` state (3
+  > lines), which is Phase 1 decision (3)'s "the group learns at its round, reading
+  > the state" and Phase 3 decision (5)'s step 5; before it, nothing in `src/`
+  > consumed a death and every test drove `report_death` by hand. (b) The bottom
+  > layer of the chain keeps `hosted_users`, which `worker_handler.py` already
+  > declared "the fold is its single writer": `on_new_user` / `on_user_adopted` add,
+  > `on_user_frozen` / `on_drop_user` discard (4 readers, 2 of them aliases) —
+  > without it a wild death is settled on an empty list and purges nobody.
+  > Verified: `pytest tests/ -q` 1928 passed / 2 skipped (was 1918/2, +10 tests);
+  > `ruff check src/ tests/` clean; `mypy src/` 94, the baseline, with ZERO findings
+  > in the five touched modules (the one in `envelope_handler.py` is pre-existing,
+  > measured with the change reverted); coverage `elements.py` 100%, `handler.py`
+  > 100%, `envelope_handler` 100%, `group_handler` 100%, `spa_commander` 97% (the
+  > five lines are the `/proc/meminfo` parse, which no macOS runs and the ubuntu CI
+  > does). EXECUTABLE STATEMENTS ADDED in `src/`: 36 (elements 3, handler 17,
+  > envelope_handler 6, group_handler 3, spa_commander 7) — the itemisation is in
+  > notes.md. FOUR NEUTRALIZATION PROBES, each breaking its own tests: the silence
+  > policy no longer folded into the child's kwargs (the e2e's freeze never happens,
+  > plus two config tests), the round no longer burying the dead (the e2e alone),
+  > the fold no longer keeping who is on board (the e2e alone), the concession
+  > pinned to None (the vertex's own test).
+  > Verified: the M3 END TO END is one story on the real things — the policies read
+  > from a config FILE on disk through the server's own read door, the vertex and
+  > the group built from nothing but what it says, three REAL child processes, a
+  > real freezer on disk, and the real clock. In order: the reception born at boot;
+  > two people placed on it and served through the WSGI seam; one of them frozen by
+  > the idleness the CONFIG FILE declared (parked at the vertex, on disk past the
+  > gate, placement to be assigned); her LAZY WAKE on her next request; the growth
+  > on demand (the concession measured, the reception refusing a newcomer with the
+  > reserve it keeps, the wake, the round, the second process, and the retry landing
+  > on it); the closure for wasted capacity through its six steps over the real
+  > child, the round that reads the ended state taking it out; and a WILD DEATH with
+  > two people on board under the running `heartbeat_loop` — nobody drove it: the
+  > end of the wire rang the wake, the round read `aborted`, the two on board were
+  > purged whole, the frozen woman on nobody's board was untouched, and the group,
+  > left with no worker at all, brought a fresh reception into being. The
+  > orchestration log the config file named is read at the end and asserted row by
+  > row: 3 `start_worker`, 1 `close_worker`, 2 `drop_worker` (`quitted` then
+  > `aborted`), 2 `drop_user` (`process_aborted`), each with its decider, its
+  > subject, the numbers in front of it and its outcome.
+  > Verified: DECLARED DEVIATIONS. (1) `config/default_config.py` is NOT touched:
+  > it resolves WHICH defaults recipe layers under a site and knows no key, so the
+  > new section needed nothing there; `config/handler.py` is touched instead, which
+  > the plan's Files list did not name — that is where a section becomes kwargs.
+  > (2) `USER_PENDING_MAX_ITEMS` (decision 4) is NOT born: nothing writes
+  > `pending_dbevents` / `pending_datachanges` yet (the notifications are Macro 4 by
+  > the plan's own Notes), so a cap on them would be a constant with no writer. The
+  > other constants of that decision were verified present: `HEARTBEAT_SECONDS`,
+  > `QUIT_TIMEOUT_SECONDS`, `STORAGE_RESERVE_PERCENT`, the four cadences,
+  > `PROCESS_PING_INTERVAL`, `PROCESS_PING_TIMEOUT`, `TRANSFER_START_DELAY`,
+  > `DEPOSIT_LOCK_WAIT_LIMIT`. (3) No `AsgiServer` builds a pool: the server's read
+  > door reads the section, and whoever OWNS a vertex — the new SPA front of Macro 4
+  > — is the caller of these two readers. The e2e builds the pair exactly as that
+  > front will, which is also what `tests/test_config.py` asserts through a real
+  > `AsgiServer`.
+  > Files: src/genro_asgi/config/elements.py,
+  > src/genro_asgi/config/handler.py,
+  > src/genro_asgi/spa/orchestration/spa_commander.py,
+  > src/genro_asgi/spa/orchestration/group_handler.py,
+  > src/genro_asgi/spa/orchestration/envelope_handler.py,
+  > tests/orchestration/test_orchestration_m3_e2e.py (new),
+  > tests/orchestration/test_orchestration_spa_commander.py,
+  > tests/test_config.py,
+  > docs/guides/configuration.md,
+  > .phased/active/orchestration-m3-commander-groups/notes.md
+  > Verify: now — the guide's new section (`docs/guides/configuration.md`, "The pool
+  > section") was RUN, not only read: its recipe example builds and yields exactly
+  > the kwargs the prose claims. The log sample it prints is the real one of the e2e
+  > run.
+  > Verified: the Verify Phase 3 DEFERRED to this phase is answered — "with a real
+  > installation, the group grows and shrinks under load in a way that looks sane in
+  > the orchestration log": the M3 e2e grows it on a refused newcomer, shrinks it on
+  > wasted capacity and regrows it after a wild death, and the eight rows of the log
+  > read in that order with the numbers each decision was taken on.
+  > Verify: now — the `_TBD` round of this phase: NO `_TBD` name was created
+  > (`grep -rn "_TBD" src/ tests/` returns nothing), because every grammar key is
+  > the constructor parameter it feeds. What the owner is owed is a CONFIRMATION of
+  > four names taken from the existing vocabulary rather than coined: the section tag
+  > `commander` (the class is `SpaCommander`), the collection `groups` / `group` (the
+  > class is `GroupHandler`, the index `group_map`), the collection key `name` (the
+  > parameter is `GroupHandler.name`, where every other collection of this dialect
+  > keys on `code`), and the two readers `commander_kwargs()` / `group_kwargs()`
+  > (the twin of `server_kwargs()`). Each is one search-and-replace if he wants
+  > another.
+  > Verified: THE OWNER'S ROUND, 2026-08-18. The four names above are CONFIRMED as
+  > they stand (`commander`, `groups` / `group`, the collection key `name`,
+  > `commander_kwargs()` / `group_kwargs()`), and so is `worker_kwargs` where the
+  > phase list said `kwargs` — the grammar key is spelled like the constructor
+  > parameter it feeds. The two gaps closed out of mandate are RATIFIED as written.
+  > Deviation (2) is ratified as an absence: `USER_PENDING_MAX_ITEMS` is born in
+  > Macro 4 with the code that fills the queues. The group's expiry ages are NOT
+  > born (see the reconciliation above): a column with no reader waits for its
+  > reader. After that removal: `pytest tests/ -q` 1928 passed / 2 skipped (no test
+  > lost — the group's two keys were assertions inside tests that still stand),
+  > `ruff check src/ tests/` clean, `mypy src/` 94.
   - Run: opus / medium
   - Pattern: `src/genro_asgi/config/elements.py:78` (`AsgiServerGrammar`,
     the `@element(parent_tags=..., sub_tags=...)` declarations and the

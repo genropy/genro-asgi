@@ -249,6 +249,9 @@ One line each; the deep dives live in their own guides.
 - **`plugins`** — the router plugins armed on every routed app.
 - **`openapi`** — `title`, `version`, `description` (see
   [OpenAPI & Swagger](openapi.md)).
+- **`commander`** — the SPA pool: the vertex's paths and policies plus one
+  `group` per family of workers (see
+  [The pool section](#the-pool-section-commander-and-its-groups)).
 
 ## The storage section
 
@@ -284,6 +287,95 @@ what lands on disk is self-describing — an envelope whose first line starts
 Outside a recipe the same three shapes reach the constructor as `storage=`:
 `None` for the default `site:` mount, a ready `StorageManager` to adopt, or
 genro-storage's own `list[dict]` of mount configurations.
+
+## The pool section: `commander` and its `groups`
+
+A site whose pages live in worker processes declares the pool in one section. It
+has two rungs — the `commander` (the vertex: one per server) and one `group` per
+family of workers — and **nothing in it says how many processes there are**: the
+group brings its reception into being at boot, then grows on demand and shrinks
+when capacity is spare, so the count is something you read in the log, never
+something you set.
+
+```python
+def commander_section(self, cfg):
+    """The pool: one vertex, two groups on two interpreters."""
+    commander = cfg.commander(
+        frozen_users_path="/var/lib/shop/frozen_users",
+        instance_dir="/var/run/shop",
+        orchestration_log_path="/var/log/shop/orchestration.log",
+        memory_max_percent=80.0,             # what this server may hold of the machine
+        machine_memory_alarm_percent=90.0,   # past this, nothing grows
+        user_expiry_hours=720.0,             # a frozen person is kept a month
+        guest_expiry_hours=24.0,             # a frozen browser, a day
+    )
+    groups = commander.groups()
+    groups.group(name="stable", occupancy_max_percent=80.0,
+                 user_idle_freeze_minutes=60.0,
+                 entry_module="genro_asgi.spa.orchestration.worker_entry",
+                 worker_class="myshop.app:ShopWorker",
+                 worker_kwargs={"site_path": "/srv/shop"})
+    groups.group(name="canary", executable="/srv/shop/.venvs/next/bin/python",
+                 entry_module="genro_asgi.spa.orchestration.worker_entry",
+                 worker_class="myshop.app:ShopWorker")
+```
+
+**The two paths are the installation's**, so they are declared once, on
+`commander`: `frozen_users_path` (the freezer — one root for the whole machine,
+because the vertex reads back what a worker wrote there) and `instance_dir` (the
+sockets). Every group is handed both.
+
+**The memory is a cascade of percentages, and only the machine is measured in
+bytes.** `memory_max_percent` on `commander` is the server's concession on the
+machine; `memory_max_percent` on a `group` is that group's share of the
+concession; `worker_memory_max_percent` is what ONE of its workers may hold of
+the group's share. The same word on each rung is deliberate — it always means
+"my share of the rung above" — and a machine that does not report its memory (no
+`/proc`) leaves the cascade unmeasured, which simply leaves the growth ungated.
+
+**The occupancy keys are how full is full.** `occupancy_max_percent` is where a
+worker stops admitting new users; `restart_occupancy_max_percent` is where a
+process is replaced rather than kept; `reception_reserved_percent` is what the
+reception keeps free for the one job only it has (receiving whoever arrives
+unplaced), so its own admission setpoint is the difference;
+`new_user_occupancy_percent` is what somebody nobody has ever measured is
+expected to cost.
+
+**The ages are the vertex's.** `user_expiry_hours` / `guest_expiry_hours` on
+`commander` are how long a FROZEN user is kept before the machine forgets him
+whole — the vertex holds them because a frozen user lives in no process, and a
+group could not notice him. `user_idle_freeze_minutes` (group) is the silence
+past which a worker parks a user in the freezer: his state survives on disk, and
+his next request brings him back wherever the pool then puts him.
+
+**The identity of the child** is the group's too: `entry_module` (what `python
+-m` runs), `executable` (its interpreter — two groups on two venvs is how two
+versions of a site serve side by side), `worker_class` (the `module:Class` the
+child loads), `main_threadpool_size` / `aux_threadpool_size`, and
+`worker_kwargs`, the grammar that class is built with. The group's name and its
+`user_idle_freeze_minutes` are added to those kwargs on the way down, so you
+write each policy once, on the rung it belongs to.
+
+**What is NOT a key.** No worker count and no maximum. No policy for the
+freezer's disk: under a tenth of it free the orchestration log says so and the
+server asks its environment for more. And no clocks — the beat, the patience of
+a departure and the cadences are module constants, because an installation tunes
+policies, not timings.
+
+**The account of what the pool does** is `orchestration_log_path` (with
+`orchestration_log_max_bytes` and `orchestration_log_backup_count`): one row per
+order, saying who decided, what, on whom, with which numbers in front of them and
+how it ended.
+
+```
+decided_by=std order=start_worker subject=std_0002 numbers={'workers': 2} outcome=None
+decided_by=std order=close_worker subject=std_0002 numbers={'occupancy_percent': 7.0, 'workers': 2} outcome=None
+decided_by=std order=drop_worker subject=std_0002 numbers=None outcome=quitted
+decided_by=vertex order=drop_user subject=mario numbers={'had_state': False} outcome=process_aborted
+```
+
+Omit the path and the rows stay on the `genro_asgi.orchestration.orders` logger,
+which is what a test wants.
 
 ## A complete recipe
 

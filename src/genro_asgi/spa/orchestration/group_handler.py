@@ -57,8 +57,11 @@ count against a byte count. A concession nobody has measured makes every reading
 0, which leaves the growth ungated by construction rather than by a special case.
 
 **The clock is the vertex's, the counting is the group's.** ``ping`` is this
-group's turn of the one round there is: it beats the workers nobody has heard
-from — a process fresh from traffic has just photographed itself — and it reads
+group's turn of the one round there is: it settles every process whose end has
+not been read yet — the state is the only word on a death, and a round is where
+it is read, whether the process left as it was told to or died wild — it beats
+the workers nobody has heard from — a process fresh from traffic has just
+photographed itself — and it reads
 its own shape only when its own count of turns says so, or when its wake was
 rung, which is what a death or a placement nobody admitted does. The wake is
 consumed HERE, at the start of the turn, so the group that rings while its turn
@@ -243,14 +246,18 @@ class GroupHandler:
         self.ping_now_event.set()
 
     async def ping(self) -> None:
-        """This group's turn of the round: beat the silent, read the shape when due.
+        """This group's turn of the round: bury the dead, beat the silent, read the shape.
 
         Acts on the group: it consumes the wake it was given — which brings the
-        reading of the shape forward, whatever its own count says — and lets
-        ``check_occupancy`` take the step that reading calls for.
+        reading of the shape forward, whatever its own count says — settles every
+        process whose end has not been read yet, and lets ``check_occupancy`` take
+        the step that reading calls for.
         """
         woken = self.ping_now_event.is_set()
         self.ping_now_event.clear()
+        for worker_handler in list(self.worker_handler_map.values()):
+            if worker_handler.state in DEAD_STATES:
+                worker_handler.envelope_handler.report_death()
         await self.ping_workers()
         await self.check_occupancy(now=woken)
 

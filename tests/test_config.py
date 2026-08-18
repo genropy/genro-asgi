@@ -43,6 +43,7 @@ from genro_asgi.__main__ import AppsRegistry
 from genro_asgi.config import HOME_ENV, BaseConfiguration, DefaultConfig
 from genro_asgi.exceptions import HTTPUnauthorized
 from genro_asgi.middleware.base import BaseMiddleware
+from genro_asgi.spa.orchestration import GroupHandler, SpaCommander
 from genro_asgi.storage_mixin import DEFAULT_SITE_MOUNT
 from genro_asgi.types import Message, Receive, Scope, Send
 
@@ -683,6 +684,171 @@ class TestTasksConfig:
 
         with pytest.raises(ValueError, match="parent"):
             ConfigurationHandler(StrayChildConfig)
+
+
+class SpaPoolConfig(AsgiConfigBuilder):
+    """The ``commander`` section with every key of both rungs, and two groups.
+
+    The second group declares nothing but its child: what it leaves out is what
+    the objects' own defaults answer for, which is the read stack's whole
+    contract.
+    """
+
+    def main(self, root: Any) -> None:
+        cfg = root.configuration()
+        cfg.server(host="127.0.0.1", port=8000)
+        cfg.applications().application(code="shop", mount="", app_class=ShopApp)
+        self.commander_section(cfg)
+
+    def commander_section(self, cfg: Any) -> None:
+        """The vertex, then its groups: stable and canary, two interpreters."""
+        commander = cfg.commander(
+            frozen_users_path="/srv/shop/frozen_users",
+            instance_dir="/srv/shop/instance",
+            memory_max_percent=75.0,
+            machine_memory_alarm_percent=85.0,
+            orchestration_log_path="/srv/shop/logs/orchestration.log",
+            orchestration_log_max_bytes=2_000_000,
+            orchestration_log_backup_count=3,
+            user_expiry_hours=480.0,
+            guest_expiry_hours=12.0,
+        )
+        groups = commander.groups()
+        groups.group(
+            name="stable",
+            memory_max_percent=80.0,
+            worker_memory_max_percent=40.0,
+            occupancy_max_percent=70.0,
+            restart_occupancy_max_percent=90.0,
+            reception_reserved_percent=30.0,
+            new_user_occupancy_percent=4.0,
+            user_idle_freeze_minutes=45.0,
+            entry_module="genro_asgi.spa.orchestration.worker_entry",
+            executable="/srv/shop/.venvs/stable/bin/python",
+            worker_class="myshop.app:ShopWorker",
+            main_threadpool_size=8,
+            aux_threadpool_size=2,
+            worker_kwargs={"site_path": "/srv/shop"},
+        )
+        groups.group(name="canary", entry_module="genro_asgi.spa.orchestration.worker_entry")
+
+
+class TestCommanderSection:
+    """``commander`` → the vertex's kwargs, and one kwargs set per group."""
+
+    def test_the_vertex_reads_its_own_policies_and_not_the_workers_path(self) -> None:
+        handler = ConfigurationHandler(SpaPoolConfig)
+
+        assert handler.commander_kwargs() == {
+            "frozen_users_path": "/srv/shop/frozen_users",
+            "memory_max_percent": 75.0,
+            "machine_memory_alarm_percent": 85.0,
+            "orchestration_log_path": "/srv/shop/logs/orchestration.log",
+            "orchestration_log_max_bytes": 2_000_000,
+            "orchestration_log_backup_count": 3,
+            "user_expiry_hours": 480.0,
+            "guest_expiry_hours": 12.0,
+        }
+
+    def test_a_group_reads_its_policies_the_two_paths_and_its_childs_identity(self) -> None:
+        groups = ConfigurationHandler(SpaPoolConfig).group_kwargs()
+
+        assert set(groups) == {"stable", "canary"}
+        assert groups["stable"] == {
+            "frozen_users_path": "/srv/shop/frozen_users",
+            "instance_dir": "/srv/shop/instance",
+            "memory_max_percent": 80.0,
+            "worker_memory_max_percent": 40.0,
+            "occupancy_max_percent": 70.0,
+            "restart_occupancy_max_percent": 90.0,
+            "reception_reserved_percent": 30.0,
+            "new_user_occupancy_percent": 4.0,
+            "entry_module": "genro_asgi.spa.orchestration.worker_entry",
+            "executable": "/srv/shop/.venvs/stable/bin/python",
+            "worker_class": "myshop.app:ShopWorker",
+            "main_threadpool_size": 8,
+            "aux_threadpool_size": 2,
+            # The keys the CHILD reads are his: his group's name, and the silence
+            # he measures himself.
+            "worker_kwargs": {
+                "site_path": "/srv/shop",
+                "group": "stable",
+                "user_idle_freeze_minutes": 45.0,
+            },
+        }
+
+    def test_a_group_that_declares_only_its_child_leaves_every_default_alone(self) -> None:
+        canary = ConfigurationHandler(SpaPoolConfig).group_kwargs()["canary"]
+
+        assert canary == {
+            "frozen_users_path": "/srv/shop/frozen_users",
+            "instance_dir": "/srv/shop/instance",
+            "entry_module": "genro_asgi.spa.orchestration.worker_entry",
+            "worker_kwargs": {"group": "canary"},
+        }
+
+    def test_the_pool_keys_reach_the_vertex_and_the_group_that_read_them(self, tmp_path) -> None:
+        groups = ConfigurationHandler(SpaPoolConfig).group_kwargs()
+        commander_kwargs = ConfigurationHandler(SpaPoolConfig).commander_kwargs()
+        commander_kwargs["frozen_users_path"] = tmp_path / "frozen_users"
+        commander_kwargs["orchestration_log_path"] = tmp_path / "orchestration.log"
+
+        commander = SpaCommander(**commander_kwargs)
+        group = GroupHandler(
+            commander,
+            "stable",
+            memory_concession_bytes=commander.memory_concession_bytes,
+            **dict(
+                groups["stable"],
+                instance_dir=tmp_path / "instance",
+                frozen_users_path=tmp_path / "frozen_users",
+            ),
+        )
+
+        assert commander.memory_max_percent == 75.0
+        assert commander.machine_memory_alarm_percent == 85.0
+        assert commander.user_expiry_hours == 480.0
+        assert group.occupancy_max_percent == 70.0
+        assert group.restart_occupancy_max_percent == 90.0
+        assert group.reception_reserved_percent == 30.0
+        assert group.new_user_occupancy_percent == 4.0
+        assert group.memory_max_percent == 80.0
+        assert group.worker_memory_max_percent == 40.0
+        # And what the group hands its workers is what a WorkerHandler is built
+        # with: the identity of the child, the two paths, the child's own kwargs.
+        assert group.worker_settings == {
+            "frozen_users_path": tmp_path / "frozen_users",
+            "instance_dir": tmp_path / "instance",
+            "entry_module": "genro_asgi.spa.orchestration.worker_entry",
+            "executable": "/srv/shop/.venvs/stable/bin/python",
+            "worker_class": "myshop.app:ShopWorker",
+            "main_threadpool_size": 8,
+            "aux_threadpool_size": 2,
+            "worker_kwargs": {
+                "site_path": "/srv/shop",
+                "group": "stable",
+                "user_idle_freeze_minutes": 45.0,
+            },
+        }
+
+    def test_a_site_with_no_pool_declares_no_group(self) -> None:
+        handler = ConfigurationHandler(TwoAppConfig)
+        assert handler.commander_kwargs() == {}
+        assert handler.group_kwargs() == {}
+
+    def test_the_pool_section_travels_through_a_real_server(self) -> None:
+        server = AsgiServer(config=SpaPoolConfig)
+        assert server.config.commander_kwargs()["memory_max_percent"] == 75.0
+        assert set(server.config.group_kwargs()) == {"stable", "canary"}
+
+    def test_a_group_outside_its_collection_is_rejected_by_the_grammar(self) -> None:
+        class StrayGroupConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                cfg = root.configuration()
+                cfg.commander().group(name="stable")
+
+        with pytest.raises(ValueError, match="parent"):
+            ConfigurationHandler(StrayGroupConfig)
 
 
 class ParametrizedShop(ShopApp):
