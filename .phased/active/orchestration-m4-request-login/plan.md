@@ -530,12 +530,15 @@ item, freezer, check, timeout, restart, congelamento per inattività.
   > two orders, zero scenario — extracted to `x_spa_worker.py` as `X_SpaWorker`,
   > with the M3 end-to-end switched from defining to importing and its own child
   > renamed `X_SpaWorker_m3` beside this phase's `X_SpaWorker_m4`.
-  > Left open, to be closed before the end-of-macro review: `_release_login_rows`
-  > deletes the receiving identity's row without announcing it, so a handler keeps
-  > a stale name in `hosted_users` — after chapter 6 `std_0002` still lists `mario`
-  > though it holds nothing of his, and a wild death there would report the loss of
-  > a user who lives elsewhere. Same ledger as the M3 review finding, opposite
-  > sign.
+  > A second defect of the same ledger, found here and CLOSED in its own commit
+  > right after this one: `_release_login_rows` deleted the receiving identity's
+  > row without announcing it, so a handler kept a stale name in `hosted_users` —
+  > and `report_death` puts a stale name among `lost_users`, which at the vertex
+  > means `drop_user`: row, connections, pages and freezer folder of a person who
+  > was alive and resident elsewhere. The tail now announces `user_rows_released`,
+  > an op only `WorkerEnvelopeHandler` folds — the dispatch skips what no rung
+  > declares, so the group's placement and the vertex's indexes, which point at his
+  > real home, are untouched.
   > Files: src/genro_asgi/spa/orchestration/envelope_handler.py, tests/conftest.py,
   > tests/test_spa_app_new.py, tests/orchestration/x_spa_worker.py,
   > tests/orchestration/test_orchestration_m3_e2e.py,

@@ -263,7 +263,14 @@ CLOCK_NAMES = ("last_refresh_ts", "last_user_ts", "last_rpc_ts")
 # The worker events that mean the population changed — a user entering or
 # leaving — and therefore that the next envelope out owes a fresh photo.
 POPULATION_WORKER_EVENTS = frozenset(
-    {"new_user", "drop_user", "user_frozen", "user_adopted", "connection_relabeled"}
+    {
+        "new_user",
+        "drop_user",
+        "user_frozen",
+        "user_adopted",
+        "connection_relabeled",
+        "user_rows_released",
+    }
 )
 
 __all__ = [
@@ -1643,6 +1650,13 @@ class SpaWorker:
         throw away the store his connection is carrying. A previous identity that
         is NOT a guest STAYS, empty if this was his last connection: he is a
         person the machine knows, and the idleness sweep is what parks him.
+
+        Losing that row is ANNOUNCED, and with a word of its own: he has not gone
+        to the deposit and he has not left the machine — he lives wherever he
+        lived before this login, and the only rung that has to hear it is the
+        handler of this process, whose list of who is on board is what a wild
+        death is settled on. A death reading a name whose rows are gone would
+        report the loss of somebody who is perfectly well somewhere else.
         """
         item = self._connection_register.pop(cid)
         for page_id in item["pages"]:
@@ -1654,6 +1668,7 @@ class SpaWorker:
             resident["connections"].discard(cid)
             if not resident["connections"]:
                 del self._user_register[user]
+                self.add_worker_event("user_rows_released", user=user)
 
     def _release_rows(self, user: str) -> None:
         """Take a user's rows out of memory, saying nothing: his departure said it.

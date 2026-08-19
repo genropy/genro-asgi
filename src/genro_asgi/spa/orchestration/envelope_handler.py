@@ -250,6 +250,13 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
         """A user has left this process: he is not one of its own any more."""
         self.worker_handler.hosted_users.discard(worker_event["user"])
 
+    #: The tail of a login says the same thing at this rung with a word of its
+    #: own: the rows are gone from that process, and the person went NOWHERE —
+    #: he lives where he lived. It stops here on purpose: the group's placement
+    #: and the vertex's indexes point at his real home and must not be touched,
+    #: and the dispatch skips an op no handler of a rung declares.
+    on_user_rows_released = on_user_frozen
+
     #: Leaving for good says the same thing at this rung: he is not in this
     #: process's memory. Where he went is read one layer up, and a row about to
     #: die needs no estimate — the stamp above touches the frozen alone.

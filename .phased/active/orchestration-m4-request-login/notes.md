@@ -172,12 +172,24 @@ raised. Both folds now ask `GUEST_PREFIX`, which is what the register one rung
 down had always said (`_release_login_rows`). Neutralization verified by
 reverting the fix: the e2e fails on the trail of the second browser.
 
-**Declared, and to be closed within this macro**: the tail of a login deletes the
-receiving identity's row when that connection was all he had on the worker, and
-announces nothing — so `WorkerHandler.hosted_users` keeps a name whose rows are
-gone. After chapter 6 `std_0002` still lists `mario`, who lives on `std_0001`; a
-wild death of `std_0002` would report the loss of a user who is fine. It is the
-same ledger as the M3 review finding on `hosted_users` (readers and no writer),
-with the opposite sign, and it is a change to the protocol of the login — the
-worker announcing a consequence instead of a fact — so it gets its own interview
-and its own commit, before the end-of-macro review.
+**The second defect, interviewed and closed in its own commit.** The tail of a
+login deletes the receiving identity's row when that connection was all he had on
+the worker, and announced nothing — so `WorkerHandler.hosted_users` kept a name
+whose rows were gone. It is not only a stale reading: `report_death` computes
+`lost_users` as `hosted_users` minus the flagged, and at the vertex a lost user is
+`drop_user`, which forgets him WHOLE, freezer folder included. The scenario that
+proves it: the second browser of a resident logs in on the spare worker, that
+worker dies wild, and the person — alive, resident on the reception, with his
+connection parcel in the deposit — is erased. Probed by neutralization twice:
+without the announcement the sentinel falls, and with the sentinel removed too the
+death consequence falls on its own (`vertex.user_map` comes back empty).
+
+The fix is one op, `user_rows_released`, folded ONLY by `WorkerEnvelopeHandler`.
+The name says what left — the ROWS — because the two neighbouring facts exist and
+mean something else: `user_frozen` is a departure for the deposit, `drop_user` is
+leaving the machine, and `await_user_release` (phase 1) already owns the reading
+"the wait on him has fallen", which is why the shorter `user_released` was
+refused. Nothing was added to the upper rungs: `work_on_envelope` dispatches with
+`getattr(self, f"on_{op}", None)`, so an op no rung declares dies at the first
+one, and the group's placement and the vertex's indexes — which point at the
+person's real home — are untouched by construction.

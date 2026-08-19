@@ -80,10 +80,11 @@ import pytest
 
 from genro_asgi import AsgiServer
 from genro_asgi.applications.spa_app_new import STICKY_CID_COOKIE
-from genro_asgi.spa.orchestration import GroupHandler
+from genro_asgi.spa.orchestration import FreezeHandler, GroupHandler
 from genro_asgi.spa.orchestration.spa_commander import GUEST_PREFIX
 
 from ..conftest import LifespanRunner, ask_app, get_answer_header
+from .conftest import wait_for
 from .x_spa_worker import EXECUTE_ORDER, PLAN_ORDER, X_SpaWorker
 
 #: The front that owns the pool of this story, and its two groups: the one the
@@ -117,6 +118,7 @@ FULL_CONCESSION_BYTES = 85_000_000
 RETRY_AFTER = "30"
 
 CALL_TIMEOUT = 10.0
+DEATH_TIMEOUT = 15.0
 
 #: Mario's whole day by the sixth chapter, in the order he lived it: two pages as
 #: a guest, the login that was still served under that guest, then everything he
@@ -402,3 +404,56 @@ async def test_a_day_of_the_site_from_the_front_to_the_child(server):
     assert vertex.counters["requests_refused"] == 1
     assert resident["status"] == 200
     assert identity_of(resident) == "mario"
+
+
+async def test_a_death_where_nothing_of_his_is_left_does_not_take_him(server, story_root):
+    """A worker that released a person's rows must not report his loss when it dies.
+
+    The tail of a login takes the receiving identity's rows out of the process
+    when that connection was all he had there — he lives wherever he lived
+    before. Until that was announced, the handler kept his name among the ones on
+    board, and a wild death of THAT process reported him among the lost: the
+    vertex forgot his row, his connections and everything of his in the deposit,
+    while he was being served by another process the whole time.
+    """
+    front = server.applications[APP_CODE]
+    vertex = front.commander
+    group = vertex.group_map[BASE_GROUP]
+    reception = group.reception
+    freezer = FreezeHandler(story_root / "frozen_users")
+
+    first = await browse(server, "/catalog")
+    cid = minted_cid(first)
+    await browse(server, f"{LOGIN_PATH}mario", cid)
+    await browse(server, "/orders", cid)
+
+    # A second process, and the second browser of the same person on it: his
+    # login leaves nothing of him there, and the deposit holds his connection.
+    group.memory_concession_bytes = GROWTH_CONCESSION_BYTES
+    await group.check_occupancy(now=True)
+    spare = group.worker_handler_map[f"{BASE_GROUP}_0002"]
+    joining = await browse(server, "/joining")
+    second_cid = minted_cid(joining)
+    await browse(server, f"{LOGIN_PATH}mario", second_cid)
+
+    assert served_by(joining) == spare.name
+    assert "mario" not in spare.hosted_users
+    assert freezer.read_connection_register_item("mario", second_cid) is not None
+
+    # That process dies wild, and the round settles the death.
+    spare.process.kill()
+    await wait_for(lambda: spare.state == "aborted", timeout=DEATH_TIMEOUT)
+    await group.ping()
+
+    assert spare.name not in group.worker_handler_map
+    # Nothing of his went with it: the row, the two connections, the deposit.
+    assert "mario" in vertex.user_map
+    assert vertex.connection_user_map[cid] == "mario"
+    assert vertex.connection_user_map[second_cid] == "mario"
+    assert group.user_worker_map["mario"] == reception.name
+    assert freezer.read_connection_register_item("mario", second_cid) is not None
+    # And he is served as ever, with everything he has done still under him.
+    served = await browse(server, "/orders/9", cid)
+
+    assert served_by(served) == reception.name
+    assert trail_of(served) == f"/catalog {LOGIN_PATH}mario /orders /orders/9"
