@@ -527,9 +527,13 @@ item, freezer, check, timeout, restart, congelamento per inattività.
   > only place both classes of test reach by
   > construction), the poor siblings left alone with the coexistence declared in
   > the docstring; the child's INSTRUMENTATION — declared memory and the driver's
-  > two orders, zero scenario — extracted to `x_spa_worker.py` as `X_SpaWorker`,
-  > with the M3 end-to-end switched from defining to importing and its own child
-  > renamed `X_SpaWorker_m3` beside this phase's `X_SpaWorker_m4`.
+  > two orders — extracted to `x_spa_worker.py` as `X_SpaWorker`, with the M3
+  > end-to-end switched from defining to importing and its own child renamed
+  > `X_SpaWorker_m3` beside this phase's `X_SpaWorker_m4`. The module carries no
+  > scenario LOGIC, which is what the extraction was for; its PROSE still says
+  > "story" seven times, and the end-to-end this phase wrote says it eighteen —
+  > so the vocabulary residue the ruling of the day left behind is 25 occurrences
+  > wider than the inventory that named only the M3 end-to-end and this plan.
   > A second defect of the same ledger, found here and CLOSED in its own commit
   > right after this one: `_release_login_rows` deleted the receiving identity's
   > row without announcing it, so a handler kept a stale name in `hosted_users` —
@@ -612,6 +616,24 @@ item, freezer, check, timeout, restart, congelamento per inattività.
   renaming the ones already there is the retrofit below. Technically free: ruff
   selects only E4/E7/E9/F here (no pep8-naming), mypy excludes `tests/`, and
   neither prefix collides with pytest collection.
+- **Correction to this phase's own record**, found by the end-of-macro review:
+  the extraction of the instrumentation was recorded as carrying "zero scenario".
+  What it carries none of is scenario LOGIC — each story's site stays in its own
+  file, which is what the boundary was for — but its PROSE says "story" seven
+  times, and the end-to-end this phase wrote says it eighteen. The residue is 25
+  occurrences wider than the inventory that named only the M3 end-to-end and this
+  plan's text. A record claim stronger than the truth is the same class of defect
+  the M3 review caught three times, so it is corrected in the record itself
+  rather than left to the cleanup.
+- **A name says WHICH PROPERTY changed, never the container it is written on**
+  (ratified 2026-08-19). `connection_relabeled` said that a label had been
+  rewritten, which names nothing: a thing can carry a price label and an owner
+  label, and "relabelled" does not say which one moved. The property that
+  changes at a login is the USER of that connection, and this codebase already
+  calls it `connection_user` (`connection_user_map`). So the verb is
+  `change_connection_user` — which is also the daemon's own name for the same
+  act — and the fact it announces is `connection_user_changed`, folded by
+  `on_connection_user_changed`. Verb, event and index now say the same two words.
 - **Vocabulary**: the word *story* leaves this workflow's prose — say SCENARIO. It
   still stands in the docstrings of the M3 end-to-end and in the phase 5 text of
   this plan; the cleanup is its own decision, not a passing edit.

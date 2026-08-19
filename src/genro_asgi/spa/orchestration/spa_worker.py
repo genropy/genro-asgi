@@ -268,7 +268,7 @@ POPULATION_WORKER_EVENTS = frozenset(
         "drop_user",
         "user_frozen",
         "user_adopted",
-        "connection_relabeled",
+        "connection_user_changed",
         "user_rows_released",
     }
 )
@@ -955,7 +955,7 @@ class SpaWorker:
             return
         self._user_register[user]["store"] = store
 
-    def relabel_connection(self, cid: str, user: str, **fields: Any) -> None:
+    def change_connection_user(self, cid: str, user: str, **fields: Any) -> None:
         """The login: this connection stops being anonymous and becomes his.
 
         Args:
@@ -994,7 +994,7 @@ class SpaWorker:
             if previous_user.startswith(GUEST_PREFIX):
                 self._transfer_flags.pop(previous_user, None)
             self.add_worker_event(
-                "connection_relabeled", user=user, previous_user=previous_user, session_id=cid
+                "connection_user_changed", user=user, previous_user=previous_user, session_id=cid
             )
 
     def open_request(self, user: str) -> None:

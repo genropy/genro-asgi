@@ -524,7 +524,7 @@ class SpaCommander:
             self.counters["frozen_users_discarded"] += 1
         return had_state
 
-    def relabel_connection(self, cid: str, user: str, previous_user: str) -> None:
+    def change_connection_user(self, cid: str, user: str, previous_user: str) -> None:
         """The login, as the surface sees it: a connection changes owner.
 
         Args:

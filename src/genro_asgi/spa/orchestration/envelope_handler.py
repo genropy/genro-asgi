@@ -232,7 +232,7 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
                     worker_event["occupancy_percent"] = estimate
         super().work_on_envelope(envelope)
 
-    def on_connection_relabeled(self, worker_event: dict[str, Any]) -> None:
+    def on_connection_user_changed(self, worker_event: dict[str, Any]) -> None:
         """A login: the person arrives, and only a GUEST leaves with his connection.
 
         Who is on board is what a wild death is judged on, so a process that dies
@@ -289,7 +289,7 @@ class GroupEnvelopeHandler(EnvelopeHandler):
         if occupancy_percent > group_handler.restart_occupancy_max_percent:
             group_handler.ping_now()
 
-    def on_connection_relabeled(self, worker_event: dict[str, Any]) -> None:
+    def on_connection_user_changed(self, worker_event: dict[str, Any]) -> None:
         """A GUEST logged in: the placement was his alone, and it goes with him.
 
         A previous identity that is not a guest keeps his: he lives where he
@@ -379,9 +379,9 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
         """A user is gone: his row, his connections and whatever was waiting for him."""
         self.spa_commander.drop_user(worker_event["user"])
 
-    def on_connection_relabeled(self, worker_event: dict[str, Any]) -> None:
+    def on_connection_user_changed(self, worker_event: dict[str, Any]) -> None:
         """A connection changed owner: the surface says so, and decides nothing."""
-        self.spa_commander.relabel_connection(
+        self.spa_commander.change_connection_user(
             worker_event["session_id"], worker_event["user"], worker_event["previous_user"]
         )
 

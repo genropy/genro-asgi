@@ -189,7 +189,7 @@ class X_SpaWorker_m4(X_SpaWorker):
         identity = environ["genro.identity"]
         path = environ["PATH_INFO"]
         if path.startswith(LOGIN_PATH):
-            self.relabel_connection(cid_of(environ), path[len(LOGIN_PATH) :])
+            self.change_connection_user(cid_of(environ), path[len(LOGIN_PATH) :])
         with self.dispatch_lock:
             store = self.user_register[identity]["store"]
             store["trail"] = f"{store['trail'] or ''}{path} "

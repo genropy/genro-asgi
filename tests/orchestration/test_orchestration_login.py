@@ -77,7 +77,7 @@ def events_of(worker: SpaWorker, op: str) -> list[dict]:
 async def test_the_connection_changes_owner_in_the_same_breath(worker):
     guest = browsing_guest(worker)
 
-    worker.relabel_connection("a1b2", "mario", user_tags="admin")
+    worker.change_connection_user("a1b2", "mario", user_tags="admin")
 
     # The caller reads the row back at once and must see the new identity.
     assert worker.connection_register["a1b2"]["user"] == "mario"
@@ -92,7 +92,7 @@ async def test_the_connection_changes_owner_in_the_same_breath(worker):
 async def test_the_new_identity_is_born_empty(worker):
     browsing_guest(worker)
 
-    worker.relabel_connection("a1b2", "mario")
+    worker.change_connection_user("a1b2", "mario")
 
     assert worker.user_register["mario"]["store"] == Bag()
 
@@ -101,12 +101,12 @@ async def test_nobody_logs_in_as_a_guest(worker):
     browsing_guest(worker)
 
     with pytest.raises(ValueError):
-        worker.relabel_connection("a1b2", "guest_somebody")
+        worker.change_connection_user("a1b2", "guest_somebody")
 
 
 async def test_a_connection_this_worker_never_saw_is_loud(worker):
     with pytest.raises(KeyError):
-        worker.relabel_connection("nobody", "mario")
+        worker.change_connection_user("nobody", "mario")
 
 
 async def test_the_departure_promised_to_the_guest_is_dropped(worker):
@@ -114,7 +114,7 @@ async def test_the_departure_promised_to_the_guest_is_dropped(worker):
     guest = browsing_guest(worker)
     worker.plan_transfers(transfer_users=[guest])
 
-    worker.relabel_connection("a1b2", "mario")
+    worker.change_connection_user("a1b2", "mario")
 
     assert worker._transfer_flags == {}
 
@@ -123,11 +123,11 @@ async def test_the_departure_promised_to_a_real_identity_survives_his_avatar_swi
     """R8 admits the real prior, and a prior that stays keeps the departure he was promised."""
     worker.add_connection("a1b2")
     worker.add_connection("c3d4")
-    worker.relabel_connection("a1b2", "mario")
-    worker.relabel_connection("c3d4", "mario")
+    worker.change_connection_user("a1b2", "mario")
+    worker.change_connection_user("c3d4", "mario")
     worker.plan_transfers(transfer_users=["mario"])
 
-    worker.relabel_connection("a1b2", "carlo")
+    worker.change_connection_user("a1b2", "carlo")
 
     assert worker._transfer_flags == {"mario": "T"}
 
@@ -141,20 +141,20 @@ async def test_an_avatar_switch_does_not_strand_the_wait_on_the_person_who_stays
     on hold with nothing left able to clear it: every other browser of his would
     wait out the whole budget and be answered 503, at every request, forever.
     """
-    group, worker_handler = relabel_rungs(tmp_path)
+    group, worker_handler = login_rungs(tmp_path)
     vertex = group.spa_commander
     worker = SpaWorker(WORKER_NAME, freeze_handler=FreezeHandler(tmp_path / "frozen_users"))
     worker.add_connection("a1b2")
     worker.add_connection("c3d4")
-    worker.relabel_connection("a1b2", "mario")
-    worker.relabel_connection("c3d4", "mario")
+    worker.change_connection_user("a1b2", "mario")
+    worker.change_connection_user("c3d4", "mario")
     worker.worker_events.clear()
     vertex.connection_user_map["c3d4"] = "mario"
     vertex.user_map["mario"] = vertex._new_row()
 
     worker.plan_transfers(transfer_users=["mario"])
     vertex.hold_user("mario", "transfer_flag T")
-    worker.relabel_connection("a1b2", "carlo")
+    worker.change_connection_user("a1b2", "carlo")
     await worker.execute_transfers()
     worker_handler.read_envelope({"worker_events": list(worker.worker_events)})
 
@@ -166,11 +166,11 @@ async def test_an_avatar_switch_does_not_strand_the_wait_on_the_person_who_stays
 async def test_the_login_travels_on_the_reply(worker):
     guest = browsing_guest(worker)
 
-    worker.relabel_connection("a1b2", "mario")
+    worker.change_connection_user("a1b2", "mario")
 
-    assert events_of(worker, "connection_relabeled") == [
+    assert events_of(worker, "connection_user_changed") == [
         {
-            "op": "connection_relabeled",
+            "op": "connection_user_changed",
             "worker": WORKER_NAME,
             "user": "mario",
             "previous_user": guest,
@@ -194,7 +194,7 @@ async def test_a_login_makes_the_photo_due(worker):
     worker._snapshot_sent_ts = time.time()
     assert worker._snapshot_due is False
 
-    worker.relabel_connection("a1b2", "mario")
+    worker.change_connection_user("a1b2", "mario")
 
     assert worker._snapshot_due is True
 
@@ -206,7 +206,7 @@ async def test_nothing_leaves_before_the_call_is_over(worker, deposit):
     browsing_guest(worker)
     worker.open_request("guest_a1b2")
 
-    worker.relabel_connection("a1b2", "mario")
+    worker.change_connection_user("a1b2", "mario")
 
     # Mid-call the rows are all still here: the site goes on serving under the
     # new identity, and the deposit has seen nothing.
@@ -217,7 +217,7 @@ async def test_nothing_leaves_before_the_call_is_over(worker, deposit):
 async def test_the_tail_carries_the_connection_and_the_guests_store(worker, deposit):
     guest = browsing_guest(worker)
 
-    worker.relabel_connection("a1b2", "mario")
+    worker.change_connection_user("a1b2", "mario")
     assert await worker.freeze_connection("a1b2") is True
 
     # On disk, under the identity he logged in as.
@@ -238,7 +238,7 @@ async def test_an_avatar_switch_carries_no_store(worker, deposit):
     worker.add_connection("c3d4", "mario")
     worker.user_register["mario"]["store"]["cart.item"] = "a lamp"
 
-    worker.relabel_connection("a1b2", "carlo")
+    worker.change_connection_user("a1b2", "carlo")
     assert await worker.freeze_connection("a1b2") is True
 
     parcel = deposit.read_connection_register_item("carlo", "a1b2")
@@ -249,7 +249,7 @@ async def test_an_avatar_switch_carries_no_store(worker, deposit):
 
 async def test_a_deposit_that_refuses_leaves_everything_alive(worker, monkeypatch):
     guest = browsing_guest(worker)
-    worker.relabel_connection("a1b2", "mario")
+    worker.change_connection_user("a1b2", "mario")
 
     def refuse(*args, **kwargs):
         raise OSError("the disk is full")
@@ -285,7 +285,7 @@ async def test_a_folder_that_never_comes_free_leaves_everything_alive_too(tmp_pa
         deposit_lock_wait_limit=0.05,
     )
     guest = browsing_guest(worker)
-    worker.relabel_connection("a1b2", "mario")
+    worker.change_connection_user("a1b2", "mario")
     # Somebody else is inside mario's folder and does not come out.
     assert deposit.take_lock("mario", "standard_0002") is True
 
@@ -320,7 +320,7 @@ async def test_a_departure_that_gave_up_does_not_hold_the_process_here(tmp_path)
         transfer_start_delay=0.0,
     )
     browsing_guest(worker)
-    worker.relabel_connection("a1b2", "mario")
+    worker.change_connection_user("a1b2", "mario")
     deposit.take_lock("mario", "standard_0002")
     await worker.freeze_connection("a1b2")
 
@@ -335,7 +335,7 @@ async def test_a_departure_that_gave_up_does_not_hold_the_process_here(tmp_path)
 
 async def test_the_guests_store_becomes_his_own_on_a_row_just_born(worker, deposit):
     browsing_guest(worker)
-    worker.relabel_connection("a1b2", "mario")
+    worker.change_connection_user("a1b2", "mario")
     await worker.freeze_connection("a1b2")
 
     await worker.adopt_connection("mario", "a1b2")
@@ -347,7 +347,7 @@ async def test_the_guests_store_becomes_his_own_on_a_row_just_born(worker, depos
 async def test_a_resident_keeps_his_own_store_and_the_guests_dies(worker, deposit):
     """The RESIDENT wins, applied where the resident is."""
     browsing_guest(worker)
-    worker.relabel_connection("a1b2", "mario")
+    worker.change_connection_user("a1b2", "mario")
     await worker.freeze_connection("a1b2")
     # He is already living here under another connection of his own.
     worker.add_connection("c3d4", "mario")
@@ -367,7 +367,7 @@ async def test_the_user_parcel_is_installed_before_the_connection_one(worker, de
     of hibernated state. A failure here is a STOP, never a test to adapt.
     """
     browsing_guest(worker)
-    worker.relabel_connection("a1b2", "mario")
+    worker.change_connection_user("a1b2", "mario")
     await worker.freeze_connection("a1b2")
     deposit.take_lock("mario", "standard_0002")
     hibernated = Bag()
@@ -389,7 +389,7 @@ async def test_the_fold_repoints_the_cookie_and_forgets_the_guest(tmp_path):
     vertex = SpaCommander(tmp_path / "frozen_users")
     guest = vertex.resolve_user("a1b2")
 
-    vertex.relabel_connection("a1b2", "mario", guest)
+    vertex.change_connection_user("a1b2", "mario", guest)
 
     assert vertex.connection_user_map["a1b2"] == "mario"
     assert "mario" in vertex.user_map
@@ -401,13 +401,13 @@ async def test_the_fold_keeps_a_real_previous_identity(tmp_path):
     vertex.connection_user_map["a1b2"] = "mario"
     vertex.resolve_user("a1b2")
 
-    vertex.relabel_connection("a1b2", "carlo", "mario")
+    vertex.change_connection_user("a1b2", "carlo", "mario")
 
     assert vertex.connection_user_map["a1b2"] == "carlo"
     assert "mario" in vertex.user_map
 
 
-def relabel_rungs(tmp_path) -> tuple[GroupHandler, WorkerHandler]:
+def login_rungs(tmp_path) -> tuple[GroupHandler, WorkerHandler]:
     """The two rungs under the vertex, over a group whose child is never launched."""
     vertex = SpaCommander(tmp_path / "frozen_users")
     group = GroupHandler(
@@ -421,12 +421,12 @@ def relabel_rungs(tmp_path) -> tuple[GroupHandler, WorkerHandler]:
     return group, WorkerHandler(group, WORKER_NAME, **group.worker_settings)
 
 
-def relabel_envelope(user: str, previous_user: str) -> dict[str, Any]:
+def user_changed_envelope(user: str, previous_user: str) -> dict[str, Any]:
     """The envelope a login climbs on, as the worker composes it."""
     return {
         "worker_events": [
             {
-                "op": "connection_relabeled",
+                "op": "connection_user_changed",
                 "worker": WORKER_NAME,
                 "user": user,
                 "previous_user": previous_user,
@@ -438,12 +438,12 @@ def relabel_envelope(user: str, previous_user: str) -> dict[str, Any]:
 
 async def test_the_handler_swaps_who_it_holds(tmp_path):
     """A death between the login and the tail must not report a guest nobody knows."""
-    _group, worker_handler = relabel_rungs(tmp_path)
+    _group, worker_handler = login_rungs(tmp_path)
     worker_handler.read_envelope(
         {"worker_events": [{"op": "new_user", "worker": WORKER_NAME, "user": "guest_a1b2"}]}
     )
 
-    worker_handler.read_envelope(relabel_envelope("mario", "guest_a1b2"))
+    worker_handler.read_envelope(user_changed_envelope("mario", "guest_a1b2"))
 
     assert worker_handler.hosted_users == {"mario"}
 
@@ -458,13 +458,13 @@ async def test_a_previous_identity_who_is_no_guest_keeps_his_place(tmp_path):
     and the register the worker keeps says so too: he stays, and the idleness
     sweep is what parks him.
     """
-    group, worker_handler = relabel_rungs(tmp_path)
+    group, worker_handler = login_rungs(tmp_path)
     worker_handler.read_envelope(
         {"worker_events": [{"op": "new_user", "worker": WORKER_NAME, "user": "mario"}]}
     )
     group.user_worker_map["mario"] = WORKER_NAME
 
-    worker_handler.read_envelope(relabel_envelope("mario_admin", "mario"))
+    worker_handler.read_envelope(user_changed_envelope("mario_admin", "mario"))
 
     assert worker_handler.hosted_users == {"mario", "mario_admin"}
     assert group.user_worker_map["mario"] == WORKER_NAME
