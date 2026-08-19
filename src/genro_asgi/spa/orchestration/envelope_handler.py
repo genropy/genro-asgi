@@ -176,6 +176,13 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
 
         Raises:
             ValueError: the process has not ended.
+
+        Who is LOST is the crossing of two lists, and neither alone would do.
+        Somebody the group placed here but who never arrived has lost nothing —
+        what is his is still in the deposit and he only wants placing again — and
+        somebody this process merely had in memory while living somewhere else
+        has lost nothing either: his home is another process, and the connection
+        of his that was passing through here is the only thing that goes.
         """
         state = self.worker_handler.state
         if state not in ("quitted", "aborted"):
@@ -191,9 +198,15 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
             "worker": self.worker_handler.name,
             "users": sorted(users),
             "frozen_users": sorted(frozen),
-            "lost_users": sorted(users - frozen),
+            "lost_users": sorted((users & self._assigned_users) - frozen),
         }
         return self({WORKER_EVENTS_KEY: [worker_event]})
+
+    @property
+    def _assigned_users(self) -> set[str]:
+        """Whom the group places on this worker — where each of them LIVES."""
+        placements = self.worker_handler.group_handler.user_worker_map
+        return {user for user, name in placements.items() if name == self.worker_handler.name}
 
     def on_worker_snapshot(self, photo: dict[str, Any]) -> None:
         """File the photo as this handler's latest: the gauges everybody judges on."""

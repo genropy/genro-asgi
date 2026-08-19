@@ -276,19 +276,36 @@ class WorkerConnector:
     def _dispatch(self, frame: Frame) -> None:
         """Route one inbound frame: a REPLY is read then resolved, and there is no other lane."""
         if frame.method == REPLY_METHOD:
-            self._take_envelope(frame)
+            refused = self._take_envelope(frame)
             self._resolve_reply(frame)
+            if refused:
+                asyncio.ensure_future(
+                    self.worker_handler.group_handler.kill_worker_TBD(
+                        self.worker_handler, "fold_refused"
+                    )
+                )
         else:
             self._logger.warning(
                 "Unexpected envelope %s from the child on %s", frame.method, self.socket_path.name
             )
 
-    def _take_envelope(self, frame: Frame) -> None:
+    def _take_envelope(self, frame: Frame) -> bool:
         """Push the envelope into the fold before the caller is answered.
 
-        Whatever it composed for the descent is dropped: nothing goes down in
-        answer to an answer. A fold that raises is denounced and the caller is
-        answered anyway.
+        Args:
+            frame: the REPLY as it came off the wire.
+
+        Returns:
+            Whether the fold refused it — which the caller turns into the death
+            of this process.
+
+        Whatever the fold composed for the descent is dropped: nothing goes down
+        in answer to an answer. A fold that raises is a divergence that already
+        happened: the single writer of the parent's surface could not apply what
+        the child said, the child drained those events when it sent them, and
+        nothing can deliver them again. So the process goes, and everything of
+        its people is settled by the death — the marks, the deposit, the new
+        placement — instead of surviving half applied.
         """
         try:
             self.worker_handler.read_envelope(frame.data or {})
@@ -298,6 +315,8 @@ class WorkerConnector:
                 frame.id,
                 self.socket_path.name,
             )
+            return True
+        return False
 
     def _resolve_reply(self, frame: Frame) -> None:
         """Hand the REPLY payload to the parked caller; a caller already gone drops it."""
