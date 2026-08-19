@@ -24,7 +24,6 @@ answer, or with the refusal.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 from typing import Any
 
@@ -40,6 +39,8 @@ from genro_asgi.applications.spa_app_new import (
     SpaApplicationNew,
 )
 from genro_asgi.spa.orchestration import AssignmentRefused, SiteFailedRequest, SpaCommander
+
+from .conftest import LifespanRunner, ask_app, get_answer_header
 
 
 class ScriptedCommander(SpaCommander):
@@ -104,78 +105,6 @@ def recipe_for(root, fronts: int = 1) -> type[AsgiConfigBuilder]:
     return FrontConfig
 
 
-class LifespanRunner:
-    """The lifespan, driven the way a real ASGI runner drives it.
-
-    The protocol is a conversation and not two calls: the server stays inside its
-    lifespan scope between the startup and the shutdown, which is exactly the span
-    a test wants to look at.
-    """
-
-    def __init__(self, server: AsgiServer) -> None:
-        self.server = server
-        self.sent: list[dict[str, Any]] = []
-        self._inbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-        self._living: asyncio.Task[None] | None = None
-
-    async def startup(self) -> None:
-        self._living = asyncio.ensure_future(
-            self.server({"type": "lifespan"}, self._inbox.get, self._send)
-        )
-        await self._inbox.put({"type": "lifespan.startup"})
-        await self._answered("lifespan.startup.")
-
-    async def shutdown(self) -> None:
-        await self._inbox.put({"type": "lifespan.shutdown"})
-        await self._living
-
-    async def _send(self, message: dict[str, Any]) -> None:
-        self.sent.append(message)
-
-    async def _answered(self, prefix: str) -> None:
-        while not any(message["type"].startswith(prefix) for message in self.sent):
-            await asyncio.sleep(0)
-
-
-async def call(app: Any, path: str, cookie: str | None = None) -> dict[str, Any]:
-    """One ASGI request, answered: the status, the headers and the body."""
-    headers = [(b"host", b"site.example")]
-    if cookie is not None:
-        headers.append((b"cookie", f"{STICKY_CID_COOKIE}={cookie}".encode()))
-    scope = {
-        "type": "http",
-        "method": "GET",
-        "path": path,
-        "query_string": b"",
-        "headers": headers,
-        "scheme": "http",
-        "client": ("10.0.0.1", 5555),
-    }
-    sent: list[dict[str, Any]] = []
-
-    async def receive() -> dict[str, Any]:
-        return {"type": "http.request", "body": b"", "more_body": False}
-
-    async def send(message: dict[str, Any]) -> None:
-        sent.append(message)
-
-    await app(scope, receive, send)
-    start = next(message for message in sent if message["type"] == "http.response.start")
-    body = b"".join(
-        message.get("body", b"") for message in sent if message["type"] == "http.response.body"
-    )
-    return {
-        "status": start["status"],
-        "headers": [(name.decode(), value.decode()) for name, value in start["headers"]],
-        "body": body,
-    }
-
-
-def header_of(answer: dict[str, Any], name: str) -> str | None:
-    """One header of an answer, by name."""
-    return next((value for key, value in answer["headers"] if key.lower() == name), None)
-
-
 @pytest.fixture
 def server(tmp_path):
     """A server built from a recipe, with its front mounted and not yet started."""
@@ -234,7 +163,7 @@ async def test_two_fronts_each_own_their_pool(tmp_path):
 async def test_its_own_route_answers_natively(started):
     front = started.applications["site0"]
 
-    answer = await call(front, "/ping")
+    answer = await ask_app(front, "/ping")
 
     assert answer["status"] == 200
     assert front.commander.calls == []
@@ -250,11 +179,11 @@ async def test_a_path_of_the_site_is_forwarded(started):
         }
     }
 
-    answer = await call(front, "/invoices/42")
+    answer = await ask_app(front, "/invoices/42")
 
     assert answer["status"] == 201
     assert answer["body"] == b"<h1>the site</h1>"
-    assert header_of(answer, "content-type") == "text/html"
+    assert get_answer_header(answer, "content-type") == "text/html"
     cid, http = front.commander.calls[0]
     assert http["path"] == "/invoices/42"
     assert http["cid"] == cid
@@ -266,10 +195,10 @@ async def test_a_path_of_the_site_is_forwarded(started):
 async def test_a_request_with_no_cookie_is_answered_with_one(started):
     front = started.applications["site0"]
 
-    answer = await call(front, "/invoices")
+    answer = await ask_app(front, "/invoices")
 
     cid, http = front.commander.calls[0]
-    assert f"{STICKY_CID_COOKIE}={cid}" in header_of(answer, "set-cookie")
+    assert f"{STICKY_CID_COOKIE}={cid}" in get_answer_header(answer, "set-cookie")
     # The site must see the connection this request already belongs to.
     assert any(
         name == "cookie" and f"{STICKY_CID_COOKIE}={cid}" in value for name, value in http["headers"]
@@ -279,9 +208,9 @@ async def test_a_request_with_no_cookie_is_answered_with_one(started):
 async def test_a_request_that_carries_the_cookie_is_answered_without_one(started):
     front = started.applications["site0"]
 
-    answer = await call(front, "/invoices", cookie="c0ffee")
+    answer = await ask_app(front, "/invoices", cookies={STICKY_CID_COOKIE: "c0ffee"})
 
-    assert header_of(answer, "set-cookie") is None
+    assert get_answer_header(answer, "set-cookie") is None
     assert front.commander.calls[0][0] == "c0ffee"
 
 
@@ -292,10 +221,10 @@ async def test_a_pool_that_takes_nobody_is_a_polite_503(started):
     front = started.applications["site0"]
     front.commander.failure = AssignmentRefused("mario", "no worker admits him", retry_after=30.0)
 
-    answer = await call(front, "/invoices")
+    answer = await ask_app(front, "/invoices")
 
     assert answer["status"] == 503
-    assert header_of(answer, "retry-after") == "30"
+    assert get_answer_header(answer, "retry-after") == "30"
     assert answer["body"] == ERR_503_TEXT.encode()
 
 
@@ -305,7 +234,7 @@ async def test_the_inside_of_the_house_never_reaches_the_browser(started):
         "mario", "ProgrammingError: relation invoices_2024 does not exist"
     )
 
-    answer = await call(front, "/invoices")
+    answer = await ask_app(front, "/invoices")
 
     assert answer["status"] == 502
     assert answer["body"] == ERR_502_TEXT.encode()
@@ -316,7 +245,7 @@ async def test_a_wire_that_is_gone_is_the_same_502(started):
     front = started.applications["site0"]
     front.commander.failure = ConnectionError("no child on the wire")
 
-    answer = await call(front, "/invoices")
+    answer = await ask_app(front, "/invoices")
 
     assert answer["status"] == 502
 
@@ -325,7 +254,7 @@ async def test_a_refusal_still_answers_with_the_cookie_it_minted(started):
     front = started.applications["site0"]
     front.commander.failure = AssignmentRefused("mario", "no worker admits him", retry_after=30.0)
 
-    answer = await call(front, "/invoices")
+    answer = await ask_app(front, "/invoices")
 
     cid = front.commander.calls[0][0]
-    assert f"{STICKY_CID_COOKIE}={cid}" in header_of(answer, "set-cookie")
+    assert f"{STICKY_CID_COOKIE}={cid}" in get_answer_header(answer, "set-cookie")

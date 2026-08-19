@@ -132,3 +132,52 @@ during this phase — a module constant and its grammar key are the SAME words a
 differ only in case (`FOO_BAR_SPAM` / `foo_bar_spam`), while a PARAMETER is free
 to take the short contextual form (`spam`, `current_spam`). To be checked over the
 whole codebase, as work of its own.
+
+## Phase 5
+
+**Six clarifications, all ratified before a line was written**: the story enters
+at the ASGI level through `AsgiServer.__call__` and not through a socket (the
+manual Verify is the transport proof; a uvicorn of our own would duplicate it and
+would blind the assertions, which read `user_worker_map`, `hosted_users` and the
+freezer riga by riga); the ASGI scaffolding lives in the ROOT conftest, the only
+place a contract test and an implementation test both reach by construction —
+the reverse would make the stable depend on the volatile; the observation window
+is the RESPONSE BODY, because an op whose only caller is a test does not get to
+live in `src/` and because the body proves the road the store travelled, not that
+a dictionary has a key; the pool grows to TWO workers before the stickiness
+chapter, since an `X-Worker` asserted on a pool of one is the vacuous shape the
+M3 hunt already caught once; the cadence of the shape is moved with
+`check_occupancy.every_beats`, the knob `beats.every` documents; and the child's
+instrumentation moves to a module of its own, story-free, because Macro 5 will
+want it for a third end-to-end.
+
+**The sequence of the pool's states is part of the design, not an accident.**
+Stickiness needs the reception to refuse while the second worker admits (100 MB:
+70% against a cap of 30, and 70% against 80); the refusal needs NOBODY to admit
+AND the growth to be gated (85 MB: two processes holding 164% of the concession).
+Raising `every_beats` does not cover the second one on its own — `GroupHandler.ping`
+reads `ping_now_event` and passes `now=woken`, and a totally refused placement is
+exactly what rings it — so the last chapter rests on the memory gate: a pool that
+CANNOT grow, which is also the truer story.
+
+**The defect the story found**, and the reason an end-to-end exists. R8 admits a
+real previous identity at a login (the avatar switch), and phase 3 had taught that
+to `SpaCommander.relabel_connection` alone, where the mistake had been loud (a
+`KeyError`). Under it, `WorkerEnvelopeHandler` and `GroupEnvelopeHandler` went on
+reading every previous identity as a guest ceasing to exist — and there the
+mistake was mute: a person with a second browser open lost his place in the
+process and his placement in the group, and the click after landed on a row just
+born, throwing away the store still sitting in the process he had left. Nothing
+raised. Both folds now ask `GUEST_PREFIX`, which is what the register one rung
+down had always said (`_release_login_rows`). Neutralization verified by
+reverting the fix: the e2e fails on the trail of the second browser.
+
+**Declared, and to be closed within this macro**: the tail of a login deletes the
+receiving identity's row when that connection was all he had on the worker, and
+announces nothing — so `WorkerHandler.hosted_users` keeps a name whose rows are
+gone. After chapter 6 `std_0002` still lists `mario`, who lives on `std_0001`; a
+wild death of `std_0002` would report the loss of a user who is fine. It is the
+same ledger as the M3 review finding on `hosted_users` (readers and no writer),
+with the opposite sign, and it is a change to the protocol of the login — the
+worker announcing a consequence instead of a fact — so it gets its own interview
+and its own commit, before the end-of-macro review.

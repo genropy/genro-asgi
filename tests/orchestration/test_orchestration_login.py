@@ -28,11 +28,18 @@ on disk is the whole point, and a fake filesystem would judge nothing.
 from __future__ import annotations
 
 import time
+from typing import Any
 
 import pytest
 from genro_bag import Bag
 
-from genro_asgi.spa.orchestration import FreezeHandler, SpaCommander, SpaWorker
+from genro_asgi.spa.orchestration import (
+    FreezeHandler,
+    GroupHandler,
+    SpaCommander,
+    SpaWorker,
+)
+from genro_asgi.spa.orchestration.worker_handler import WorkerHandler
 from genro_asgi.spa.orchestration.spa_worker import GUEST_PREFIX
 
 WORKER_NAME = "standard_0001"
@@ -291,11 +298,8 @@ async def test_the_fold_keeps_a_real_previous_identity(tmp_path):
     assert "mario" in vertex.user_map
 
 
-async def test_the_handler_swaps_who_it_holds(tmp_path):
-    """A death between the login and the tail must not report a guest nobody knows."""
-    from genro_asgi.spa.orchestration import GroupHandler
-    from genro_asgi.spa.orchestration.worker_handler import WorkerHandler
-
+def relabel_rungs(tmp_path) -> tuple[GroupHandler, WorkerHandler]:
+    """The two rungs under the vertex, over a group whose child is never launched."""
     vertex = SpaCommander(tmp_path / "frozen_users")
     group = GroupHandler(
         vertex,
@@ -305,23 +309,54 @@ async def test_the_handler_swaps_who_it_holds(tmp_path):
         frozen_users_path=tmp_path / "frozen_users",
         entry_module="never.launched",
     )
-    worker_handler = WorkerHandler(group, "standard_0001", **group.worker_settings)
+    return group, WorkerHandler(group, WORKER_NAME, **group.worker_settings)
+
+
+def relabel_envelope(user: str, previous_user: str) -> dict[str, Any]:
+    """The envelope a login climbs on, as the worker composes it."""
+    return {
+        "worker_events": [
+            {
+                "op": "connection_relabeled",
+                "worker": WORKER_NAME,
+                "user": user,
+                "previous_user": previous_user,
+                "session_id": "a1b2",
+            }
+        ]
+    }
+
+
+async def test_the_handler_swaps_who_it_holds(tmp_path):
+    """A death between the login and the tail must not report a guest nobody knows."""
+    _group, worker_handler = relabel_rungs(tmp_path)
     worker_handler.read_envelope(
-        {"worker_events": [{"op": "new_user", "worker": "standard_0001", "user": "guest_a1b2"}]}
+        {"worker_events": [{"op": "new_user", "worker": WORKER_NAME, "user": "guest_a1b2"}]}
     )
 
-    worker_handler.read_envelope(
-        {
-            "worker_events": [
-                {
-                    "op": "connection_relabeled",
-                    "worker": "standard_0001",
-                    "user": "mario",
-                    "previous_user": "guest_a1b2",
-                    "session_id": "a1b2",
-                }
-            ]
-        }
-    )
+    worker_handler.read_envelope(relabel_envelope("mario", "guest_a1b2"))
 
     assert worker_handler.hosted_users == {"mario"}
+
+
+async def test_a_previous_identity_who_is_no_guest_keeps_his_place(tmp_path):
+    """An avatar switch moves ONE connection: the person stays where he lives.
+
+    The two rungs under the vertex used to read every previous identity as a
+    guest ceasing to exist, so a real one lost both his place in the process and
+    his placement in the group — and his next request, landing anywhere on a row
+    just born, would throw away the store he still had. R8 admits the real prior,
+    and the register the worker keeps says so too: he stays, and the idleness
+    sweep is what parks him.
+    """
+    group, worker_handler = relabel_rungs(tmp_path)
+    worker_handler.read_envelope(
+        {"worker_events": [{"op": "new_user", "worker": WORKER_NAME, "user": "mario"}]}
+    )
+    group.user_worker_map["mario"] = WORKER_NAME
+
+    worker_handler.read_envelope(relabel_envelope("mario_admin", "mario"))
+
+    assert worker_handler.hosted_users == {"mario", "mario_admin"}
+    assert group.user_worker_map["mario"] == WORKER_NAME
+    assert group.spa_commander.connection_user_map["a1b2"] == "mario_admin"

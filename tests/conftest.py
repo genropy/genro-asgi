@@ -20,6 +20,13 @@ messages without re-declaring the boilerplate: ``http_request`` runs one
 request and returns the ``send`` messages; ``response_status`` /
 ``response_headers`` / ``response_body`` read that message list.
 
+Beside those fixtures live ``LifespanRunner``, ``ask_app`` and ``get_answer_header``,
+three plain callables: a front backed by a pool is driven INSIDE its own lifespan
+scope, and its requests carry a cookie, a query string and a client address that
+the fixtures above do not pack. The two mechanisms coexist on purpose — the
+fixtures have a dozen consumers among the contract tests, and unifying them is
+its own task, never smuggled into another change.
+
 ``genro_asgi_home`` is autouse: no test ever reads the developer's real
 ``~/.genroasgi``, whose ``config.py`` would otherwise layer itself under every
 ``AsgiServer(config=...)`` built here.
@@ -266,3 +273,95 @@ def sse_request() -> Callable[..., object]:
         return SseConnection(task, sent)
 
     return _sse_request
+
+
+class LifespanRunner:
+    """The lifespan, driven the way a real ASGI runner drives it.
+
+    The protocol is a conversation and not two calls: the server stays inside its
+    lifespan scope between the startup and the shutdown, which is exactly the span
+    a test wants to look at.
+    """
+
+    def __init__(self, server: Any) -> None:
+        self.server = server
+        self.sent: list[dict[str, Any]] = []
+        self._inbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._living: asyncio.Task[None] | None = None
+
+    async def startup(self) -> None:
+        self._living = asyncio.ensure_future(
+            self.server({"type": "lifespan"}, self._inbox.get, self._send)
+        )
+        await self._inbox.put({"type": "lifespan.startup"})
+        await self._answered("lifespan.startup.")
+
+    async def shutdown(self) -> None:
+        await self._inbox.put({"type": "lifespan.shutdown"})
+        await self._living
+
+    async def _send(self, message: dict[str, Any]) -> None:
+        self.sent.append(message)
+
+    async def _answered(self, prefix: str) -> None:
+        while not any(message["type"].startswith(prefix) for message in self.sent):
+            await asyncio.sleep(0)
+
+
+async def ask_app(
+    app: Any, path: str, cookies: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """One ASGI request, answered: the status, the headers and the body.
+
+    Args:
+        app: the server or application to drive.
+        path: the path of the request.
+        cookies: what the browser carries, as name/value pairs; none by default.
+
+    Returns:
+        The answer as ``status`` / ``headers`` (decoded pairs) / ``body``.
+    """
+    headers = [(b"host", b"site.example")]
+    if cookies:
+        jar = "; ".join(f"{name}={value}" for name, value in cookies.items())
+        headers.append((b"cookie", jar.encode()))
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": path,
+        "query_string": b"",
+        "headers": headers,
+        "scheme": "http",
+        "client": ("10.0.0.1", 5555),
+    }
+    sent: list[dict[str, Any]] = []
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    await app(scope, receive, send)
+    start = next(message for message in sent if message["type"] == "http.response.start")
+    body = b"".join(
+        message.get("body", b"") for message in sent if message["type"] == "http.response.body"
+    )
+    return {
+        "status": start["status"],
+        "headers": [(name.decode(), value.decode()) for name, value in start["headers"]],
+        "body": body,
+    }
+
+
+def get_answer_header(answer: dict[str, Any], name: str) -> str | None:
+    """One header of an answer, by name.
+
+    Args:
+        answer: what ``ask_app`` returned.
+        name: the header to read, lowercase.
+
+    Returns:
+        Its value, or None when the answer carries no such header.
+    """
+    return next((value for key, value in answer["headers"] if key.lower() == name), None)

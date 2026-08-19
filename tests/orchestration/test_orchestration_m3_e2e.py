@@ -22,13 +22,10 @@ Nothing is doubled: what plays a part it does not own is only the DRIVER — the
 test — standing in for the request chain of Macro 4, which is the layer that will
 turn an HTTP request into "resolve the identity, place him, forward".
 
-The worker in the children is ``StoryWorker``, a ``SpaWorker`` subclass of this
-test package: it fills the ``wsgi_app`` seam with a tiny site, the way the
-genropy-asgi bridge fills it with a whole one; it answers the two orders the
-protocol does not carry (the shot and the transfer cycle — verbs of the worker
-that no op routes to, exactly as in the Macro 2 story); and it DECLARES the
-memory it holds, because macOS has no ``/proc`` and a story about occupancy must
-be readable on every platform.
+The worker in the children is ``X_SpaWorker_m3``, which takes the shared
+instrumentation of ``X_SpaWorker`` — the declared memory and the
+driver's two orders — and fills the ``wsgi_app`` seam with a tiny site of its
+own, the way the genropy-asgi bridge fills it with a whole one.
 
 The day, in order:
 
@@ -81,26 +78,19 @@ from genro_asgi.spa.orchestration import (
     FreezeHandler,
     GroupHandler,
     SpaCommander,
-    SpaWorker,
     UserOnHold,
 )
 from genro_asgi.spa.orchestration.spa_commander import GUEST_PREFIX
 
 from .conftest import wait_for
+from .x_spa_worker import EXECUTE_ORDER, PLAN_ORDER, X_SpaWorker
 
 #: The front that owns the pool of this story: a pool hangs under its own app.
 APP_CODE = "shop"
 
 GROUP = "std"
 ENTRY_MODULE = "genro_asgi.spa.orchestration.worker_entry"
-STORY_WORKER = f"{__name__}:StoryWorker"
-
-#: The two orders of this story the protocol does NOT carry — the shot and the
-#: cycle that follows it are verbs of the worker, and in the machine proper
-#: nobody orders them: the shot is taken by whoever composes a due photo. So the
-#: driver reaches them through the subclass, as the Macro 2 story does.
-PLAN_ORDER = "/op/plan_transfers"
-EXECUTE_ORDER = "/op/execute_transfers"
+STORY_WORKER = f"{__name__}:X_SpaWorker_m3"
 
 #: The silence past which a worker parks a user, as the CONFIG FILE declares it —
 #: in minutes, because it is a policy of the installation — and the gate the
@@ -167,45 +157,19 @@ class ServerConfiguration(AsgiConfigBuilder):
 '''
 
 
-class StoryWorker(SpaWorker):
-    """The worker of the story: a tiny site, a declared memory, two driver orders.
+class X_SpaWorker_m3(X_SpaWorker):
+    """The worker of the story: the shared instrumentation, and a tiny site.
 
     The site is the real seam — ``wsgi_app``, what the genropy-asgi bridge
     assigns — and it says back who asked and for what, which is how the parent
     reads that the request really crossed the process boundary.
-
-    ``declared_rss_bytes`` replaces the reading of ``/proc/self/status``: macOS
-    has none, so a story whose subject is occupancy would be unreadable there.
-    The number travels in the child's own ``worker_kwargs``, which is how the
-    grammar configures the class it names.
     """
 
-    def __init__(self, name: str, *, declared_rss_bytes: int = 0, **kwargs: Any) -> None:
-        super().__init__(name, **kwargs)
-        self.declared_rss_bytes = declared_rss_bytes
-        self.wsgi_app = self.tiny_site
-
-    @property
-    def rss_bytes(self) -> int:
-        """What this process declares it holds, in bytes."""
-        return self.declared_rss_bytes
-
-    def tiny_site(self, environ: dict[str, Any], start_response: Any) -> list[bytes]:
+    def site(self, environ: dict[str, Any], start_response: Any) -> list[bytes]:
         """The WSGI callable: say back who asked, for what, and which process served it."""
         start_response("200 OK", [("Content-Type", "text/plain"), ("X-Worker", self.name)])
         return [f"{environ['REQUEST_METHOD']} {environ['PATH_INFO']} "
                 f"for {environ['genro.identity']}".encode()]
-
-    async def answer_call(self, frame: Any) -> None:
-        """Answer the driver's two orders, and hand everything else upstairs."""
-        if frame.path == PLAN_ORDER:
-            self.plan_transfers()
-            await self.send_reply(frame, result={})
-        elif frame.path == EXECUTE_ORDER:
-            await self.execute_transfers()
-            await self.send_reply(frame, result={})
-        else:
-            await super().answer_call(frame)
 
 
 def http_call(cid: str, identity: str, *, path: str, **payload: Any) -> dict[str, Any]:

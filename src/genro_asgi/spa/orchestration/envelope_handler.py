@@ -104,6 +104,12 @@ from .worker_connector import GLOBAL_STORE_KEY, WORKER_SNAPSHOT_KEY
 #: The slot the worker events travel in, as the worker composes it.
 WORKER_EVENTS_KEY = "worker_events"
 
+#: What a user with no name of his own is called. The folds of a login read it
+#: to tell the identity that CEASES to exist from the one that stays. Redefined
+#: with its ratified value rather than imported: the vertex owns the module that
+#: declares it and importing it back would close a circle.
+GUEST_PREFIX = "guest_"
+
 #: What only a presentation carries: the child says its pid at birth and never
 #: again. It is what tells the vertex that this envelope is owed the whole store.
 PRESENTATION_KEY = "pid"
@@ -227,13 +233,17 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
         super().work_on_envelope(envelope)
 
     def on_connection_relabeled(self, worker_event: dict[str, Any]) -> None:
-        """A login swaps one of its own for another: the guest goes, the person arrives.
+        """A login: the person arrives, and only a GUEST leaves with his connection.
 
         Who is on board is what a wild death is judged on, so a process that dies
         between a login and the tail of its call must not be read as still
-        holding a guest the surface has already forgotten.
+        holding a guest the surface has already forgotten. A previous identity
+        that is not a guest is a person this process still holds — an avatar
+        switch moves one connection of his, never him — and the register one rung
+        down keeps his row for exactly that reason.
         """
-        self.worker_handler.hosted_users.discard(worker_event["previous_user"])
+        if worker_event["previous_user"].startswith(GUEST_PREFIX):
+            self.worker_handler.hosted_users.discard(worker_event["previous_user"])
         self.worker_handler.hosted_users.add(worker_event["user"])
 
     def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
@@ -273,8 +283,14 @@ class GroupEnvelopeHandler(EnvelopeHandler):
             group_handler.ping_now()
 
     def on_connection_relabeled(self, worker_event: dict[str, Any]) -> None:
-        """A guest logged in: the placement was his alone, and it goes with him."""
-        self.group_handler.user_worker_map.pop(worker_event["previous_user"], None)
+        """A GUEST logged in: the placement was his alone, and it goes with him.
+
+        A previous identity that is not a guest keeps his: he lives where he
+        lived, whatever else he holds there, and the idleness sweep is what parks
+        him if that connection was his last.
+        """
+        if worker_event["previous_user"].startswith(GUEST_PREFIX):
+            self.group_handler.user_worker_map.pop(worker_event["previous_user"], None)
 
     def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
         """A user has left for the freezer: his placement is to be assigned again."""

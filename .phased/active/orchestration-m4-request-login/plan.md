@@ -489,7 +489,58 @@ item, freezer, check, timeout, restart, congelamento per inattività.
   - Verify: now — the `_TBD` round of this phase, the new front's class name
     among them.
 
-- [ ] **Phase 5**: The whole day, end to end
+- [x] **Phase 5**: The whole day, end to end
+  > Done: one test, one real server built from a recipe ON DISK, two real child
+  > processes and a real WSGI site, entered through `AsgiServer.__call__` at every
+  > click — the front, the vertex, the group, the wire and the site are all the
+  > real ones, and nothing stands in for the request chain any more. The story:
+  > the recipe declares TWO groups and elects the one that is NOT declared first
+  > (R2 proved by the file), only the elected one has a reception; a visitor with
+  > no cookie is served and his guest store grows; he logs in through the site's
+  > own in-process call; his NEXT click finds that store under his real name
+  > (R3/R5 proved at the destination); somebody goes quiet, the driver's two
+  > orders park her and her own next click wakes her with her trail; the
+  > concession shrinks to 100 MB, one shape step brings a second process into
+  > being, a SECOND browser of the same person lands on it as a guest and, once
+  > logged in, his next click is answered by the FIRST worker with that person's
+  > trail and no trace of the guest's — stickiness and the R5 invariant, both
+  > non-vacuous only because the pool has two workers; an avatar switch gives the
+  > new identity an empty store while the other browser still renders the first
+  > one's; and at 85 MB nobody admits and `_grow` refuses (`saturated`), so a
+  > newcomer gets 503 + `Retry-After: 30` while the residents keep being served.
+  > THE STORY FOUND A DEFECT, fixed in this same commit: of the three folds of
+  > `connection_relabeled` only `SpaCommander.relabel_connection` knew R8 — the
+  > two below treated EVERY previous identity as a guest ceasing to exist, so an
+  > avatar switch by somebody holding another connection lost him his row in
+  > `WorkerHandler.hosted_users` and his placement in `GroupHandler.user_worker_map`;
+  > his next click landed anywhere on a row just born and his store stayed orphaned
+  > in the process he had left, silently. Both folds now branch on `GUEST_PREFIX`,
+  > as the worker's own register already did (`_release_login_rows`: "A previous
+  > identity that is NOT a guest STAYS"). Neutralization verified: without the fix
+  > the e2e fails on the trail of the second browser.
+  > The clock stays alive; only `GroupHandler.check_occupancy.every_beats` is
+  > raised, and the two shape steps are asked for by hand — its WAKE still
+  > overrides the cadence, which is why the last chapter rests on the memory gate
+  > and not on a round that has not arrived.
+  > Scaffolding: `LifespanRunner` / `call_TBD` / `header_of_TBD` moved to
+  > `tests/conftest.py` as `LifespanRunner` / `ask_app` / `get_answer_header` (the
+  > only place both classes of test reach by
+  > construction), the poor siblings left alone with the coexistence declared in
+  > the docstring; the child's INSTRUMENTATION — declared memory and the driver's
+  > two orders, zero scenario — extracted to `x_spa_worker.py` as `X_SpaWorker`,
+  > with the M3 end-to-end switched from defining to importing and its own child
+  > renamed `X_SpaWorker_m3` beside this phase's `X_SpaWorker_m4`.
+  > Left open, to be closed before the end-of-macro review: `_release_login_rows`
+  > deletes the receiving identity's row without announcing it, so a handler keeps
+  > a stale name in `hosted_users` — after chapter 6 `std_0002` still lists `mario`
+  > though it holds nothing of his, and a wild death there would report the loss of
+  > a user who lives elsewhere. Same ledger as the M3 review finding, opposite
+  > sign.
+  > Files: src/genro_asgi/spa/orchestration/envelope_handler.py, tests/conftest.py,
+  > tests/test_spa_app_new.py, tests/orchestration/x_spa_worker.py,
+  > tests/orchestration/test_orchestration_m3_e2e.py,
+  > tests/orchestration/test_orchestration_login.py,
+  > tests/orchestration/test_orchestration_m4_e2e.py
   - Run: opus / medium
   - Pattern: `tests/orchestration/test_orchestration_m3_e2e.py` (the day of the
     pool, built from nothing but a config FILE) — the same shape, one rung up:
@@ -548,6 +599,43 @@ item, freezer, check, timeout, restart, congelamento per inattività.
   wire. Filesystem access goes ONLY through storage nodes, and storage is pinned
   synchronous (`StorageMixin` calls `set_sync()`; the tests pin the same) —
   never `await` a storage node call.
+- **Test-only classes are named by derivation, never baptised** (ratified
+  2026-08-19, phase 5). `X_<ProductionClass>` when the class stands in for one of
+  production — `X_SpaWorker` is the tests' `SpaWorker`; a qualifier is appended
+  when several test classes stand for the same one — `X_SpaWorker_m3`,
+  `X_SpaWorker_m4`; `XT_<Name>` when it exists only for the tests and has no
+  original — `XT_LifespanRunner`, `XT_SseConnection`. The name is DERIVED, so this
+  family never goes through a `_TBD` round again. It binds new names from now on;
+  renaming the ones already there is the retrofit below. Technically free: ruff
+  selects only E4/E7/E9/F here (no pep8-naming), mypy excludes `tests/`, and
+  neither prefix collides with pytest collection.
+- **Vocabulary**: the word *story* leaves this workflow's prose — say SCENARIO. It
+  still stands in the docstrings of the M3 end-to-end and in the phase 5 text of
+  this plan; the cleanup is its own decision, not a passing edit.
+- **Test suite clean-up, after M4** — one task in three steps that hold together,
+  in this order:
+  1. RETROFIT of the names to the convention above: `StoryWorker`, `GroupStub`,
+     `GroupDouble`, `CountingCommander`, `LifespanRunner`, `SseConnection` and the
+     classes of `child_stub.py`. One bulk rename, never smuggled into another
+     change.
+  2. ARE THE STUBS STILL NEEDED? `GroupStub` says in its own docstring that it
+     exists because "GroupHandler is built in its own phase — until then a handler
+     still needs a group above it". That class has existed since Macro 3: what has
+     to be checked is whether the real `GroupHandler` can take its place in the
+     five files that use it (`m2_e2e`, `envelope_chain`, `spa_worker_process`,
+     `worker_handler`, `foundations_e2e`). If it can, a class disappears and with
+     it the name collision with `GroupDouble`.
+  3. WHICH TESTS HAVE LOST THEIR MEANING. The development went in steps, and some
+     tests were born to validate the STEP and not the behaviour: they photograph
+     intermediate scaffolding or a provisional contract that is covered end to end
+     today. Past the step they say nothing, yet they keep running and keep looking
+     like coverage. Rule 10 already declares them removable together with what
+     they photograph — what is missing is the pass. Operational criterion: for
+     each test under `tests/orchestration/`, ask what would fall if the behaviour
+     disappeared, and when the answer is "the same thing that falls from a fuller
+     test", it is a candidate for removal.
+     AFTER step 2, because replacing a stub with the real thing can already bring
+     down tests that existed only for the stub.
 - **Out of this macro, declared**: the data plane (addressed delivery,
   subscriptions, the pending mailboxes, `USER_PENDING_MAX_ITEMS`), the
   notifications, the live move and the plan's ladder, `recycle_worker`,
