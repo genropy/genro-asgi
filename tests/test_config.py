@@ -41,6 +41,7 @@ from genro_asgi import (
     ConfigurationHandler,
 )
 from genro_asgi.__main__ import AppsRegistry
+from genro_asgi.applications.spa_app_new import SpaApplicationNew
 from genro_asgi.config import HOME_ENV, BaseConfiguration, DefaultConfig
 from genro_asgi.exceptions import HTTPUnauthorized
 from genro_asgi.spa.orchestration.spa_commander import ORDERS_LOGGER_NAME
@@ -699,12 +700,14 @@ class SpaPoolConfig(AsgiConfigBuilder):
     def main(self, root: Any) -> None:
         cfg = root.configuration()
         cfg.server(host="127.0.0.1", port=8000)
-        cfg.applications().application(code="shop", mount="", app_class=ShopApp)
-        self.commander_section(cfg)
+        front = cfg.applications().application(
+            code="shop", mount="", app_class=SpaApplicationNew
+        )
+        self.commander_section(front)
 
-    def commander_section(self, cfg: Any) -> None:
+    def commander_section(self, front: Any) -> None:
         """The vertex, then its groups: stable and canary, two interpreters."""
-        commander = cfg.commander(
+        commander = front.commander(
             frozen_users_path="/srv/shop/frozen_users",
             instance_dir="/srv/shop/instance",
             memory_max_percent=75.0,
@@ -739,8 +742,8 @@ class SpaPoolConfig(AsgiConfigBuilder):
 class ElectedGroupConfig(SpaPoolConfig):
     """The same pool, with the group that receives a newcomer elected by name."""
 
-    def commander_section(self, cfg: Any) -> None:
-        commander = cfg.commander(frozen_users_path="/srv/shop/frozen_users")
+    def commander_section(self, front: Any) -> None:
+        commander = front.commander(frozen_users_path="/srv/shop/frozen_users")
         groups = commander.groups(default="canary")
         groups.group(name="stable", entry_module="genro_asgi.spa.orchestration.worker_entry")
         groups.group(name="canary", entry_module="genro_asgi.spa.orchestration.worker_entry")
@@ -750,14 +753,14 @@ class TestCommanderSection:
     """``commander`` → the vertex's kwargs, and one kwargs set per group."""
 
     def test_the_recipe_elects_the_group_that_receives_a_newcomer(self) -> None:
-        kwargs = ConfigurationHandler(ElectedGroupConfig).commander_kwargs()
+        kwargs = ConfigurationHandler(ElectedGroupConfig).commander_kwargs("shop")
 
         assert kwargs["default_group"] == "canary"
 
     def test_the_vertex_reads_its_own_policies_and_not_the_workers_path(self) -> None:
         handler = ConfigurationHandler(SpaPoolConfig)
 
-        assert handler.commander_kwargs() == {
+        assert handler.commander_kwargs("shop") == {
             "frozen_users_path": "/srv/shop/frozen_users",
             "memory_max_percent": 75.0,
             "machine_memory_alarm_percent": 85.0,
@@ -769,7 +772,7 @@ class TestCommanderSection:
         }
 
     def test_a_group_reads_its_policies_the_two_paths_and_its_childs_identity(self) -> None:
-        groups = ConfigurationHandler(SpaPoolConfig).group_kwargs()
+        groups = ConfigurationHandler(SpaPoolConfig).group_kwargs("shop")
 
         assert set(groups) == {"stable", "canary"}
         assert groups["stable"] == {
@@ -797,7 +800,7 @@ class TestCommanderSection:
         }
 
     def test_a_group_that_declares_only_its_child_leaves_every_default_alone(self) -> None:
-        canary = ConfigurationHandler(SpaPoolConfig).group_kwargs()["canary"]
+        canary = ConfigurationHandler(SpaPoolConfig).group_kwargs("shop")["canary"]
 
         assert canary == {
             "frozen_users_path": "/srv/shop/frozen_users",
@@ -807,8 +810,8 @@ class TestCommanderSection:
         }
 
     def test_the_pool_keys_reach_the_vertex_and_the_group_that_read_them(self, tmp_path) -> None:
-        groups = ConfigurationHandler(SpaPoolConfig).group_kwargs()
-        commander_kwargs = ConfigurationHandler(SpaPoolConfig).commander_kwargs()
+        groups = ConfigurationHandler(SpaPoolConfig).group_kwargs("shop")
+        commander_kwargs = ConfigurationHandler(SpaPoolConfig).commander_kwargs("shop")
         commander_kwargs["frozen_users_path"] = tmp_path / "frozen_users"
         commander_kwargs["orchestration_log_path"] = tmp_path / "orchestration.log"
 
@@ -859,22 +862,35 @@ class TestCommanderSection:
 
     def test_a_site_with_no_pool_declares_no_group(self) -> None:
         handler = ConfigurationHandler(TwoAppConfig)
-        assert handler.commander_kwargs() == {}
-        assert handler.group_kwargs() == {}
+        assert handler.commander_kwargs("shop") == {}
+        assert handler.group_kwargs("shop") == {}
 
     def test_the_pool_section_travels_through_a_real_server(self) -> None:
         server = AsgiServer(config=SpaPoolConfig)
-        assert server.config.commander_kwargs()["memory_max_percent"] == 75.0
-        assert set(server.config.group_kwargs()) == {"stable", "canary"}
+        assert server.config.commander_kwargs("shop")["memory_max_percent"] == 75.0
+        assert set(server.config.group_kwargs("shop")) == {"stable", "canary"}
 
     def test_a_group_outside_its_collection_is_rejected_by_the_grammar(self) -> None:
         class StrayGroupConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
                 cfg = root.configuration()
-                cfg.commander().group(name="stable")
+                front = cfg.applications().application(
+                    code="shop", mount="", app_class=SpaApplicationNew
+                )
+                front.commander().group(name="stable")
 
         with pytest.raises(ValueError, match="parent"):
             ConfigurationHandler(StrayGroupConfig)
+
+    def test_the_pool_is_not_a_section_of_the_site_dialect(self) -> None:
+        """A pool belongs to the front that owns it, so the root has no words for it."""
+
+        class TopLevelPoolConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                root.configuration().commander(frozen_users_path="/srv/shop/frozen_users")
+
+        with pytest.raises(AttributeError, match="commander"):
+            ConfigurationHandler(TopLevelPoolConfig)
 
 
 class ParametrizedShop(ShopApp):

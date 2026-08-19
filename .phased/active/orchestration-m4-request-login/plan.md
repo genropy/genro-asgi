@@ -397,7 +397,56 @@ item, freezer, check, timeout, restart, congelamento per inattività.
     store; the guest unmounted at the fold, the real previous identity kept.
   - Verify: now — the `_TBD` round of this phase.
 
-- [ ] **Phase 4**: The new front
+- [x] **Phase 4**: The new front
+  > Done: `SpaApplicationNew` (applications/spa_app_new.py) stands beside
+  > `SpaApplication`, which is not touched: the demux, the cookie and the packing
+  > are TRANSCRIBED and nothing is imported in either direction. It owns the new
+  > pool, built at startup out of the recipe — an application reaches its own
+  > configuration only once a server holds it — and taken down with the server.
+  > Serving is the two-stage demux; a site path becomes ONE call to
+  > `SpaCommander.serve_request`, and the front names no group, no worker and no
+  > wire. The refusal is a polite 503 carrying the `Retry-After` the vertex
+  > composed; a site that broke inside a healthy process and a wire that is gone
+  > are both a 502. Both answer a GENERIC line — `ERR_503_TEXT`, `ERR_502_TEXT` —
+  > while the real text goes to the log: an exception's message carries the inside
+  > of the house, and the legacy front that puts it on the wire is a defect of the
+  > legacy, not a contract.
+  > THE OWNERSHIP OF THE POOL WAS CORRECTED MID-PHASE by the owner, and R11/R12
+  > with it (record v1.1): a pool belongs to the APPLICATION that owns it — the
+  > chain is server → applications → spa_application → commander → groups →
+  > GroupHandler → workers → WorkerHandler → socket → SpaWorker — as
+  > `SpaApplication` has shown since 2026-08-08, with its own commander configured
+  > through the open-signature `application(...)` element. So the pool's words left
+  > the site dialect and became this front's own grammar
+  > (`SpaApplicationGrammarNew`), a recipe writes them under
+  > `applications.<code>.commander`, and the readers became
+  > `commander_kwargs(code)` / `group_kwargs(code)`. R12 (one front per server)
+  > is SUPERSEDED: several fronts are several pools, and apportioning
+  > `memory_max_percent` between them is the installation's business, caught by the
+  > machine alarm line that already exists when it is over-declared.
+  > Verified: `pytest tests/ -q` 1988 passed / 2 skipped (was 1977/2); `ruff check
+  > src/ tests/` clean; the new front is 171 executable lines against a cap of ~300
+  > (the legacy front is 318 total) — the ownership move made it SHORTER, since the
+  > one-front check died and the reading goes through the door the app already has;
+  > the four contract files of the legacy front pass untouched.
+  > Behaviours covered by the 10 contract tests: the pool built from the recipe at
+  > startup, with the elected group arriving from the grammar, and taken down at
+  > shutdown; two fronts owning two distinct pools with two freezer roots; the app's
+  > own route answered natively while a site path is forwarded; the cookie minted
+  > and answered, and NOT re-issued when the request carried one; the site's answer
+  > rebuilt whole; the 503 with its `Retry-After`; the 502 for both a broken site
+  > and a gone wire; a refusal still answering with the cookie it minted; and the
+  > inside of the house never reaching the browser (`relation invoices_2024` stays
+  > in the log).
+  > Baptised at the close: `SpaApplicationNew` and `SpaApplicationGrammarNew` —
+  > transit names, declared as such: at the cutover the legacy dies and both drop
+  > the suffix in one rename · `REQUEST_HOLD_MAX_SECONDS`, which is NOT the
+  > request's deadline but the CEILING on the orchestration delay inside it (the
+  > CALL still has none, phase 2) · `ERR_503_TEXT` / `ERR_502_TEXT`.
+  > Files: src/genro_asgi/applications/spa_app_new.py,
+  > src/genro_asgi/config/elements.py, src/genro_asgi/config/handler.py,
+  > tests/test_spa_app_new.py, tests/test_config.py,
+  > tests/orchestration/test_orchestration_m3_e2e.py
   - Run: opus / medium
   - Pattern: `applications/spa_app.py` — the demux (`internal_roots`,
     `resolves_natively`), the cookie read ONCE, `pack_http`, the response
@@ -412,13 +461,16 @@ item, freezer, check, timeout, restart, congelamento per inattività.
     contract files are NOT touched: they are the continuity sentinel of the
     machine that serves real traffic until the cutover.
     (2) **It reads its own configuration back from the handler** (R11):
-    `commander_kwargs()` and `group_kwargs()` plus the elected base group, as
-    every application re-reads its own section.
-    (3) **ONE SPA front per server** (R12, the new rule): a second front reading
-    the same `commander` section is a CONFIG ERROR, refused loudly at boot. The
-    vertex is one per server, `frozen_users_path` is one root for the whole
-    machine, and the memory cascade is anchored to ONE `MemTotal`. Several sites
-    on one server are several GROUPS under the one vertex.
+    `commander_kwargs(code)` and `group_kwargs(code)` over
+    `applications.<code>.commander`, as every application re-reads its own
+    section.
+    (3) **A pool belongs to the application that owns it** (R11 amended, R12
+    SUPERSEDED 2026-08-18). The pool's words are the FRONT's own grammar, an
+    `ApplicationGrammar` subclass, and a recipe writes them under
+    `applications.<code>.commander`. Several fronts on one server are several
+    pools; apportioning `memory_max_percent` between them is the installation's
+    business, and an over-declared machine is caught by the alarm line that
+    already exists.
     (4) **The lifecycle is the application's**: `on_startup` starts the vertex,
     `on_shutdown` stops it; the front serves only from "ready" (R13).
     (5) **The translations** (the numbers of Phase 2's point 3): the polite 503

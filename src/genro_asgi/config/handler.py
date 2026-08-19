@@ -300,8 +300,13 @@ class ConfigurationHandler(ConfigHandler):
             )
         return descriptors
 
-    def commander_kwargs(self) -> dict[str, Any]:
-        """The ``commander`` section as the vertex's own constructor kwargs.
+    def commander_kwargs(self, code: str) -> dict[str, Any]:
+        """The pool of one application as its vertex's own constructor kwargs.
+
+        Args:
+            code: the application whose pool this is — a pool belongs to the
+                front that owns it, so the words live under
+                ``applications.<code>.commander``.
 
         ``instance_dir`` is NOT among them: the sockets are the workers' business,
         so that path is folded into every group instead (``group_kwargs``). The
@@ -310,8 +315,9 @@ class ConfigurationHandler(ConfigHandler):
         What the recipe leaves out is left out, and the vertex's own default
         answers.
         """
+        section = f"applications.{code}.commander"
         kwargs = self.closed_attrs(
-            "commander",
+            section,
             "frozen_users_path",
             "memory_max_percent",
             "machine_memory_alarm_percent",
@@ -321,13 +327,16 @@ class ConfigurationHandler(ConfigHandler):
             "user_expiry_hours",
             "guest_expiry_hours",
         )
-        elected = self("commander.groups.default", default=None)
+        elected = self(f"{section}.groups.default", default=None)
         if elected is not None:
             kwargs["default_group"] = elected
         return kwargs
 
-    def group_kwargs(self) -> dict[str, dict[str, Any]]:
-        """The declared groups as ``{name: kwargs}``, ready for one ``GroupHandler`` each.
+    def group_kwargs(self, code: str) -> dict[str, dict[str, Any]]:
+        """One application's groups as ``{name: kwargs}``, one ``GroupHandler`` each.
+
+        Args:
+            code: the application whose pool these groups belong to.
 
         The two paths of the installation live on ``commander`` and are folded in
         here, because a group is what builds the workers that need them. The keys
@@ -336,13 +345,14 @@ class ConfigurationHandler(ConfigHandler):
         silence the worker itself measures — so a recipe writes each policy once,
         on the rung it belongs to, and the child is handed what is his.
         """
-        node = self.node("commander.groups")
+        section = f"applications.{code}.commander"
+        node = self.node(f"{section}.groups")
         if node is None:
             return {}
-        shared = self.closed_attrs("commander", "frozen_users_path", "instance_dir")
+        shared = self.closed_attrs(section, "frozen_users_path", "instance_dir")
         groups: dict[str, dict[str, Any]] = {}
         for child in node.value:
-            path = f"commander.groups.{child.label}"
+            path = f"{section}.groups.{child.label}"
             kwargs = self.closed_attrs(
                 path,
                 "memory_max_percent",

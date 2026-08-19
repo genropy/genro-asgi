@@ -88,6 +88,9 @@ from genro_asgi.spa.orchestration.spa_commander import GUEST_PREFIX
 
 from .conftest import wait_for
 
+#: The front that owns the pool of this story: a pool hangs under its own app.
+APP_CODE = "shop"
+
 GROUP = "std"
 ENTRY_MODULE = "genro_asgi.spa.orchestration.worker_entry"
 STORY_WORKER = f"{__name__}:StoryWorker"
@@ -119,17 +122,21 @@ DEATH_TIMEOUT = 15.0
 POOL_CONFIG = '''
 """The pool of the story, as an installation writes it."""
 
+from genro_asgi.applications.spa_app_new import SpaApplicationNew
 from genro_asgi.config import AsgiConfigBuilder
 
 
 class ServerConfiguration(AsgiConfigBuilder):
-    """One commander, one group, and the child that runs in it."""
+    """One front, its commander, one group, and the child that runs in it."""
 
     default_config = False
 
     def main(self, root):
         cfg = root.configuration()
-        commander = cfg.commander(
+        front = cfg.applications().application(
+            code="{app_code}", mount="", app_class=SpaApplicationNew
+        )
+        commander = front.commander(
             frozen_users_path="{root}/frozen_users",
             instance_dir="{root}/i",
             orchestration_log_path="{root}/orchestration.log",
@@ -264,6 +271,7 @@ def story_root(repo_on_pythonpath):
     (root / "pool_config.py").write_text(
         POOL_CONFIG.format(
             root=root,
+            app_code=APP_CODE,
             group=GROUP,
             idle_minutes=IDLE_MINUTES,
             entry_module=ENTRY_MODULE,
@@ -285,12 +293,12 @@ def pool_config(story_root):
 @pytest.fixture
 async def group(pool_config):
     """The vertex and the group, built from nothing but what the config file says."""
-    vertex = SpaCommander(**pool_config.commander_kwargs())
+    vertex = SpaCommander(**pool_config.commander_kwargs(APP_CODE))
     group_handler = GroupHandler(
         vertex,
         GROUP,
         memory_concession_bytes=vertex.memory_concession_bytes,
-        **pool_config.group_kwargs()[GROUP],
+        **pool_config.group_kwargs(APP_CODE)[GROUP],
     )
     yield group_handler
     for worker_handler in list(group_handler.worker_handler_map.values()):

@@ -96,3 +96,39 @@ is the vertex's DECISION, and reusing it would be homonymy by drift) ·
 `_login_previous_user_map`, whose value is an identity and says so ·
 `_release_login_rows` and `_install_carried_store` aligned to the two above without
 a round of their own.
+
+## Phase 4
+
+**The six clarifications** are in `temp/domande_fase4_m4_2026-08-18.md`. The one
+that outlived them all is not among them: mid-phase the owner corrected the
+OWNERSHIP of the pool, and R11/R12 were rewritten (record v1.1). What the
+correction turned on is a fact that was in front of us the whole time —
+`SpaApplication` owns its commander and is configured through the open-signature
+`application(...)` element — and what I had presented as a constraint (an
+application cannot hold its own pool configuration) was never true.
+
+Consequences worth finding again from here:
+
+- **The site dialect no longer has words for a pool.** A recipe that writes
+  `configuration().commander(...)` now fails, and a test pins it.
+- **`node_label="commander"`** on the front's grammar element: without it the
+  builder files the node as `commander_0`, because the singleton cardinality that
+  used to come from the parent's `sub_tags` is gone with the move.
+- **The 503 says nothing about WHY.** Three reasons reach the front as
+  `AssignmentRefused` — a saturated group, a broken group, an expired hold — and
+  the reason travels in the exception's `cause`, to the log. Telling the browser
+  which one would leak how full the pool is and give a client nothing it can act
+  on. What COULD depend on the reason is the `Retry-After` (an expired hold is a
+  different scale from a group that has to wait for its own round); it does not
+  today, and that is a declared uniformity, not an oversight.
+- **Resource exhaustion is not the 503's business.** Machine memory and freezer
+  storage are read by `check_resources`, which writes its order row and calls
+  `need_resources()` — the seam a k8s commander overrides. The real escalation
+  verb, `notify_sysop` (v3 §9), arrives with the notifications in Macro 5, and
+  these three points are its callers.
+
+**Pending, at the owner's request**: an audit of the naming convention he stated
+during this phase — a module constant and its grammar key are the SAME words and
+differ only in case (`FOO_BAR_SPAM` / `foo_bar_spam`), while a PARAMETER is free
+to take the short contextual form (`spam`, `current_spam`). To be checked over the
+whole codebase, as work of its own.

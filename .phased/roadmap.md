@@ -3,7 +3,8 @@
 Authority order, most recent first — on a conflict the most recent wins:
 
 1. `temp/design_m4_2026-08-18.md` — the Macro 4 decision record (🟢 APPROVATO,
-   R1..R14);
+   R1..R14; v1.1 amends R11 and supersedes R12: a pool belongs to the
+   application that owns it, so several SPA fronts on one server are legitimate);
 2. `temp/design_orchestrazione_v4_2026-08-17.md` — design v4;
 3. `temp/design_orchestrazione_v3_2026-08-16.md` — design v3, for the sections
    v4 does not touch (§8 freezer, §9 data plane, §11 login, §12 boot, §13
