@@ -51,8 +51,10 @@ Sections:
 - ``databases`` — one descriptor per database handler.
 - ``plugins`` — the router plugins armed on every routed app.
 - ``openapi`` — the OpenAPI metadata (grammar only in core 1a).
-- ``commander`` — the SPA pool: the vertex's paths and policies, plus the
-  ``groups`` collection, one entry per group of workers.
+
+The SPA pool is NOT a section of this dialect: a pool belongs to the application
+that owns it, so its words live in that application's own grammar and its recipe
+is written under ``applications.<code>.commander``.
 
 A recipe subclasses ``AsgiConfigBuilder`` and overrides ``main(self, root)``;
 application classes are imported and passed as objects::
@@ -89,8 +91,7 @@ class AsgiServerGrammar(TaskGrammar):
     @element(
         sub_tags=(
             "server[0:1],middleware[0:1],authentication[0:1],storage[0:1],"
-            "applications[0:1],databases[0:1],plugins[0:1],openapi[0:1],"
-            "commander[0:1]"
+            "applications[0:1],databases[0:1],plugins[0:1],openapi[0:1]"
         ),
         node_label="configuration",
     )
@@ -356,100 +357,6 @@ class AsgiServerGrammar(TaskGrammar):
         """One router plugin: ``code`` (the collection key), optional
         ``enabled`` (set False to leave it unarmed) and arbitrary options handed
         to ``router.plug(code, **options)``."""
-
-    @element(parent_tags="commander", sub_tags="group", collection_key="name")
-    def groups(self) -> None:
-        """Collection of worker groups, each labelled by its ``name`` — stable paths
-        ``commander.groups.<name>``. A group is the workers built from ONE grammar:
-        the same child, the same policies."""
-
-    @element(parent_tags="groups", sub_tags="")
-    def group(
-        self,
-        name: str = None,
-        memory_max_percent: float | BagResolver = None,
-        worker_memory_max_percent: float | BagResolver = None,
-        occupancy_max_percent: float | BagResolver = None,
-        restart_occupancy_max_percent: float | BagResolver = None,
-        reception_reserved_percent: float | BagResolver = None,
-        new_user_occupancy_percent: float | BagResolver = None,
-        newcomer_reserve_count: int | BagResolver = None,
-        user_idle_freeze_minutes: float | BagResolver = None,
-        entry_module: str = None,
-        executable: str | BagResolver = None,
-        worker_class: str = None,
-        main_threadpool_size: int | BagResolver = None,
-        aux_threadpool_size: int | BagResolver = None,
-        worker_kwargs: dict = None,
-    ) -> None:
-        """One group of workers: its own policies, and the identity of its child.
-
-        ``name`` is the collection key and names the group's workers too
-        (``<name>_0001``), so it is short — a worker's name is its socket's.
-
-        **Nothing here says how many workers there are.** The group brings its
-        reception into being at boot and then grows on demand and shrinks by
-        waste, so the count is a reading and never a setting.
-
-        The POLICIES: ``memory_max_percent`` is this group's share of the
-        server's concession and ``worker_memory_max_percent`` what ONE worker may
-        hold of that share (the same word one rung down — the cascade is machine,
-        concession, quota, worker); ``occupancy_max_percent`` is how full a worker
-        gets before it stops admitting and ``restart_occupancy_max_percent`` where
-        a process is replaced instead of kept; ``reception_reserved_percent`` is
-        what the reception keeps free for the trade only it has;
-        ``new_user_occupancy_percent`` is what a user nobody has ever measured is
-        expected to cost, and ``newcomer_reserve_count`` how many of that size
-        must always find room — the group grows at its own round before anybody
-        is refused. ``user_idle_freeze_minutes`` is the silence past which a
-        worker parks a user in the freezer.
-
-        The IDENTITY of the child: ``entry_module`` (what ``python -m`` runs),
-        ``executable`` (the interpreter — a group is how two versions of a site
-        live side by side), ``worker_class`` (the ``module:Class`` the child
-        loads), the two thread pool sizes, and ``worker_kwargs``, the grammar that
-        class is built with. The two paths are the installation's and are declared
-        once, on ``commander``.
-        """
-
-    @element(parent_tags="configuration", sub_tags="groups[0:1]")
-    def commander(
-        self,
-        frozen_users_path: str | BagResolver = None,
-        instance_dir: str | BagResolver = None,
-        memory_max_percent: float | BagResolver = None,
-        machine_memory_alarm_percent: float | BagResolver = None,
-        orchestration_log_path: str | BagResolver = None,
-        orchestration_log_max_bytes: int | BagResolver = None,
-        orchestration_log_backup_count: int | BagResolver = None,
-        user_expiry_hours: float | BagResolver = None,
-        guest_expiry_hours: float | BagResolver = None,
-    ) -> None:
-        """The SPA pool: the vertex's own policies, and the groups under it.
-
-        The two PATHS of the installation, declared once here and shared by every
-        group: ``frozen_users_path`` is the freezer root — the vertex reads what a
-        worker wrote there, so it is one root for the whole machine — and
-        ``instance_dir`` holds the sockets.
-
-        ``memory_max_percent`` is what this server may hold OF THE MACHINE (the
-        concession; omitted, all of it), and every percentage below is a share of
-        it. ``machine_memory_alarm_percent`` is the health line of the whole
-        machine, past which nothing grows. The freezer's own storage answers to no
-        key: under a tenth free the log says so and the machine asks for more.
-
-        ``orchestration_log_path`` (+ ``_max_bytes`` / ``_backup_count``) is the
-        file every order lands on — who decided, what, on whom, with which numbers
-        and how it ended; omitted, the rows stay on the logger.
-
-        ``user_expiry_hours`` / ``guest_expiry_hours`` are the ages a FROZEN user
-        is kept for before the machine forgets him whole. A guest is shorter: he
-        is a browser, not a person the machine knows.
-
-        Technical times — the beat, the patience of a departure, the cadences —
-        are module constants and not grammar: an installation tunes policies, not
-        clocks.
-        """
 
     @element(parent_tags="configuration", sub_tags="")
     def openapi(

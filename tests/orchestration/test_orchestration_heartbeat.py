@@ -378,17 +378,30 @@ async def test_each_task_of_the_vertex_runs_on_its_own_count_of_beats(
     def runs_of(task_name: str) -> int:
         return commander.beat_counts.get(task_name, {}).get("runs", 0)
 
+    def turns_of(task_name: str) -> int:
+        return commander.beat_counts.get(task_name, {}).get("turns", 0)
+
+    def round_closed() -> bool:
+        """The last task of the round has caught up with the first: no round is open."""
+        return turns_of("check_resources") >= 4 and turns_of("check_resources") == turns_of(
+            "drop_expired_users"
+        )
+
     beating = clock()
-    await wait_for(lambda: runs_of("drop_expired_users") >= 4)
+    # The clock is stopped ON A ROUND BOUNDARY and never mid-round: the counts are
+    # read where every task of the beat has had the same number of turns, so the
+    # relations below are exact and not a tolerance.
+    await wait_for(round_closed)
+    beats = turns_of("drop_expired_users")
     beating.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await beating
 
-    beats = runs_of("drop_expired_users")
-    assert runs_of("check_resources") in ((beats - 1) // 2, beats // 2)
+    assert runs_of("drop_expired_users") == beats
+    assert runs_of("check_resources") == beats // 2
     # Its turns are counted all the same: the sweep is given every beat and says no.
     assert runs_of("cleanup_frozen") == 0
-    assert commander.beat_counts["cleanup_frozen"]["turns"] == beats
+    assert turns_of("cleanup_frozen") == beats
 
 
 async def test_a_task_that_raises_leaves_the_others_of_its_beat_alone(

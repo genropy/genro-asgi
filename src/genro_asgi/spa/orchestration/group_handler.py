@@ -305,7 +305,8 @@ class GroupHandler:
         Raises:
             AssignmentRefused: every worker refused; the wake is rung on the way out.
 
-        Acts on ``user_worker_map``.
+        Acts on ``user_worker_map`` and, in the same breath, on the row at the
+        vertex that says which group he is on.
         """
         occupancy_percent = self.spa_commander.user_map[user]["occupancy_percent"]
         if occupancy_percent is None:
@@ -321,6 +322,7 @@ class GroupHandler:
                 self._logger.debug("Group %s: %s", self.name, refusal)
                 continue
             self.user_worker_map[user] = worker_handler.name
+            self.spa_commander.record_user_group(user, self.name)
             return worker_handler.name
         self.ping_now()
         raise AssignmentRefused(user, f"no worker of {self.name} admits him")
@@ -350,6 +352,25 @@ class GroupHandler:
         if spare is not None:
             await self._order_quit(spare, "close_worker")
 
+    async def kill_worker_TBD(self, worker_handler: WorkerHandler, cause: str) -> None:
+        """Take a worker's process away because it cannot be trusted any more.
+
+        Args:
+            worker_handler: the worker whose process goes.
+            cause: why, written on the order row.
+
+        Acts on the process — it is killed, and the end of its wire settles the
+        death like any other, so its people are marked, deposited or purged by
+        the road that already exists. The order row is the point: a machine
+        killing its own workers has to be readable in the account of the orders
+        and not only in the log of the application, because a defect that keeps
+        doing it would otherwise look like an ordinary birth-and-death cycle.
+        """
+        self._logger.error("Group %s: %s cannot be trusted (%s)", self.name, worker_handler.name, cause)
+        self.spa_commander.log_order(self.name, "kill_worker", worker_handler.name, outcome=cause)
+        if worker_handler.process is not None:
+            await worker_handler.terminate_process()
+
     async def start_worker(self) -> WorkerHandler | None:
         """Bring one more worker into this group and start its process.
 
@@ -377,6 +398,21 @@ class GroupHandler:
             self.name, "start_worker", name, numbers={"workers": len(self.living_workers)}
         )
         return worker_handler
+
+    async def stop(self) -> None:
+        """Take every process of this group down and close their wires.
+
+        Acts on each of its workers: the death is DECLARED before it is dealt —
+        the wait an order parks is what tells an ordered death from a wild one,
+        and a shutdown is an order — then the process is killed and buried and
+        the socket is closed. One that has already died is left alone: there is
+        nothing to kill and its wire went with it.
+        """
+        for worker_handler in list(self.worker_handler_map.values()):
+            if worker_handler.process is not None:
+                worker_handler.expect_death()
+                await worker_handler.terminate_process()
+            await worker_handler.connector.stop()
 
     async def restart_worker(self, worker_handler: WorkerHandler) -> WorkerHandler | None:
         """Ask a worker to leave for good and put a fresh one in its place.

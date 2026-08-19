@@ -39,6 +39,7 @@ from .envelope_handler import (
 from .exceptions import (
     AssignmentRefused,
     NoRoomError,
+    SiteFailedRequest,
     UserOnHold,
     WorkerQuittingError,
 )
@@ -59,6 +60,7 @@ __all__ = [
     "GroupEnvelopeHandler",
     "GroupHandler",
     "NoRoomError",
+    "SiteFailedRequest",
     "SpaCommander",
     "SpaWorker",
     "UserOnHold",

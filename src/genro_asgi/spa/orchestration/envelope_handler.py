@@ -104,6 +104,12 @@ from .worker_connector import GLOBAL_STORE_KEY, WORKER_SNAPSHOT_KEY
 #: The slot the worker events travel in, as the worker composes it.
 WORKER_EVENTS_KEY = "worker_events"
 
+#: What a user with no name of his own is called. The folds of a login read it
+#: to tell the identity that CEASES to exist from the one that stays. Redefined
+#: with its ratified value rather than imported: the vertex owns the module that
+#: declares it and importing it back would close a circle.
+GUEST_PREFIX = "guest_"
+
 #: What only a presentation carries: the child says its pid at birth and never
 #: again. It is what tells the vertex that this envelope is owed the whole store.
 PRESENTATION_KEY = "pid"
@@ -170,6 +176,13 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
 
         Raises:
             ValueError: the process has not ended.
+
+        Who is LOST is the crossing of two lists, and neither alone would do.
+        Somebody the group placed here but who never arrived has lost nothing —
+        what is his is still in the deposit and he only wants placing again — and
+        somebody this process merely had in memory while living somewhere else
+        has lost nothing either: his home is another process, and the connection
+        of his that was passing through here is the only thing that goes.
         """
         state = self.worker_handler.state
         if state not in ("quitted", "aborted"):
@@ -185,9 +198,15 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
             "worker": self.worker_handler.name,
             "users": sorted(users),
             "frozen_users": sorted(frozen),
-            "lost_users": sorted(users - frozen),
+            "lost_users": sorted((users & self._assigned_users) - frozen),
         }
         return self({WORKER_EVENTS_KEY: [worker_event]})
+
+    @property
+    def _assigned_users(self) -> set[str]:
+        """Whom the group places on this worker — where each of them LIVES."""
+        placements = self.worker_handler.group_handler.user_worker_map
+        return {user for user, name in placements.items() if name == self.worker_handler.name}
 
     def on_worker_snapshot(self, photo: dict[str, Any]) -> None:
         """File the photo as this handler's latest: the gauges everybody judges on."""
@@ -226,9 +245,30 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
                     worker_event["occupancy_percent"] = estimate
         super().work_on_envelope(envelope)
 
+    def on_connection_user_changed(self, worker_event: dict[str, Any]) -> None:
+        """A login: the person arrives, and only a GUEST leaves with his connection.
+
+        Who is on board is what a wild death is judged on, so a process that dies
+        between a login and the tail of its call must not be read as still
+        holding a guest the surface has already forgotten. A previous identity
+        that is not a guest is a person this process still holds — an avatar
+        switch moves one connection of his, never him — and the register one rung
+        down keeps his row for exactly that reason.
+        """
+        if worker_event["previous_user"].startswith(GUEST_PREFIX):
+            self.worker_handler.hosted_users.discard(worker_event["previous_user"])
+        self.worker_handler.hosted_users.add(worker_event["user"])
+
     def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
         """A user has left this process: he is not one of its own any more."""
         self.worker_handler.hosted_users.discard(worker_event["user"])
+
+    #: The tail of a login says the same thing at this rung with a word of its
+    #: own: the rows are gone from that process, and the person went NOWHERE —
+    #: he lives where he lived. It stops here on purpose: the group's placement
+    #: and the vertex's indexes point at his real home and must not be touched,
+    #: and the dispatch skips an op no handler of a rung declares.
+    on_user_rows_released = on_user_frozen
 
     #: Leaving for good says the same thing at this rung: he is not in this
     #: process's memory. Where he went is read one layer up, and a row about to
@@ -261,6 +301,16 @@ class GroupEnvelopeHandler(EnvelopeHandler):
         occupancy_percent = group_handler.get_occupancy_percent(photo)
         if occupancy_percent > group_handler.restart_occupancy_max_percent:
             group_handler.ping_now()
+
+    def on_connection_user_changed(self, worker_event: dict[str, Any]) -> None:
+        """A GUEST logged in: the placement was his alone, and it goes with him.
+
+        A previous identity that is not a guest keeps his: he lives where he
+        lived, whatever else he holds there, and the idleness sweep is what parks
+        him if that connection was his last.
+        """
+        if worker_event["previous_user"].startswith(GUEST_PREFIX):
+            self.group_handler.user_worker_map.pop(worker_event["previous_user"], None)
 
     def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
         """A user has left for the freezer: his placement is to be assigned again."""
@@ -341,6 +391,12 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
     def on_drop_user(self, worker_event: dict[str, Any]) -> None:
         """A user is gone: his row, his connections and whatever was waiting for him."""
         self.spa_commander.drop_user(worker_event["user"])
+
+    def on_connection_user_changed(self, worker_event: dict[str, Any]) -> None:
+        """A connection changed owner: the surface says so, and decides nothing."""
+        self.spa_commander.change_connection_user(
+            worker_event["session_id"], worker_event["user"], worker_event["previous_user"]
+        )
 
     def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
         """A user is in the freezer: the mark goes on, with what he is expected to cost."""

@@ -426,6 +426,15 @@ class WorkerHandler:
         except ProcessLookupError:
             pass
 
+    def expect_death(self) -> None:
+        """Say that the death about to happen is awaited, so it is not a wild one.
+
+        Acts on the parked wait, whose being live is what ``on_child_lost`` reads
+        to tell an ordered death from a wild one: what follows is ``quitted`` and
+        no alarm is owed for it. The killing is the caller's own next step.
+        """
+        self._park_death_wait()
+
     def _park_death_wait(self) -> asyncio.Future[None]:
         """Park the wait an ordered death resolves; its being live IS the order."""
         self._death_wait = asyncio.get_running_loop().create_future()

@@ -40,6 +40,7 @@ from genro_asgi.spa.orchestration.envelope_handler import PRESENTATION_KEY, WORK
 from genro_asgi.spa.orchestration.worker_connector import GLOBAL_STORE_KEY, WORKER_SNAPSHOT_KEY
 
 from .child_stub import ANNOUNCE_OP
+from .conftest import wait_for
 from .group_stub import GroupStub
 
 CHILD_MODULE = "tests.orchestration.child_stub"
@@ -341,12 +342,40 @@ async def test_the_ordered_death_freezes_the_flagged_and_discards_the_rest(
     assert group.dropped_workers == [WORKER_NAME]
 
 
+async def test_a_death_does_not_take_whoever_was_only_passing_through(handler, commander, group):
+    """Only whoever LIVED here dies here: the crossing of the two lists.
+
+    A person is in a process's memory for reasons other than living in it — the
+    login of a second browser puts him there for the length of one call, while
+    his home, his store and his deposit folder are on another process. A death
+    read off that memory alone would erase somebody who is perfectly well, and a
+    death read off the placement alone would erase somebody the group had sent
+    here who had not yet arrived, whose parcel is untouched in the deposit.
+    """
+    passing = commander.resolve_user("cid-a")
+    expected = commander.resolve_user("cid-b")
+    resident = commander.resolve_user("cid-c")
+    handler.hosted_users.update({passing, resident})   # in this process's memory
+    group.user_worker_map[passing] = "standard_0002"   # but he lives elsewhere
+    group.user_worker_map[expected] = WORKER_NAME      # sent here, never arrived
+    group.user_worker_map[resident] = WORKER_NAME
+    handler.state = "aborted"
+
+    handler.envelope_handler.report_death()
+
+    assert resident not in commander.user_map
+    assert passing in commander.user_map
+    assert expected in commander.user_map
+    assert commander.connection_user_map["cid-a"] == passing
+
+
 async def test_the_wild_death_saves_nobody_and_its_parcels_are_discarded(
     handler, commander, group, caplog
 ):
     caplog.set_level(logging.INFO)
     user = commander.resolve_user("cid-a")
     handler.hosted_users.add(user)
+    group.user_worker_map[user] = WORKER_NAME          # this worker is where he LIVES
     # What a freeze leaves on disk, written the way a worker writes it: under the
     # semaphore of that user's own folder.
     commander.freeze_handler.take_lock(user, WORKER_NAME)
@@ -439,18 +468,14 @@ async def test_a_real_child_announces_and_the_vertex_learns_it(
     assert beat[WORKER_SNAPSHOT_KEY]["global_store"] == born_with
     assert born_with != to_tytx(commander.global_register, "json")
 
-    # A FOLD THAT REFUSES DOES NOT SEVER THE WIRE. An worker event about somebody
-    # the vertex never wrote cannot be filed — and a bug one level up must not
-    # take a whole process's users down with it: the refusal is denounced and the
-    # caller is answered.
+    # A FOLD THAT REFUSES ANSWERS THE CALLER AND THEN TAKES THE PROCESS AWAY. The
+    # events of that envelope were drained by the child when it sent them and
+    # nothing can deliver them again, so the parent's surface and the child's have
+    # already diverged: the process goes, and the death settles its people by the
+    # road that already exists. The request in flight is answered first — a
+    # browser waiting on it must not be left hanging by the machine's own
+    # housekeeping.
     refused = await handler.connector.call(
-        ANNOUNCE_OP,
-        {"worker_events": [{"op": "drop_page", "worker": WORKER_NAME, "page_id": "p1"}]},
-        timeout=CALL_TIMEOUT,
-    )
-    assert refused["result"] == {"announcing": 1}
-
-    stranger = await handler.connector.call(
         ANNOUNCE_OP,
         {
             "worker_events": [
@@ -460,7 +485,8 @@ async def test_a_real_child_announces_and_the_vertex_learns_it(
         timeout=CALL_TIMEOUT,
     )
 
-    assert stranger["result"] == {"announcing": 1}
+    assert refused["result"] == {"announcing": 1}
     assert "The fold refused the envelope" in caplog.text
-    assert handler.connector.connected is True
-    assert await handler.ping_process() is not None
+    await wait_for(lambda: handler.process is None, timeout=CALL_TIMEOUT)
+    assert "order=kill_worker" in caplog.text
+    assert "outcome=fold_refused" in caplog.text
