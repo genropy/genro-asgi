@@ -66,8 +66,6 @@ class GroupStub:
         self.users_on_board: list[set[str]] = []
         #: The names of the handlers taken out of the group, in order.
         self.dropped_workers: list[str] = []
-        #: The workers this group was told to kill, with the cause.
-        self.killed_workers: list[tuple[str, str]] = []
         #: Whether the next photo counts as urgent — the tests set it, and the
         #: reading below turns it into the occupancy the chain judges.
         self.urgent_snapshots = False
@@ -83,13 +81,6 @@ class GroupStub:
     def get_occupancy_percent(self, worker_snapshot: dict[str, Any] | None) -> float:
         """How full the worker of this photo is: full when the tests want it urgent."""
         return 100.0 if self.urgent_snapshots else 0.0
-
-    async def kill_worker_TBD(self, worker_handler: Any, cause: str) -> None:
-        """The group's order when a worker cannot be trusted: the row, then the kill."""
-        self.killed_workers.append((worker_handler.name, cause))
-        self.spa_commander.log_order(self.name, "kill_worker", worker_handler.name, outcome=cause)
-        if worker_handler.process is not None:
-            await worker_handler.terminate_process()
 
     def drop_worker(self, worker: str) -> None:
         """Take a dead handler out of the group, with the placements that pointed at it."""

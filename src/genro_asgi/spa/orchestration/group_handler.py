@@ -352,25 +352,6 @@ class GroupHandler:
         if spare is not None:
             await self._order_quit(spare, "close_worker")
 
-    async def kill_worker_TBD(self, worker_handler: WorkerHandler, cause: str) -> None:
-        """Take a worker's process away because it cannot be trusted any more.
-
-        Args:
-            worker_handler: the worker whose process goes.
-            cause: why, written on the order row.
-
-        Acts on the process — it is killed, and the end of its wire settles the
-        death like any other, so its people are marked, deposited or purged by
-        the road that already exists. The order row is the point: a machine
-        killing its own workers has to be readable in the account of the orders
-        and not only in the log of the application, because a defect that keeps
-        doing it would otherwise look like an ordinary birth-and-death cycle.
-        """
-        self._logger.error("Group %s: %s cannot be trusted (%s)", self.name, worker_handler.name, cause)
-        self.spa_commander.log_order(self.name, "kill_worker", worker_handler.name, outcome=cause)
-        if worker_handler.process is not None:
-            await worker_handler.terminate_process()
-
     async def start_worker(self) -> WorkerHandler | None:
         """Bring one more worker into this group and start its process.
 

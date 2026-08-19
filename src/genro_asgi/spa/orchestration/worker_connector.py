@@ -276,36 +276,26 @@ class WorkerConnector:
     def _dispatch(self, frame: Frame) -> None:
         """Route one inbound frame: a REPLY is read then resolved, and there is no other lane."""
         if frame.method == REPLY_METHOD:
-            refused = self._take_envelope(frame)
+            self._take_envelope(frame)
             self._resolve_reply(frame)
-            if refused:
-                asyncio.ensure_future(
-                    self.worker_handler.group_handler.kill_worker_TBD(
-                        self.worker_handler, "fold_refused"
-                    )
-                )
         else:
             self._logger.warning(
                 "Unexpected envelope %s from the child on %s", frame.method, self.socket_path.name
             )
 
-    def _take_envelope(self, frame: Frame) -> bool:
+    def _take_envelope(self, frame: Frame) -> None:
         """Push the envelope into the fold before the caller is answered.
 
         Args:
             frame: the REPLY as it came off the wire.
 
-        Returns:
-            Whether the fold refused it — which the caller turns into the death
-            of this process.
-
         Whatever the fold composed for the descent is dropped: nothing goes down
-        in answer to an answer. A fold that raises is a divergence that already
-        happened: the single writer of the parent's surface could not apply what
-        the child said, the child drained those events when it sent them, and
-        nothing can deliver them again. So the process goes, and everything of
-        its people is settled by the death — the marks, the deposit, the new
-        placement — instead of surviving half applied.
+        in answer to an answer. A fold that raises is a fault of THIS side — a
+        field the two sides name differently, or a bug in a layer of the chain —
+        so the exception is logged with its stack and nothing is done to the
+        child: the orchestration neither corrects nor masks, and the worker is
+        not answerable for it. The events of that envelope stay half applied,
+        which is the declared price until the escalation of F48 exists.
         """
         try:
             self.worker_handler.read_envelope(frame.data or {})
@@ -315,8 +305,6 @@ class WorkerConnector:
                 frame.id,
                 self.socket_path.name,
             )
-            return True
-        return False
 
     def _resolve_reply(self, frame: Frame) -> None:
         """Hand the REPLY payload to the parked caller; a caller already gone drops it."""

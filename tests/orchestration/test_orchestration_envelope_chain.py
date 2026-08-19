@@ -40,7 +40,6 @@ from genro_asgi.spa.orchestration.envelope_handler import PRESENTATION_KEY, WORK
 from genro_asgi.spa.orchestration.worker_connector import GLOBAL_STORE_KEY, WORKER_SNAPSHOT_KEY
 
 from .child_stub import ANNOUNCE_OP
-from .conftest import wait_for
 from .group_stub import GroupStub
 
 CHILD_MODULE = "tests.orchestration.child_stub"
@@ -468,13 +467,11 @@ async def test_a_real_child_announces_and_the_vertex_learns_it(
     assert beat[WORKER_SNAPSHOT_KEY]["global_store"] == born_with
     assert born_with != to_tytx(commander.global_register, "json")
 
-    # A FOLD THAT REFUSES ANSWERS THE CALLER AND THEN TAKES THE PROCESS AWAY. The
-    # events of that envelope were drained by the child when it sent them and
-    # nothing can deliver them again, so the parent's surface and the child's have
-    # already diverged: the process goes, and the death settles its people by the
-    # road that already exists. The request in flight is answered first — a
-    # browser waiting on it must not be left hanging by the machine's own
-    # housekeeping.
+    # A FOLD THAT REFUSES ANSWERS THE CALLER AND LEAVES THE CHILD ALONE. What
+    # raised is a fault of THIS side — a field the two sides name differently, or
+    # a bug in a layer of the chain — so it is logged with its stack and the
+    # process is not touched: the orchestration neither corrects nor masks, and
+    # the worker is not answerable for a defect of the parent.
     refused = await handler.connector.call(
         ANNOUNCE_OP,
         {
@@ -487,6 +484,5 @@ async def test_a_real_child_announces_and_the_vertex_learns_it(
 
     assert refused["result"] == {"announcing": 1}
     assert "The fold refused the envelope" in caplog.text
-    await wait_for(lambda: handler.process is None, timeout=CALL_TIMEOUT)
-    assert "order=kill_worker" in caplog.text
-    assert "outcome=fold_refused" in caplog.text
+    assert handler.process is not None
+    assert handler.state == "running"
