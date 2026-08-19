@@ -193,3 +193,69 @@ refused. Nothing was added to the upper rungs: `work_on_envelope` dispatches wit
 `getattr(self, f"on_{op}", None)`, so an op no rung declares dies at the first
 one, and the group's placement and the vertex's indexes — which point at the
 person's real home — are untouched by construction.
+
+## End-of-macro review — what it opened, and what it taught the next mandate
+
+Five axes in parallel (correctness, the hot path of the login, volume, vacuous
+tests, fidelity to the record), each in its own worktree, on `main..b5d90a0`.
+The record itself came out clean: R1..R14 all implemented with `file:line`, the
+twenty-three walkthrough answers of the handoff §5 implemented as answered, the
+seventeen baptisms present, the legacy untouched, and none of the declared
+exclusions crept in. The 124 mypy advisories were checked family by family and
+are all idiomatic noise — including the two that looked real (`on_startup`
+returning a coroutine, which `LifespanHandler._run_hook` handles by
+`iscoroutinefunction`, and `WsgiSeam(self.wsgi_app)`, guarded by its caller).
+
+**Open, minuted here, not decided.**
+
+- **The boot wipe of the deposit's working directory does not exist.** The v3
+  record §12.1 (F4) ratifies that every start wipes it; `FreezeHandler.__init__`
+  only does `mkdir(exist_ok=True)`, and two docstrings
+  (`spa_commander.py:659`, `freeze_handler.py:36`) assert the wipe as a fact. It
+  is a MISSING BEHAVIOUR and not a stale docstring. Mitigating: `cleanup_frozen`
+  absorbs most of the effect at its first round, discarding every folder no
+  `user_map` row claims. To be taken up after the fixes.
+- **Two tests of `test_orchestration_worker_handler.py` are flaky** on the
+  child's birth timing (`test_a_launched_process_presents_itself_on_the_handlers_socket`
+  and `test_the_photo_arrives_with_the_presentation_and_every_envelope_after`,
+  with `test_the_beat_gives_back_what_the_process_answered` and
+  `test_a_mute_process_is_killed_after_one_repeated_beat` seen once under load).
+  Two axes of three saw it independently, which makes it a real defect of the
+  suite and part of the fix round — NOT of the clean-up task.
+
+**Rules for the next review mandate**, both learned from this one failing them:
+
+1. **Pin the commit — it is systematic, not an accident.** ALL FIVE worktrees
+   were handed out sitting on the BASE branch instead of the review commit: an
+   isolated worktree is born on the branch base, not on the commit under review.
+   Every axis caught it within its first six commands and moved before taking any
+   measurement, and each re-ran its probes at the review commit when asked, so
+   nothing was suspended — but that was five independent catches, not a
+   safeguard. The `PYTHONPATH` rule does not cover this: it protects against the
+   wrong DIRECTORY, not the wrong COMMIT, and an axis that only read code and
+   reasoned — a documentary one — would have reviewed the base branch with no
+   error to warn it. The mandate's first step is `git switch --detach <commit>`
+   plus the verification that `git log -1` prints it.
+2. **Carry the ratifications of the day.** The volume axis proposed collapsing
+   `WorkerHandler.expect_death` into `_park_death_wait` as an accidental 1:1
+   wrapper. It is not: the verb was baptised in this macro precisely so
+   `GroupHandler.stop` would not reach into another class's private. The mandate
+   had not told it, which is a defect of the mandate and not of the axis.
+
+**The fixes are ordered by ROOT, not by symptom** — ten separate fixes over three
+causes would produce ten guards:
+
+- **Root A**, the tail treats the login as if the request were single and already
+  over: `_serve_request` computes the identity once and `freeze_connection` looks
+  neither at the pendings nor at the claim it took.
+- **Root B**, R8 did not go all the way down: the two folds were aligned, the
+  worker was left behind (`_transfer_flags.pop(previous_user)` with no
+  `GUEST_PREFIX` question, and the hold barrier never released).
+- **Root C**, whoever reads the events in an intermediate window: a raise inside
+  a fold discards the rest of an envelope already drained, and a wild death
+  between the relabel and the tail annihilates somebody living elsewhere.
+
+**The probes are the SOURCE of the scenarios, never the tests themselves.** A
+probe proves once; a test has to survive the rewrites — and this review has just
+shown what happens when a test photographs the wrong thing. Every fix carries its
+own test, classified at birth, with the neutralization done again.

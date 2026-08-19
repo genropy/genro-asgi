@@ -118,6 +118,50 @@ async def test_the_departure_promised_to_the_guest_is_dropped(worker):
     assert worker._transfer_flags == {}
 
 
+async def test_the_departure_promised_to_a_real_identity_survives_his_avatar_switch(worker):
+    """R8 admits the real prior, and a prior that stays keeps the departure he was promised."""
+    worker.add_connection("a1b2")
+    worker.add_connection("c3d4")
+    worker.relabel_connection("a1b2", "mario")
+    worker.relabel_connection("c3d4", "mario")
+    worker.plan_transfers(transfer_users=["mario"])
+
+    worker.relabel_connection("a1b2", "carlo")
+
+    assert worker._transfer_flags == {"mario": "T"}
+
+
+async def test_an_avatar_switch_does_not_strand_the_wait_on_the_person_who_stays(tmp_path):
+    """The consequence of the flag: without it the wait on him has nothing to release it.
+
+    The vertex parks whoever the photo shows on his way out, and the ONLY things
+    that let that wait go are the marks a departure or a homecoming brings. An
+    avatar switch that cancelled the departure of a real identity would leave him
+    on hold with nothing left able to clear it: every other browser of his would
+    wait out the whole budget and be answered 503, at every request, forever.
+    """
+    group, worker_handler = relabel_rungs(tmp_path)
+    vertex = group.spa_commander
+    worker = SpaWorker(WORKER_NAME, freeze_handler=FreezeHandler(tmp_path / "frozen_users"))
+    worker.add_connection("a1b2")
+    worker.add_connection("c3d4")
+    worker.relabel_connection("a1b2", "mario")
+    worker.relabel_connection("c3d4", "mario")
+    worker.worker_events.clear()
+    vertex.connection_user_map["c3d4"] = "mario"
+    vertex.user_map["mario"] = vertex._new_row()
+
+    worker.plan_transfers(transfer_users=["mario"])
+    vertex.hold_user("mario", "transfer_flag T")
+    worker.relabel_connection("a1b2", "carlo")
+    await worker.execute_transfers()
+    worker_handler.read_envelope({"worker_events": list(worker.worker_events)})
+
+    assert vertex.user_map["mario"]["on_hold"] is None
+    assert vertex.user_hold_event_map == {}
+    assert vertex.resolve_user("c3d4") == "mario"
+
+
 async def test_the_login_travels_on_the_reply(worker):
     guest = browsing_guest(worker)
 

@@ -972,9 +972,12 @@ class SpaWorker:
         Acts on the registers AT ONCE — the row changes owner, the user is born
         here if he was unknown, and the pages follow their connection without
         being touched, their owner being derived through it — on the flag the
-        tail of this call reads, and on the departure the previous identity may
-        have been promised: a guest that is ceasing to exist is not carried to
-        the deposit, so that flag is dropped in this same breath. Announces the
+        tail of this call reads, and on the departure a GUEST may have been
+        promised: one that is ceasing to exist is not carried to the deposit, so
+        his flag is dropped in this same breath. A previous identity that is no
+        guest KEEPS his: he stays here with whatever else he holds, the round
+        that promised his departure still means it, and cancelling it would leave
+        the wait on him at the vertex with nothing to release it. Announces the
         login, which is what the vertex folds.
         """
         if user.startswith(GUEST_PREFIX):
@@ -988,7 +991,8 @@ class SpaWorker:
             self._user_register[user]["connections"].add(cid)
             item.update(user=user, **fields)
             self._login_previous_user_map[cid] = previous_user
-            self._transfer_flags.pop(previous_user, None)
+            if previous_user.startswith(GUEST_PREFIX):
+                self._transfer_flags.pop(previous_user, None)
             self.add_worker_event(
                 "connection_relabeled", user=user, previous_user=previous_user, session_id=cid
             )
