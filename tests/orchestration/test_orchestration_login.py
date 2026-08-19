@@ -27,6 +27,7 @@ on disk is the whole point, and a fake filesystem would judge nothing.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -263,6 +264,70 @@ async def test_a_deposit_that_refuses_leaves_everything_alive(worker, monkeypatc
     assert guest in worker.user_register
     assert worker.freeze_failures == 1
     assert events_of(worker, "user_frozen") == []
+
+
+async def test_a_folder_that_never_comes_free_leaves_everything_alive_too(tmp_path):
+    """The other way a departure does not happen, and it must end where the first one ends.
+
+    The contract of this method is that a departure that gives up leaves the
+    machine as it was. Of its two ways of giving up, only the refused write used
+    to honour it: the folder that never comes free returned early, keeping the
+    claim it had taken on the previous identity. A claim nobody gives back is a
+    departure that never ends, and the worker's own ``quit`` waits on exactly
+    that — so a process that had once served a login under a busy folder could
+    never finish leaving, and the drain of a replacement would stall on it.
+    """
+    deposit = FreezeHandler(tmp_path / "frozen_users")
+    worker = SpaWorker(
+        WORKER_NAME,
+        freeze_handler=deposit,
+        deposit_lock_retry_interval=0.01,
+        deposit_lock_wait_limit=0.05,
+    )
+    guest = browsing_guest(worker)
+    worker.relabel_connection("a1b2", "mario")
+    # Somebody else is inside mario's folder and does not come out.
+    assert deposit.take_lock("mario", "standard_0002") is True
+
+    assert await worker.freeze_connection("a1b2") is False
+
+    # The declared degraded shape, exactly as for a refused write.
+    assert worker.connection_register["a1b2"]["user"] == "mario"
+    assert guest in worker.user_register
+    assert worker.freeze_failures == 1
+    assert events_of(worker, "user_frozen") == []
+    # And nothing of the attempt is left behind to block what comes next.
+    assert worker._departing_users == set()
+    assert worker._login_previous_user_map == {}
+    assert deposit.lock_holder("mario") == "standard_0002"
+
+
+async def test_a_departure_that_gave_up_does_not_hold_the_process_here(tmp_path):
+    """The consequence: a worker that gave up on a folder can still finish leaving.
+
+    ``quit`` parks everybody and then waits for the departures to be OVER, which
+    is no flag left and nobody still on his way out. A claim kept by a departure
+    that gave up is somebody on his way out for ever, so that wait would never
+    return and the process would never leave — the drain of a replacement, which
+    waits on the same thing, would stall behind it.
+    """
+    deposit = FreezeHandler(tmp_path / "frozen_users")
+    worker = SpaWorker(
+        WORKER_NAME,
+        freeze_handler=deposit,
+        deposit_lock_retry_interval=0.01,
+        deposit_lock_wait_limit=0.05,
+        transfer_start_delay=0.0,
+    )
+    browsing_guest(worker)
+    worker.relabel_connection("a1b2", "mario")
+    deposit.take_lock("mario", "standard_0002")
+    await worker.freeze_connection("a1b2")
+
+    await asyncio.wait_for(worker.quit(), timeout=5.0)
+
+    assert worker._transfers_done.is_set() is True
+    assert worker._departing_users == set()
 
 
 # -- what the next request finds, wherever the pool puts him --

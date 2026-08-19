@@ -1132,9 +1132,14 @@ class SpaWorker:
         the connection, its pages, the guest left behind, and the new identity
         too when this was all it had here, so that his own next request finds a
         row just born and installs the carried store instead of discarding it.
-        A refused write leaves EVERYTHING alive and announces nothing: the
-        identity stays resident on this worker with its connection attached,
-        which is a legitimate shape of the machine, and the failure is counted.
+        A departure that does not happen leaves EVERYTHING alive and announces
+        nothing: the identity stays resident on this worker with its connection
+        attached, which is a legitimate shape of the machine, and the failure is
+        counted. BOTH ways of not happening end there — a folder that never comes
+        free and a deposit that refuses the parcel — so the claim taken on the
+        previous identity and the flag of this login are given back on every road
+        out. A claim kept by a departure that gave up would be held forever, and
+        the whole worker could never finish leaving.
         """
         with self.dispatch_lock:
             previous_user = self._login_previous_user_map.get(cid)
@@ -1144,44 +1149,46 @@ class SpaWorker:
         if not self._claim_departure(previous_user):
             return False
         try:
-            await self._take_folder_lock(user)
-        except TimeoutError:
-            self._freeze_failures += 1
-            self._logger.error(
-                "Worker %s: the folder of %s never came free; the connection of his "
-                "login stays here",
-                self.name,
-                user,
-            )
-            return False
-        try:
-            with self.dispatch_lock:
-                parcel = self._connection_parcel(cid)
-                if previous_user.startswith(GUEST_PREFIX):
-                    parcel["store"] = self._user_register[previous_user]["store"]
-                parcel = copy.deepcopy(parcel)
-            await self._run_in_pool(
-                self.service_pool,
-                functools.partial(
-                    self.freeze_handler.write_connection_register_item,
+            try:
+                await self._take_folder_lock(user)
+            except TimeoutError:
+                self._freeze_failures += 1
+                self._logger.error(
+                    "Worker %s: the folder of %s never came free; the connection of his "
+                    "login stays here",
+                    self.name,
                     user,
-                    cid,
-                    parcel,
-                    writer=self.name,
-                    cause="login",
-                    group=self.group,
-                ),
-            )
-        except Exception:
-            self._freeze_failures += 1
-            self._logger.exception(
-                "Worker %s: the deposit refused the connection of %s; he stays here",
-                self.name,
-                user,
-            )
-            return False
+                )
+                return False
+            try:
+                with self.dispatch_lock:
+                    parcel = self._connection_parcel(cid)
+                    if previous_user.startswith(GUEST_PREFIX):
+                        parcel["store"] = self._user_register[previous_user]["store"]
+                    parcel = copy.deepcopy(parcel)
+                await self._run_in_pool(
+                    self.service_pool,
+                    functools.partial(
+                        self.freeze_handler.write_connection_register_item,
+                        user,
+                        cid,
+                        parcel,
+                        writer=self.name,
+                        cause="login",
+                        group=self.group,
+                    ),
+                )
+            except Exception:
+                self._freeze_failures += 1
+                self._logger.exception(
+                    "Worker %s: the deposit refused the connection of %s; he stays here",
+                    self.name,
+                    user,
+                )
+                return False
+            finally:
+                self.freeze_handler.release_lock(user, self.name)
         finally:
-            self.freeze_handler.release_lock(user, self.name)
             with self.dispatch_lock:
                 del self._login_previous_user_map[cid]
             self._release_departure(previous_user)
