@@ -42,6 +42,14 @@ hours. Today it travels on one envelope only, the answer to the presentation,
 because that is the only process holding none of it; the update to a process
 already alive replaces the replica the same way when it arrives.
 
+**The store goes down whole and comes up as writes.** The descent replaces the
+replica; the climb carries what the hosted site wrote on it, in a
+``global_writes`` slot beside the photo. No lane is opened for it: the writes
+ride the envelope that was already going up, and the fold applies them to the
+master before the caller of that envelope is unblocked. So the asymmetry below
+holds unchanged — there is still nothing but the presentation and the REPLYs
+coming up this wire.
+
 **Stale socket, always unlinked.** The socket file outlives the process that
 crashed, and a bind over it fails; the path is cleared before every bind. The
 directory holding the sockets is private (0700): connecting there means
@@ -61,13 +69,16 @@ reads it there. So the photo has ONE road instead of three, a live process has a
 photo from birth, and the beat is left with the only question its name asks: are
 you alive.
 
-**The protocol is ASYMMETRIC, and that is what keeps it small.** Down go CALLs;
-up come the presentation at birth and then REPLYs, nothing else. So a REPLY is
-the only envelope this wire routes — its payload handed to the parked caller
-inline, O(1), the loop staying on the wire — and whatever the child announces
-travels in that payload, riding the answer to whatever was asked of it. Anything
-else arriving from below is logged as an unexpected envelope: there is no lane
-for it to be on.
+**Two lanes, one wire, and the doctrine of the channel on both.** Down go CALLs
+and the REPLYs to what the child asked; up come the presentation at birth, the
+REPLYs to what was asked of it, and the child's own CALLs. A REPLY is resolved
+INLINE — its payload handed to the parked caller, O(1), the loop staying on the
+wire — and a CALL is served as a TASK, so a slow answer cannot make this wire
+deaf to the next frame. The conversations interleave without confusion because
+every frame carries its id: the transport was always full duplex, and the second
+lane needed no machinery of its own. A CALL the handler does not serve comes back
+as an error REPLY, never as a dropped frame; anything that is neither method is
+logged as an unexpected envelope, because there is no third lane.
 
 **The end of the wire is a LOCAL fact of this handler.** EOF — the death signal
 on a same-host socket — or a protocol violation closes the stream, fails every
@@ -88,16 +99,40 @@ from ...channel.frame import MAX_FRAME_SIZE, REGISTER_METHOD, Frame, FrameStream
 
 CALL_METHOD = "CALL"
 REPLY_METHOD = "REPLY"
-GLOBAL_STORE_KEY = "global_register_item_tytx"
-WORKER_SNAPSHOT_KEY = "worker_snapshot"
+
+#: The slot the worker events travel in, as the worker composes it.
+ENVELOPE_SLOT_WORKER_EVENTS = "worker_events"
+
+#: The slot the photo rides in, beside whatever payload its envelope carries.
+ENVELOPE_SLOT_WORKER_SNAPSHOT = "worker_snapshot"
+
+#: What only a presentation carries: the child says its pid at birth and never
+#: again. It is what tells the vertex that this envelope is owed the whole store.
+ENVELOPE_SLOT_PRESENTATION = "pid"
 
 __all__ = [
     "CALL_METHOD",
-    "GLOBAL_STORE_KEY",
+    "ENVELOPE_SLOT_PRESENTATION",
+    "ENVELOPE_SLOT_WORKER_EVENTS",
+    "ENVELOPE_SLOT_WORKER_SNAPSHOT",
     "REPLY_METHOD",
-    "WORKER_SNAPSHOT_KEY",
+    "CommanderCallFailed",
     "WorkerConnector",
 ]
+
+
+class CommanderCallFailed(Exception):
+    """The lane carried the call up and the answer was an error, not a result.
+
+    Args:
+        path: the routing key the child's CALL was placed on.
+        cause: what the parent side said went wrong, for the log.
+    """
+
+    def __init__(self, path: str, cause: str) -> None:
+        self.path = path
+        self.cause = cause
+        super().__init__(f"the call to {path} failed: {cause}")
 
 
 class WorkerConnector:
@@ -127,6 +162,7 @@ class WorkerConnector:
         self._stream: FrameStream | None = None
         self._pending: dict[str, asyncio.Future[Any]] = {}
         self._connected_event = asyncio.Event()
+        self._service_tasks: set[asyncio.Task[None]] = set()
         self._closing = False
 
     @property
@@ -226,6 +262,7 @@ class WorkerConnector:
             self._connected_event.clear()
             await stream.close()
             self._fail_pending(f"the wire of {self.socket_path.name} is down")
+            self._cancel_child_calls()
             if presented and not self._closing:
                 self._logger.info("Wire lost on %s", self.socket_path.name)
                 await self._fire(self.worker_handler.on_child_lost)
@@ -273,14 +310,61 @@ class WorkerConnector:
                 return
             self._dispatch(frame)
 
+    def _cancel_child_calls(self) -> None:
+        """Drop every CALL of the dead child still being served up here.
+
+        Nothing can be answered on a wire that is gone, and a call left parked
+        would go on holding whatever it is parked ON — the store grant, in
+        practice, which a dead waiter would win and never give back.
+        """
+        for task in list(self._service_tasks):
+            task.cancel()
+
     def _dispatch(self, frame: Frame) -> None:
-        """Route one inbound frame: a REPLY is read then resolved, and there is no other lane."""
+        """Route one inbound frame: a REPLY resolves its caller, a CALL is served as a task."""
         if frame.method == REPLY_METHOD:
             self._take_envelope(frame)
             self._resolve_reply(frame)
+        elif frame.method == CALL_METHOD:
+            task = asyncio.create_task(self._serve_child_call(frame))
+            self._service_tasks.add(task)
+            task.add_done_callback(self._service_tasks.discard)
         else:
             self._logger.warning(
                 "Unexpected envelope %s from the child on %s", frame.method, self.socket_path.name
+            )
+
+    async def _serve_child_call(self, frame: Frame) -> None:
+        """Serve one CALL the child placed, and answer it.
+
+        Args:
+            frame: the CALL as it came off the wire.
+
+        The handler is asked, sync or async, and whatever it returns is the
+        ``result`` of the REPLY. Anything it raises — a path it does not serve
+        included, which reaches here as the ``AttributeError`` of a hook that is
+        not there — becomes the ``error`` of that same REPLY: the child is
+        answered once, always, so nobody is left parked on a dropped frame.
+        """
+        try:
+            answer = self.worker_handler.serve_child_call(frame.path, frame.data or {})
+            if inspect.isawaitable(answer):
+                answer = await answer
+            data: dict[str, Any] = {"result": answer}
+        except Exception as exc:
+            self._logger.exception(
+                "The CALL %s from the child on %s was not served",
+                frame.path,
+                self.socket_path.name,
+            )
+            data = {"error": f"{type(exc).__name__}: {exc}"}
+        try:
+            await self._live_stream().write(
+                Frame(id=frame.id, method=REPLY_METHOD, path=frame.path, data=data)
+            )
+        except ConnectionError:
+            self._logger.warning(
+                "The answer to %s found no wire on %s", frame.path, self.socket_path.name
             )
 
     def _take_envelope(self, frame: Frame) -> None:

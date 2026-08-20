@@ -1,0 +1,3 @@
+✓ Phase 4 completed: The table events
+
+Committed `045b81e`. `subscribeTable` / `notifyDbEvents` plus the three local helpers transcribed onto `SpaWorker`, with a `SubscriptionIndex` beside the registry sharing its lock; the index empties in `_remove_page_item` (the single-writer every removal path funnels through, so the freeze is covered too) and refills in `_install_page_subscriptions`. Contract file 11 passed, full suite 2045 passed / 2 skipped, `ruff check src/ tests/` clean; mypy stayed at its 146 advisory findings, none new.

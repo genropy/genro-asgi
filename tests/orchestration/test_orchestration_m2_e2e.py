@@ -57,10 +57,9 @@ import time
 from typing import Any
 
 import pytest
-from genro_tytx import to_tytx
 
 from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker, UserOnHold, WorkerHandler
-from genro_asgi.spa.orchestration.worker_connector import WORKER_SNAPSHOT_KEY
+from genro_asgi.spa.orchestration.worker_connector import ENVELOPE_SLOT_WORKER_SNAPSHOT
 
 from .group_stub import GroupStub
 from .conftest import wait_for
@@ -121,7 +120,6 @@ class DrivenWorker(SpaWorker):
             [
                 ("Content-Type", "text/plain"),
                 ("X-Worker", self.name),
-                ("X-Global-Store", str(self.global_register_item_tytx)),
             ],
         )
         return [f"{environ['REQUEST_METHOD']} {environ['PATH_INFO']} "
@@ -253,9 +251,8 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     assert handler.worker_snapshot["connections"] == {}
 
     # SERVES. The request crosses the process boundary inside the envelope and
-    # comes back as the site answered it — headers and body whole, and among the
-    # headers the whole global store the presentation was answered with. The rows
-    # are born on the way in, and the worker events say so.
+    # comes back as the site answered it — headers and body whole. The rows are
+    # born on the way in, and the worker events say so.
     before = time.time()
     reply = await handler.connector.call(
         "/site/invoices", http_call("cid-a", "mario", path="/invoices"), timeout=CALL_TIMEOUT
@@ -263,11 +260,9 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
 
     assert reply["result"]["status"] == 200
     assert ["X-Worker", WORKER_NAME] in reply["result"]["headers"]
-    master_store = to_tytx(group.spa_commander.global_register, "json")
-    assert ["X-Global-Store", master_store] in reply["result"]["headers"]
     assert body_of(reply) == "GET /invoices for mario"
     assert announced(reply) == ["new_user", "new_connection"]
-    photo = reply[WORKER_SNAPSHOT_KEY]
+    photo = reply[ENVELOPE_SLOT_WORKER_SNAPSHOT]
     assert sorted(photo["users"]["mario"]) == ["item", "transfer_flag"]
     assert photo["users"]["mario"]["transfer_flag"] is None
     assert photo["users"]["mario"]["item"]["state"] == "active"
@@ -300,7 +295,7 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     # spoken is kept. The decision travels on the photo that answers the order.
     planned = await handler.connector.call(PLAN_ORDER, timeout=CALL_TIMEOUT)
 
-    flagged = planned[WORKER_SNAPSHOT_KEY]["users"]
+    flagged = planned[ENVELOPE_SLOT_WORKER_SNAPSHOT]["users"]
     assert {user: pair["transfer_flag"] for user, pair in flagged.items()} == {
         "mario": "T",
         "anna": None,
@@ -338,7 +333,7 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     assert commander.user_is_frozen("mario") is True
     assert commander.user_map["mario"]["on_hold"] is None
     assert group.user_worker_map == {"mario": None}
-    photo = parked[WORKER_SNAPSHOT_KEY]
+    photo = parked[ENVELOPE_SLOT_WORKER_SNAPSHOT]
     assert "mario" not in photo["users"]
     assert photo["users"]["anna"]["item"]["state"] == "active"
     assert list(photo["connections"]) == ["cid-b"]
@@ -360,7 +355,7 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     assert deposit.read_user_register_item("mario") is None
     assert deposit.read_connection_register_item("mario", "cid-a") is None
     assert deposit.user_folders == set()
-    assert woken[WORKER_SNAPSHOT_KEY]["users"]["mario"]["item"]["state"] == "active"
+    assert woken[ENVELOPE_SLOT_WORKER_SNAPSHOT]["users"]["mario"]["item"]["state"] == "active"
     # The vertex turned the mark off on the same worker event: he lives in a process
     # again, so his next request is routed there and not to the deposit.
     assert commander.user_is_frozen("mario") is False

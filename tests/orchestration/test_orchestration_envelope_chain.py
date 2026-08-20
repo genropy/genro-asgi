@@ -33,11 +33,13 @@ from typing import Any
 
 import pytest
 
-from genro_tytx import to_tytx
 
 from genro_asgi.spa.orchestration import UserOnHold, WorkerHandler
-from genro_asgi.spa.orchestration.envelope_handler import PRESENTATION_KEY, WORKER_EVENTS_KEY
-from genro_asgi.spa.orchestration.worker_connector import GLOBAL_STORE_KEY, WORKER_SNAPSHOT_KEY
+from genro_asgi.spa.orchestration.worker_connector import (
+    ENVELOPE_SLOT_PRESENTATION,
+    ENVELOPE_SLOT_WORKER_EVENTS,
+    ENVELOPE_SLOT_WORKER_SNAPSHOT,
+)
 
 from .child_stub import ANNOUNCE_OP
 from .group_stub import GroupStub
@@ -49,15 +51,15 @@ CALL_TIMEOUT = 5.0
 
 def envelope(*worker_events: dict[str, Any], photo: dict[str, Any] | None = None) -> dict[str, Any]:
     """One envelope as a child composes it: its worker events, and its photo if due."""
-    made: dict[str, Any] = {WORKER_EVENTS_KEY: list(worker_events)}
+    made: dict[str, Any] = {ENVELOPE_SLOT_WORKER_EVENTS: list(worker_events)}
     if photo is not None:
-        made[WORKER_SNAPSHOT_KEY] = photo
+        made[ENVELOPE_SLOT_WORKER_SNAPSHOT] = photo
     return made
 
 
 def presentation(**payload: Any) -> dict[str, Any]:
     """The envelope of a child being born: what only a presentation carries."""
-    return {PRESENTATION_KEY: 4242, **payload}
+    return {ENVELOPE_SLOT_PRESENTATION: 4242, **payload}
 
 
 def photo_of(**users: str | None) -> dict[str, Any]:
@@ -151,8 +153,8 @@ async def test_the_births_of_the_reception_find_the_rows_already_written(handler
 async def test_a_page_is_written_where_it_belongs_and_forgotten_one_by_one(handler, commander):
     handler.read_envelope(
         envelope(
-            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a"},
-            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p2", "session_id": "cid-a"},
+            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a", "table_subscriptions": []},
+            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p2", "session_id": "cid-a", "table_subscriptions": []},
         )
     )
     assert commander.page_connection_map == {"p1": "cid-a", "p2": "cid-a"}
@@ -166,8 +168,8 @@ async def test_a_page_is_written_where_it_belongs_and_forgotten_one_by_one(handl
 async def test_a_cascade_of_pages_goes_in_one_worker_event(handler, commander):
     handler.read_envelope(
         envelope(
-            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a"},
-            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p2", "session_id": "cid-a"},
+            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a", "table_subscriptions": []},
+            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p2", "session_id": "cid-a", "table_subscriptions": []},
             {"op": "drop_pages", "worker": WORKER_NAME, "page_ids": ["p1", "p2"]},
         )
     )
@@ -178,7 +180,7 @@ async def test_a_cascade_of_pages_goes_in_one_worker_event(handler, commander):
 async def test_a_connection_leaves_its_pages_and_keeps_its_identity(handler, commander):
     user = commander.resolve_user("cid-a")
     handler.read_envelope(
-        envelope({"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a"})
+        envelope({"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a", "table_subscriptions": []})
     )
 
     handler.read_envelope(
@@ -195,8 +197,8 @@ async def test_several_connections_leave_in_one_worker_event(handler, commander)
     commander.resolve_user("cid-b")
     handler.read_envelope(
         envelope(
-            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a"},
-            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p2", "session_id": "cid-b"},
+            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a", "table_subscriptions": []},
+            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p2", "session_id": "cid-b", "table_subscriptions": []},
         )
     )
 
@@ -214,7 +216,7 @@ async def test_a_user_who_is_gone_leaves_nothing_behind(handler, commander, grou
     user = commander.resolve_user("cid-a")
     group.user_worker_map[user] = WORKER_NAME
     handler.read_envelope(
-        envelope({"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a"})
+        envelope({"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a", "table_subscriptions": []})
     )
     commander.user_map[user]["pending_dbevents"] = [{"table": "invoices"}]
 
@@ -402,21 +404,12 @@ async def test_a_death_reported_for_a_living_process_is_refused(handler):
         handler.envelope_handler.report_death()
 
 
-async def test_a_presentation_is_answered_with_the_whole_store(handler, commander):
-    register = commander.global_register
-
-    assert handler.read_envelope(presentation()) == {GLOBAL_STORE_KEY: to_tytx(register, "json")}
-
-    register.set_item("counters.invoices", 3)
-    answer = handler.read_envelope(presentation())
-
-    assert answer == {GLOBAL_STORE_KEY: to_tytx(register, "json")}
-    assert "invoices" in str(answer[GLOBAL_STORE_KEY])
-
-
-async def test_an_answer_is_not_answered_and_carries_no_store(handler, commander):
+async def test_nothing_at_all_travels_back_down_the_chain(handler, commander):
+    # The store used to ride the presentation; it lives on the lane now, so the
+    # descent carries no payload of its own for any kind of envelope.
     commander.global_register.set_item("counters.invoices", 3)
 
+    assert handler.read_envelope(presentation()) == {}
     assert handler.read_envelope(envelope()) == {}
     assert handler.read_envelope(envelope(photo=photo_of(mario=None))) == {}
 
@@ -425,14 +418,12 @@ async def test_a_real_child_announces_and_the_vertex_learns_it(
     handler, commander, group, repo_on_pythonpath, caplog
 ):
     caplog.set_level(logging.INFO)
-    commander.global_register.set_item("counters.invoices", 3)
     user = commander.resolve_user("cid-a")
 
-    # BORN. Its own first photo cannot know the store — it travels in the
-    # presentation, and the store comes back in the answer to it, which is what
-    # the chain composed: the whole thing, because a newborn holds nothing.
+    # BORN. The photo it presents itself with is all this side knows of it, and
+    # the answer to that presentation carries nothing back.
     await handler.launch_process()
-    assert handler.worker_snapshot["global_store"] is None
+    assert handler.worker_snapshot["pid"] == handler.process.pid
 
     # IT ANNOUNCES. What happened in that process rides the answer to the order,
     # climbs the three layers inline, and lands in the indexes of the vertex.
@@ -440,7 +431,7 @@ async def test_a_real_child_announces_and_the_vertex_learns_it(
         ANNOUNCE_OP,
         {
             "worker_events": [
-                {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a"},
+                {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a", "table_subscriptions": []},
                 {"op": "user_frozen", "worker": WORKER_NAME, "user": user, "placement": None},
             ]
         },
@@ -448,24 +439,11 @@ async def test_a_real_child_announces_and_the_vertex_learns_it(
     )
 
     assert reply["result"] == {"announcing": 2}
-    assert reply[WORKER_SNAPSHOT_KEY]["global_store"] == to_tytx(commander.global_register, "json")
     assert commander.page_connection_map == {"p1": "cid-a"}
     assert commander.user_is_frozen(user) is True
     # The estimate was composed on this side of the wire, off the last photo.
     assert commander.user_map[user]["occupancy_percent"] == 0.0
     assert group.user_worker_map == {user: None}
-
-    # A CHANGE MADE NOW DOES NOT REACH IT. The store it holds is the one it was
-    # answered at birth, and the beat carries no order of its own: how a change of
-    # the master reaches a process already alive is not decided yet — the write
-    # climbs, and the update is sent to everybody, in the phase that gives the
-    # vertex its groups.
-    born_with = handler.worker_snapshot["global_store"]
-    commander.global_register.set_item("counters.orders", 7)
-    beat = await handler.ping_process()
-
-    assert beat[WORKER_SNAPSHOT_KEY]["global_store"] == born_with
-    assert born_with != to_tytx(commander.global_register, "json")
 
     # A FOLD THAT REFUSES ANSWERS THE CALLER AND LEAVES THE CHILD ALONE. What
     # raised is a fault of THIS side — a field the two sides name differently, or

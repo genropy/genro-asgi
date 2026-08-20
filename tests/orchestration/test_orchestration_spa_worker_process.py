@@ -44,12 +44,12 @@ from typing import Any
 
 import pytest
 
+
 from genro_asgi.channel.frame import Frame, FrameStream
 from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker, WorkerEntry, WorkerHandler
 from genro_asgi.spa.orchestration.worker_connector import (
-    GLOBAL_STORE_KEY,
     REPLY_METHOD,
-    WORKER_SNAPSHOT_KEY,
+    ENVELOPE_SLOT_WORKER_SNAPSHOT,
     WorkerConnector,
 )
 from genro_asgi.spa.orchestration.worker_entry import DEFAULT_WORKER_CLASS
@@ -68,7 +68,6 @@ WORKER_NAME = "standard_0001"
 GROUP = "standard"
 ENTRY_MODULE = "genro_asgi.spa.orchestration.worker_entry"
 ECHO_WORKER = f"{__name__}:EchoWorker"
-GLOBAL_STORE = "the whole global store, as it travels"
 LONG_TTL = 30.0
 BROKEN_PATH = "/falls_over"
 
@@ -99,26 +98,25 @@ class HandlerStub:
 
     The wire hands every envelope over whole and writes back down whatever comes
     out, so this stub plays the fold as well: it files the photo an envelope
-    carried, keeps the worker events for the assertions, and answers with the
-    store — which is what the real chain composes for a process that holds none.
+    carried, keeps the worker events for the assertions, and answers with
+    nothing — which is what the real chain composes.
     It doubles as the level above the handler in the real-child test at the end,
     where the only thing asked of a group is the wake — so it answers for that
     too, and counts it.
     """
 
     def __init__(self) -> None:
-        self.global_register_item_tytx = GLOBAL_STORE
         self.worker_snapshot: dict[str, Any] | None = None
         self.announced: list[dict[str, Any]] = []
         self.lost = 0
         self.wakes = 0
 
     def read_envelope(self, envelope: dict[str, Any]) -> dict[str, Any]:
-        """Read the envelope as the three layers would, and answer with the store."""
-        if WORKER_SNAPSHOT_KEY in envelope:
-            self.worker_snapshot = envelope[WORKER_SNAPSHOT_KEY]
+        """Read the envelope as the three layers would; nothing travels back down."""
+        if ENVELOPE_SLOT_WORKER_SNAPSHOT in envelope:
+            self.worker_snapshot = envelope[ENVELOPE_SLOT_WORKER_SNAPSHOT]
         self.announced.extend(envelope.get("worker_events") or ())
-        return {GLOBAL_STORE_KEY: self.global_register_item_tytx}
+        return {}
 
     def on_child_lost(self) -> None:
         self.lost += 1
@@ -215,7 +213,7 @@ class ParentWire:
         )
         self.entries.append(entry)
         self.lives.append(asyncio.create_task(entry.serve()))
-        await wait_for(lambda: entry.worker is not None and entry.worker.global_register_item_tytx)
+        await wait_for(lambda: entry.worker is not None and entry.worker.stream is not None)
         return entry.worker
 
     async def stop(self) -> None:
@@ -248,7 +246,7 @@ class ParentWire:
                     id=frame.id,
                     method=REPLY_METHOD,
                     path=frame.path,
-                    data={GLOBAL_STORE_KEY: GLOBAL_STORE},
+                    data={},
                 )
             )
 
@@ -287,8 +285,8 @@ def age_user(worker: SpaWorker, user: str, seconds: float) -> None:
     The forced step is what makes a restamp visible: a clock that was not
     written again stays where this put it.
     """
-    item = worker.user_register[user]
-    for one in [item] + [worker.connection_register[cid] for cid in item["connections"]]:
+    item = worker.user_register.get(user)
+    for one in [item] + [worker.connection_register.get(cid) for cid in item["connections"]]:
         for clock in ("last_refresh_ts", "last_user_ts", "last_rpc_ts"):
             one[clock] -= seconds
 
@@ -334,7 +332,6 @@ async def test_the_presentation_carries_the_first_photo_and_brings_the_store_hom
         "connections": {},
         "users": {},
     }
-    assert worker.global_register_item_tytx == GLOBAL_STORE
 
 
 async def test_the_beat_is_answered_and_asks_for_nothing_else(wire):
@@ -380,22 +377,22 @@ async def test_the_request_finds_its_row_born_and_its_clocks_stamped(wire):
     )
 
     assert announced(reply) == ["new_user", "new_connection"]
-    assert worker.connection_register["cid-a"]["user"] == "mario"
-    assert worker.user_register["mario"]["state"] == "active"
-    assert worker.user_register["mario"]["last_rpc_ts"] >= before
-    assert worker.connection_register["cid-a"]["last_rpc_ts"] >= before
+    assert worker.connection_register.get("cid-a")["user"] == "mario"
+    assert worker.user_register.get("mario")["state"] == "active"
+    assert worker.user_register.get("mario")["last_rpc_ts"] >= before
+    assert worker.connection_register.get("cid-a")["last_rpc_ts"] >= before
 
 
 async def test_every_served_call_writes_the_real_clock_again(wire):
     worker = await wire.take()
     await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
-    first = worker.user_register["mario"]["last_rpc_ts"]
+    first = worker.user_register.get("mario")["last_rpc_ts"]
     age_user(worker, "mario", 60)
 
     await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
 
-    assert worker.user_register["mario"]["last_rpc_ts"] > first
-    assert worker.connection_register["cid-a"]["last_rpc_ts"] > first
+    assert worker.user_register.get("mario")["last_rpc_ts"] > first
+    assert worker.connection_register.get("cid-a")["last_rpc_ts"] > first
 
 
 async def test_an_anonymous_request_is_a_guest_in_full(wire):
@@ -403,7 +400,7 @@ async def test_an_anonymous_request_is_a_guest_in_full(wire):
 
     await wire.connector.call("/site/invoices", http_call("cid-a"), timeout=5.0)
 
-    assert worker.connection_register["cid-a"]["user"] == "guest_cid-a"
+    assert worker.connection_register.get("cid-a")["user"] == "guest_cid-a"
     assert "guest_cid-a" in worker.user_register
 
 
@@ -416,7 +413,7 @@ async def test_the_second_request_of_a_connection_costs_no_new_row(wire):
     )
 
     assert announced(reply) == []
-    assert list(worker.user_register) == ["mario"]
+    assert worker.user_register.keys() == ["mario"]
 
 
 async def test_a_frozen_user_comes_home_when_the_envelope_says_so(wire, deposit):
@@ -430,7 +427,7 @@ async def test_a_frozen_user_comes_home_when_the_envelope_says_so(wire, deposit)
     )
 
     assert "user_adopted" in announced(reply)
-    assert worker.user_register["mario"]["state"] == "active"
+    assert worker.user_register.get("mario")["state"] == "active"
     assert deposit.read_user_register_item("mario") is None
 
 
@@ -477,7 +474,7 @@ async def test_a_worker_with_no_site_refuses_the_form_and_registers_nobody(wire)
     )
 
     assert reply["error"] == "http CALL form refused: this worker hosts no WSGI site"
-    assert worker.user_register == {}
+    assert worker.user_register.keys() == []
 
 
 # ----------------------------------------------------------------------
@@ -494,9 +491,11 @@ async def test_two_replies_inside_the_ttl_carry_one_photo(wire):
     await asyncio.sleep(0.06)
     third = await wire.connector.call(PING_OP_PATH, timeout=5.0)
 
-    assert WORKER_SNAPSHOT_KEY in first
-    assert WORKER_SNAPSHOT_KEY not in second
-    assert third[WORKER_SNAPSHOT_KEY]["pid"] == first[WORKER_SNAPSHOT_KEY]["pid"]
+    assert ENVELOPE_SLOT_WORKER_SNAPSHOT in first
+    assert ENVELOPE_SLOT_WORKER_SNAPSHOT not in second
+    assert (
+        third[ENVELOPE_SLOT_WORKER_SNAPSHOT]["pid"] == first[ENVELOPE_SLOT_WORKER_SNAPSHOT]["pid"]
+    )
 
 
 async def test_a_user_arriving_puts_the_photo_on_the_envelope_whatever_the_ttl(wire):
@@ -508,12 +507,12 @@ async def test_a_user_arriving_puts_the_photo_on_the_envelope_whatever_the_ttl(w
     )
     quiet = await wire.connector.call(PING_OP_PATH, timeout=5.0)
 
-    assert arrival[WORKER_SNAPSHOT_KEY]["users"]["mario"] == {
-        "item": arrival[WORKER_SNAPSHOT_KEY]["users"]["mario"]["item"],
+    assert arrival[ENVELOPE_SLOT_WORKER_SNAPSHOT]["users"]["mario"] == {
+        "item": arrival[ENVELOPE_SLOT_WORKER_SNAPSHOT]["users"]["mario"]["item"],
         "transfer_flag": None,
     }
-    assert arrival[WORKER_SNAPSHOT_KEY]["user_count"] == 1
-    assert WORKER_SNAPSHOT_KEY not in quiet
+    assert arrival[ENVELOPE_SLOT_WORKER_SNAPSHOT]["user_count"] == 1
+    assert ENVELOPE_SLOT_WORKER_SNAPSHOT not in quiet
 
 
 async def test_a_user_leaving_puts_the_photo_on_the_envelope_too(wire):
@@ -526,7 +525,7 @@ async def test_a_user_leaving_puts_the_photo_on_the_envelope_too(wire):
     reply = await wire.connector.call(PING_OP_PATH, timeout=5.0)
 
     assert announced(reply) == ["user_frozen"]
-    assert reply[WORKER_SNAPSHOT_KEY]["user_count"] == 0
+    assert reply[ENVELOPE_SLOT_WORKER_SNAPSHOT]["user_count"] == 0
 
 
 async def test_a_user_waking_puts_the_photo_on_the_envelope_too(wire, deposit):
@@ -541,9 +540,9 @@ async def test_a_user_waking_puts_the_photo_on_the_envelope_too(wire, deposit):
     quiet = await wire.connector.call(PING_OP_PATH, timeout=5.0)
 
     assert announced(woken) == ["user_adopted", "new_connection"]
-    assert woken[WORKER_SNAPSHOT_KEY]["users"]["mario"]["item"]["state"] == "active"
-    assert woken[WORKER_SNAPSHOT_KEY]["user_count"] == 1
-    assert WORKER_SNAPSHOT_KEY not in quiet
+    assert woken[ENVELOPE_SLOT_WORKER_SNAPSHOT]["users"]["mario"]["item"]["state"] == "active"
+    assert woken[ENVELOPE_SLOT_WORKER_SNAPSHOT]["user_count"] == 1
+    assert ENVELOPE_SLOT_WORKER_SNAPSHOT not in quiet
 
 
 async def test_the_photo_carries_the_flag_the_transfers_decided(wire):
@@ -553,7 +552,7 @@ async def test_the_photo_carries_the_flag_the_transfers_decided(wire):
 
     reply = await wire.connector.call(PING_OP_PATH, timeout=5.0)
 
-    photo = reply[WORKER_SNAPSHOT_KEY]
+    photo = reply[ENVELOPE_SLOT_WORKER_SNAPSHOT]
     assert photo["users"]["mario"]["transfer_flag"] == "T"
     assert photo["users"]["mario"]["item"]["state"] == "active"
     assert photo["users"]["mario"]["item"]["connection_count"] == 1
@@ -572,7 +571,7 @@ async def test_the_order_to_leave_is_answered_with_everybody_flagged_and_then_ta
 
     leaving = await wire.connector.call(QUIT_OP_PATH, timeout=5.0)
 
-    flags = leaving[WORKER_SNAPSHOT_KEY]["users"]
+    flags = leaving[ENVELOPE_SLOT_WORKER_SNAPSHOT]["users"]
     assert {user: pair["transfer_flag"] for user, pair in flags.items()} == {
         "mario": "T",
         "anna": "T",
@@ -591,8 +590,8 @@ async def test_the_order_to_drop_a_user_answers_with_what_it_announced(wire):
     )
 
     assert announced(reply) == ["drop_connections", "drop_user"]
-    assert worker.user_register == {}
-    assert worker.connection_register == {}
+    assert worker.user_register.keys() == []
+    assert worker.connection_register.keys() == []
 
 
 async def test_the_order_to_drop_a_connection_answers_with_what_it_announced(wire):
@@ -604,35 +603,22 @@ async def test_the_order_to_drop_a_connection_answers_with_what_it_announced(wir
     )
 
     assert announced(reply) == ["drop_connection", "drop_user"]
-    assert worker.connection_register == {}
+    assert worker.connection_register.keys() == []
 
 
 # ----------------------------------------------------------------------
-# The store downward, and the envelope that has no lane
+# The envelope that has no lane
 # ----------------------------------------------------------------------
-
-
-async def test_the_store_slot_replaces_the_replica_whole(wire):
-    worker = await wire.take()
-    assert worker.global_register_item_tytx == GLOBAL_STORE
-
-    # The store rides an order going down — the beat is the one that always
-    # comes — because down this wire there is nothing else to ride.
-    await wire.connector.call(
-        PING_OP_PATH, {GLOBAL_STORE_KEY: "a later store"}, timeout=5.0
-    )
-
-    assert worker.global_register_item_tytx == "a later store"
 
 
 async def test_an_envelope_that_is_not_an_order_is_denounced_and_nothing_else(wire, caplog):
     caplog.set_level(logging.WARNING)
     worker = await wire.take()
 
-    worker.handle_frame(Frame(method=REPLY_METHOD, path="/op/anything"))
+    # A REPLY has a lane of its own now — the answer to a call this worker
+    # placed upward — so what is denounced is whatever is neither of the two.
     worker.handle_frame(Frame(method="POST", path="/op/anything"))
 
-    assert f"unexpected envelope {REPLY_METHOD}" in caplog.text
     assert "unexpected envelope POST" in caplog.text
     assert worker.exited is False
 
@@ -659,7 +645,7 @@ async def test_a_dead_wire_parks_everybody_in_the_deposit_and_ends_the_worker(wi
     await wait_for(lambda: worker.exited)
     assert deposit.read_user_register_item("mario") is not None
     assert deposit.read_connection_register_item("mario", "cid-a") is not None
-    assert worker.user_register == {}
+    assert worker.user_register.keys() == []
 
 
 # ----------------------------------------------------------------------

@@ -149,12 +149,16 @@ import logging
 import os
 import time
 from collections import Counter
+from datetime import UTC, datetime, timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
 from genro_bag import Bag
+from genro_tytx import from_tytx, to_tytx
 
+from ..global_store import GlobalStore, GlobalStoreLock
+from ..subscription_index import SubscriptionIndex
 from .beats import every
 from .envelope_handler import CommanderEnvelopeHandler
 from .exceptions import AssignmentRefused, UserOnHold, SiteFailedRequest
@@ -204,7 +208,375 @@ SHAPE_REVIEW_SECONDS = HEARTBEAT_SECONDS * CHECK_OCCUPANCY_BEATS
 #: like one of the contract ops.
 SITE_PATH_PREFIX = "/site"
 
-__all__ = ["GUEST_PREFIX", "HEARTBEAT_SECONDS", "ORDERS_LOGGER_NAME", "SpaCommander"]
+#: The namespace of the lane going UP: a worker places its desk CALLs on
+#: ``/desk/<op>``, the way the orders going down travel on ``/op/<name>``. The
+#: segment after the prefix IS the name of the method that serves it.
+DESK_PATH_PREFIX = "/desk/"
+
+#: What ``kind`` names when an addressed write is a STATE one: the target is a
+#: store, and the write is a real Bag write wherever it lands. Redefined with
+#: its ratified value rather than imported: the module that declares it is the
+#: child's, and the vertex does not depend on the child.
+STATE_KINDS = frozenset({"page_store", "user_store", "connection_store"})
+
+#: How long a queued event is worth delivering. Past it a delivery is garbage —
+#: the browser would paint a value the machine has long moved on from — so the
+#: drain discards it instead of shipping it. One rule for all three species.
+EVENT_MAX_AGE_SECONDS = 300.0
+
+__all__ = [
+    "DESK_PATH_PREFIX",
+    "EVENT_MAX_AGE_SECONDS",
+    "GUEST_PREFIX",
+    "HEARTBEAT_SECONDS",
+    "ORDERS_LOGGER_NAME",
+    "STATE_KINDS",
+    "DeliveryDesk",
+    "SpaCommander",
+]
+
+
+class DeliveryDesk:
+    """The vertex's desk: who subscribes what, and what waits for whom.
+
+    The commander alone holds the subscription index and the pending queues, and
+    every one of them is fed and drained by CALLs a worker places on the lane.
+    Three species, never mixed: a page's **datachanges** (explicit writes
+    addressed at it), a page's **dbevents** (the deposits of a commit on a table
+    it subscribed), and a user's **store changes** (STATE writes addressed at his
+    own store, applied to his Bag by whichever of his pages retires them —
+    usersticky puts them all in one process, and the siblings capture the write
+    locally on their own ``user_view``).
+
+    **The global store is served here too**, for the same reason: it lives on
+    the commander and nowhere else, so ``store_set``, ``store_del`` and the two
+    halves of the read-modify-write grant are lane CALLs like the rest. There is
+    no replica anywhere to keep aligned.
+
+    **Outside the pickled surface, on purpose.** The queues are ephemeral: what
+    is waiting for a user who goes into the freezer is lost with the websockets
+    that would have carried it, and nothing here is dumped or restored.
+
+    **The subscription answers only once it is filed**, so a site that subscribes
+    a table and commits it inside the same request finds it active: the
+    subscribe-window is closed by construction, not by luck.
+
+    **The exchange files first and answers after**, so the caller's own events
+    come back in the same round; a sibling page's events wait in its own queue
+    for its own next exchange, since nothing is ever pushed from here.
+
+    Args:
+        spa_commander: the vertex this desk belongs to.
+        event_max_age_seconds: how long a queued event stays deliverable.
+    """
+
+    def __init__(
+        self, spa_commander: Any, *, event_max_age_seconds: float = EVENT_MAX_AGE_SECONDS
+    ) -> None:
+        self.spa_commander = spa_commander
+        self.event_max_age_seconds = event_max_age_seconds
+        #: Which pages want which table, both directions, one mutator each.
+        self.page_subscriptions = SubscriptionIndex()
+        #: The pending changes of each page, in arrival order.
+        self.page_datachange_map: dict[str, list[dict[str, Any]]] = {}
+        #: The pending table-event deposits of each page, in arrival order.
+        self.page_dbevent_map: dict[str, list[dict[str, Any]]] = {}
+        #: The pending STATE writes addressed at each user's own store.
+        self.user_store_change_map: dict[str, list[dict[str, Any]]] = {}
+        self._logger = logging.getLogger(__name__)
+
+    @property
+    def subscribed_tables(self) -> list[str]:
+        """Every table holding at least one subscription — the workers' source filter."""
+        return sorted(self.page_subscriptions.table_pages)
+
+    def serve_child_call(self, path: str, data: dict[str, Any]) -> Any:
+        """Serve one CALL a worker placed on the lane, by the name in its path.
+
+        Args:
+            path: the routing key, ``/desk/<op>``.
+            data: the payload, handed over as the op's own keyword arguments.
+
+        Returns:
+            Whatever the op answers, which becomes the ``result`` of the REPLY.
+
+        Raises:
+            AttributeError: no op of that name — the wire answers an error REPLY,
+                never a silent discard.
+        """
+        return getattr(self, f"op_{path.removeprefix(DESK_PATH_PREFIX)}")(**data)
+
+    def install_page_subscriptions(self, page_id: str, tables: list[str]) -> None:
+        """File a page's announced subscriptions: the index rebuilt from the row.
+
+        Args:
+            page_id: the page the announcement is about.
+            tables: the ``table_subscriptions`` its register row carries —
+                empty at birth, the replayed set at the wake.
+
+        Acts on ``page_subscriptions``.
+        """
+        for table in tables:
+            self.page_subscriptions.subscribe(page_id, table)
+
+    def op_subscribe_table(
+        self, page_id: str, table: str, subscribe: bool = True
+    ) -> dict[str, Any]:
+        """File (or unfile) a page's subscription to a table's events.
+
+        Args:
+            page_id: the subscribing page — whoever asks, so there is no target.
+            table: the table whose events it wants.
+            subscribe: opening the subscription, or closing it.
+
+        Returns:
+            The subscription as it was taken, plus the whole subscribed-table
+            list the worker caches as its source filter.
+
+        Acts on ``page_subscriptions`` BEFORE it answers.
+        """
+        if subscribe:
+            self.page_subscriptions.subscribe(page_id, table)
+        else:
+            self.page_subscriptions.unsubscribe(page_id, table)
+        return {
+            "page_id": page_id,
+            "table": table,
+            "subscribe": subscribe,
+            "tables": self.subscribed_tables,
+        }
+
+    def op_exchange(
+        self,
+        page_id: str,
+        user: str,
+        datachanges: list[dict[str, Any]] | None = None,
+        dbevents: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Take a request's events in, and hand back what waits for its page.
+
+        Args:
+            page_id: the exchanging page — whose queues are retired.
+            user: its owner, whose store queue is retired with them.
+            datachanges: the addressed writes the request produced, each a header
+                (``kind``, ``target``, ``filters``, ``replace``) around a
+                TYTX-encoded ``change``.
+            dbevents: the deposits the request produced, as the worker shaped
+                them.
+
+        Returns:
+            The two page species, the user's store changes and the current
+            subscribed-table list. The changes travel TYTX-encoded: their
+            ``change_ts`` is a datetime, which JSON has no word for.
+
+        Acts on all three queue maps: the arrivals are filed first, so what the
+        caller itself produced for itself is in the answer.
+        """
+        for message in datachanges or ():
+            self.file_datachange(message)
+        for deposit in dbevents or ():
+            self.file_dbevent(deposit)
+        return {
+            "datachanges": to_tytx(self.drain_page_datachanges(page_id), "json"),
+            "dbevents": self.drain_page_dbevents(page_id),
+            "store_changes": to_tytx(self.drain_user_store_changes(user), "json"),
+            "tables": self.subscribed_tables,
+        }
+
+    def file_datachange(self, message: dict[str, Any]) -> None:
+        """Put one addressed write in the queue of whoever it is addressed at.
+
+        Args:
+            message: the header — ``op``, ``kind``, ``target``, ``filters`` —
+                plus what the op adds: the TYTX-encoded ``change`` of a
+                ``set_datachange``, the ``path`` of a ``drop_datachanges``.
+
+        Raises:
+            NotImplementedError: a filtered address — the page surface here
+                answers no field yet, exactly as on the worker before it.
+
+        Acts on ``page_datachange_map`` for a SIGNAL address and on
+        ``user_store_change_map`` for a STATE one. ``replace`` coalesces with the
+        pending change of the same key — path, reason, fired — so a value
+        written over and over reaches the browser once. ``reset_datachanges``
+        empties that queue and ``drop_datachanges`` takes one prefix out of it,
+        the semantics the page collector had before the queue moved here.
+        """
+        if message.get("filters") is not None:
+            raise NotImplementedError(f"desk: the filtered address {message['filters']!r}")
+        if message["kind"] in STATE_KINDS:
+            queue = self.user_store_change_map.setdefault(message["target"], [])
+        else:
+            queue = self.page_datachange_map.setdefault(message["target"], [])
+        if message.get("op") == "reset_datachanges":
+            queue.clear()
+            return
+        if message.get("op") == "drop_datachanges":
+            queue[:] = [
+                pending
+                for pending in queue
+                if not self._under(pending["key"]["path"], message["path"])
+            ]
+            return
+        change = from_tytx(message["change"], "json")
+        if message.get("replace"):
+            queue[:] = [pending for pending in queue if pending["key"] != change["key"]]
+        queue.append(change)
+
+    def file_dbevent(self, deposit: dict[str, Any]) -> None:
+        """Put one deposit in the queue of every page subscribing its table.
+
+        Args:
+            deposit: the deposit as the worker shaped it — ``table``, ``batch``,
+                ``from_page_id``, ``reason``, ``ts``.
+
+        Acts on ``page_dbevent_map``. A table nobody subscribes anywhere costs
+        one dict lookup that misses and the deposit dies here: a dbevent is a
+        signal, and there is no queue for a listener that does not exist.
+        """
+        for page_id in self.page_subscriptions.pages_for(deposit["table"]):
+            self.page_dbevent_map.setdefault(page_id, []).append(deposit)
+
+    def drain_page_datachanges(self, page_id: str) -> list[dict[str, Any]]:
+        """Retire a page's pending changes, the stale ones discarded."""
+        return self._fresh_changes(self.page_datachange_map.pop(page_id, []))
+
+    def drain_page_dbevents(self, page_id: str) -> list[dict[str, Any]]:
+        """Retire a page's pending deposits, the stale ones discarded."""
+        horizon = time.time() - self.event_max_age_seconds
+        return [
+            deposit
+            for deposit in self.page_dbevent_map.pop(page_id, [])
+            if deposit["ts"] >= horizon
+        ]
+
+    def drain_user_store_changes(self, user: str) -> list[dict[str, Any]]:
+        """Retire a user's pending store writes, the stale ones discarded."""
+        return self._fresh_changes(self.user_store_change_map.pop(user, []))
+
+    def op_store_set(self, path: str, value: Any = None) -> dict[str, Any]:
+        """Write one path of the store, and answer once it holds the value.
+
+        Args:
+            path: the path to write.
+            value: what to write there.
+
+        Returns:
+            The path written, which is what the site's protocol expects.
+
+        Acts on ``global_register``. Last writer wins: there is one copy and no
+        version, so two workers writing the same path are ordered by the lane
+        and the second one is the truth.
+        """
+        self.spa_commander.global_register.set_item(path, value)
+        return {"path": path}
+
+    def op_store_del(self, path: str) -> dict[str, Any]:
+        """Remove one path of the store — the node is gone, not set to None.
+
+        Args:
+            path: the path to remove.
+
+        Returns:
+            The path removed.
+
+        Acts on ``global_register``.
+        """
+        self.spa_commander.global_register.pop(path)
+        return {"path": path}
+
+    async def op_store_lock(
+        self, worker: str, request_id: str
+    ) -> dict[str, Any]:
+        """Park on the FIFO grant, then hand the store itself to the winner.
+
+        Args:
+            worker: the process asking — whose death releases the grant.
+            request_id: the hold's own id, which the release quotes back.
+
+        Returns:
+            The store as it stands at grant time, TYTX-encoded: the holder never
+            has to ask whether what it reads is current, because what it mounts
+            IS the only copy.
+
+        Acts on ``global_lock``. The answer is the grant, so a worker whose call
+        is still parked here simply has not been answered yet.
+        """
+        await self.spa_commander.global_lock.acquire(worker, request_id)
+        return {
+            "request_id": request_id,
+            "store": to_tytx(self.spa_commander.global_register, "json"),
+        }
+
+    def op_store_unlock(
+        self, request_id: str, changes: Any = None
+    ) -> dict[str, Any]:
+        """Apply a holder's drained changes and let the next waiter in.
+
+        Args:
+            request_id: the grant being given back.
+            changes: what the body captured on its working copy, TYTX-encoded —
+                attributes, reason and fired included, so nothing of the write's
+                shape is lost on the way up. Empty when the body raised.
+
+        Returns:
+            Whether anything was applied — a release for a grant no longer in
+            force applies nothing, which is the all-or-nothing rule.
+
+        Acts on ``global_register`` and on ``global_lock``, the store written
+        BEFORE the release so the next waiter's grant carries these changes.
+        """
+        if not self.spa_commander.global_lock.holds(request_id):
+            self._logger.debug(
+                "desk: the release of the grant %s is no longer in force", request_id
+            )
+            return {"applied": False}
+        GlobalStore(self.spa_commander.global_register).apply_changes(from_tytx(changes, "json"))
+        self.spa_commander.global_lock.release()
+        return {"applied": True}
+
+    def release_worker_lock(self, worker: str) -> None:
+        """Give the grant back for a worker that died holding it, applying nothing.
+
+        Args:
+            worker: the process whose wire has just ended.
+
+        Acts on ``global_lock`` when that worker was the holder, and on nothing
+        at all otherwise. The changes it had made live only on its own working
+        copy, which died with it — the whole death rule, and the reason the
+        protocol needs no rollback.
+        """
+        if not self.spa_commander.global_lock.held_by(worker):
+            return
+        self.spa_commander.global_lock.release()
+        self._logger.info("Worker %s died holding the store: released, nothing applied", worker)
+
+    def drop_page(self, page_id: str) -> None:
+        """Forget a page here: its two queues and its subscriptions, one breath.
+
+        Args:
+            page_id: the page that is gone.
+
+        Acts on both page queue maps and on ``page_subscriptions``: nothing is
+        delivered to a page that is not there any more, and nothing keeps its
+        tables alive in the source filter.
+        """
+        self.page_datachange_map.pop(page_id, None)
+        self.page_dbevent_map.pop(page_id, None)
+        self.page_subscriptions.drop_page(page_id)
+
+    def drop_user(self, user: str) -> None:
+        """Forget what was waiting for a user's own store; his pages go on their own."""
+        self.user_store_change_map.pop(user, None)
+
+    def _under(self, path: str, prefix: str) -> bool:
+        """Whether a pending change's path falls under a dropped prefix."""
+        return path == prefix or path.startswith(f"{prefix}.")
+
+    def _fresh_changes(self, changes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """The changes still young enough to deliver, in the order they arrived."""
+        horizon = datetime.now(UTC) - timedelta(seconds=self.event_max_age_seconds)
+        return [change for change in changes if change["change_ts"] >= horizon]
 
 
 class SpaCommander:
@@ -232,6 +604,8 @@ class SpaCommander:
         memory_max_percent: what this server may hold OF THE MACHINE — the
             concession every percentage below it is a share of. All of it by
             default.
+        event_max_age_seconds: how long an event waiting at the delivery desk
+            stays deliverable; past it the drain discards it.
     """
 
     def __init__(
@@ -247,15 +621,23 @@ class SpaCommander:
         guest_expiry_hours: float = 24.0,
         machine_memory_alarm_percent: float = 90.0,
         memory_max_percent: float = 100.0,
+        event_max_age_seconds: float = EVENT_MAX_AGE_SECONDS,
     ) -> None:
         self.freeze_handler = FreezeHandler(frozen_users_path)
         self.user_expiry_hours = user_expiry_hours
         self.guest_expiry_hours = guest_expiry_hours
         self.machine_memory_alarm_percent = machine_memory_alarm_percent
         self.memory_max_percent = memory_max_percent
-        #: The master of the store every worker holds a replica of: the only
-        #: writer of that content is here, and a replica is replaced entire.
+        #: The global store itself: not a master over replicas any more, the
+        #: ONLY copy there is. Every read and every write of the hosted sites
+        #: reaches it as a CALL on the lane, answered once it has landed.
         self.global_register = Bag()
+        #: The grant of that store for a read-modify-write hold: FIFO, one
+        #: holder, and a holder whose process dies releases it applying nothing.
+        self.global_lock = GlobalStoreLock()
+        #: The desk of the deliveries: the subscriptions and the three queue
+        #: species, held here alone and outside everything that is pickled.
+        self.delivery_desk = DeliveryDesk(self, event_max_age_seconds=event_max_age_seconds)
         self.envelope_handler = CommanderEnvelopeHandler(self)
         #: Where the whole machine stands: ``running`` or ``saturated`` (no room
         #: for a newcomer anywhere). Written by the check of the resources, which
@@ -481,9 +863,11 @@ class SpaCommander:
             page_id: the page that is gone; one already forgotten is that same
                 outcome.
 
-        Acts on ``page_connection_map``.
+        Acts on ``page_connection_map`` and on the desk, whose queues and
+        subscriptions of that page go with it.
         """
         self.page_connection_map.pop(page_id, None)
+        self.delivery_desk.drop_page(page_id)
 
     def drop_connection(self, cid: str) -> None:
         """Forget a connection's pages, and keep the connection's identity.
@@ -491,11 +875,13 @@ class SpaCommander:
         Args:
             cid: the connection that is gone.
 
-        Acts on ``page_connection_map`` only: the cid stays in
-        ``connection_user_map``, because the cookie is eternal.
+        Acts on ``page_connection_map`` and on the desk each of those pages had
+        a queue in: the cid stays in ``connection_user_map``, because the cookie
+        is eternal.
         """
         for page_id in [page for page, owner in self.page_connection_map.items() if owner == cid]:
             del self.page_connection_map[page_id]
+            self.delivery_desk.drop_page(page_id)
 
     def drop_user(self, user: str) -> bool:
         """Forget an identity whole: his row, his connections, his pages, his freezer state.
@@ -507,8 +893,9 @@ class SpaCommander:
         Returns:
             Whether the freezer was holding anything of his.
 
-        Acts on all three indexes, on his barrier — whoever waited for him is
-        woken to find him gone and starts over — and on the freezer, counting
+        Acts on all three indexes, on the desk — his own store queue goes, his
+        pages went with their connections — on his barrier — whoever waited for
+        him is woken to find him gone and starts over — and on the freezer, counting
         what was waiting for him and will now never be delivered.
         """
         row = self.user_map.pop(user, None) or {}
@@ -519,6 +906,7 @@ class SpaCommander:
         self.counters["pendings_lost"] += len(row.get("pending_dbevents") or ()) + len(
             row.get("pending_datachanges") or ()
         )
+        self.delivery_desk.drop_user(user)
         had_state = self.freeze_handler.drop_user_folder(user)
         if had_state:
             self.counters["frozen_users_discarded"] += 1

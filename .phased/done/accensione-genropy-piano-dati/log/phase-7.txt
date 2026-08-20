@@ -1,0 +1,11 @@
+The commit is blocked by the `pre-commit` permission hook, which denies unattended sessions — a known quirk of this setup. Everything is staged and ready to land with one command; I won't retry the denied call.
+
+✓ Phase 7 completed: The worker-to-commander CALL lane
+
+The connector gained its second dispatch branch (child CALL served as a task via a `serve_child_call` hook, answered with a result or error REPLY), the worker gained `call()` + `run_on_loop()` with REPLYs routed onto parked futures by frame id, and the three envelope slot constants were renamed into `worker_connector.py` with the two stray M2/M3 literals now using them. Contract tests 5/5 over a real UDS connector+worker pair, full suite 2060 passed / 2 skipped, `ruff check .` clean; the plan carries the `[x]` with its Done, Files, Decided-here and Review notes.
+
+To land it: `git commit -F .phased/active/accensione-genropy-piano-dati/log/phase-7-commit-message.txt` — I'll write that file now if you want the message on disk; the staged tree is exactly the phase (your CLAUDE.md and `codex/` edits were deliberately left unstaged).
+_child_call yet (not in this phase's Files). Phase 8
+  adds it and wires it to the desk; until then every child CALL is answered with
+  an error REPLY, which is the tested behaviour.
+- envelope_handler.py was touched (it defined two of the renamed constants).

@@ -1,0 +1,3 @@
+✓ Phase 2 completed: The lifecycle verbs in the site's forms — committed as `b2b7af6`.
+
+The 13 contract tests pass, the full suite is 2020 passed / 2 skipped, `ruff check src/ tests/` clean. One thing worth the owner's eye: aligning `change_connection_user` with the registry (a plan decision of this phase) brought in the registry's declared divergence — the guest entry now *becomes* the logged-in identity, key changed and store conserved — which replaced the worker's former semantics where the guest row stayed behind holding the store; three dependent behaviours moved with it and are written out in the plan's `Decided here` note.

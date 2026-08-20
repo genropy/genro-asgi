@@ -62,7 +62,7 @@ def browsing_guest(worker: SpaWorker, cid: str = "a1b2", pages: int = 1) -> str:
     guest = f"{GUEST_PREFIX}{cid}"
     for index in range(pages):
         worker.add_page(f"page-{index}", cid)
-    worker.user_register[guest]["store"]["cart.item"] = "a lamp"
+    worker.user_register.get(guest)["store"]["cart.item"] = "a lamp"
     return guest
 
 
@@ -80,21 +80,26 @@ async def test_the_connection_changes_owner_in_the_same_breath(worker):
     worker.change_connection_user("a1b2", "mario", user_tags="admin")
 
     # The caller reads the row back at once and must see the new identity.
-    assert worker.connection_register["a1b2"]["user"] == "mario"
-    assert worker.connection_register["a1b2"]["user_tags"] == "admin"
-    assert worker.user_register["mario"]["connections"] == {"a1b2"}
-    assert worker.user_register[guest]["connections"] == set()
+    assert worker.connection_register.get("a1b2")["user"] == "mario"
+    assert worker.connection_register.get("a1b2")["user_tags"] == "admin"
+    assert worker.user_register.get("mario")["connections"] == {"a1b2"}
+    # The guest entry did not stay behind empty: it BECAME mario's, key and all.
+    assert guest not in worker.user_register
     # The pages were not touched: their owner is derived through the connection.
-    assert worker.page_register["page-0"]["connection_id"] == "a1b2"
-    assert worker._page_user("page-0") == "mario"
+    assert worker.page_register.get("page-0")["connection_id"] == "a1b2"
+    assert worker.registry.page_user("page-0") == "mario"
 
 
-async def test_the_new_identity_is_born_empty(worker):
-    browsing_guest(worker)
+async def test_the_new_identity_inherits_the_guest_store(worker):
+    """The guest item follows its first real identity — the registry's own rule."""
+    guest = browsing_guest(worker)
+    guest_store = worker.user_register.get(guest)["store"]
+    guest_store["draft"] = "half typed"
 
     worker.change_connection_user("a1b2", "mario")
 
-    assert worker.user_register["mario"]["store"] == Bag()
+    assert worker.user_register.get("mario")["store"] is guest_store
+    assert worker.user_register.get("mario")["store"]["draft"] == "half typed"
 
 
 async def test_nobody_logs_in_as_a_guest(worker):
@@ -236,7 +241,7 @@ async def test_an_avatar_switch_carries_no_store(worker, deposit):
     worker.add_connection("a1b2", "mario")
     worker.add_page("page-0", "a1b2")
     worker.add_connection("c3d4", "mario")
-    worker.user_register["mario"]["store"]["cart.item"] = "a lamp"
+    worker.user_register.get("mario")["store"]["cart.item"] = "a lamp"
 
     worker.change_connection_user("a1b2", "carlo")
     assert await worker.freeze_connection("a1b2") is True
@@ -244,7 +249,7 @@ async def test_an_avatar_switch_carries_no_store(worker, deposit):
     parcel = deposit.read_connection_register_item("carlo", "a1b2")
     assert "store" not in parcel
     # He kept his other connection, so he is still here with his store.
-    assert worker.user_register["mario"]["store"]["cart.item"] == "a lamp"
+    assert worker.user_register.get("mario")["store"]["cart.item"] == "a lamp"
 
 
 async def test_a_deposit_that_refuses_leaves_everything_alive(worker, monkeypatch):
@@ -259,9 +264,10 @@ async def test_a_deposit_that_refuses_leaves_everything_alive(worker, monkeypatc
     assert await worker.freeze_connection("a1b2") is False
 
     # The legitimate degraded shape: he is resident here with his connection.
-    assert worker.connection_register["a1b2"]["user"] == "mario"
+    assert worker.connection_register.get("a1b2")["user"] == "mario"
     assert "mario" in worker.user_register
-    assert guest in worker.user_register
+    assert worker.page_register.get("page-0") is not None
+    assert guest not in worker.user_register    # it became mario's at the login
     assert worker.freeze_failures == 1
     assert events_of(worker, "user_frozen") == []
 
@@ -292,8 +298,10 @@ async def test_a_folder_that_never_comes_free_leaves_everything_alive_too(tmp_pa
     assert await worker.freeze_connection("a1b2") is False
 
     # The declared degraded shape, exactly as for a refused write.
-    assert worker.connection_register["a1b2"]["user"] == "mario"
-    assert guest in worker.user_register
+    assert worker.connection_register.get("a1b2")["user"] == "mario"
+    assert "mario" in worker.user_register
+    assert worker.page_register.get("page-0") is not None
+    assert guest not in worker.user_register    # it became mario's at the login
     assert worker.freeze_failures == 1
     assert events_of(worker, "user_frozen") == []
     # And nothing of the attempt is left behind to block what comes next.
@@ -340,7 +348,7 @@ async def test_the_guests_store_becomes_his_own_on_a_row_just_born(worker, depos
 
     await worker.adopt_connection("mario", "a1b2")
 
-    assert worker.user_register["mario"]["store"]["cart.item"] == "a lamp"
+    assert worker.user_register.get("mario")["store"]["cart.item"] == "a lamp"
     assert "page-0" in worker.page_register
 
 
@@ -351,11 +359,11 @@ async def test_a_resident_keeps_his_own_store_and_the_guests_dies(worker, deposi
     await worker.freeze_connection("a1b2")
     # He is already living here under another connection of his own.
     worker.add_connection("c3d4", "mario")
-    worker.user_register["mario"]["store"]["cart.item"] = "his own lamp"
+    worker.user_register.get("mario")["store"]["cart.item"] = "his own lamp"
 
     await worker.adopt_connection("mario", "a1b2")
 
-    assert worker.user_register["mario"]["store"]["cart.item"] == "his own lamp"
+    assert worker.user_register.get("mario")["store"]["cart.item"] == "his own lamp"
 
 
 async def test_the_user_parcel_is_installed_before_the_connection_one(worker, deposit):
@@ -379,7 +387,7 @@ async def test_the_user_parcel_is_installed_before_the_connection_one(worker, de
 
     await worker._resolve_row("mario", "a1b2", {"user_frozen": True, "http": {}})
 
-    assert worker.user_register["mario"]["store"]["cart.item"] == "what he had before"
+    assert worker.user_register.get("mario")["store"]["cart.item"] == "what he had before"
 
 
 # -- what the vertex folds --

@@ -42,10 +42,11 @@ from typing import Any
 
 import pytest
 
-from genro_tytx import to_tytx
 
-from genro_asgi.spa.orchestration.envelope_handler import PRESENTATION_KEY
-from genro_asgi.spa.orchestration.worker_connector import GLOBAL_STORE_KEY, WORKER_SNAPSHOT_KEY
+from genro_asgi.spa.orchestration.worker_connector import (
+    ENVELOPE_SLOT_PRESENTATION,
+    ENVELOPE_SLOT_WORKER_SNAPSHOT,
+)
 from genro_asgi.spa.orchestration import WorkerHandler
 from genro_asgi.spa.orchestration import worker_handler as worker_handler_module
 from .group_stub import GroupStub
@@ -110,7 +111,9 @@ async def live() -> None:
 
 
 asyncio.run(live())
-'''.format(env_var=WORKER_ENV_VAR, snapshot_key=WORKER_SNAPSHOT_KEY, quit_path=QUIT_OP_PATH)
+'''.format(
+    env_var=WORKER_ENV_VAR, snapshot_key=ENVELOPE_SLOT_WORKER_SNAPSHOT, quit_path=QUIT_OP_PATH
+)
 
 CHILD_MODULE = "scripted_child"
 
@@ -177,14 +180,10 @@ async def test_the_spawn_payload_carries_the_child_whole_configuration(make_hand
     }
 
 
-async def test_the_store_has_an_owner_now_and_the_presentation_is_answered_with_it(
-    make_handler, group
-):
+async def test_the_chain_composes_nothing_to_send_back_down(make_handler, group):
     handler = make_handler()
 
-    assert handler.read_envelope({PRESENTATION_KEY: 4242}) == {
-        GLOBAL_STORE_KEY: to_tytx(group.spa_commander.global_register, "json")
-    }
+    assert handler.read_envelope({ENVELOPE_SLOT_PRESENTATION: 4242}) == {}
     assert handler.read_envelope({}) == {}
 
 
@@ -227,7 +226,7 @@ async def test_the_beat_gives_back_what_the_process_answered(make_handler):
     answered = await handler.ping_process()
 
     assert answered["result"] == {"answered": PING_OP_PATH}
-    assert answered[WORKER_SNAPSHOT_KEY]["pid"] == handler.process.pid
+    assert answered[ENVELOPE_SLOT_WORKER_SNAPSHOT]["pid"] == handler.process.pid
 
 
 async def test_a_mute_process_is_killed_after_one_repeated_beat(make_handler, group, caplog):

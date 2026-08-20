@@ -1,0 +1,5 @@
+Foreman unreachable — the silent-skip case for an unattended sub-session.
+
+✓ Phase 5 completed: The site's global store climbs the envelope
+
+The worker now holds a live `global_replica` hydrated from the descending `GLOBAL_STORE_KEY`, `store_set`/`store_del`/`global_store_lock` write it first and queue for a new `global_writes` envelope slot drained by `_outbound`, and `CommanderEnvelopeHandler.on_global_writes` → `SpaCommander.apply_global_writes` folds them into the master, refusing a stale derived write with one log line. Suite 2054 passed / 2 skipped, `ruff check src/ tests/` clean, advisory mypy unchanged at 146; commit `54f08ed` touches only the phase's files, leaving the pre-existing uncommitted `CLAUDE.md` and `codex/` edits alone.

@@ -1,0 +1,5 @@
+Phase 3 committed.
+
+✓ Phase 3 completed: The local data plane
+
+Five verbs added to `SpaWorker` (`setStoreSubscription`, `collect_page`, `set_datachange`, `reset_datachanges`, `drop_datachanges`) plus one private resolver `_addressed_row`; the plan's 14 contract tests pass, full suite 2034 passed / 2 skipped, `ruff check src/ tests/` clean. The pre_refactoring's message/route/apply chain was deliberately not transcribed — it shapes a message for an ascent this pass does not build — and the two branches it would have carried (filtered broadcast, store address) are explicit `NotImplementedError` in the resolver; recorded in the plan and in `notes.md`.

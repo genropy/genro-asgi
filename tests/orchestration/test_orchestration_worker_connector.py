@@ -37,7 +37,6 @@ from genro_asgi.channel.frame import REGISTER_METHOD, REGISTER_PATH, Frame, Fram
 from genro_asgi.spa.orchestration import WorkerConnector
 from genro_asgi.spa.orchestration.worker_connector import (
     CALL_METHOD,
-    GLOBAL_STORE_KEY,
     REPLY_METHOD,
 )
 
@@ -116,20 +115,20 @@ class HandlerStub:
 
     The wire reads nothing of what arrives: it hands the envelope over whole and
     writes back down whatever comes out. So the handler of these tests is the fold
-    — it keeps the envelopes it was given, and answers with the store, which is
-    what the real chain composes for a newborn.
+    — it keeps the envelopes it was given, and answers with a payload of its own,
+    whatever the real chain happens to compose today.
     """
 
     def __init__(self, name: str = "standard_0001") -> None:
         self.name = name
-        self.global_register_item_tytx = "::T::the whole store"
+        self.descent: dict[str, Any] = {"descending": "what the chain composed"}
         self.envelopes: list[dict[str, Any]] = []
         self.losses = 0
 
     def read_envelope(self, envelope: dict[str, Any]) -> dict[str, Any]:
         """Keep what arrived, and answer with what goes down."""
         self.envelopes.append(envelope)
-        return {GLOBAL_STORE_KEY: self.global_register_item_tytx}
+        return dict(self.descent)
 
     def on_child_lost(self) -> None:
         self.losses += 1
@@ -170,12 +169,12 @@ async def test_a_stale_socket_is_unlinked_before_the_bind(short_root, handler):
         await wire.stop()
 
 
-async def test_the_presentation_is_answered_with_the_whole_global_store(connector, handler):
+async def test_the_presentation_is_answered_with_what_the_chain_composed(connector, handler):
     child = ChildPeer(str(connector.socket_path))
     reply = await child.present(config={"pool_size": 4})
 
     assert reply.method == REPLY_METHOD
-    assert reply.data == {GLOBAL_STORE_KEY: handler.global_register_item_tytx}
+    assert reply.data == handler.descent
     await connector.wait_connected()
     assert connector.connected is True
 
@@ -197,17 +196,35 @@ async def test_a_call_travels_and_its_reply_comes_back(connector):
     await child.close()
 
 
-async def test_an_envelope_that_is_not_a_reply_has_no_lane_and_is_denounced(
+async def test_an_envelope_that_is_neither_of_the_two_lanes_is_denounced(
     connector, handler, caplog
 ):
+    """A REPLY resolves and a CALL is served: what is left has nowhere to go."""
     child = ChildPeer(str(connector.socket_path))
     await child.present()
 
     with caplog.at_level("WARNING"):
-        await child.send(CALL_METHOD, "/lock_taken", {"user": "mario"})
+        await child.send("POST", "/lock_taken", {"user": "mario"})
         await wait_for(lambda: "Unexpected envelope" in caplog.text)
 
-    assert f"Unexpected envelope {CALL_METHOD}" in caplog.text
+    assert "Unexpected envelope POST" in caplog.text
+    assert handler.losses == 0
+
+    await child.close()
+
+
+async def test_a_call_the_handler_has_no_hook_for_comes_back_as_an_error(connector, handler):
+    """This handler serves no calls at all — the child is answered all the same."""
+    child = ChildPeer(str(connector.socket_path))
+    await child.present()
+    child.answer_calls = False
+
+    await child.send(CALL_METHOD, "/desk/ask", {"user": "mario"})
+    await child.wait_frames(1)
+
+    answer = child.received[0]
+    assert answer.method == REPLY_METHOD
+    assert "AttributeError" in answer.data["error"]
     assert handler.losses == 0
 
     await child.close()
@@ -260,12 +277,12 @@ async def test_the_successor_finds_the_same_socket(connector, handler):
     await first.close()
     await wait_for(lambda: connector.connected is False)
 
-    handler.global_register_item_tytx = "::T::the store as it is now"
+    handler.descent = {"descending": "what the chain composes now"}
     successor = ChildPeer(str(connector.socket_path))
     reply = await successor.present()
     await connector.wait_connected()
 
-    assert reply.data == {GLOBAL_STORE_KEY: "::T::the store as it is now"}
+    assert reply.data == {"descending": "what the chain composes now"}
 
     await successor.close()
 

@@ -23,7 +23,7 @@ a REAL child process running a REAL WSGI site over a real Unix socket.
 
 **What the story looks at is the site's own answer.** The store lives inside the
 child and no assertion can reach it, so the site writes the trail of the paths it
-has served into ``user_register[identity]["store"]`` and renders it back —
+has served into ``user_register.get(identity)["store"]`` and renders it back —
 identity and content, in the body. Proving the store that way proves the whole
 road it travelled (``freeze_connection`` → the parcel on disk → ``adopt_user`` /
 ``adopt_connection`` → the install at the destination), not that a dictionary has
@@ -191,7 +191,8 @@ class X_SpaWorker_m4(X_SpaWorker):
         if path.startswith(LOGIN_PATH):
             self.change_connection_user(cid_of(environ), path[len(LOGIN_PATH) :])
         with self.dispatch_lock:
-            store = self.user_register[identity]["store"]
+            owner = self.connection_register.get(cid_of(environ))["user"]
+            store = self.user_register.get(owner)["store"]
             store["trail"] = f"{store['trail'] or ''}{path} "
             trail = store["trail"]
         start_response("200 OK", [("Content-Type", "text/plain"), ("X-Worker", self.name)])
@@ -375,8 +376,10 @@ async def test_a_day_of_the_site_from_the_front_to_the_child(server):
     assert group.user_worker_map["mario"] == reception.name
 
     # 7. AN AVATAR SWITCH KEEPS THE TWO APART. The first browser logs in again, as
-    # another real person. The login itself is still served under mario — the site
-    # was called for him — and it is the identity BORN of it that starts empty.
+    # another real person. The re-label happens in the middle of that request, so
+    # what the site writes after it lands on the identity BORN of the login — and
+    # that identity starts empty here, its login-request row released with it:
+    # mario's own trail therefore ends where his last click left it.
     await browse(server, f"{LOGIN_PATH}mario_admin", cid)
     switched = await browse(server, "/admin", cid)
     unmoved = await browse(server, "/orders/10", second_cid)
@@ -385,7 +388,7 @@ async def test_a_day_of_the_site_from_the_front_to_the_child(server):
     assert trail_of(switched) == "/admin"
     assert served_by(switched) == spare.name        # a new identity, placed anew
     assert identity_of(unmoved) == "mario"
-    assert trail_of(unmoved) == f"{MARIO_TRAIL} {LOGIN_PATH}mario_admin /orders/10"
+    assert trail_of(unmoved) == f"{MARIO_TRAIL} /orders/10"
 
     # 8. A POOL WITH NO ROOM IS A POLITE 503. Against eighty-five megabytes the
     # two processes hold more than the whole concession: nobody admits, and the

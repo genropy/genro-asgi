@@ -32,6 +32,13 @@ envelope, then calls the layer above and brings back what goes DOWN; at the vert
 the climb ends and the answer is composed. The wire writes that answer where there
 IS an envelope going down — the reply to a presentation — and drops it otherwise.
 
+**The writes of the site climb in their own slot, and only the vertex reads
+them.** A worker whose hosted site wrote its replica of the global store puts
+those writes in ``global_writes``, and the fold applies them to the master
+before the caller of that envelope is unblocked. It is the third slot of the
+envelope, beside the photo and the worker events, and it is read by ONE layer:
+the master lives at the vertex and nothing below it has a copy to correct.
+
 **Only the presentation is answered with the store.** The one thing the vertex
 has to say to a process that just spoke is the global store, and the only process
 that has none of it is one that was just born: so the descent carries it when the
@@ -97,12 +104,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from genro_tytx import to_tytx
-
-from .worker_connector import GLOBAL_STORE_KEY, WORKER_SNAPSHOT_KEY
-
-#: The slot the worker events travel in, as the worker composes it.
-WORKER_EVENTS_KEY = "worker_events"
+from .worker_connector import (
+    ENVELOPE_SLOT_WORKER_EVENTS,
+    ENVELOPE_SLOT_WORKER_SNAPSHOT,
+)
 
 #: What a user with no name of his own is called. The folds of a login read it
 #: to tell the identity that CEASES to exist from the one that stays. Redefined
@@ -110,13 +115,7 @@ WORKER_EVENTS_KEY = "worker_events"
 #: declares it and importing it back would close a circle.
 GUEST_PREFIX = "guest_"
 
-#: What only a presentation carries: the child says its pid at birth and never
-#: again. It is what tells the vertex that this envelope is owed the whole store.
-PRESENTATION_KEY = "pid"
-
 __all__ = [
-    "PRESENTATION_KEY",
-    "WORKER_EVENTS_KEY",
     "CommanderEnvelopeHandler",
     "EnvelopeHandler",
     "GroupEnvelopeHandler",
@@ -141,10 +140,10 @@ class EnvelopeHandler:
 
         Acts through the ``on_`` methods this layer carries.
         """
-        photo = envelope.get(WORKER_SNAPSHOT_KEY)
+        photo = envelope.get(ENVELOPE_SLOT_WORKER_SNAPSHOT)
         if photo is not None:
             self.on_worker_snapshot(photo)
-        for worker_event in envelope.get(WORKER_EVENTS_KEY) or ():
+        for worker_event in envelope.get(ENVELOPE_SLOT_WORKER_EVENTS) or ():
             reader = getattr(self, f"on_{worker_event['op']}", None)
             if reader is not None:
                 reader(worker_event)
@@ -200,7 +199,7 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
             "frozen_users": sorted(frozen),
             "lost_users": sorted((users & self._assigned_users) - frozen),
         }
-        return self({WORKER_EVENTS_KEY: [worker_event]})
+        return self({ENVELOPE_SLOT_WORKER_EVENTS: [worker_event]})
 
     @property
     def _assigned_users(self) -> set[str]:
@@ -233,10 +232,14 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
         idleness sweep freezes many between two beats and they travel together.
         Then the base reading: the photo, the events.
         """
-        worker_events = envelope.get(WORKER_EVENTS_KEY) or ()
+        worker_events = envelope.get(ENVELOPE_SLOT_WORKER_EVENTS) or ()
         leavers = sum(1 for we in worker_events if we["op"] == "user_frozen")
         if leavers:
-            photo = envelope.get(WORKER_SNAPSHOT_KEY) or self.worker_handler.worker_snapshot or {}
+            photo = (
+                envelope.get(ENVELOPE_SLOT_WORKER_SNAPSHOT)
+                or self.worker_handler.worker_snapshot
+                or {}
+            )
             estimate = self.worker_handler.group_handler.get_occupancy_percent(photo) / (
                 len(photo.get("users") or {}) + leavers
             )
@@ -346,16 +349,15 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
         self.spa_commander = spa_commander
 
     def __call__(self, envelope: dict[str, Any]) -> dict[str, Any]:
-        """Work on the envelope for the vertex, and answer a presentation with the store.
+        """Work on the envelope for the vertex, which is where the chain ends.
 
         Returns:
-            The whole store in the form it travels in when this envelope is a
-            presentation; nothing at all otherwise.
+            Nothing at all: the descent carries no payload of its own any more —
+            the global store used to ride the presentation and now lives on the
+            lane, where the worker asks for it.
         """
         self.work_on_envelope(envelope)
-        if PRESENTATION_KEY not in envelope:
-            return {}
-        return {GLOBAL_STORE_KEY: to_tytx(self.spa_commander.global_register, "json")}
+        return {}
 
     def on_worker_snapshot(self, photo: dict[str, Any]) -> None:
         """Park every user the photo shows on his way out: his next request waits."""
@@ -365,10 +367,15 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
                 self.spa_commander.hold_user(user, f"transfer_flag {flag}")
 
     def on_new_page(self, worker_event: dict[str, Any]) -> None:
-        """A page was born: it belongs to the connection that asked for it, for good."""
+        """A page was born (or woke): it belongs to its connection, and the desk
+        files the subscriptions the announcement carries — the index is a
+        projection of the page rows, and this is where it is rebuilt."""
         self.spa_commander.page_connection_map[worker_event["page_id"]] = worker_event[
             "session_id"
         ]
+        self.spa_commander.delivery_desk.install_page_subscriptions(
+            worker_event["page_id"], worker_event["table_subscriptions"]
+        )
 
     def on_drop_page(self, worker_event: dict[str, Any]) -> None:
         """A page is gone."""

@@ -1,0 +1,16 @@
+wf(phase 6): Coherence review and auto-fix
+
+Two mechanical fixes on the Phase 1-5 file set, both invisible to the
+project's frozen ruff selection (E4,E7,E9,F): __all__ back to alphabetical
+order, and the two signatures over the declared line-length of 100 wrapped
+the way every other multi-line def in the file wraps.
+
+Nine findings went to review.md instead of the code. Two are load-bearing
+for the second pass: the ascent's write shape drops the attributes, reason
+and fired the drained change carries, so a site's node attributes never
+reach the master; and a derived write the master refuses stays applied on
+the worker's replica, which re-synchronises only on a presentation. Both
+are consequences of the ratified mechanics, so neither was touched.
+
+A wider ruff probe finds 22 findings on the same files and none was fixed:
+adopting a rule is a per-rule decision, never a side effect of a lint pass.

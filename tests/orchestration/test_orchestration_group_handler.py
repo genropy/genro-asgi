@@ -41,7 +41,7 @@ from typing import Any
 import pytest
 
 from genro_asgi.spa.orchestration import AssignmentRefused, GroupHandler, SpaCommander
-from genro_asgi.spa.orchestration.worker_connector import WORKER_SNAPSHOT_KEY
+from genro_asgi.spa.orchestration.worker_connector import ENVELOPE_SLOT_WORKER_SNAPSHOT
 from genro_asgi.spa.orchestration.worker_handler import QUIT_OP_PATH, WORKER_ENV_VAR
 
 from .conftest import wait_for
@@ -98,7 +98,9 @@ async def live() -> None:
 
 
 asyncio.run(live())
-'''.format(env_var=WORKER_ENV_VAR, snapshot_key=WORKER_SNAPSHOT_KEY, quit_path=QUIT_OP_PATH)
+'''.format(
+    env_var=WORKER_ENV_VAR, snapshot_key=ENVELOPE_SLOT_WORKER_SNAPSHOT, quit_path=QUIT_OP_PATH
+)
 
 CHILD_MODULE = "scripted_group_child"
 
@@ -458,10 +460,12 @@ async def test_a_photo_past_the_restart_setpoint_brings_the_round_forward(make_g
     worker_handler = await group.start_worker()
     group.ping_now_event.clear()
 
-    worker_handler.read_envelope({WORKER_SNAPSHOT_KEY: {"rss_bytes": MEMORY_CEILING // 2}})
+    worker_handler.read_envelope(
+        {ENVELOPE_SLOT_WORKER_SNAPSHOT: {"rss_bytes": MEMORY_CEILING // 2}}
+    )
     assert group.ping_now_event.is_set() is False
 
-    worker_handler.read_envelope({WORKER_SNAPSHOT_KEY: {"rss_bytes": MEMORY_CEILING}})
+    worker_handler.read_envelope({ENVELOPE_SLOT_WORKER_SNAPSHOT: {"rss_bytes": MEMORY_CEILING}})
 
     assert group.ping_now_event.is_set() is True
 

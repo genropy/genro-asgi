@@ -1,0 +1,11 @@
+✓ Phase 11 completed: Coherence review and auto-fix of the redesign
+
+Verified in this session: `ruff check` clean on the 21-file set of Phases 7–10 and over the whole tree, full suite **2075 passed, 2 skipped** — the Done criterion in full, with `review.md` rewritten (3 auto-fixes, 9 findings flagged, all 9 Phase 6 findings accounted for: 4 dissolved by the redesign, 5 standing). The plan reads `recommendation: done`; the one finding worth a decision before the second pass is finding 1, `STATE_KINDS` declared verbatim on both sides of the wire.
+
+The phase commit is **staged but not committed**: the `pre-commit` rules hook denies the commit in an unattended session (the known quirk — it must be landed from the mother session). Run there:
+
+```
+git commit -m "wf(phase 11): Coherence review and auto-fix of the redesign"
+```
+
+Your own uncommitted edits to `CLAUDE.md` and `codex/` were deliberately left unstaged.

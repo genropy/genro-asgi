@@ -1,0 +1,5 @@
+✓ Phase 6 completed: Coherence review and auto-fix — plan marked `[x]`, all six phases now closed.
+
+Done criterion demonstrated: `review.md` written with its three sections; `ruff check` clean on the 14-file set and on `src/ tests/` whole; full suite 2054 passed, 2 skipped (identical before and after the fixes). Only two fixes were mechanical enough to apply — `__all__` back to alphabetical order and the two signatures over the declared `line-length = 100`; the 22 findings a wider ruff selection reports were deliberately left, since `pyproject.toml` makes rule adoption a per-rule decision.
+
+The commit is staged but could not land: the `pre-commit` hook denies `git commit` in an unattended session, so it needs `git commit -F .phased/active/accensione-genropy-piano-dati/log/phase-6-commit-message.txt` from an interactive one. Two review items matter for the second pass: the ascent's write shape drops the `attributes`/`reason`/`fired` the drained change carries, and a derived write the master refuses stays applied on the worker's replica until that process is reborn.

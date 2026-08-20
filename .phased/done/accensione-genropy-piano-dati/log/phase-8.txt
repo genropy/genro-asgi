@@ -1,0 +1,42 @@
+Phase 8 — The commander's delivery desk
+
+Baseline: full suite 2060 passed / 2 skipped, ruff clean — BEFORE the phase, with
+Phase 7's work sitting staged-but-uncommitted (the pre-commit permission hook
+denies unattended sessions; the Phase 7 session recorded [x] and could not land).
+
+Built
+-----
+- `DeliveryDesk` in `spa_commander.py`: the `SubscriptionIndex` (table -> pages),
+  the per-page datachange and dbevent queues, the per-user STATE store-write
+  queue. All outside the pickled surface.
+- `op_subscribe_table` files the subscription BEFORE it answers, and its answer
+  carries the whole subscribed-table list (the worker's source filter).
+- `op_exchange` files the arrivals first and drains after, so the caller's own
+  events come back in the same round; a sibling page's events wait in its own
+  queue for its own exchange. `replace=True` coalesces on (path, reason, fired).
+  A table nobody subscribes anywhere: the deposit dies at the desk.
+- One hygiene rule for all three species: the drain discards what is older than
+  `event_max_age_seconds` (default 300, a `SpaCommander` kwarg).
+- `SpaCommander.drop_page`/`drop_connection`/`drop_user` route through the desk.
+- `WorkerHandler.serve_child_call` is the rung the lane's CALL climbs; the desk
+  dispatches by name to `op_<segment>`.
+
+Tests
+-----
+`tests/orchestration/test_contract_phase8_delivery_desk.py` — 9/9, every
+`wf:contract:` line, over a real lane on a real UDS (SpaWorker <-> real
+WorkerHandler under a real SpaCommander).
+Full suite 2069 passed / 2 skipped. `ruff check .` clean.
+
+Not landed
+----------
+Committing is blocked by the `pre-commit` permission hook, which denies
+unattended sessions (it exempts only a launcher-set `PHASED_UNATTENDED`). Phase 7
+is in the INDEX; Phase 8's work is unstaged, so the two land separately, in this
+order:
+
+  1. commit the index alone, with -F on log/phase-7-commit-message.txt
+  2. add -A, then commit with -F on log/phase-8-commit-message.txt
+
+The CLAUDE.md and codex/ edits were left unstaged throughout and would ride step
+2 — unstage them first if they are not wanted there.

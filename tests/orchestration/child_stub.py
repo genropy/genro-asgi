@@ -57,9 +57,8 @@ from genro_asgi.channel.frame import REGISTER_METHOD, REGISTER_PATH, Frame, Fram
 from genro_asgi.spa.orchestration import FreezeHandler
 from genro_asgi.spa.orchestration.worker_connector import (
     CALL_METHOD,
-    GLOBAL_STORE_KEY,
     REPLY_METHOD,
-    WORKER_SNAPSHOT_KEY,
+    ENVELOPE_SLOT_WORKER_SNAPSHOT,
 )
 from genro_asgi.spa.orchestration.worker_handler import PING_OP_PATH, WORKER_ENV_VAR
 
@@ -96,7 +95,6 @@ class ChildStub:
         self.name = self.config["name"]
         self.group = self.config["kwargs"]["group"]
         self.freeze_handler = FreezeHandler(self.config["frozen_users_path"])
-        self.global_store: str | None = None
         self.answering = True
         self.stream: FrameStream | None = None
         self.worker_events: list[dict[str, Any]] = []
@@ -114,11 +112,10 @@ class ChildStub:
         """What this process honestly knows of itself.
 
         Returns:
-            Its pid, its name and the global store it was handed at the
-            presentation — a real worker adds the memory and the clocks it can
-            actually measure.
+            Its pid and its name — a real worker adds the memory and the clocks
+            it can actually measure.
         """
-        return {"pid": os.getpid(), "name": self.name, "global_store": self.global_store}
+        return {"pid": os.getpid(), "name": self.name}
 
     async def live(self) -> None:
         """Connect, present, then serve the parent until the wire ends.
@@ -136,10 +133,7 @@ class ChildStub:
             await self.serve_frame(frame)
 
     async def present(self) -> None:
-        """Say pid and configuration, and keep the whole global store that answers.
-
-        Sets ``global_store``.
-        """
+        """Say pid and configuration, and wait for the parent's answer."""
         await self.stream.write(
             Frame(
                 method=REGISTER_METHOD,
@@ -147,12 +141,11 @@ class ChildStub:
                 data={
                     "pid": os.getpid(),
                     "config": self.config,
-                    WORKER_SNAPSHOT_KEY: self.photo,
+                    ENVELOPE_SLOT_WORKER_SNAPSHOT: self.photo,
                 },
             )
         )
-        reply = await self.stream.read()
-        self.global_store = reply.data[GLOBAL_STORE_KEY]
+        await self.stream.read()
 
     async def serve_frame(self, frame: Frame) -> None:
         """Obey one envelope from the parent.
@@ -160,19 +153,13 @@ class ChildStub:
         Args:
             frame: the envelope as it came off the wire.
 
-        The global store is taken off the envelope first, whatever kind it is —
-        the mirror of what the parent does with the photo — so a change made up
-        there shows in the next photo taken down here. Then a CALL is answered
-        with its REPLY, reusing its id, and whatever this process was told to
-        announce rides that answer, as a real worker's own worker events do. A
-        mute process answers no CALL at all, and the order that mutes it is the
-        last thing it answers.
+        A CALL is answered with its REPLY, reusing its id, and whatever this
+        process was told to announce rides that answer, as a real worker's own
+        worker events do. A mute process answers no CALL at all, and the order
+        that mutes it is the last thing it answers.
 
-        Sets ``global_store``, and empties ``worker_events``: they are delivered
-        once.
+        Empties ``worker_events``: they are delivered once.
         """
-        if isinstance(frame.data, dict) and GLOBAL_STORE_KEY in frame.data:
-            self.global_store = frame.data[GLOBAL_STORE_KEY]
         if frame.method == CALL_METHOD and self.answering:
             result = await self.operations[frame.path](frame.data)
             worker_events, self.worker_events = self.worker_events, []
@@ -184,7 +171,7 @@ class ChildStub:
                     data={
                         "result": result,
                         "worker_events": worker_events,
-                        WORKER_SNAPSHOT_KEY: self.photo,
+                        ENVELOPE_SLOT_WORKER_SNAPSHOT: self.photo,
                     },
                 )
             )

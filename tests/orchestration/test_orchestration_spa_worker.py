@@ -98,14 +98,14 @@ def test_a_connection_arriving_anonymous_is_a_user_in_full(worker):
         "worker": WORKER_NAME,
         "user": GUEST_PREFIX + "cid-a",
     }
-    assert worker.user_register[GUEST_PREFIX + "cid-a"]["state"] == "active"
+    assert worker.user_register.get(GUEST_PREFIX + "cid-a")["state"] == "active"
 
 
 def test_a_named_connection_hangs_from_its_user(worker):
     worker.add_connection("cid-a", "mario")
 
-    assert worker.connection_register["cid-a"]["user"] == "mario"
-    assert worker.user_register["mario"]["connections"] == {"cid-a"}
+    assert worker.connection_register.get("cid-a")["user"] == "mario"
+    assert worker.user_register.get("mario")["connections"] == {"cid-a"}
     assert announced(worker) == ["new_user", "new_connection"]
 
 
@@ -113,9 +113,9 @@ def test_a_page_brings_the_whole_chain_into_being_bottom_up(worker):
     worker.add_page("page-1", "cid-a", "mario")
 
     assert announced(worker) == ["new_user", "new_connection", "new_page"]
-    assert worker.page_register["page-1"]["connection_id"] == "cid-a"
-    assert worker.connection_register["cid-a"]["pages"] == {"page-1"}
-    assert worker.user_register["mario"]["connections"] == {"cid-a"}
+    assert worker.page_register.get("page-1")["connection_id"] == "cid-a"
+    assert worker.connection_register.get("cid-a")["pages"] == {"page-1"}
+    assert worker.user_register.get("mario")["connections"] == {"cid-a"}
 
 
 def test_a_second_page_of_a_known_connection_announces_only_itself(worker):
@@ -126,7 +126,7 @@ def test_a_second_page_of_a_known_connection_announces_only_itself(worker):
 
     assert announced(worker) == ["new_page"]
     assert worker.worker_events[0]["user"] == "mario"
-    assert worker.connection_register["cid-a"]["pages"] == {"page-1", "page-2"}
+    assert worker.connection_register.get("cid-a")["pages"] == {"page-1", "page-2"}
 
 
 # ----------------------------------------------------------------------
@@ -140,9 +140,9 @@ def test_a_page_call_stamps_the_three_clocks_up_the_chain(worker):
     now = worker.refresh_chain("page-1", "last_user_ts", "last_rpc_ts")
 
     for item in (
-        worker.page_register["page-1"],
-        worker.connection_register["cid-a"],
-        worker.user_register["mario"],
+        worker.page_register.get("page-1"),
+        worker.connection_register.get("cid-a"),
+        worker.user_register.get("mario"),
     ):
         assert item["last_refresh_ts"] == now
         assert item["last_user_ts"] == now
@@ -151,7 +151,7 @@ def test_a_page_call_stamps_the_three_clocks_up_the_chain(worker):
 
 def test_the_beat_stamps_the_technical_clock_and_nothing_else(worker):
     worker.add_page("page-1", "cid-a", "mario")
-    user_item = worker.user_register["mario"]
+    user_item = worker.user_register.get("mario")
     born_human = user_item["last_user_ts"]
     born_rpc = user_item["last_rpc_ts"]
 
@@ -204,7 +204,7 @@ async def test_a_user_the_worker_never_saw_is_added_frozen_and_pulled(worker, de
 
     item = await worker.adopt_user("mario")
 
-    assert item is worker.user_register["mario"]
+    assert item is worker.user_register.get("mario")
     assert item["state"] == "active"
     assert item["store"]["cart.total"] == 3
 
@@ -238,7 +238,7 @@ async def test_a_burst_on_a_frozen_row_makes_one_trip_and_the_sisters_wait(worke
 
     burst = [asyncio.create_task(worker.adopt_user("mario")) for _ in range(5)]
     await asyncio.sleep(0.02)
-    assert worker.user_register["mario"]["state"] == "unfreezing"
+    assert worker.user_register.get("mario")["state"] == "unfreezing"
     assert deposit.user_reads == 0
 
     deposit.release_lock("mario", "standard_0002")
@@ -316,7 +316,7 @@ async def test_a_parcel_no_envelope_authorises_is_never_touched(worker, deposit)
     worker.refresh_chain("page-1", "last_rpc_ts")
 
     assert deposit.user_reads == 0
-    assert len(worker.user_register["mario"]["store"]) == 0
+    assert len(worker.user_register.get("mario")["store"]) == 0
     assert deposit.read_user_register_item("mario")["cart.total"] == 99
     assert announced(worker) == ["new_user", "new_connection", "new_page"]
 
@@ -340,8 +340,8 @@ async def test_a_connection_found_in_the_deposit_arrives_with_its_pages(worker, 
 
     assert announced(worker) == ["new_connection", "new_page"]
     assert item["last_user_ts"] == 111.0
-    assert worker.page_register["page-2"]["last_rpc_ts"] == 222.0
-    assert worker.user_register["mario"]["connections"] == {"cid-a", "cid-b"}
+    assert worker.page_register.get("page-2")["last_rpc_ts"] == 222.0
+    assert worker.user_register.get("mario")["connections"] == {"cid-a", "cid-b"}
     assert deposit.read_connection_register_item("mario", "cid-b") is None
 
 
@@ -370,7 +370,7 @@ async def test_a_connection_already_held_costs_no_trip(worker, deposit):
 
     item = await worker.adopt_connection("mario", "cid-a")
 
-    assert item is worker.connection_register["cid-a"]
+    assert item is worker.connection_register.get("cid-a")
     assert deposit.connection_reads == 0
     assert announced(worker) == []
 
@@ -384,12 +384,12 @@ def test_dropping_a_page_takes_what_it_was_the_last_of(worker):
     worker.add_page("page-1", "cid-a", "mario")
     worker.worker_events.clear()
 
-    worker.drop_page("page-1")
+    worker.drop_page("mario", "page-1")
 
     assert announced(worker) == ["drop_page", "drop_connection", "drop_user"]
-    assert worker.page_register == {}
-    assert worker.connection_register == {}
-    assert worker.user_register == {}
+    assert worker.page_register.keys() == []
+    assert worker.connection_register.keys() == []
+    assert worker.user_register.keys() == []
 
 
 def test_dropping_a_page_with_a_sister_leaves_the_chain_standing(worker):
@@ -397,10 +397,10 @@ def test_dropping_a_page_with_a_sister_leaves_the_chain_standing(worker):
     worker.add_page("page-2", "cid-a")
     worker.worker_events.clear()
 
-    worker.drop_page("page-1")
+    worker.drop_page("mario", "page-1")
 
     assert announced(worker) == ["drop_page"]
-    assert worker.connection_register["cid-a"]["pages"] == {"page-2"}
+    assert worker.connection_register.get("cid-a")["pages"] == {"page-2"}
 
 
 def test_dropping_a_connection_speaks_the_plural_for_its_pages(worker):
@@ -409,12 +409,12 @@ def test_dropping_a_connection_speaks_the_plural_for_its_pages(worker):
     worker.add_connection("cid-b", "mario")
     worker.worker_events.clear()
 
-    worker.drop_connection("cid-a")
+    worker.drop_connection("mario", "cid-a")
 
     assert announced(worker) == ["drop_pages", "drop_connection"]
     assert worker.worker_events[0]["page_ids"] == ["page-1", "page-2"]
-    assert worker.page_register == {}
-    assert worker.user_register["mario"]["connections"] == {"cid-b"}
+    assert worker.page_register.keys() == []
+    assert worker.user_register.get("mario")["connections"] == {"cid-b"}
 
 
 def test_dropping_a_user_takes_everything_under_him(worker):
@@ -427,9 +427,9 @@ def test_dropping_a_user_takes_everything_under_him(worker):
     assert announced(worker) == ["drop_pages", "drop_connections", "drop_user"]
     assert worker.worker_events[0]["page_ids"] == ["page-1", "page-2"]
     assert worker.worker_events[1]["session_ids"] == ["cid-a", "cid-b"]
-    assert worker.page_register == {}
-    assert worker.connection_register == {}
-    assert worker.user_register == {}
+    assert worker.page_register.keys() == []
+    assert worker.connection_register.keys() == []
+    assert worker.user_register.keys() == []
 
 
 def test_dropping_a_bare_user_says_only_that(worker):
@@ -442,18 +442,21 @@ def test_dropping_a_bare_user_says_only_that(worker):
 
 
 def test_a_drop_asks_for_absence(worker):
-    worker.drop_page("page-nowhere")
-    worker.drop_connection("cid-nowhere")
+    worker.drop_page("nobody", "page-nowhere")
     worker.drop_user("nobody")
 
     assert announced(worker) == []
+    # A connection is the one drop that answers absence with an error: the site
+    # names the connection it is logging out, and a name nobody holds is a bug
+    # upstream, not a departure that already happened.
+    with pytest.raises(KeyError, match="cid-nowhere"):
+        worker.drop_connection("nobody", "cid-nowhere")
 
     worker.add_page("page-1", "cid-a", "mario")
-    worker.drop_page("page-1")
+    worker.drop_page("mario", "page-1")
     worker.worker_events.clear()
 
-    worker.drop_page("page-1")
-    worker.drop_connection("cid-a")
+    worker.drop_page("mario", "page-1")
     worker.drop_user("mario")
 
     assert announced(worker) == []

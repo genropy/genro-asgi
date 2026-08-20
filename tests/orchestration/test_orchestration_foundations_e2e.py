@@ -46,7 +46,6 @@ import time
 from typing import Any
 
 import pytest
-from genro_tytx import to_tytx
 
 from genro_asgi.spa.orchestration import FreezeHandler, WorkerHandler
 
@@ -108,25 +107,15 @@ async def test_a_worker_is_born_works_dies_wild_and_leaves_its_traces_behind(
 
     # It is born: the process presents itself on its handler's own socket, and
     # the presentation already carries its first photo — a live process is never
-    # without one. That photo cannot know the global store yet: the store comes
-    # back in the answer the child is still waiting for.
+    # without one.
     await handler.launch_process()
     assert handler.connector.connected is True
-    assert handler.worker_snapshot == {
-        "pid": handler.process.pid,
-        "name": "standard_0001",
-        "global_store": None,
-    }
+    assert handler.worker_snapshot == {"pid": handler.process.pid, "name": "standard_0001"}
 
-    # It is alive: the beat asks that and nothing else, and the photo riding the
-    # answer is the first one that knows the store it was handed — the master's
-    # own, which came down as the answer to its presentation.
+    # It is alive: the beat asks that and nothing else, and a fresh photo rides
+    # the answer.
     await handler.ping_process()
-    assert handler.worker_snapshot == {
-        "pid": handler.process.pid,
-        "name": "standard_0001",
-        "global_store": to_tytx(group.spa_commander.global_register, "json"),
-    }
+    assert handler.worker_snapshot == {"pid": handler.process.pid, "name": "standard_0001"}
 
     # It takes the semaphore of one of its users. Nothing is announced upward:
     # the lock is the deposit's own mechanism, and the vertex already knows —

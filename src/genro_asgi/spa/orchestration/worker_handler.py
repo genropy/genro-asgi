@@ -298,6 +298,25 @@ class WorkerHandler:
         self._last_envelope_ts = time.monotonic()
         return self.envelope_handler(envelope)
 
+    def serve_child_call(self, path: str, data: dict[str, Any]) -> Any:
+        """Hand a CALL the child placed on the lane to the desk that serves it.
+
+        Args:
+            path: the routing key the child chose.
+            data: its payload.
+
+        Returns:
+            Whatever the desk answers, which the wire puts in the REPLY.
+
+        Raises:
+            AttributeError: the desk serves no op of that name; the wire turns it
+                into an error REPLY, so the child is answered either way.
+
+        Nothing is written here: the queues and the subscriptions are the
+        vertex's, and this handler is only the rung the call climbs.
+        """
+        return self.group_handler.spa_commander.delivery_desk.serve_child_call(path, data)
+
     async def launch_process(self) -> None:
         """Open the wire if it is closed, spawn the child, wait for it to present itself.
 
@@ -401,8 +420,10 @@ class WorkerHandler:
         """The wire died: the parked wait says whether anybody was expecting it.
 
         Sets ``state`` — ``quitted`` when a wait was live, ``aborted`` when the
-        death was nobody's order — and rings the group's wake.
+        death was nobody's order — rings the group's wake, and gives the desk
+        back the store grant this process was holding, if it held one.
         """
+        self.group_handler.spa_commander.delivery_desk.release_worker_lock(self.name)
         ordered = self._settle_death_wait()
         if ordered:
             self.state = "quitted"
