@@ -1,0 +1,86 @@
+# Copyright 2025 Softwell S.r.l.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""The debug door: one eval, any process of the pool, over the lane there is."""
+
+from __future__ import annotations
+
+import pytest
+
+from genro_asgi.applications.spa_inspector import SpaInspector, SpaInspectorMcpApplication
+from genro_asgi.spa.orchestration.spa_worker import GUEST_PREFIX
+
+
+@pytest.fixture
+def wired_lane(desk_lane):
+    """The lane, with its handler hanging in the group map like a launched one."""
+    group = desk_lane.commander.group_map["standard"]
+    group.worker_handler_map[desk_lane.worker_handler.name] = desk_lane.worker_handler
+    return desk_lane
+
+
+async def test_the_commander_answers_about_itself(wired_lane):
+    wired_lane.commander.resolve_user("cid-a")
+
+    assert await wired_lane.commander.inspect_target("commander", "len(commander.user_map)") == "1"
+
+
+async def test_a_worker_answers_over_the_lane(wired_lane):
+    wired_lane.worker.add_connection("a1b2")
+    wired_lane.worker.add_page("page-0", "a1b2")
+
+    connections = await wired_lane.commander.inspect_target(
+        "standard_0001", "len(worker.connection_register)"
+    )
+    pages = await wired_lane.commander.inspect_target(
+        "standard_0001", "sorted(worker.page_register.keys())"
+    )
+
+    assert connections == "1"
+    assert pages == "['page-0']"
+
+
+async def test_an_expression_that_fails_in_the_child_travels_back_as_the_error(wired_lane):
+    with pytest.raises(RuntimeError, match="NameError"):
+        await wired_lane.commander.inspect_target("standard_0001", "no_such_name")
+
+
+async def test_an_unknown_target_names_the_ones_there_are(wired_lane):
+    with pytest.raises(KeyError, match="commander, standard_0001"):
+        await wired_lane.commander.inspect_target("standard_9999", "1")
+
+
+class XT_Server:
+    """The one attribute of a server the inspector reads: its applications."""
+
+    def __init__(self, applications):
+        self.applications = applications
+
+
+async def test_the_tools_reach_the_front_and_list_the_targets(wired_lane):
+    from genro_asgi.applications.spa_app_new import SpaApplicationNew
+
+    spa_front = SpaApplicationNew.__new__(SpaApplicationNew)
+    spa_front._commander = wired_lane.commander
+    inspector_app = SpaInspectorMcpApplication(code="inspect")
+    inspector_app.server = XT_Server({"shop": spa_front, "other": object()})
+    inspector = SpaInspector(inspector_app)
+
+    wired_lane.worker.add_connection("a1b2")
+    guest = f"{GUEST_PREFIX}a1b2"
+
+    assert await inspector.targets() == {"shop": ["commander", "standard_0001"]}
+
+    answer = await inspector.inspect("sorted(worker.user_register.keys())", "standard_0001")
+    assert answer == {"target": "standard_0001", "repr": f"['{guest}']"}

@@ -255,6 +255,7 @@ from .worker_connector import (
 from .worker_handler import (
     DROP_CONNECTION_OP_PATH,
     DROP_USER_OP_PATH,
+    INSPECT_OP_PATH,
     PING_OP_PATH,
     QUIT_OP_PATH,
 )
@@ -1481,8 +1482,25 @@ class SpaWorker:
                 "Worker %s: unexpected envelope %s from its handler", self.name, frame.method
             )
 
+    def inspect_expression(self, expr: str) -> str:
+        """Evaluate one debug expression against this process, repr back.
+
+        Args:
+            expr: a Python expression; ``worker`` names this instance.
+
+        Returns:
+            The ``repr`` of the value — the debug door's whole answer, so
+            anything unforeseen is readable without a tool having predicted it.
+
+        Evaluates under ``dispatch_lock``, so the rows it reads are coherent.
+        Full eval power by construction: the door exists only where the
+        inspector surface was mounted on purpose, never in production.
+        """
+        with self.dispatch_lock:
+            return repr(eval(expr, {"worker": self}))
+
     async def answer_call(self, frame: Frame) -> None:
-        """Answer one CALL: the beat, the http form, one of the three ops, or nothing known.
+        """Answer one CALL: the beat, the http form, one of the four ops, or nothing known.
 
         Args:
             frame: the CALL as it came off the wire.
@@ -1504,6 +1522,13 @@ class SpaWorker:
             if connection is not None:
                 self.drop_connection(connection["user"], payload["cid"])
             await self.send_reply(frame, result={})
+        elif frame.path == INSPECT_OP_PATH:
+            try:
+                result = {"repr": self.inspect_expression(payload["expr"])}
+            except Exception as exc:
+                await self.send_reply(frame, error=f"{type(exc).__name__}: {exc}")
+            else:
+                await self.send_reply(frame, result=result)
         else:
             await self.send_reply(frame, error=f"unknown op: {frame.path!r}")
 

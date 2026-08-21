@@ -164,6 +164,7 @@ from .envelope_handler import CommanderEnvelopeHandler
 from .exceptions import AssignmentRefused, UserOnHold, SiteFailedRequest
 from .freeze_handler import FreezeHandler
 from .group_handler import CHECK_OCCUPANCY_BEATS, GroupHandler
+from .worker_handler import INSPECT_OP_PATH
 
 #: What a user with no name of his own is called: the prefix plus his cid. The
 #: name itself carries the rule — whoever reads it knows nobody logged in here.
@@ -796,6 +797,46 @@ class SpaCommander:
         self.counters["requests_refused"] += 1
         refusal.retry_after = SHAPE_REVIEW_SECONDS
         return refusal
+
+    @property
+    def inspect_targets(self) -> list[str]:
+        """Every process the debug door can look into: this vertex, then the workers."""
+        names = ["commander"]
+        for group_handler in self.group_map.values():
+            names.extend(group_handler.worker_handler_map)
+        return names
+
+    async def inspect_target(self, target: str, expr: str) -> str:
+        """Evaluate one debug expression in one process of the pool, repr back.
+
+        Args:
+            target: ``commander`` for this very process, or a worker's name.
+            expr: a Python expression; the namespace holds ``commander`` here,
+                ``worker`` inside a child.
+
+        Returns:
+            The ``repr`` of the value, whatever the expression reached — the
+            point of an eval door is answering questions nobody predicted.
+
+        Raises:
+            KeyError: no such target; the ones there are travel in the error.
+            RuntimeError: the child refused the expression — its error verbatim.
+
+        Full eval power by construction: the door exists only where the
+        inspector surface was mounted on purpose, never in production.
+        """
+        if target == "commander":
+            return repr(eval(expr, {"commander": self}))
+        for group_handler in self.group_map.values():
+            worker_handler = group_handler.worker_handler_map.get(target)
+            if worker_handler is not None:
+                reply = await worker_handler.connector.call(INSPECT_OP_PATH, {"expr": expr})
+                if "error" in reply:
+                    raise RuntimeError(str(reply["error"]))
+                return reply["result"]["repr"]
+        raise KeyError(
+            f"inspect: no target {target!r} here — have: {', '.join(self.inspect_targets)}"
+        )
 
     def resolve_user(self, cid: str) -> str:
         """The reception desk: whose cid this is, minting him if he is new.

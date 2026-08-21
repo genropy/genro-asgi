@@ -123,6 +123,9 @@ WORKER_ENV_VAR = "GENRO_ASGI_WORKER"
 #: legacy machine dies at the cutover.
 PING_OP_PATH = "/op/ping"
 
+#: The debug door: evaluate one expression inside the child, repr back.
+INSPECT_OP_PATH = "/op/inspect"
+
 #: The routing key of the order to leave: the process drains and ends itself.
 #: Its answer comes back at once, carrying the photo with every user flagged for
 #: cession — the level above parks them all in one read.
@@ -153,6 +156,7 @@ WAIT_POLL_INTERVAL = 0.05
 __all__ = [
     "DROP_CONNECTION_OP_PATH",
     "DROP_USER_OP_PATH",
+    "INSPECT_OP_PATH",
     "PING_OP_PATH",
     "PROCESS_PING_INTERVAL",
     "PROCESS_PING_TIMEOUT",
