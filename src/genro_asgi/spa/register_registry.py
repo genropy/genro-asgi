@@ -17,8 +17,8 @@
 One host holding named :class:`Register` instances. The core creates the three
 primary registers of the worker world (legacy origin, the rich-content ones)
 and nothing else: ``user_items`` (keyed by user, no secondary index),
-``connection_items`` (keyed by the session id, no secondary index) and
-``page_items`` (keyed by page_id, indexed by ``session_id`` and
+``connection_items`` (keyed by the connection id, no secondary index) and
+``page_items`` (keyed by page_id, indexed by ``connection_id`` and
 ``root_page_id`` — query dimensions of the page forest, not edges of the
 ownership tree). The ``_items`` suffix is the ratified
 naming rule: the name says the map and the level — naked ``users``/``pages``
@@ -42,7 +42,7 @@ connection row's ``user``. Every lifecycle mutator writes both directions in
 the same gesture, so the two can never disagree. A page row stores NO ``user``
 label: the owner is DERIVED by walking up (``page_user``), and what is
 derived cannot diverge. The connection row is born GUEST — its ``user`` is
-``GUEST_PREFIX`` + the session id, the name itself carrying the guest rule —
+``GUEST_PREFIX`` + the connection id, the name itself carrying the guest rule —
 and the login is a label mutation on that live row, never a re-key.
 
 **The extension seam.** ``new_register(name, index_attrs=())`` creates, hosts
@@ -135,7 +135,7 @@ class RegisterRegistry:
             "connection_items": Register("connection_items"),
             "page_items": Register(
                 "page_items",
-                index_attrs=("session_id", "root_page_id"),
+                index_attrs=("connection_id", "root_page_id"),
             ),
         }
 
@@ -146,7 +146,7 @@ class RegisterRegistry:
 
     @property
     def connection_items(self) -> Register:
-        """The primary register of connections, keyed by the session id."""
+        """The primary register of connections, keyed by the connection id."""
         return self._registers["connection_items"]
 
     @property
@@ -222,7 +222,7 @@ class RegisterRegistry:
         """Create the connection row of ``connection_id``, born guest by default.
 
         ``user is None`` means the anonymous reception: the row takes
-        ``GUEST_PREFIX`` + the session id as its user — the daemon's own
+        ``GUEST_PREFIX`` + the connection id as its user — the daemon's own
         naming, so the name itself says guest — and the guest user entry is
         brought into being with it, a user entry like any other, with its own
         live store. A consumer that mints its own ``guest_<id>`` passes it
@@ -255,8 +255,7 @@ class RegisterRegistry:
         page_id: str,
         *,
         user: str,
-        session_id: str,
-        connection_id: str | None = None,
+        connection_id: str,
         root_page_id: str | None = None,
         parent_page_id: str | None = None,
         avatar_key: str = Session.ROOT_AVATAR_KEY,
@@ -271,9 +270,9 @@ class RegisterRegistry:
         A child (``parent_page_id`` set) without a ``root_page_id`` is an
         impossible case and raises ``ValueError``.
 
-        ``connection_id`` defaults to the session id — the connection of a page
-        IS its session in the reception. The chain is brought into being from
-        the bottom up: the connection row when unseen, and with it the user
+        ``connection_id`` names the connection the page hangs from — the
+        daemon's own word for it. The chain is brought into being from the
+        bottom up: the connection row when unseen, and with it the user
         entry when unseen. ``user`` drives that cascade ONLY — it is never
         stored on the page row, whose owner is derived by ``page_user``.
         The new page id joins its connection row's ``pages``.
@@ -295,8 +294,6 @@ class RegisterRegistry:
             raise ValueError(f"page {page_id!r} has a parent but no root_page_id")
         if root_page_id is None:
             root_page_id = page_id
-        if connection_id is None:
-            connection_id = session_id
         if user not in self.user_items:
             self.new_user(user)
         if connection_id not in self.connection_items:
@@ -307,7 +304,6 @@ class RegisterRegistry:
         fields.setdefault("last_refresh_ts", time.time())
         page = self.page_items.create(
             page_id,
-            session_id=session_id,
             connection_id=connection_id,
             root_page_id=root_page_id,
             parent_page_id=parent_page_id,

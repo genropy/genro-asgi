@@ -158,7 +158,7 @@ class Routed:
         """
         self.commander.assign_user(user, self.names[worker_index])
         return await self.commander.forward_call(
-            user, "/op/new_page", {"page_id": page_id, "session_id": f"s-{page_id}"}
+            user, "/op/new_page", {"page_id": page_id, "connection_id": f"s-{page_id}"}
         )
 
     async def subscribe_page(self, user: str, page_id: str, prefix: str) -> Any:
@@ -529,7 +529,7 @@ def test_a_filter_on_a_field_the_walk_does_not_derive_matches_nothing() -> None:
     commander = UserStickyCommander(workers=0)
     surface_page(commander, "p1", "alice", "s1")
 
-    assert commander.matching_pages("session_id:s1") == []
+    assert commander.matching_pages("connection_id:s1") == []
     assert [page_id for page_id, _ in commander.matching_pages("*")] == ["p1"]
 
 

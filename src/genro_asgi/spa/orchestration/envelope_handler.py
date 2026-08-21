@@ -385,12 +385,15 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
             )
 
     def on_new_page(self, worker_event: dict[str, Any]) -> None:
-        """A page was born (or woke): it belongs to its connection, and the desk
+        """A page was born (or woke): it belongs to its ROUTING COOKIE, and the desk
         files the subscriptions the announcement carries — the index is a
-        projection of the page rows, and this is where it is rebuilt."""
-        self.spa_commander.page_connection_map[worker_event["page_id"]] = worker_event[
-            "session_id"
-        ]
+        projection of the page rows, and this is where it is rebuilt. A page of
+        a connection no cookie routes joins no index, but its subscriptions are
+        filed all the same: the exchange finds it by page_id."""
+        if worker_event["sticky_cid"] is not None:
+            self.spa_commander.page_connection_map[worker_event["page_id"]] = worker_event[
+                "sticky_cid"
+            ]
         self.spa_commander.delivery_desk.install_page_subscriptions(
             worker_event["page_id"], worker_event["table_subscriptions"]
         )
@@ -406,12 +409,14 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
 
     def on_drop_connection(self, worker_event: dict[str, Any]) -> None:
         """A connection is gone: its pages with it, its identity kept (the cookie is eternal)."""
-        self.spa_commander.drop_connection(worker_event["session_id"])
+        if worker_event["sticky_cid"] is not None:
+            self.spa_commander.drop_connection(worker_event["sticky_cid"])
 
     def on_drop_connections(self, worker_event: dict[str, Any]) -> None:
         """Several connections at once — the cascade of a user leaving."""
-        for cid in worker_event["session_ids"]:
-            self.spa_commander.drop_connection(cid)
+        for sticky_cid in worker_event["sticky_cids"]:
+            if sticky_cid is not None:
+                self.spa_commander.drop_connection(sticky_cid)
 
     def on_drop_user(self, worker_event: dict[str, Any]) -> None:
         """A user is gone: his row, his connections and whatever was waiting for him."""

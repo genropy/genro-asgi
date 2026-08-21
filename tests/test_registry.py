@@ -187,6 +187,6 @@ def test_reindex_rebuilds_indexes_from_items() -> None:
 
 
 def test_name_and_index_attrs_properties() -> None:
-    register = Register("pages", index_attrs=("user", "session_id"))
+    register = Register("pages", index_attrs=("user", "connection_id"))
     assert register.name == "pages"
-    assert register.index_attrs == ("user", "session_id")
+    assert register.index_attrs == ("user", "connection_id")

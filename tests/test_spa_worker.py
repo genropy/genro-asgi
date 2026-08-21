@@ -266,7 +266,7 @@ def test_lifecycle_ops_mutate_the_register_and_shape_increasing_seqs() -> None:
         assert {e["worker"] for e in events} == {"W:w1"}
         assert events[2]["previous_user"] == "guest_sess-1"
         assert events[2]["user"] == "alice"
-        assert events[2]["session_id"] == "sess-1"
+        assert events[2]["connection_id"] == "sess-1"
     assert worker.last_seq == 4
     # The lifecycle never touches the outbox: it rides the REPLY alone.
     assert worker.outbox.pending() == 0
@@ -275,9 +275,9 @@ def test_lifecycle_ops_mutate_the_register_and_shape_increasing_seqs() -> None:
 def test_the_page_ops_announce_the_whole_chain_cascade_in_order() -> None:
     worker = UserStickyWorker("W:w1")
     with call_sink(worker) as events:
-        worker.new_page("sess-1", "p1", session_id="sess-1")
-        worker.new_page("sess-1", "p2", session_id="sess-1")
-        assert [(e["op"], e.get("session_id"), e.get("page_id")) for e in events] == [
+        worker.new_page("sess-1", "p1", connection_id="sess-1")
+        worker.new_page("sess-1", "p2", connection_id="sess-1")
+        assert [(e["op"], e.get("connection_id"), e.get("page_id")) for e in events] == [
             ("new_user", None, None),
             ("new_connection", "sess-1", None),
             ("new_page", "sess-1", "p1"),
@@ -286,7 +286,7 @@ def test_the_page_ops_announce_the_whole_chain_cascade_in_order() -> None:
         events.clear()
         worker.drop_page("sess-1", "p1")
         worker.drop_page("sess-1", "p2")
-        assert [(e["op"], e.get("session_id"), e.get("page_id")) for e in events] == [
+        assert [(e["op"], e.get("connection_id"), e.get("page_id")) for e in events] == [
             ("drop_page", None, "p1"),
             ("drop_page", None, "p2"),
             ("drop_connection", "sess-1", None),
@@ -298,15 +298,15 @@ def test_the_page_ops_announce_the_whole_chain_cascade_in_order() -> None:
 def test_the_drop_connection_op_demolishes_the_whole_cascade_in_order() -> None:
     worker = UserStickyWorker("W:w1")
     with call_sink(worker) as events:
-        worker.new_page("sess-1", "p1", session_id="sess-1")
-        worker.new_page("sess-1", "p2", session_id="sess-1")
+        worker.new_page("sess-1", "p1", connection_id="sess-1")
+        worker.new_page("sess-1", "p2", connection_id="sess-1")
         events.clear()
         dropped = worker.drop_connection("sess-1", "sess-1")
         # The logout's handle: pages first (in the edge SET's own order — the
         # contract orders the species, never the siblings), the connection,
         # the user it was the last connection of — every announcement on this
         # CALL's own sink.
-        shaped = [(e["op"], e.get("session_id"), e.get("page_id")) for e in events]
+        shaped = [(e["op"], e.get("connection_id"), e.get("page_id")) for e in events]
         assert sorted(shaped[:2]) == [
             ("drop_page", None, "p1"),
             ("drop_page", None, "p2"),
@@ -324,11 +324,11 @@ def test_the_drop_connection_op_demolishes_the_whole_cascade_in_order() -> None:
 def test_the_drop_connection_op_spares_the_user_with_a_sibling_connection() -> None:
     worker = UserStickyWorker("W:w1")
     with call_sink(worker) as events:
-        worker.new_page("alice", "p1", session_id="sess-1")
-        worker.new_page("alice", "p2", session_id="sess-2")
+        worker.new_page("alice", "p1", connection_id="sess-1")
+        worker.new_page("alice", "p2", connection_id="sess-2")
         events.clear()
         worker.drop_connection("alice", "sess-1")
-        assert [(e["op"], e.get("session_id"), e.get("page_id")) for e in events] == [
+        assert [(e["op"], e.get("connection_id"), e.get("page_id")) for e in events] == [
             ("drop_page", None, "p1"),
             ("drop_connection", "sess-1", None),
         ]
@@ -347,17 +347,17 @@ def test_the_drop_connection_op_refuses_an_unknown_connection() -> None:
 def test_a_second_connection_of_a_user_announces_only_its_own_birth() -> None:
     worker = UserStickyWorker("W:w1")
     with call_sink(worker) as events:
-        worker.new_page("alice", "p1", session_id="sess-1")
+        worker.new_page("alice", "p1", connection_id="sess-1")
         events.clear()
-        worker.new_page("alice", "p2", session_id="sess-2")
-        assert [(e["op"], e.get("session_id")) for e in events] == [
+        worker.new_page("alice", "p2", connection_id="sess-2")
+        assert [(e["op"], e.get("connection_id")) for e in events] == [
             ("new_connection", "sess-2"),
             ("new_page", "sess-2"),
         ]
         events.clear()
         worker.drop_page("alice", "p1")
         # The sibling connection keeps the user alive: no drop_user in the cascade.
-        assert [(e["op"], e.get("session_id")) for e in events] == [
+        assert [(e["op"], e.get("connection_id")) for e in events] == [
             ("drop_page", None),
             ("drop_connection", "sess-1"),
         ]
@@ -367,7 +367,7 @@ def test_a_second_connection_of_a_user_announces_only_its_own_birth() -> None:
 def test_a_connection_row_survives_the_wire_view() -> None:
     worker = UserStickyWorker("W:w1")
     with call_sink(worker):
-        worker.new_page("alice", "p1", session_id="sess-1")
+        worker.new_page("alice", "p1", connection_id="sess-1")
     wired = worker.wire_entry(worker.connection_items.get("sess-1"))
     stamp = wired.pop("last_refresh_ts")
     assert wired == {"register_item_id": "sess-1", "user": "alice"}
@@ -443,7 +443,7 @@ def test_the_commanded_eviction_hands_the_slice_over_and_announces_nothing() -> 
     target = UserStickyWorker("W:w2")
     with call_sink(source) as events:
         source.new_connection("sess-1", user="alice", tenant="acme")
-        source.new_page("alice", page_id="p1", session_id="sess-1")
+        source.new_page("alice", page_id="p1", connection_id="sess-1")
         source.page_items.get("p1")["store"]["counter"] = 1
         announced = len(events)
         result = source.evict_user("alice")
@@ -848,7 +848,7 @@ async def test_shutdown_stops_the_tasks_and_closes_the_channel_without_orphan(
 def test_a_resident_login_links_the_connection_and_ships_nothing() -> None:
     worker = UserStickyWorker("W:w1")
     with call_sink(worker) as events:
-        worker.new_page("alice", "p1", session_id="sess-1")
+        worker.new_page("alice", "p1", connection_id="sess-1")
         page_store = worker.page_items.get("p1")["store"]
         events.clear()
         worker.new_connection("sess-2")
@@ -861,7 +861,7 @@ def test_a_resident_login_links_the_connection_and_ships_nothing() -> None:
             "new_connection",
             "change_connection_user",
         ]
-        assert events[-1]["session_id"] == "sess-2"
+        assert events[-1]["connection_id"] == "sess-2"
         assert events[-1]["previous_user"] == "guest_sess-2"
         assert "encoded" not in events[-1]
     # Nothing was evicted: the resident entry, its first connection and its page
@@ -879,7 +879,7 @@ def test_a_self_login_leaves_the_user_whole() -> None:
     # user must run AFTER the re-add — this test pins that order.
     worker = UserStickyWorker("W:w1")
     with call_sink(worker) as events:
-        worker.new_page("alice", "p1", session_id="sess-1")
+        worker.new_page("alice", "p1", connection_id="sess-1")
         entry = worker.user_items.get("alice")
         user_store, connections = entry["store"], entry["connections"]
         events.clear()
@@ -905,7 +905,7 @@ def test_the_drain_loses_nothing_to_a_concurrent_depositor() -> None:
     window can swallow a deposit landing inside it.
     """
     worker = UserStickyWorker("W:w1")
-    worker.registry.new_page("p1", user="u1", session_id="s1")
+    worker.registry.new_page("p1", user="u1", connection_id="s1")
     worker.setStoreSubscription("u1", page_id="p1", storename="page", prefix="form")
     store = worker.page_items.get("p1")["store"]
     deposits = 400
@@ -955,7 +955,7 @@ async def test_a_page_evicted_between_the_call_and_its_reply_still_gets_a_reply(
     worker = harness.worker
     await harness.call(
         "/op/new_page",
-        {"identity": "sess-1", "kwargs": {"page_id": "p1", "session_id": "sess-1"}},
+        {"identity": "sess-1", "kwargs": {"page_id": "p1", "connection_id": "sess-1"}},
     )
     original = worker.pool.run
 
@@ -1001,7 +1001,7 @@ def caching_worker(*page_ids: str) -> UserStickyWorker:
     worker = UserStickyWorker("W:w1")
     with call_sink(worker):
         for page_id in page_ids:
-            worker.new_page("u1", page_id, session_id="s1")
+            worker.new_page("u1", page_id, connection_id="s1")
     for page_id in page_ids:
         store = worker.page_items.get(page_id)["store"]
         store.set_item("cache.users", "payload", _caching_table="adm.user")
@@ -1102,8 +1102,8 @@ def aged_worker(**kwargs: Any) -> UserStickyWorker:
     """
     worker = UserStickyWorker("W:w1", **kwargs)
     with call_sink(worker):
-        worker.new_page("mario", "p1", session_id="s1")
-        worker.new_page("guest_g1", "pg", session_id="g1")
+        worker.new_page("mario", "p1", connection_id="s1")
+        worker.new_page("guest_g1", "pg", connection_id="g1")
     return worker
 
 
@@ -1128,7 +1128,7 @@ async def test_a_page_addressed_call_refreshes_the_whole_chain(harness: Any) -> 
     """The page's own CALL is its sign of life, and it climbs to its user."""
     worker = harness.worker
     await harness.call(
-        "/op/new_page", {"identity": "mario", "kwargs": {"page_id": "p1", "session_id": "s1"}}
+        "/op/new_page", {"identity": "mario", "kwargs": {"page_id": "p1", "connection_id": "s1"}}
     )
     rows = [
         worker.page_items.get("p1"),
@@ -1151,7 +1151,7 @@ async def test_a_call_addressing_no_page_stamps_nothing(harness: Any) -> None:
     """Only a page-addressed CALL refreshes: a worker-level op is nobody's life sign."""
     worker = harness.worker
     with call_sink(worker):
-        worker.new_page("mario", "p1", session_id="s1")
+        worker.new_page("mario", "p1", connection_id="s1")
     worker.user_items.get("mario")["last_refresh_ts"] = 0.0
 
     await harness.call("/op/occupancy", {"identity": "mario"})

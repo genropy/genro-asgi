@@ -25,7 +25,7 @@ async def test_a_state_kind_this_pass_does_not_deliver_is_refused_at_the_call(de
     # wf:contract: set_datachange with kind='page_store' or 'connection_store'
     # wf:contract: raises an explicit error IN THE CALLER'S OWN CALL, before
     # wf:contract: anything lands on the request slot — never a silent success
-    desk_lane.worker.new_page("u1", page_id="p1", session_id="s1")
+    desk_lane.worker.new_page("u1", page_id="p1", connection_id="s1")
     await desk_lane.open_request()
 
     for kind in ("page_store", "connection_store"):
@@ -42,7 +42,7 @@ async def test_a_filtered_address_fails_alone(desk_lane):
     # wf:contract: request's OTHER events (laid before and after) survive on the
     # wf:contract: slot and the same request's collect_page drains and delivers
     # wf:contract: them — the bad call fails alone, as the pre_refactoring does
-    desk_lane.worker.new_page("u1", page_id="p1", session_id="s1")
+    desk_lane.worker.new_page("u1", page_id="p1", connection_id="s1")
     await desk_lane.open_request()
 
     await desk_lane.verb("set_datachange", "u1", change=foreign_change("before.x", 1), target="p1")
@@ -60,7 +60,7 @@ async def test_nothing_refused_ever_reaches_the_desk(desk_lane):
     # wf:contract: after the refusals above, the desk queues hold nothing of the
     # wf:contract: refused messages — no half-filed batch, and the exchange of
     # wf:contract: the request completes without error
-    desk_lane.worker.new_page("u1", page_id="p1", session_id="s1")
+    desk_lane.worker.new_page("u1", page_id="p1", connection_id="s1")
     await desk_lane.open_request()
 
     with pytest.raises(NotImplementedError):

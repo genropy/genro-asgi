@@ -109,7 +109,7 @@ def make_page(worker: UserStickyWorker, page_id: str = "p1") -> dict[str, Any]:
     The page collector is born filtered and empty (D1), so ``form`` has to be
     opened explicitly before a write into the page's own store is captured.
     """
-    worker.registry.new_page(page_id, user="u1", session_id="s1")
+    worker.registry.new_page(page_id, user="u1", connection_id="s1")
     worker.setStoreSubscription("u1", page_id=page_id, storename="page", prefix="form")
     return worker.registry.subscribe_store_path(page_id, "prefs")
 

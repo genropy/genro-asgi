@@ -1730,13 +1730,13 @@ class UserStickyCommander:
         elif op == "drop_user":
             self.drop_user(event["user"], worker)
         elif op == "new_connection":
-            self.register_connection(event["session_id"], event["user"])
+            self.register_connection(event["connection_id"], event["user"])
         elif op == "drop_connection":
-            self.drop_connection(event["session_id"])
+            self.drop_connection(event["connection_id"])
         elif op == LOGIN_OP:
-            self.relabel_user(event["user"], event.get("previous_user"), event["session_id"], worker)
+            self.relabel_user(event["user"], event.get("previous_user"), event["connection_id"], worker)
         elif op == "new_page":
-            self.register_page(event["page_id"], event["user"], worker, event["session_id"])
+            self.register_page(event["page_id"], event["user"], worker, event["connection_id"])
         elif op == "drop_page":
             self.drop_page(event["page_id"], worker)
         elif op in LIFECYCLE_OPS:
@@ -1755,24 +1755,24 @@ class UserStickyCommander:
             return
         self.assign_user(user, worker)
 
-    def register_connection(self, session_id: str, user: str) -> None:
+    def register_connection(self, connection_id: str, user: str) -> None:
         """Map a connection to the user it belongs to — the middle link, folded."""
-        self.connection_user[session_id] = user
-        self.user_connections.setdefault(user, set()).add(session_id)
+        self.connection_user[connection_id] = user
+        self.user_connections.setdefault(user, set()).add(connection_id)
 
-    def drop_connection(self, session_id: str) -> None:
+    def drop_connection(self, connection_id: str) -> None:
         """Forget one connection: its pages announced their own drop before it.
 
         The cascade climbs on the worker and is announced in that order, so by
         the time this arrives the pages of that connection are already gone.
         The user stays: a sibling connection of it is being served all along.
         """
-        owner = self.connection_user.pop(session_id, None)
+        owner = self.connection_user.pop(connection_id, None)
         if owner is not None:
-            self.discard_connection_edge(owner, session_id)
-        self.connection_pages.pop(session_id, None)
+            self.discard_connection_edge(owner, connection_id)
+        self.connection_pages.pop(connection_id, None)
 
-    def discard_connection_edge(self, user: str, session_id: str) -> None:
+    def discard_connection_edge(self, user: str, connection_id: str) -> None:
         """Take one connection off its user's edge set, dropping the set when empty.
 
         Called only for an owner just read off ``connection_user``, so the edge
@@ -1780,11 +1780,11 @@ class UserStickyCommander:
         surface and raises (``KeyError``), never passes silently.
         """
         siblings = self.user_connections[user]
-        siblings.discard(session_id)
+        siblings.discard(connection_id)
         if not siblings:
             del self.user_connections[user]
 
-    def relabel_user(self, user: str, previous_user: str | None, session_id: str, worker: str) -> None:
+    def relabel_user(self, user: str, previous_user: str | None, connection_id: str, worker: str) -> None:
         """The login: the CONNECTION changes owner, and no page edge ever moves.
 
         One edge moves, and one only — the surface transcribes what the worker
@@ -1803,11 +1803,11 @@ class UserStickyCommander:
         announcing worker is either that home (the join) or the holder of a
         remnant ``settle_login`` is about to discard.
         """
-        former_owner = self.connection_user.get(session_id)
+        former_owner = self.connection_user.get(connection_id)
         if former_owner is not None and former_owner != user:
-            self.discard_connection_edge(former_owner, session_id)
-        self.connection_user[session_id] = user
-        self.user_connections.setdefault(user, set()).add(session_id)
+            self.discard_connection_edge(former_owner, connection_id)
+        self.connection_user[connection_id] = user
+        self.user_connections.setdefault(user, set()).add(connection_id)
         if (
             previous_user is not None
             and previous_user != user
@@ -1841,17 +1841,17 @@ class UserStickyCommander:
         self.page_connection[page_id] = connection
         self.connection_pages.setdefault(connection, set()).add(page_id)
 
-    def discard_page_edge(self, session_id: str, page_id: str) -> None:
+    def discard_page_edge(self, connection_id: str, page_id: str) -> None:
         """Take one page off its connection's edge set, dropping the set when empty.
 
         Called only for a connection just read off ``page_connection``, so the
         edge set exists by the alignment invariant — a missing one is a broken
         surface and raises (``KeyError``), never passes silently.
         """
-        siblings = self.connection_pages[session_id]
+        siblings = self.connection_pages[connection_id]
         siblings.discard(page_id)
         if not siblings:
-            del self.connection_pages[session_id]
+            del self.connection_pages[connection_id]
 
     def drop_page(self, page_id: str, worker: str) -> None:
         """Unhang a page, unless it has meanwhile been placed somewhere else.
@@ -1891,9 +1891,9 @@ class UserStickyCommander:
             return None
         return self.user_worker_map.get(user)
 
-    def pages_of_connection(self, session_id: str) -> list[str]:
+    def pages_of_connection(self, connection_id: str) -> list[str]:
         """Every page opened by one connection, sorted — the edge set read downward."""
-        return sorted(self.connection_pages.get(session_id, set()))
+        return sorted(self.connection_pages.get(connection_id, set()))
 
     def drop_user(self, user: str, worker: str) -> None:
         """Unmap a user, unless it has meanwhile been assigned somewhere else."""
@@ -1946,11 +1946,11 @@ class UserStickyCommander:
         if worker is not None and worker != FROZEN:
             del self.worker_roster[worker]["users"][user]
         self.forget_users([user])
-        for session_id in sorted(self.user_connections.pop(user, set())):
-            for page_id in sorted(self.connection_pages.pop(session_id, set())):
+        for connection_id in sorted(self.user_connections.pop(user, set())):
+            for page_id in sorted(self.connection_pages.pop(connection_id, set())):
                 del self.page_connection[page_id]
                 self.page_subscriptions.drop_page(page_id)
-            del self.connection_user[session_id]
+            del self.connection_user[connection_id]
 
     def sweep_worker(self, worker: str) -> list[str]:
         """Forget every user of a dead worker: what they pointed at is gone.
@@ -2565,9 +2565,9 @@ class UserStickyCommander:
             prior = self.user_worker_map.get(event["user"]) if is_login else None
             self.fold_event(worker, event)
             if is_login:
-                self.settle_login(worker, event["user"], event["session_id"], prior)
+                self.settle_login(worker, event["user"], event["connection_id"], prior)
 
-    def settle_login(self, worker: str, user: str, session_id: str, prior: str | None) -> None:
+    def settle_login(self, worker: str, user: str, connection_id: str, prior: str | None) -> None:
         """One login's decision, taken synchronously on the fold's own tick.
 
         A ``FROZEN`` PLACEMENT answers before ``prior`` is even consulted: the
@@ -2632,9 +2632,9 @@ class UserStickyCommander:
             if chosen != worker:
                 self.spawn_settlement(self.move_user(user, chosen), name=f"login-move:{user}")
         elif prior != worker:
-            remnant_pages = self.pages_of_connection(session_id)
+            remnant_pages = self.pages_of_connection(connection_id)
             self.spawn_settlement(
-                self.rehome_login(worker, user, session_id, remnant_pages),
+                self.rehome_login(worker, user, connection_id, remnant_pages),
                 name=f"login-rehome:{user}",
             )
 
@@ -2651,7 +2651,7 @@ class UserStickyCommander:
         return task
 
     async def rehome_login(
-        self, source: str, user: str, session_id: str, remnant_pages: list[str]
+        self, source: str, user: str, connection_id: str, remnant_pages: list[str]
     ) -> None:
         """Settle a login onto a user resident elsewhere: discard, then join.
 
@@ -2708,7 +2708,7 @@ class UserStickyCommander:
             return
         path = f"{OP_PATH_PREFIX}new_connection"
         payload = await self.hub.call(
-            residence, path, {"identity": session_id, "kwargs": {"user": user}}
+            residence, path, {"identity": connection_id, "kwargs": {"user": user}}
         )
         await self.unwrap_reply(residence, path, payload)
 

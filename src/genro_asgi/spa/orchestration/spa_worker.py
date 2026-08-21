@@ -329,7 +329,6 @@ PARCEL_PAGE_REBUILT_FIELDS = frozenset(
     {
         "register_item_id",
         "connection_id",
-        "session_id",
         "collector",
         "user_view",
         "dbevents",
@@ -678,7 +677,7 @@ class SpaWorker:
                 self.add_user(user)
             item = self._add_connection_item(cid, user, **fields)
             self.add_worker_event(
-                "new_connection", user=user, session_id=cid, sticky_cid=item["sticky_cid"]
+                "new_connection", user=user, sticky_cid=item["sticky_cid"]
             )
             return item
 
@@ -708,7 +707,7 @@ class SpaWorker:
                 "new_page",
                 user=self.registry.page_user(page_id),
                 page_id=page_id,
-                session_id=cid,
+                sticky_cid=self.connection_register.get(cid)["sticky_cid"],
                 table_subscriptions=sorted(item["table_subscriptions"]),
             )
             return item
@@ -737,8 +736,8 @@ class SpaWorker:
         Args:
             identity: the user the page belongs to.
             page_id: the page identity.
-            fields: anything else the row should carry; ``session_id`` (or
-                ``connection_id``) names the connection it hangs from.
+            fields: anything else the row should carry; ``connection_id``
+                names the connection it hangs from.
 
         Returns:
             The page register item.
@@ -747,7 +746,7 @@ class SpaWorker:
         and the user above it into being when they are unseen and announces the
         cascade in the order it happened.
         """
-        cid = fields.pop("session_id", None) or fields.pop("connection_id", None)
+        cid = fields.pop("connection_id", None)
         return self.add_page(page_id, cid, identity, **fields)
 
     def drop_page(self, identity: str, page_id: str) -> None:
@@ -769,40 +768,44 @@ class SpaWorker:
             cid = page["connection_id"]
             user = self.registry.page_user(page_id)
             self._remove_page_item(page_id)
-            self.add_worker_event("drop_page", user=user, page_id=page_id, session_id=cid)
-            if not self.connection_register.get(cid)["pages"]:
+            self.add_worker_event("drop_page", user=user, page_id=page_id)
+            connection = self.connection_register.get(cid)
+            if not connection["pages"]:
+                sticky_cid = connection["sticky_cid"]
                 self._remove_connection_item(cid)
-                self.add_worker_event("drop_connection", user=user, session_id=cid)
+                self.add_worker_event("drop_connection", user=user, sticky_cid=sticky_cid)
                 self._drop_emptied_user(user)
 
-    def drop_connection(self, identity: str, session_id: str) -> None:
+    def drop_connection(self, identity: str, connection_id: str) -> None:
         """Take a whole connection off this worker, its pages first.
 
         Args:
             identity: the user the site names as the connection's owner; the
                 owner this worker acts on is read off the row.
-            session_id: the connection to be gone.
+            connection_id: the connection to be gone.
 
         Raises:
             KeyError: this worker holds no such connection.
 
         Removes the pages and the connection, announcing ``drop_pages`` (when it
         had any), ``drop_connection``, and ``drop_user`` if it was the user's
-        last.
+        last. The connection announcement carries the routing cookie — the name
+        the vertex's indexes go by — read off the item before it is removed.
         """
-        cid = session_id
+        cid = connection_id
         with self.dispatch_lock:
             item = self.connection_register.get(cid)
             if item is None:
                 raise KeyError(f"drop_connection: no connection {cid!r} here")
             user = item["user"]
+            sticky_cid = item["sticky_cid"]
             page_ids = sorted(item["pages"])
             for page_id in page_ids:
                 self._remove_page_item(page_id)
             if page_ids:
-                self.add_worker_event("drop_pages", user=user, page_ids=page_ids, session_id=cid)
+                self.add_worker_event("drop_pages", user=user, page_ids=page_ids)
             self._remove_connection_item(cid)
-            self.add_worker_event("drop_connection", user=user, session_id=cid)
+            self.add_worker_event("drop_connection", user=user, sticky_cid=sticky_cid)
             self._drop_emptied_user(user)
 
     def drop_user(self, user: str) -> None:
@@ -819,20 +822,23 @@ class SpaWorker:
             item = self.user_register.get(user)
             if item is None:
                 return
-            session_ids = sorted(item["connections"])
+            connection_ids = sorted(item["connections"])
+            sticky_cids = [
+                self.connection_register.get(cid)["sticky_cid"] for cid in connection_ids
+            ]
             page_ids = sorted(
                 page_id
-                for cid in session_ids
+                for cid in connection_ids
                 for page_id in self.connection_register.get(cid)["pages"]
             )
             for page_id in page_ids:
                 self._remove_page_item(page_id)
             if page_ids:
                 self.add_worker_event("drop_pages", user=user, page_ids=page_ids)
-            for cid in session_ids:
+            for cid in connection_ids:
                 self._remove_connection_item(cid)
-            if session_ids:
-                self.add_worker_event("drop_connections", user=user, session_ids=session_ids)
+            if connection_ids:
+                self.add_worker_event("drop_connections", user=user, sticky_cids=sticky_cids)
             self._remove_user_item(user)
             self._unfreeze_waits.pop(user, None)
             self.add_worker_event("drop_user", user=user)
@@ -1770,10 +1776,10 @@ class SpaWorker:
             if item is None:
                 if found is None:
                     return None
-                session_id, parcel = found
+                connection_id, parcel = found
                 resident = user in self.user_register
-                item = self.add_connection(session_id, user, **parcel.get("connection", {}))
-                cid = session_id
+                item = self.add_connection(connection_id, user, **parcel.get("connection", {}))
+                cid = connection_id
                 for page_id, fields in parcel.get("pages", {}).items():
                     replayed = {
                         key: fields.pop(key) for key in PARCEL_PAGE_REPLAYED_FIELDS if key in fields
@@ -1786,7 +1792,7 @@ class SpaWorker:
                         "new_page",
                         user=self.registry.page_user(page_id),
                         page_id=page_id,
-                        session_id=cid,
+                        sticky_cid=item["sticky_cid"],
                         table_subscriptions=sorted(page["table_subscriptions"]),
                     )
                 self._install_carried_store(user, parcel.get("store"), resident)
@@ -2300,8 +2306,8 @@ class SpaWorker:
             if user is not None:
                 await self.close_request(user)
             with self.dispatch_lock:
-                session_id = self.cid_connection_map.get(cid, cid)
-            await self.freeze_connection(session_id)
+                connection_id = self.cid_connection_map.get(cid, cid)
+            await self.freeze_connection(connection_id)
 
     def _serve_on_thread(self, seam: WsgiSeam, payload: dict[str, Any]) -> Any:
         """Serve the stitching on the pool thread, under a slot of its own.
@@ -2583,7 +2589,7 @@ class SpaWorker:
         """
         page_ids = sorted(self.connection_register.get(cid)["pages"])
         if page_ids:
-            self.add_worker_event("drop_pages", user=user, page_ids=page_ids, session_id=cid)
+            self.add_worker_event("drop_pages", user=user, page_ids=page_ids)
         for page_id in page_ids:
             self._remove_page_item(page_id)
         self._remove_connection_item(cid)
@@ -2610,9 +2616,7 @@ class SpaWorker:
         for cid in sorted(item["connections"]):
             page_ids = sorted(self.connection_register.get(cid)["pages"])
             if page_ids:
-                self.add_worker_event(
-                    "drop_pages", user=user, page_ids=page_ids, session_id=cid
-                )
+                self.add_worker_event("drop_pages", user=user, page_ids=page_ids)
             for page_id in page_ids:
                 self._remove_page_item(page_id)
             self._remove_connection_item(cid)
@@ -2645,7 +2649,7 @@ class SpaWorker:
         return self.registry.new_page(
             page_id,
             user=self.connection_register.get(cid)["user"],
-            session_id=cid,
+            connection_id=cid,
             **self._stamped(**fields),
         )
 
@@ -2781,7 +2785,7 @@ class SpaWorker:
             return cid, payload
         for payload in self.freeze_handler.read_connection_register_items(user):
             if payload.get("connection", {}).get("sticky_cid") == cid:
-                session_id = payload["connection_id"]
-                self.freeze_handler.drop_connection_register_item(user, session_id)
-                return session_id, payload
+                connection_id = payload["connection_id"]
+                self.freeze_handler.drop_connection_register_item(user, connection_id)
+                return connection_id, payload
         return None

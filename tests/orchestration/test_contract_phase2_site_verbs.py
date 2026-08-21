@@ -62,34 +62,34 @@ def test_new_connection_names_the_anonymous_guest_and_announces_the_cascade(work
 
 
 def test_new_page_builds_the_whole_chain_and_announces_it_in_order(worker):
-    entry = worker.new_page("alice", page_id="p1", session_id="s1")
+    entry = worker.new_page("alice", page_id="p1", connection_id="s1")
 
     assert entry["connection_id"] == "s1"
     assert announced(worker) == ["new_user", "new_connection", "new_page"]
     page_event = worker.worker_events[-1]
     assert page_event["page_id"] == "p1"
-    assert page_event["session_id"] == "s1"
+    assert page_event["sticky_cid"] is None
     assert page_event["user"] == "alice"
 
 
 def test_new_page_keeps_the_fields_the_site_writes(worker):
     """``start_ts`` is the site's own stamp: the row carries it verbatim."""
-    worker.new_page("alice", page_id="p1", session_id="s1", start_ts=1000.0)
+    worker.new_page("alice", page_id="p1", connection_id="s1", start_ts=1000.0)
 
     assert worker.page_register.get("p1")["start_ts"] == 1000.0
 
 
 def test_a_second_page_on_a_known_connection_announces_only_itself(worker):
-    worker.new_page("alice", page_id="p1", session_id="s1")
+    worker.new_page("alice", page_id="p1", connection_id="s1")
     worker.worker_events.clear()
 
-    worker.new_page("alice", page_id="p2", session_id="s1")
+    worker.new_page("alice", page_id="p2", connection_id="s1")
 
     assert announced(worker) == ["new_page"]
 
 
 def test_the_new_rows_carry_the_data_plane_from_birth(worker):
-    worker.new_page("alice", page_id="p1", session_id="s1")
+    worker.new_page("alice", page_id="p1", connection_id="s1")
 
     page = worker.page_register.get("p1")
     assert isinstance(page["store"], Bag)
@@ -103,7 +103,7 @@ def test_the_new_rows_carry_the_data_plane_from_birth(worker):
 
 
 def test_drop_page_takes_the_page_and_announces_what_its_departure_empties(worker):
-    worker.new_page("alice", page_id="p1", session_id="s1")
+    worker.new_page("alice", page_id="p1", connection_id="s1")
     worker.worker_events.clear()
 
     worker.drop_page("alice", "p1")
@@ -118,8 +118,8 @@ def test_drop_page_takes_the_page_and_announces_what_its_departure_empties(worke
 
 
 def test_drop_page_leaves_the_surviving_sibling_alone(worker):
-    worker.new_page("alice", page_id="p1", session_id="s1")
-    worker.new_page("alice", page_id="p2", session_id="s1")
+    worker.new_page("alice", page_id="p1", connection_id="s1")
+    worker.new_page("alice", page_id="p2", connection_id="s1")
     worker.worker_events.clear()
 
     worker.drop_page("alice", "p1")
@@ -130,11 +130,11 @@ def test_drop_page_leaves_the_surviving_sibling_alone(worker):
 
 
 def test_drop_connection_demolishes_pages_first_then_connection_then_user(worker):
-    worker.new_page("alice", page_id="p1", session_id="s1")
-    worker.new_page("alice", page_id="p2", session_id="s1")
+    worker.new_page("alice", page_id="p1", connection_id="s1")
+    worker.new_page("alice", page_id="p2", connection_id="s1")
     worker.worker_events.clear()
 
-    worker.drop_connection("alice", session_id="s1")
+    worker.drop_connection("alice", connection_id="s1")
 
     ops = announced(worker)
     assert ops[-1] == "drop_user"
@@ -147,7 +147,7 @@ def test_drop_connection_demolishes_pages_first_then_connection_then_user(worker
 
 def test_drop_connection_on_an_unknown_connection_is_an_explicit_error(worker):
     with pytest.raises(KeyError, match="ghost"):
-        worker.drop_connection("alice", session_id="ghost")
+        worker.drop_connection("alice", connection_id="ghost")
 
 
 # ----------------------------------------------------------------------
@@ -156,7 +156,7 @@ def test_drop_connection_on_an_unknown_connection_is_an_explicit_error(worker):
 
 
 def test_the_login_relabels_the_connection_in_place(worker):
-    worker.new_page("guest_sess-1", page_id="p1", session_id="sess-1")
+    worker.new_page("guest_sess-1", page_id="p1", connection_id="sess-1")
     connection = worker.connection_register.get("sess-1")
 
     worker.change_connection_user("sess-1", user="alice")
@@ -168,7 +168,7 @@ def test_the_login_relabels_the_connection_in_place(worker):
 
 
 def test_the_guest_store_follows_its_first_real_identity(worker):
-    worker.new_page("guest_sess-1", page_id="p1", session_id="sess-1")
+    worker.new_page("guest_sess-1", page_id="p1", connection_id="sess-1")
     guest_store = worker.user_register.get("guest_sess-1")["store"]
     guest_store["draft"] = "half typed"
 
@@ -192,7 +192,7 @@ def test_add_user_keeps_its_own_form_beside_the_site_verbs(worker):
 
 
 def test_refresh_chain_answers_the_sites_single_argument_call(worker):
-    worker.new_page("alice", page_id="p1", session_id="s1")
+    worker.new_page("alice", page_id="p1", connection_id="s1")
 
     instant = worker.refresh_chain("p1")
 

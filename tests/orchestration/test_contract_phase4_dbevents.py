@@ -41,16 +41,16 @@ WORKER_NAME = "standard_0001"
 def worker(tmp_path):
     deposit = FreezeHandler(tmp_path / "frozen_users")
     made = SpaWorker(WORKER_NAME, freeze_handler=deposit, deposit_lock_retry_interval=0.01)
-    made.new_page("alice", page_id="p0", session_id="s1")
-    made.new_page("alice", page_id="p1", session_id="s1")
+    made.new_page("alice", page_id="p0", connection_id="s1")
+    made.new_page("alice", page_id="p1", connection_id="s1")
     return made
 
 
 @pytest.fixture
 async def lane(desk_lane):
     """The live lane with alice's two pages already on the worker."""
-    desk_lane.worker.new_page("alice", page_id="p0", session_id="s1")
-    desk_lane.worker.new_page("alice", page_id="p1", session_id="s1")
+    desk_lane.worker.new_page("alice", page_id="p0", connection_id="s1")
+    desk_lane.worker.new_page("alice", page_id="p1", connection_id="s1")
     return desk_lane
 
 
@@ -131,7 +131,7 @@ async def test_a_commit_reaches_the_local_subscribers(lane):
 
 
 async def test_two_subscribing_pages_read_the_same_shaped_deposit(lane):
-    lane.worker.new_page("alice", page_id="p2", session_id="s1")
+    lane.worker.new_page("alice", page_id="p2", connection_id="s1")
     await lane.verb("subscribeTable", "alice", table="glbl.user", page_id="p1")
     await lane.verb("subscribeTable", "alice", table="glbl.user", page_id="p2")
 

@@ -18,7 +18,7 @@ async def subscribed_guest(lane, table: str = "mytable") -> str:
     The vertex row placement would have created is seeded by hand: the lane
     has no reception in front of it.
     """
-    lane.worker.add_connection("a1b2")
+    lane.worker.add_connection("a1b2", sticky_cid="spa-a1b2")
     lane.worker.add_page("page-0", "a1b2")
     guest = f"{GUEST_PREFIX}a1b2"
     lane.commander.user_map[guest] = lane.commander._new_row()

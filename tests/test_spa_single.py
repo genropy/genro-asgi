@@ -338,7 +338,7 @@ async def make_page(commander: UserStickyCommander, user: str, page_id: str) -> 
     it is in the reception, so a guest's pages hang from the connection its
     login will re-label.
     """
-    await commander.forward_call(user, "/op/new_page", {"page_id": page_id, "session_id": user})
+    await commander.forward_call(user, "/op/new_page", {"page_id": page_id, "connection_id": user})
 
 
 async def pull(commander: UserStickyCommander, user: str, page_id: str) -> dict[str, Any]:
@@ -658,7 +658,7 @@ async def test_the_register_crosses_a_total_restart_through_the_dump(tmp_path: A
     await first.start()
     await first.forward_call("sess-1", "/op/new_connection")
     await first.forward_call(
-        "sess-1", "/op/new_page", {"page_id": "p1", "session_id": "sess-1"}
+        "sess-1", "/op/new_page", {"page_id": "p1", "connection_id": "sess-1"}
     )
     await first.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
     await first.forward_call(
@@ -678,7 +678,7 @@ async def test_the_register_crosses_a_total_restart_through_the_dump(tmp_path: A
         assert second.user_worker_map["alice"] == second.worker.name
         assert second.worker.user_items.get("alice")["store"]["prefs.theme"] == "dark"
         assert second.worker.connection_items.get("sess-1")["user"] == "alice"
-        assert second.worker.page_items.get("p1")["session_id"] == "sess-1"
+        assert second.worker.page_items.get("p1")["connection_id"] == "sess-1"
         # The surface is re-hung from the package itself (adopt_slice): the
         # operational install sends no events, so the fold never runs here.
         assert second.connection_user == {"sess-1": "alice"}

@@ -144,7 +144,7 @@ async def test_a_newcomer_travels_anonymous_and_the_site_baptises(commander, gro
                     "op": "new_connection",
                     "worker": "standard_0001",
                     "user": "guest_legacy1",
-                    "session_id": "legacy-conn-1",
+                    "connection_id": "legacy-conn-1",
                     "sticky_cid": "cid-a",
                 }
             ]

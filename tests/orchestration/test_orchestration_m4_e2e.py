@@ -100,9 +100,9 @@ STORY_WORKER = f"{__name__}:X_SpaWorker_m4"
 LOGIN_PATH = "/login/"
 
 #: What the story's site prefixes its OWN connection ids with. The routing cookie
-#: and the site's session id are two different strings — which is what makes the
-#: junction between them observable at all.
-SITE_SESSION_PREFIX = "site-"
+#: and the site's connection id are two different strings — which is what makes
+#: the junction between them observable at all.
+SITE_CONNECTION_PREFIX = "site-"
 
 #: The silence past which a worker parks a user, as the recipe declares it, and
 #: the gate the departures wait out — both shrunk to fractions of a second.
@@ -206,22 +206,22 @@ class X_SpaWorker_m4(X_SpaWorker):
         """
         identity = environ["genro.identity"]
         path = environ["PATH_INFO"]
-        session_id = self.site_session_id(cid_of(environ))
-        if self.connection_register.get(session_id) is None:
-            self.new_connection(session_id, user=identity)
+        connection_id = self.site_connection_id(cid_of(environ))
+        if self.connection_register.get(connection_id) is None:
+            self.new_connection(connection_id, user=identity)
         if path.startswith(LOGIN_PATH):
-            self.change_connection_user(session_id, path[len(LOGIN_PATH) :])
+            self.change_connection_user(connection_id, path[len(LOGIN_PATH) :])
         with self.dispatch_lock:
-            owner = self.connection_register.get(session_id)["user"]
+            owner = self.connection_register.get(connection_id)["user"]
             store = self.user_register.get(owner)["store"]
             store["trail"] = f"{store['trail'] or ''}{path} "
             trail = store["trail"]
         start_response("200 OK", [("Content-Type", "text/plain"), ("X-Worker", self.name)])
         return [f"{identity}|{trail}".encode()]
 
-    def site_session_id(self, cid: str) -> str:
+    def site_connection_id(self, cid: str) -> str:
         """This site's own id for the browser behind that cookie, its own to mint."""
-        return f"{SITE_SESSION_PREFIX}{cid}"
+        return f"{SITE_CONNECTION_PREFIX}{cid}"
 
 
 def cid_of(environ: dict[str, Any]) -> str:
@@ -321,7 +321,7 @@ async def test_a_day_of_the_site_from_the_front_to_the_child(server):
     first = await browse(server, "/catalog")
     cid = minted_cid(first)
     # The guest's name is the SITE's, built on the id the site minted for itself.
-    guest = f"{GUEST_PREFIX}{SITE_SESSION_PREFIX}{cid}"
+    guest = f"{GUEST_PREFIX}{SITE_CONNECTION_PREFIX}{cid}"
 
     assert identity_of(first) == "None"
     assert vertex.connection_user_map[cid] == guest
@@ -491,7 +491,7 @@ async def test_a_death_where_nothing_of_his_is_left_does_not_take_him(server, st
 
     assert served_by(joining) == reception.name
     assert "mario" not in reception.hosted_users
-    assert freezer.read_connection_register_item("mario", f"{SITE_SESSION_PREFIX}{second_cid}") is not None
+    assert freezer.read_connection_register_item("mario", f"{SITE_CONNECTION_PREFIX}{second_cid}") is not None
 
     # That process dies wild, and the round settles the death.
     reception.process.kill()
@@ -504,7 +504,7 @@ async def test_a_death_where_nothing_of_his_is_left_does_not_take_him(server, st
     assert vertex.connection_user_map[cid] == "mario"
     assert vertex.connection_user_map[second_cid] == "mario"
     assert group.user_worker_map["mario"] == spare.name
-    assert freezer.read_connection_register_item("mario", f"{SITE_SESSION_PREFIX}{second_cid}") is not None
+    assert freezer.read_connection_register_item("mario", f"{SITE_CONNECTION_PREFIX}{second_cid}") is not None
     # And he is served as ever, with everything he has done still under him.
     served = await browse(server, "/orders/9", cid)
 

@@ -47,7 +47,7 @@ WORKER_NAME = "standard_0001"
 def worker(tmp_path):
     deposit = FreezeHandler(tmp_path / "frozen_users")
     made = SpaWorker(WORKER_NAME, freeze_handler=deposit, deposit_lock_retry_interval=0.01)
-    made.new_page("u1", page_id="p1", session_id="s1")
+    made.new_page("u1", page_id="p1", connection_id="s1")
     return made
 
 
@@ -122,7 +122,7 @@ def test_a_subscription_for_an_unknown_page_is_an_error(worker):
 
 async def test_collect_page_merges_both_collectors_by_ts(desk_lane):
     worker = desk_lane.worker
-    worker.new_page("u1", page_id="p1", session_id="s1")
+    worker.new_page("u1", page_id="p1", connection_id="s1")
     await desk_lane.verb(
         "setStoreSubscription", "u1", page_id="p1", storename="page", prefix="form"
     )
@@ -150,7 +150,7 @@ async def test_collect_page_merges_both_collectors_by_ts(desk_lane):
 async def test_collect_page_drains_the_dbevents_species_apart(desk_lane):
     """The mailbox on the row is gone: the deposits come back from the desk."""
     worker = desk_lane.worker
-    worker.new_page("u1", page_id="p1", session_id="s1")
+    worker.new_page("u1", page_id="p1", connection_id="s1")
     await desk_lane.verb("subscribeTable", "u1", table="adm.user", page_id="p1")
     await desk_lane.verb("notifyDbEvents", "u1", dbevents={"adm.user": ["ins:1"]}, page_id="p1")
 
@@ -173,7 +173,7 @@ def test_collect_page_of_an_unknown_page_is_an_error(worker):
 
 async def test_the_explicit_deposit_ignores_the_page_filter(desk_lane):
     """An explicit write is not a capture: it lands whatever the page subscribed."""
-    desk_lane.worker.new_page("u1", page_id="p1", session_id="s1")
+    desk_lane.worker.new_page("u1", page_id="p1", connection_id="s1")
     await desk_lane.verb(
         "set_datachange", "u1", change=foreign_change("untold.x", 1), target="p1"
     )
@@ -198,7 +198,7 @@ def test_the_signature_carries_the_addressing_it_will_grow_into(worker):
 
 async def test_replace_coalesces_the_pending_change_of_the_same_key(desk_lane):
     """The daemon's own dedup, now in the desk queue: written twice, delivered once."""
-    desk_lane.worker.new_page("u1", page_id="p1", session_id="s1")
+    desk_lane.worker.new_page("u1", page_id="p1", connection_id="s1")
     for value in (1, 2):
         await desk_lane.verb(
             "set_datachange",
@@ -215,7 +215,7 @@ async def test_replace_coalesces_the_pending_change_of_the_same_key(desk_lane):
 
 async def test_reset_datachanges_empties_the_pending_without_reading_them(desk_lane):
     """What it empties is the desk queue: the addressed writes waiting for that page."""
-    desk_lane.worker.new_page("u1", page_id="p1", session_id="s1")
+    desk_lane.worker.new_page("u1", page_id="p1", connection_id="s1")
     await desk_lane.verb(
         "set_datachange", "u1", change=foreign_change("untold.x", 1), target="p1"
     )
@@ -225,7 +225,7 @@ async def test_reset_datachanges_empties_the_pending_without_reading_them(desk_l
 
 
 async def test_drop_datachanges_discards_only_the_path_it_names(desk_lane):
-    desk_lane.worker.new_page("u1", page_id="p1", session_id="s1")
+    desk_lane.worker.new_page("u1", page_id="p1", connection_id="s1")
     await desk_lane.verb(
         "set_datachange", "u1", change=foreign_change("form.name", "Ada"), target="p1"
     )

@@ -35,8 +35,8 @@ from genro_asgi.spa.worker import UserStickyWorker
 def make_registry() -> RegisterRegistry:
     """A registry holding one user with two pages."""
     registry = RegisterRegistry()
-    registry.new_page("p1", user="u1", session_id="s1")
-    registry.new_page("p2", user="u1", session_id="s1")
+    registry.new_page("p1", user="u1", connection_id="s1")
+    registry.new_page("p2", user="u1", connection_id="s1")
     return registry
 
 
@@ -57,13 +57,13 @@ def test_rows_are_born_with_live_stores() -> None:
 def test_a_moved_row_keeps_the_stamp_it_travelled_with() -> None:
     """The birth stamp is a default, not an imposition: a rebirth restores it."""
     registry = RegisterRegistry()
-    registry.new_page("p1", user="u1", session_id="s1", last_refresh_ts=1000.0)
+    registry.new_page("p1", user="u1", connection_id="s1", last_refresh_ts=1000.0)
     assert registry.page_items.get("p1")["last_refresh_ts"] == 1000.0
 
 
 def test_page_collector_captures_nothing_until_the_page_subscribes() -> None:
     worker = UserStickyWorker("W:w1")
-    worker.registry.new_page("p1", user="u1", session_id="s1")
+    worker.registry.new_page("p1", user="u1", connection_id="s1")
     page = worker.page_items.get("p1")
     page["store"]["form.name"] = "Ada"
     assert page["collector"].pending == 0
@@ -72,7 +72,7 @@ def test_page_collector_captures_nothing_until_the_page_subscribes() -> None:
 
 def test_page_collector_captures_its_own_store() -> None:
     worker = UserStickyWorker("W:w1")
-    worker.registry.new_page("p1", user="u1", session_id="s1")
+    worker.registry.new_page("p1", user="u1", connection_id="s1")
     worker.setStoreSubscription("u1", page_id="p1", storename="page", prefix="form")
     page = worker.page_items.get("p1")
     assert page["subscribed_paths"] == {"form"}
@@ -93,7 +93,7 @@ def test_page_collector_captures_its_own_store() -> None:
 def subscribed_worker() -> UserStickyWorker:
     """A worker holding one page of ``u1``, nothing subscribed yet."""
     worker = UserStickyWorker("W:w1")
-    worker.registry.new_page("p1", user="u1", session_id="s1")
+    worker.registry.new_page("p1", user="u1", connection_id="s1")
     return worker
 
 
@@ -257,7 +257,7 @@ def test_drop_user_detaches_the_collectors_of_its_pages() -> None:
 
 def test_collect_page_merges_both_collectors_by_ts() -> None:
     worker = UserStickyWorker("W:w1")
-    worker.registry.new_page("p1", user="u1", session_id="s1")
+    worker.registry.new_page("p1", user="u1", connection_id="s1")
     worker.setStoreSubscription("u1", page_id="p1", storename="page", prefix="form")
     worker.registry.subscribe_store_path("p1", "prefs")
     page = worker.page_items.get("p1")
@@ -278,7 +278,7 @@ def test_collect_page_merges_both_collectors_by_ts() -> None:
 
 def test_collect_page_drains_the_dbevents_species_apart() -> None:
     worker = UserStickyWorker("W:w1")
-    worker.registry.new_page("p1", user="u1", session_id="s1")
+    worker.registry.new_page("p1", user="u1", connection_id="s1")
     page = worker.page_items.get("p1")
     page["dbevents"].append({"table": "adm.user"})
     collected = worker.collect_page("p1")
@@ -299,7 +299,7 @@ def test_collect_page_of_an_unknown_page_is_an_error() -> None:
 
 def test_apply_forwarded_stamps_the_original_ts() -> None:
     worker = UserStickyWorker("W:w1")
-    worker.registry.new_page("p1", user="u1", session_id="s1")
+    worker.registry.new_page("p1", user="u1", connection_id="s1")
     worker.setStoreSubscription("u1", page_id="p1", storename="page", prefix="form")
     source = Bag()
     source.set_item("form.name", "Ada", _attributes={"tag": "input"})
@@ -319,7 +319,7 @@ def test_apply_forwarded_stamps_the_original_ts() -> None:
 
 def test_apply_forwarded_deletes_instead_of_nulling() -> None:
     worker = UserStickyWorker("W:w1")
-    worker.registry.new_page("p1", user="u1", session_id="s1")
+    worker.registry.new_page("p1", user="u1", connection_id="s1")
     worker.setStoreSubscription("u1", page_id="p1", storename="page", prefix="form")
     target = worker.page_items.get("p1")["store"]
     target["form.name"] = "Ada"
@@ -342,8 +342,8 @@ def test_apply_forwarded_deletes_instead_of_nulling() -> None:
 
 def test_the_login_relabels_the_connection_and_its_pages_with_the_keys_intact() -> None:
     registry = RegisterRegistry()
-    registry.new_page("p1", user="sess-1", session_id="sess-1")
-    registry.new_page("p2", user="sess-1", session_id="sess-1")
+    registry.new_page("p1", user="sess-1", connection_id="sess-1")
+    registry.new_page("p2", user="sess-1", connection_id="sess-1")
     connection = registry.connection_items.get("sess-1")
 
     registry.change_connection_user("sess-1", "alice")
@@ -359,7 +359,7 @@ def test_the_login_relabels_the_connection_and_its_pages_with_the_keys_intact() 
 
 def test_the_login_keeps_the_user_view_on_the_carried_store() -> None:
     registry = RegisterRegistry()
-    registry.new_page("p1", user="guest_sess-1", session_id="sess-1")
+    registry.new_page("p1", user="guest_sess-1", connection_id="sess-1")
     registry.subscribe_store_path("p1", "prefs")
     guest_store = registry.user_items.get("guest_sess-1")["store"]
 
@@ -378,7 +378,7 @@ def test_the_login_keeps_the_user_view_on_the_carried_store() -> None:
 def test_the_login_re_attaches_the_user_view_without_draining_it() -> None:
     registry = RegisterRegistry()
     registry.new_user("alice")
-    registry.new_page("p1", user="sess-1", session_id="sess-1")
+    registry.new_page("p1", user="sess-1", connection_id="sess-1")
     registry.subscribe_store_path("p1", "prefs")
     registry.user_items.get("sess-1")["store"]["prefs.theme"] = "dark"
     before = registry.page_items.get("p1")["user_view"]
@@ -404,7 +404,7 @@ def test_the_login_re_attaches_the_user_view_without_draining_it() -> None:
 
 def test_the_guest_item_follows_its_first_real_identity() -> None:
     registry = RegisterRegistry()
-    registry.new_page("p1", user="guest_sess-1", session_id="sess-1")
+    registry.new_page("p1", user="guest_sess-1", connection_id="sess-1")
     guest = registry.user_items.get("guest_sess-1")
     guest_store, guest_connections = guest["store"], guest["connections"]
     guest_store["draft"] = "half typed"
@@ -423,7 +423,7 @@ def test_the_guest_item_follows_its_first_real_identity() -> None:
 
 def test_the_carried_store_keeps_capturing_with_no_re_attach() -> None:
     registry = RegisterRegistry()
-    registry.new_page("p1", user="guest_sess-1", session_id="sess-1")
+    registry.new_page("p1", user="guest_sess-1", connection_id="sess-1")
     registry.subscribe_store_path("p1", "prefs")
     view = registry.page_items.get("p1")["user_view"]
 
@@ -437,10 +437,10 @@ def test_the_carried_store_keeps_capturing_with_no_re_attach() -> None:
 
 def test_a_login_onto_a_resident_user_leaves_the_guest_store_behind() -> None:
     registry = RegisterRegistry()
-    registry.new_page("p0", user="alice", session_id="s0")
+    registry.new_page("p0", user="alice", connection_id="s0")
     resident_store = registry.user_items.get("alice")["store"]
     resident_store["prefs.theme"] = "dark"
-    registry.new_page("p1", user="guest_sess-1", session_id="sess-1")
+    registry.new_page("p1", user="guest_sess-1", connection_id="sess-1")
     registry.user_items.get("guest_sess-1")["store"]["draft"] = "half typed"
 
     registry.change_connection_user("sess-1", "alice")
@@ -457,8 +457,8 @@ def test_a_login_onto_a_resident_user_leaves_the_guest_store_behind() -> None:
 
 def test_a_real_users_connection_logging_in_elsewhere_gets_a_fresh_store() -> None:
     registry = RegisterRegistry()
-    registry.new_page("p1", user="alice", session_id="s1")
-    registry.new_page("p2", user="alice", session_id="s2")
+    registry.new_page("p1", user="alice", connection_id="s1")
+    registry.new_page("p2", user="alice", connection_id="s2")
     registry.user_items.get("alice")["store"]["draft"] = "half typed"
 
     registry.change_connection_user("s1", "bob")
@@ -477,11 +477,11 @@ def test_a_real_users_connection_logging_in_elsewhere_gets_a_fresh_store() -> No
 
 def test_a_second_connection_logging_in_leaves_the_first_untouched() -> None:
     registry = RegisterRegistry()
-    registry.new_page("p1", user="sess-1", session_id="sess-1")
+    registry.new_page("p1", user="sess-1", connection_id="sess-1")
     registry.change_connection_user("sess-1", "alice")
     first = registry.connection_items.get("sess-1")
     alice_store = registry.user_items.get("alice")["store"]
-    registry.new_page("p2", user="sess-2", session_id="sess-2")
+    registry.new_page("p2", user="sess-2", connection_id="sess-2")
 
     registry.change_connection_user("sess-2", "alice")
 
@@ -495,7 +495,7 @@ def test_a_second_connection_logging_in_leaves_the_first_untouched() -> None:
 
 def test_the_login_fields_describe_the_user_and_its_connection() -> None:
     registry = RegisterRegistry()
-    registry.new_page("p1", user="sess-1", session_id="sess-1")
+    registry.new_page("p1", user="sess-1", connection_id="sess-1")
 
     registry.change_connection_user("sess-1", "alice", user_name="Ada")
 
@@ -508,7 +508,7 @@ def test_the_login_fields_on_a_resident_stay_on_the_connection() -> None:
     registry = RegisterRegistry()
     registry.new_user("alice", user_name="Ada")
     resident_store = registry.user_items.get("alice")["store"]
-    registry.new_page("p1", user="sess-1", session_id="sess-1")
+    registry.new_page("p1", user="sess-1", connection_id="sess-1")
 
     registry.change_connection_user("sess-1", "alice", user_name="Lovelace")
 

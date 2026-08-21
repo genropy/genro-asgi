@@ -415,7 +415,7 @@ async def test_the_store_the_parcel_brings_takes_its_watchers_with_it(freezing: 
     # page of its own already subscribed to the store prefix.
     worker = freezing.workers[target]
     worker.registry.new_connection("sess-9", user="alice")
-    worker.registry.new_page("p9", user="alice", session_id="sess-9")
+    worker.registry.new_page("p9", user="alice", connection_id="sess-9")
     worker.registry.subscribe_store_path("p9", "prefs")
     resident_store = worker.user_items.get("alice")["store"]
     resident_store["prefs.theme"] = "light"

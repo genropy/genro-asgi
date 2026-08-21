@@ -1929,7 +1929,7 @@ class UserStickyWorker(RoutingClass):
             entry = self.registry.new_connection(identity, **fields)
             if unseen_user:
                 self.offer_event("new_user", user=entry["user"])
-            self.offer_event("new_connection", user=entry["user"], session_id=identity)
+            self.offer_event("new_connection", user=entry["user"], connection_id=identity)
             return self.wire_entry(entry)
 
     @route()
@@ -1966,7 +1966,7 @@ class UserStickyWorker(RoutingClass):
                 "change_connection_user",
                 user=user,
                 previous_user=previous_user,
-                session_id=identity,
+                connection_id=identity,
             )
             return self.wire_entry(entry)
 
@@ -2003,11 +2003,11 @@ class UserStickyWorker(RoutingClass):
         up — the user entry and the connection row with the first page of them —
         so the surface hears that cascade first, in the order it happened: the
         ``new_user`` it really is, then the ``new_connection``, then the page.
-        The page event names its connection (``session_id``): the surface's page
+        The page event names its connection (``connection_id``): the surface's page
         row is the bottom of that same chain and the login mutates it there.
         """
         with self.dispatch_lock:
-            connection_id = fields.get("connection_id") or fields.get("session_id")
+            connection_id = fields.get("connection_id")
             unseen_user = identity not in self.user_items
             unseen_connection = connection_id not in self.connection_items
             entry = self.registry.new_page(page_id, user=identity, **fields)
@@ -2015,9 +2015,9 @@ class UserStickyWorker(RoutingClass):
             if unseen_user:
                 self.offer_event("new_user", user=identity)
             if unseen_connection:
-                self.offer_event("new_connection", user=identity, session_id=entry["connection_id"])
+                self.offer_event("new_connection", user=identity, connection_id=entry["connection_id"])
             self.offer_event(
-                "new_page", user=identity, page_id=page_id, session_id=entry["connection_id"]
+                "new_page", user=identity, page_id=page_id, connection_id=entry["connection_id"]
             )
             return self.wire_entry(entry)
 
@@ -2046,7 +2046,7 @@ class UserStickyWorker(RoutingClass):
         entry = self.registry.drop_page(page_id)
         announce("drop_page", user=user, page_id=page_id)
         if entry["connection_id"] not in self.connection_items:
-            announce("drop_connection", user=user, session_id=entry["connection_id"])
+            announce("drop_connection", user=user, connection_id=entry["connection_id"])
         if user not in self.user_items:
             announce("drop_user", user=user)
         return entry
@@ -2069,7 +2069,7 @@ class UserStickyWorker(RoutingClass):
             self.drop_page_cache(page_id)
             announce("drop_page", user=user, page_id=page_id)
         self.registry.drop_connection(connection_id)
-        announce("drop_connection", user=user, session_id=connection_id)
+        announce("drop_connection", user=user, connection_id=connection_id)
         if user not in self.user_items:
             announce("drop_user", user=user)
         return connection
@@ -2081,7 +2081,7 @@ class UserStickyWorker(RoutingClass):
             return self.wire_entry(self.demolish_page(page_id, self.offer_event))
 
     @route()
-    def drop_connection(self, identity: str, session_id: str) -> dict[str, Any]:
+    def drop_connection(self, identity: str, connection_id: str) -> dict[str, Any]:
         """Drop a connection row with its whole cascade — the logout's handle.
 
         The demolition is ``demolish_connection``'s, in its order — the pages
@@ -2091,9 +2091,9 @@ class UserStickyWorker(RoutingClass):
         ``register.drop_connection(connection_id, cascade=True)``.
         """
         with self.dispatch_lock:
-            if session_id not in self.connection_items:
-                raise KeyError(f"drop_connection: unknown connection {session_id!r}")
-            return self.wire_entry(self.demolish_connection(session_id, self.offer_event))
+            if connection_id not in self.connection_items:
+                raise KeyError(f"drop_connection: unknown connection {connection_id!r}")
+            return self.wire_entry(self.demolish_connection(connection_id, self.offer_event))
 
     # ------------------------------------------------------------------
     # Expiry: the daemon's cleanup pass, transcribed — and left disarmed.

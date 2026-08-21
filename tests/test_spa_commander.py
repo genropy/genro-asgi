@@ -297,14 +297,14 @@ def test_retiring_an_unknown_worker_is_an_error(commander: UserStickyCommander) 
 def assert_tree_aligned(commander: UserStickyCommander) -> None:
     """Every edge agrees with its label, and every label with its edge."""
     edges = {
-        (user, session_id)
+        (user, connection_id)
         for user, sessions in commander.user_connections.items()
-        for session_id in sessions
+        for connection_id in sessions
     }
-    assert edges == {(user, session_id) for session_id, user in commander.connection_user.items()}
+    assert edges == {(user, connection_id) for connection_id, user in commander.connection_user.items()}
     page_edges = {
-        (session_id, page_id)
-        for session_id, pages in commander.connection_pages.items()
+        (connection_id, page_id)
+        for connection_id, pages in commander.connection_pages.items()
         for page_id in pages
     }
     assert page_edges == {
@@ -320,19 +320,19 @@ def populate_tree(commander: UserStickyCommander) -> None:
         "W:w-1",
         [
             event("new_user", 1, user="alice"),
-            event("new_connection", 2, user="alice", session_id="s1"),
-            event("new_page", 3, user="alice", page_id="p1", session_id="s1"),
-            event("new_connection", 4, user="alice", session_id="s2"),
-            event("new_page", 5, user="alice", page_id="p2", session_id="s2"),
-            event("new_page", 6, user="alice", page_id="p3", session_id="s2"),
+            event("new_connection", 2, user="alice", connection_id="s1"),
+            event("new_page", 3, user="alice", page_id="p1", connection_id="s1"),
+            event("new_connection", 4, user="alice", connection_id="s2"),
+            event("new_page", 5, user="alice", page_id="p2", connection_id="s2"),
+            event("new_page", 6, user="alice", page_id="p3", connection_id="s2"),
         ],
     )
     commander.place_logins(
         "W:w-2",
         [
             event("new_user", 1, user="bob"),
-            event("new_connection", 2, user="bob", session_id="s9"),
-            event("new_page", 3, user="bob", page_id="p9", session_id="s9"),
+            event("new_connection", 2, user="bob", connection_id="s9"),
+            event("new_page", 3, user="bob", page_id="p9", connection_id="s9"),
         ],
     )
 
@@ -363,7 +363,7 @@ def test_a_login_moves_the_edge_and_orphans_nothing(commander: UserStickyCommand
     # The fold alone: what the announcing worker's login does to the tree. Where
     # alice then belongs is ``settle_login``'s business, asserted on the move side.
     commander.fold_event(
-        "W:w-2", event(LOGIN_OP, 4, user="alice", previous_user="bob", session_id="s9")
+        "W:w-2", event(LOGIN_OP, 4, user="alice", previous_user="bob", connection_id="s9")
     )
 
     assert_tree_aligned(commander)
@@ -382,7 +382,7 @@ def test_dropping_a_connection_leaves_its_sibling_intact(commander: UserStickyCo
         [
             event("drop_page", 7, user="alice", page_id="p2"),
             event("drop_page", 8, user="alice", page_id="p3"),
-            event("drop_connection", 9, user="alice", session_id="s2"),
+            event("drop_connection", 9, user="alice", connection_id="s2"),
         ],
     )
 
@@ -744,7 +744,7 @@ async def test_the_login_fold_cannot_resurrect_the_guest_consumption(
         commander,
         {
             "result": 7,
-            "events": [event(LOGIN_OP, 2, user="alice", previous_user="s-1", session_id="c-1")],
+            "events": [event(LOGIN_OP, 2, user="alice", previous_user="s-1", connection_id="c-1")],
         },
     )
     assert await commander.forward_call("s-1", "/op") == 7
@@ -777,16 +777,16 @@ async def test_the_fold_runs_off_the_forward_clock(
     ledger_during_settle: list[dict[str, Any]] = []
     original = commander.settle_login
 
-    def spying(worker: str, user: str, session_id: str, prior: str | None) -> None:
+    def spying(worker: str, user: str, connection_id: str, prior: str | None) -> None:
         ledger_during_settle.append(dict(commander.forward_counters["W:w-1"]))
-        original(worker, user, session_id, prior)
+        original(worker, user, connection_id, prior)
 
     commander.settle_login = spying  # type: ignore[method-assign]
     answer(
         commander,
         {
             "result": 7,
-            "events": [event(LOGIN_OP, 2, user="alice", previous_user="s-1", session_id="c-1")],
+            "events": [event(LOGIN_OP, 2, user="alice", previous_user="s-1", connection_id="c-1")],
         },
     )
     await commander.forward_call("s-1", "/op")

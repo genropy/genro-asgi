@@ -391,16 +391,16 @@ def test_the_dual_index_follows_every_re_pointing(commander: UserStickyCommander
     assert commander.users_on("W:w-2") == set()
 
 
-def a_login_batch(session_id: str = "sess-1") -> list[dict[str, Any]]:
+def a_login_batch(connection_id: str = "sess-1") -> list[dict[str, Any]]:
     """The two events a guest's first login rides up with."""
     return [
-        {"op": "new_user", "seq": 1, "user": session_id},
+        {"op": "new_user", "seq": 1, "user": connection_id},
         {
             "op": "change_connection_user",
             "seq": 2,
             "user": "alice",
-            "previous_user": session_id,
-            "session_id": session_id,
+            "previous_user": connection_id,
+            "connection_id": connection_id,
         },
     ]
 
@@ -426,7 +426,7 @@ def test_the_prior_residence_is_read_before_the_login_is_folded(
     enroll(commander, "W:w-2")
     seen: list[str | None] = []
 
-    def spying(worker: str, user: str, session_id: str, prior: str | None) -> None:
+    def spying(worker: str, user: str, connection_id: str, prior: str | None) -> None:
         seen.append(prior)
 
     commander.settle_login = spying  # type: ignore[method-assign]
@@ -717,7 +717,7 @@ async def seed_live_guest(pool: Any, source: str, page_id: str = "p1") -> dict[s
     await pool.commander.forward_call("sess-1", "/op/new_connection")
     # The anonymous page declares its guest-named user, as the legacy bridge does.
     await pool.commander.forward_call(
-        "guest_sess-1", "/op/new_page", {"page_id": page_id, "session_id": "sess-1"}
+        "guest_sess-1", "/op/new_page", {"page_id": page_id, "connection_id": "sess-1"}
     )
     worker = pool.workers[source]
     worker.registry.subscribe_store_path(page_id, "prefs")
@@ -953,11 +953,11 @@ async def test_two_connections_of_one_user_end_up_whole_on_one_worker(pages: Any
     # and the first login lands back home: one worker, one user, two connections.
     commander.assign_user("ballast", other)
     await commander.forward_call(
-        "sess-1", "/op/new_page", {"page_id": "p1", "session_id": "sess-1"}
+        "sess-1", "/op/new_page", {"page_id": "p1", "connection_id": "sess-1"}
     )
     await commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
     await commander.forward_call(
-        "sess-2", "/op/new_page", {"page_id": "p2", "session_id": "sess-2"}
+        "sess-2", "/op/new_page", {"page_id": "p2", "connection_id": "sess-2"}
     )
     await commander.forward_call("sess-2", "/op/change_connection_user", {"user": "alice"})
     # The first login travelled and was reinstalled here; the second found alice
@@ -984,7 +984,7 @@ async def test_a_login_onto_a_user_resident_elsewhere_discards_the_remnant(
     target = next(name for name in pages.names if name != source)
     tilt_away(commander, source)
     await commander.forward_call(
-        "sess-1", "/op/new_page", {"page_id": "p1", "session_id": "sess-1"}
+        "sess-1", "/op/new_page", {"page_id": "p1", "connection_id": "sess-1"}
     )
     await commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
     await settled_at(commander, "alice", target)
@@ -992,7 +992,7 @@ async def test_a_login_onto_a_user_resident_elsewhere_discards_the_remnant(
     resident.user_items.get("alice")["store"]["prefs.theme"] = "dark"
     # A second guest, on the reception, does some work and logs in as the same user.
     await commander.forward_call(
-        "sess-2", "/op/new_page", {"page_id": "p2", "session_id": "sess-2"}
+        "sess-2", "/op/new_page", {"page_id": "p2", "connection_id": "sess-2"}
     )
     pages.workers[source].page_items.get("p2")["store"]["counter"] = 1
     await commander.forward_call("sess-2", "/op/change_connection_user", {"user": "alice"})
@@ -1098,7 +1098,7 @@ async def home_bound_alice(pages: Any) -> str:
     other = next(name for name in pages.names if name != source)
     commander.assign_user("ballast", other)
     await commander.forward_call(
-        "sess-1", "/op/new_page", {"page_id": "p1", "session_id": "sess-1"}
+        "sess-1", "/op/new_page", {"page_id": "p1", "connection_id": "sess-1"}
     )
     await commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
     assert commander.user_worker_map["alice"] == source
@@ -1112,7 +1112,7 @@ async def test_a_resident_login_never_takes_the_pages_off_the_worker(pages: Any)
     page_row = worker.page_items.get("p1")
     page_store = page_row["store"]
     await commander.forward_call(
-        "sess-2", "/op/new_page", {"page_id": "p2", "session_id": "sess-2"}
+        "sess-2", "/op/new_page", {"page_id": "p2", "connection_id": "sess-2"}
     )
     folded = spy_on_folded(commander)
     await commander.forward_call("sess-2", "/op/change_connection_user", {"user": "alice"})
@@ -1123,7 +1123,7 @@ async def test_a_resident_login_never_takes_the_pages_off_the_worker(pages: Any)
     assert commander.user_worker_map["alice"] == source
     # The login went up with no baggage: the op does not package, ever.
     logins = [event for event in folded if event["op"] == "change_connection_user"]
-    assert [event["session_id"] for event in logins] == ["sess-2"]
+    assert [event["connection_id"] for event in logins] == ["sess-2"]
     assert "encoded" not in logins[0]
     # And both pages are served afterwards, each on its own connection.
     for page_id in ("p1", "p2"):
@@ -1137,7 +1137,7 @@ async def test_no_login_at_home_installs_anything(pages: Any) -> None:
     # The first login belonged where it was born: no move, so no handover.
     assert probe.destinations == []
     await commander.forward_call(
-        "sess-2", "/op/new_page", {"page_id": "p2", "session_id": "sess-2"}
+        "sess-2", "/op/new_page", {"page_id": "p2", "connection_id": "sess-2"}
     )
     await commander.forward_call("sess-2", "/op/change_connection_user", {"user": "alice"})
     # And the resident login had nothing to settle either.
@@ -1152,7 +1152,7 @@ async def test_traffic_to_a_resident_page_survives_a_concurrent_login(pages: Any
     worker.setStoreSubscription("alice", page_id="p1", storename="page", prefix="counter")
     worker.page_items.get("p1")["store"]["counter"] = 1
     await commander.forward_call(
-        "sess-2", "/op/new_page", {"page_id": "p2", "session_id": "sess-2"}
+        "sess-2", "/op/new_page", {"page_id": "p2", "connection_id": "sess-2"}
     )
     # The panel's repro: p1's own traffic runs while the second connection logs
     # in as alice. It used to fall into the eviction window — the subscription
@@ -1208,7 +1208,7 @@ async def logged_in_elsewhere(pool: Any) -> tuple[str, str]:
     target = next(name for name in pool.names if name != source)
     tilt_away(commander, source)
     await commander.forward_call(
-        "sess-1", "/op/new_page", {"page_id": "p1", "session_id": "sess-1"}
+        "sess-1", "/op/new_page", {"page_id": "p1", "connection_id": "sess-1"}
     )
     await commander.forward_call(
         "sess-1", "/op/subscribeTable", {"table": "orders", "page_id": "p1"}
@@ -1216,7 +1216,7 @@ async def logged_in_elsewhere(pool: Any) -> tuple[str, str]:
     await commander.forward_call("sess-1", "/op/change_connection_user", {"user": "alice"})
     await settled_at(commander, "alice", target)
     commander.assign_user("bob", source)
-    await commander.forward_call("bob", "/op/new_page", {"page_id": "p2", "session_id": "sess-2"})
+    await commander.forward_call("bob", "/op/new_page", {"page_id": "p2", "connection_id": "sess-2"})
     # Clear what the move itself carried: what the assertions read afterwards is
     # only what crossed the rail after the login.
     await drain_over_the_wire(pool, "alice")
@@ -1287,7 +1287,7 @@ async def test_the_first_connection_is_served_across_the_second_login(pages: Any
     target = next(name for name in pages.names if name != source)
     tilt_away(commander, source)
     await commander.forward_call(
-        "sess-1", "/op/new_page", {"page_id": "p1", "session_id": "sess-1"}
+        "sess-1", "/op/new_page", {"page_id": "p1", "connection_id": "sess-1"}
     )
     await commander.forward_call(
         "sess-1", "/op/subscribe_prefix", {"page_id": "p1", "prefix": "prefs"}
@@ -1308,7 +1308,7 @@ async def test_the_first_connection_is_served_across_the_second_login(pages: Any
     # S2: a second guest, on the reception, logs in as the very same user — it
     # used to raise, and the failed install took the first placement down with it.
     await commander.forward_call(
-        "sess-2", "/op/new_page", {"page_id": "p2", "session_id": "sess-2"}
+        "sess-2", "/op/new_page", {"page_id": "p2", "connection_id": "sess-2"}
     )
     await commander.forward_call(
         "sess-2", "/op/subscribe_prefix", {"page_id": "p2", "prefix": "prefs"}

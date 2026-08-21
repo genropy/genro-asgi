@@ -87,7 +87,7 @@ def explode(running: UserStickyCommander) -> None:
 async def test_monitor_state_answers_one_row_per_register_entry() -> None:
     worker = UserStickyWorker("W:w1")
     worker.registry.new_connection("c1", user="alice")
-    worker.registry.new_page("p1", user="alice", session_id="s1", connection_id="c1")
+    worker.registry.new_page("p1", user="alice", connection_id="c1")
     state = await worker.monitor_state()
     assert state["worker"] == "W:w1"
     assert [row["register_item_id"] for row in state["users"]] == ["alice"]
@@ -102,7 +102,7 @@ async def test_monitor_state_projects_scalars_never_the_working_fields() -> None
     worker = UserStickyWorker("W:w1")
     worker.registry.new_connection("c1", user="alice")
     worker.registry.new_page(
-        "p1", user="alice", session_id="s1", connection_id="c1", data={"secret": "x"}
+        "p1", user="alice", connection_id="c1", data={"secret": "x"}
     )
     worker.page_items.get("p1")["dbevents"].append({"table": "sys.user", "batch": [{"id": 1}]})
     state = await worker.monitor_state()
@@ -266,7 +266,7 @@ async def test_population_gathers_the_registers_of_the_live_worker(
     # An anonymous page names its user with the reserved guest prefix — the
     # consumer declares it, exactly as the legacy bridge does.
     await single.forward_call(
-        "guest_sess-1", "/op/new_page", {"page_id": "p1", "session_id": "sess-1"}
+        "guest_sess-1", "/op/new_page", {"page_id": "p1", "connection_id": "sess-1"}
     )
     people = await single.population()
     assert len(people["workers"]) == 1

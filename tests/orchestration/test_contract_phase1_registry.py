@@ -96,8 +96,8 @@ def test_the_pages_of_a_connection_answer_through_the_secondary_index(worker):
     worker.add_page("p2", "cid-a")
     worker.add_page("p3", "cid-b")
 
-    assert sorted(worker.page_register.keys_by("session_id", "cid-a")) == ["p1", "p2"]
-    assert worker.page_register.keys_by("session_id", "cid-b") == ["p3"]
+    assert sorted(worker.page_register.keys_by("connection_id", "cid-a")) == ["p1", "p2"]
+    assert worker.page_register.keys_by("connection_id", "cid-b") == ["p3"]
 
 
 # ----------------------------------------------------------------------

@@ -49,8 +49,8 @@ TABLE = "glbl.user"
 @pytest.fixture
 async def lane(desk_lane):
     """The live lane with alice's two pages already on the worker."""
-    desk_lane.worker.new_page(USER, page_id=SIBLING, session_id="s1")
-    desk_lane.worker.new_page(USER, page_id=PAGE, session_id="s1")
+    desk_lane.worker.new_page(USER, page_id=SIBLING, connection_id="s1")
+    desk_lane.worker.new_page(USER, page_id=PAGE, connection_id="s1")
     return desk_lane
 
 

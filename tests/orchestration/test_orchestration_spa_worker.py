@@ -426,7 +426,7 @@ def test_dropping_a_user_takes_everything_under_him(worker):
 
     assert announced(worker) == ["drop_pages", "drop_connections", "drop_user"]
     assert worker.worker_events[0]["page_ids"] == ["page-1", "page-2"]
-    assert worker.worker_events[1]["session_ids"] == ["cid-a", "cid-b"]
+    assert worker.worker_events[1]["sticky_cids"] == [None, None]
     assert worker.page_register.keys() == []
     assert worker.connection_register.keys() == []
     assert worker.user_register.keys() == []

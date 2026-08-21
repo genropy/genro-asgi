@@ -108,7 +108,7 @@ class Notified:
         """Create a page of ``user`` on a chosen worker, through the ordinary CALL."""
         self.commander.assign_user(user, self.names[worker_index])
         return await self.commander.forward_call(
-            user, "/op/new_page", {"page_id": page_id, "session_id": f"s-{page_id}"}
+            user, "/op/new_page", {"page_id": page_id, "connection_id": f"s-{page_id}"}
         )
 
     async def subscribe(self, user: str, page_id: str, table: str, subscribe: bool = True) -> Any:

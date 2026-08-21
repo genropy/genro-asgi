@@ -154,7 +154,7 @@ async def test_the_births_of_the_reception_find_the_rows_already_written(handler
     handler.read_envelope(
         envelope(
             {"op": "new_user", "worker": WORKER_NAME, "user": user},
-            {"op": "new_connection", "worker": WORKER_NAME, "user": user, "session_id": "cid-a", "sticky_cid": None},
+            {"op": "new_connection", "worker": WORKER_NAME, "user": user, "sticky_cid": None},
         )
     )
 
@@ -165,8 +165,8 @@ async def test_the_births_of_the_reception_find_the_rows_already_written(handler
 async def test_a_page_is_written_where_it_belongs_and_forgotten_one_by_one(handler, commander):
     handler.read_envelope(
         envelope(
-            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a", "table_subscriptions": []},
-            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p2", "session_id": "cid-a", "table_subscriptions": []},
+            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "sticky_cid": "cid-a", "table_subscriptions": []},
+            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p2", "sticky_cid": "cid-a", "table_subscriptions": []},
         )
     )
     assert commander.page_connection_map == {"p1": "cid-a", "p2": "cid-a"}
@@ -180,8 +180,8 @@ async def test_a_page_is_written_where_it_belongs_and_forgotten_one_by_one(handl
 async def test_a_cascade_of_pages_goes_in_one_worker_event(handler, commander):
     handler.read_envelope(
         envelope(
-            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a", "table_subscriptions": []},
-            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p2", "session_id": "cid-a", "table_subscriptions": []},
+            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "sticky_cid": "cid-a", "table_subscriptions": []},
+            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p2", "sticky_cid": "cid-a", "table_subscriptions": []},
             {"op": "drop_pages", "worker": WORKER_NAME, "page_ids": ["p1", "p2"]},
         )
     )
@@ -192,11 +192,11 @@ async def test_a_cascade_of_pages_goes_in_one_worker_event(handler, commander):
 async def test_a_connection_leaves_its_pages_and_keeps_its_identity(handler, commander):
     user = minted(commander, "cid-a")
     handler.read_envelope(
-        envelope({"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a", "table_subscriptions": []})
+        envelope({"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "sticky_cid": "cid-a", "table_subscriptions": []})
     )
 
     handler.read_envelope(
-        envelope({"op": "drop_connection", "worker": WORKER_NAME, "session_id": "cid-a"})
+        envelope({"op": "drop_connection", "worker": WORKER_NAME, "sticky_cid": "cid-a"})
     )
 
     assert commander.page_connection_map == {}
@@ -209,14 +209,14 @@ async def test_several_connections_leave_in_one_worker_event(handler, commander)
     minted(commander, "cid-b")
     handler.read_envelope(
         envelope(
-            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a", "table_subscriptions": []},
-            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p2", "session_id": "cid-b", "table_subscriptions": []},
+            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "sticky_cid": "cid-a", "table_subscriptions": []},
+            {"op": "new_page", "worker": WORKER_NAME, "page_id": "p2", "sticky_cid": "cid-b", "table_subscriptions": []},
         )
     )
 
     handler.read_envelope(
         envelope(
-            {"op": "drop_connections", "worker": WORKER_NAME, "session_ids": ["cid-a", "cid-b"]}
+            {"op": "drop_connections", "worker": WORKER_NAME, "sticky_cids": ["cid-a", "cid-b"]}
         )
     )
 
@@ -228,7 +228,7 @@ async def test_a_user_who_is_gone_leaves_nothing_behind(handler, commander, grou
     user = minted(commander, "cid-a")
     group.user_worker_map[user] = WORKER_NAME
     handler.read_envelope(
-        envelope({"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a", "table_subscriptions": []})
+        envelope({"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "sticky_cid": "cid-a", "table_subscriptions": []})
     )
     commander.user_map[user]["pending_dbevents"] = [{"table": "invoices"}]
 
@@ -443,7 +443,7 @@ async def test_a_real_child_announces_and_the_vertex_learns_it(
         ANNOUNCE_OP,
         {
             "worker_events": [
-                {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a", "table_subscriptions": []},
+                {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "sticky_cid": "cid-a", "table_subscriptions": []},
                 {"op": "user_frozen", "worker": WORKER_NAME, "user": user, "placement": None},
             ]
         },

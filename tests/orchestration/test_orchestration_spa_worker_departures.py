@@ -351,7 +351,6 @@ async def test_the_valve_parks_whoever_only_beats_and_spares_the_active(deposit)
             "worker": WORKER_NAME,
             "user": "mario",
             "page_ids": ["page-idle"],
-            "session_id": "cid-idle",
         },
     ]
 
