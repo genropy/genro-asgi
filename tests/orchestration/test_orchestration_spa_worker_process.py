@@ -85,12 +85,22 @@ class EchoWorker(SpaWorker):
         self.wsgi_app = self.echo_site
 
     def echo_site(self, environ: dict[str, Any], start_response: Any) -> list[bytes]:
-        """The WSGI callable: say back who asked, and for what — or break on demand."""
+        """The WSGI callable: say back who asked, and for what — or break on demand.
+
+        Like a real site, it BAPTISES while serving (the doctrine of 2026-08-21:
+        the rows are the site's to bear): a named identity with no connection
+        under this request's cookie registers one, keyed by the cookie itself —
+        the core-only world, where no site renames the connection.
+        """
         if environ["PATH_INFO"] == BROKEN_PATH:
             raise RuntimeError("the site fell over")
+        identity = environ["genro.identity"]
+        cid = self.request_slot.cid
+        if identity is not None and self._connection_for_cid(cid) is None:
+            self.new_connection(cid, user=identity)
         start_response("200 OK", [("Content-Type", "text/plain"), ("X-Worker", self.name)])
         return [f"{environ['REQUEST_METHOD']} {environ['PATH_INFO']} "
-                f"for {environ['genro.identity']}".encode()]
+                f"for {identity}".encode()]
 
 
 class HandlerStub:
@@ -254,7 +264,11 @@ class ParentWire:
 def http_call(
     cid: str, identity: str | None = None, *, path: str = "/invoices", **payload: Any
 ) -> dict[str, Any]:
-    """The http CALL form as the front packs it: the request, and who it is for."""
+    """The http CALL form as the front packs it: the request, and who it is for.
+
+    ``identity`` travels verbatim: None IS the anonymous first visit, never a
+    name derived from the cookie — the vertex mints nobody.
+    """
     return {
         "http": {
             "method": "GET",
@@ -264,7 +278,7 @@ def http_call(
             "body": "",
             "cid": cid,
         },
-        "identity": identity or cid,
+        "identity": identity,
         **payload,
     }
 
@@ -395,13 +409,17 @@ async def test_every_served_call_writes_the_real_clock_again(wire):
     assert worker.connection_register.get("cid-a")["last_rpc_ts"] > first
 
 
-async def test_an_anonymous_request_is_a_guest_in_full(wire):
+async def test_an_anonymous_request_touches_no_register(wire):
+    """The doctrine of 2026-08-21: the vertex mints nobody, and a site that
+    baptises nobody leaves nothing — no rows, no announcements, no leak."""
     worker = await wire.take()
 
-    await wire.connector.call("/site/invoices", http_call("cid-a"), timeout=5.0)
+    reply = await wire.connector.call("/site/invoices", http_call("cid-a"), timeout=5.0)
 
-    assert worker.connection_register.get("cid-a")["user"] == "guest_cid-a"
-    assert "guest_cid-a" in worker.user_register
+    assert body_of(reply) == "GET /invoices for None"
+    assert worker.connection_register.keys() == []
+    assert worker.user_register.keys() == []
+    assert announced(reply) == []
 
 
 async def test_the_second_request_of_a_connection_costs_no_new_row(wire):
@@ -447,6 +465,8 @@ async def test_a_deposit_that_never_frees_the_folder_answers_the_call_with_its_f
 
 async def test_a_site_that_falls_over_answers_with_its_failure_and_frees_the_user(wire):
     worker = await wire.take()
+    # A first request baptises him: the broken one below must not hold him.
+    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
 
     reply = await wire.connector.call(
         "/site/falls_over", http_call("cid-a", "mario", path=BROKEN_PATH), timeout=5.0

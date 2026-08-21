@@ -414,7 +414,8 @@ async def test_a_closure_that_would_undo_a_growth_is_not_made(make_group):
 async def test_a_placement_pointing_at_a_worker_that_died_goes_with_it(make_group, commander):
     group = make_group()
     worker_handler = await group.start_worker()
-    user = commander.resolve_user("cid-a")
+    user = "guest_legacy1"
+    commander.record_connection_user("cid-a", user)
     assert group.assign_user(user) == worker_handler.name
 
     # The process dies before it ever said the user had arrived in it: nobody

@@ -241,6 +241,25 @@ class FreezeHandler:
         envelope = self._read_envelope(self._connection_path(user, cid))
         return None if envelope is None else envelope["payload"]
 
+    def read_connection_register_items(self, user: str) -> list[Any]:
+        """Every connection payload parked for ``user``, in filename order.
+
+        Args:
+            user: the user whose folder is read.
+
+        Returns:
+            The payloads as they were written; an empty list for no folder.
+            Nothing is deleted: whoever matches one takes it away by its own
+            ``connection_id``.
+        """
+        folder = self._user_folder(user)
+        payloads = []
+        for path in sorted(folder.glob(f"{CONNECTION_REGISTER_ITEM_PREFIX}*.pickle")):
+            envelope = self._read_envelope(path)
+            if envelope is not None:
+                payloads.append(envelope["payload"])
+        return payloads
+
     def get_item_header(self, user: str, cid: str | None = None) -> dict[str, Any] | None:
         """The diagnostic header of an item — for counting and for the sysop.
 

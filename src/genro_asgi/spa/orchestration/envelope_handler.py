@@ -315,6 +315,10 @@ class GroupEnvelopeHandler(EnvelopeHandler):
         if worker_event["previous_user"].startswith(GUEST_PREFIX):
             self.group_handler.user_worker_map.pop(worker_event["previous_user"], None)
 
+    def on_new_connection(self, worker_event: dict[str, Any]) -> None:
+        """A connection born in a process places its user there: the map at the fact."""
+        self.group_handler.user_worker_map[worker_event["user"]] = worker_event["worker"]
+
     def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
         """A user has left for the freezer: his placement is to be assigned again."""
         self.group_handler.user_worker_map[worker_event["user"]] = None
@@ -365,6 +369,20 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
             flag = row.get("transfer_flag")
             if flag is not None:
                 self.spa_commander.hold_user(user, f"transfer_flag {flag}")
+
+    def on_new_connection(self, worker_event: dict[str, Any]) -> None:
+        """A connection born under a routing cookie joins that cookie to its user.
+
+        The junction of the whole identity design: the vertex mints nobody,
+        it LEARNS — the site baptised while serving, the worker attached the
+        request's cookie, and this fold writes the indexes at the fact. A
+        connection born outside a routed request carries None and joins
+        nothing.
+        """
+        if worker_event["sticky_cid"] is not None:
+            self.spa_commander.record_connection_user(
+                worker_event["sticky_cid"], worker_event["user"]
+            )
 
     def on_new_page(self, worker_event: dict[str, Any]) -> None:
         """A page was born (or woke): it belongs to its connection, and the desk

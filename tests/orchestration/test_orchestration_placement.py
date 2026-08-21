@@ -43,6 +43,18 @@ from genro_asgi.spa.orchestration import (
 MEMORY_CEILING = 1_000_000
 
 
+
+def minted(commander, cid: str) -> str:
+    """The identity the site would baptise for this cookie, learned by the vertex.
+
+    The old mint died with the doctrine (the cookie routes, the site names):
+    tests stage the junction the fold of ``new_connection`` would have written.
+    """
+    user = f"guest_{cid}"
+    commander.record_connection_user(cid, user)
+    return user
+
+
 @pytest.fixture
 def commander(tmp_path):
     return SpaCommander(tmp_path / "frozen_users")
@@ -77,7 +89,7 @@ def worker_at(group, name: str, occupancy_percent: float, state: str = "running"
 
 def newcomer(commander, cid: str = "cid-a") -> str:
     """A user the vertex has minted and nobody has ever measured."""
-    return commander.resolve_user(cid)
+    return minted(commander, cid)
 
 
 async def test_a_photo_reads_as_the_percentage_it_is_and_never_over_full(group):

@@ -33,14 +33,18 @@ Reading a row's meaning goes through the predicates (``user_is_frozen``), and
 ``on_hold`` is not read at all: it is RAISED, as ``UserOnHold``, by the one step
 that resolves an identity. So a caller cannot forget to look at it.
 
-**Whoever shows up is a user in full.** The front mints the cookie and keeps no
-state; the vertex mints the ROWS. At the first request of a cid never seen, and
-BEFORE anything descends, ``resolve_user`` writes the identity (``guest_<cid>``)
-and its row: routing somebody the indexes do not carry is exactly what cannot be
-done, so the writing comes first. The worker events the reception then sends
-upward (``new_user``, ``new_connection``) find the work already done, and are
-idempotent no-ops by design. A cid whose row is gone — a cookie that outlived it
-— is minted again, empty: the browser is still known, its state is not.
+**The cookie routes, the site baptises.** The front mints the cookie and keeps
+no state; the vertex mints NOBODY. A cid the indexes do not carry travels
+ANONYMOUS to the default group's reception, and the hosted site names its own
+connection and its own guest while serving — the worker attaches the request's
+cookie to that birth, and the fold of ``new_connection`` is what writes
+``connection_user_map`` and the user row, at the fact (``record_connection_user``).
+This replaced the founding doctrine ("routing somebody the indexes do not carry
+is exactly what cannot be done, so the writing comes first", owner decision
+2026-08-21): the identity and the guest name belong to the site, and a parallel
+vocabulary at the vertex made every visitor exist twice. A cid whose USER ROW is
+gone — a cookie that outlived it — is healed with an empty row: the browser is
+still known, its state is not.
 
 **The master of the store lives here, and it is a Bag.** Every worker holds a
 replica of it and never writes it: what a worker wants written travels up, is
@@ -750,9 +754,10 @@ class SpaCommander:
             SiteFailedRequest: his worker answered with a failure.
             ConnectionError: the wire of his worker is gone.
 
-        Acts on the indexes through every step it walks — a cid never seen is
-        minted, a user with no home is placed — and, on the way back, through the
-        chain, which folds what the child announced before this returns.
+        Acts on the indexes only through the chain: a cid never seen travels
+        ANONYMOUS to the default group's reception — the site baptises while
+        serving, and the fold of its own announcements is what writes the
+        indexes. A known user with no home is placed, as ever.
         """
         deadline = asyncio.get_running_loop().time() + hold_timeout
         while True:
@@ -761,18 +766,36 @@ class SpaCommander:
                 break
             except UserOnHold as waiting:
                 await self._wait_out_hold(waiting.user, deadline)
-        group_handler = self.group_map[self.user_map[user]["group"] or self.default_group]
-        try:
-            worker_name = group_handler.user_worker_map.get(user) or group_handler.assign_user(user)
-        except AssignmentRefused as refusal:
-            raise self._refused(refusal) from None
-        worker_handler = group_handler.worker_handler_map[worker_name]
+        if user is None or user.startswith(GUEST_PREFIX):
+            # RECEPTION-FIRST, the ratified rule: as long as somebody is a
+            # guest he never leaves the reception — anonymous first visit and
+            # baptised guest alike. Only the login makes him placeable.
+            group_handler = self.group_map[
+                (self.user_map[user]["group"] if user is not None else None) or self.default_group
+            ]
+            reception = group_handler.reception
+            # The saturation doctrine holds for the STRANGER: no room, polite
+            # refusal. A guest already inside is served as ever.
+            if reception is None or (user is None and group_handler.state == "saturated"):
+                raise self._refused(
+                    AssignmentRefused(cid, "no room for a newcomer: the pool is restricted")
+                ) from None
+            worker_handler = reception
+        else:
+            group_handler = self.group_map[self.user_map[user]["group"] or self.default_group]
+            try:
+                worker_name = group_handler.user_worker_map.get(user) or group_handler.assign_user(
+                    user
+                )
+            except AssignmentRefused as refusal:
+                raise self._refused(refusal) from None
+            worker_handler = group_handler.worker_handler_map[worker_name]
         reply = await worker_handler.connector.call(
             f"{SITE_PATH_PREFIX}{http['path']}",
             {
                 "http": {**http, "cid": cid},
                 "identity": user,
-                "user_frozen": self.user_is_frozen(user),
+                "user_frozen": self.user_is_frozen(user) if user is not None else False,
             },
         )
         if "error" in reply:
@@ -838,32 +861,49 @@ class SpaCommander:
             f"inspect: no target {target!r} here — have: {', '.join(self.inspect_targets)}"
         )
 
-    def resolve_user(self, cid: str) -> str:
-        """The reception desk: whose cid this is, minting him if he is new.
+    def resolve_user(self, cid: str) -> str | None:
+        """Whose cid this is — None for a cookie the site has not baptised yet.
 
         Args:
             cid: the identity the cookie carries.
 
         Returns:
-            The user this connection belongs to — an existing identity, or the
-            guest just minted for a cid never seen before.
+            The user this connection belongs to, or None: the vertex MINTS
+            NOBODY — the identity and the guest name are the hosted site's,
+            learned from its own ``new_connection`` through the fold. A None
+            routes to the reception, anonymous.
 
         Raises:
             UserOnHold: this user is between two homes.
 
-        Acts on the indexes when the cid or the row is missing.
+        Acts on the indexes only to heal a known cid whose user row is gone —
+        the cookie outlived the row, the browser is still known, its state is
+        not.
         """
         user = self.connection_user_map.get(cid)
         if user is None:
-            user = f"{GUEST_PREFIX}{cid}"
-            self.connection_user_map[cid] = user
-            self._logger.info("Vertex: cid %s is new — minted as %s", cid, user)
+            return None
         if user not in self.user_map:
             self.user_map[user] = self._new_row()
         row = self.user_map[user]
         if row["on_hold"] is not None:
             raise UserOnHold(user, row["on_hold"])
         return user
+
+    def record_connection_user(self, cid: str, user: str) -> None:
+        """The junction, written at the fact: the routing cookie learns whose it is.
+
+        Args:
+            cid: the ``sticky_cid`` the request travelled under.
+            user: the identity the site baptised while serving it.
+
+        Acts on ``connection_user_map`` and, for an identity never seen, on
+        ``user_map``. Called by the fold of ``new_connection`` — the one road
+        an identity enters the vertex by.
+        """
+        self.connection_user_map[cid] = user
+        if user not in self.user_map:
+            self.user_map[user] = self._new_row()
 
     def user_is_frozen(self, user: str) -> bool:
         """Whether this user's state is in the freezer rather than in a process.

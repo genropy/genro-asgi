@@ -395,7 +395,8 @@ async def test_the_user_parcel_is_installed_before_the_connection_one(worker, de
 
 async def test_the_fold_repoints_the_cookie_and_forgets_the_guest(tmp_path):
     vertex = SpaCommander(tmp_path / "frozen_users")
-    guest = vertex.resolve_user("a1b2")
+    guest = "guest_a1b2"
+    vertex.record_connection_user("a1b2", guest)
 
     vertex.change_connection_user("a1b2", "mario", guest)
 
@@ -406,8 +407,7 @@ async def test_the_fold_repoints_the_cookie_and_forgets_the_guest(tmp_path):
 
 async def test_the_fold_keeps_a_real_previous_identity(tmp_path):
     vertex = SpaCommander(tmp_path / "frozen_users")
-    vertex.connection_user_map["a1b2"] = "mario"
-    vertex.resolve_user("a1b2")
+    vertex.record_connection_user("a1b2", "mario")
 
     vertex.change_connection_user("a1b2", "carlo", "mario")
 

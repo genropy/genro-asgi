@@ -31,7 +31,7 @@ def wired_lane(desk_lane):
 
 
 async def test_the_commander_answers_about_itself(wired_lane):
-    wired_lane.commander.resolve_user("cid-a")
+    wired_lane.commander.record_connection_user("cid-a", "guest_legacy1")
 
     assert await wired_lane.commander.inspect_target("commander", "len(commander.user_map)") == "1"
 

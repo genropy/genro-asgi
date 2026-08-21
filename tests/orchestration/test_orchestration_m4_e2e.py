@@ -123,7 +123,13 @@ DEATH_TIMEOUT = 15.0
 #: Mario's whole day by the sixth chapter, in the order he lived it: two pages as
 #: a guest, the login that was still served under that guest, then everything he
 #: did once the store had come home to his own name.
-MARIO_TRAIL = f"/catalog /catalog/lamps {LOGIN_PATH}mario /orders /orders /orders/9"
+#: Mario's whole day as the RESIDENT reads it. The second browser's login click
+#: is in it: served at his own home (anonymous requests go to the reception, and
+#: that is where he lives), the write after the re-label lands on the resident's
+#: store, which nobody releases — the born identity loses, the resident keeps.
+MARIO_TRAIL = (
+    f"/catalog /catalog/lamps {LOGIN_PATH}mario /orders /orders {LOGIN_PATH}mario /orders/9"
+)
 
 POOL_CONFIG = '''
 """The pool of the story, as an installation writes it."""
@@ -186,9 +192,16 @@ class X_SpaWorker_m4(X_SpaWorker):
     """
 
     def site(self, environ: dict[str, Any], start_response: Any) -> list[bytes]:
-        """Serve one page: log in when asked, add to the trail, render it back."""
+        """Serve one page: log in when asked, add to the trail, render it back.
+
+        Like a real site it BAPTISES on first sight (doctrine of 2026-08-21):
+        a cookie with no connection registers one, named by the site itself —
+        here the cookie's own value, the core-only world.
+        """
         identity = environ["genro.identity"]
         path = environ["PATH_INFO"]
+        if self._connection_for_cid(cid_of(environ)) is None:
+            self.new_connection(cid_of(environ), user=identity)
         if path.startswith(LOGIN_PATH):
             self.change_connection_user(cid_of(environ), path[len(LOGIN_PATH) :])
         with self.dispatch_lock:
@@ -290,16 +303,20 @@ async def test_a_day_of_the_site_from_the_front_to_the_child(server):
     assert vertex.group_map[OTHER_GROUP].worker_handler_map == {}
     reception = group.reception
 
-    # 2. A VISITOR ARRIVES WITH NO COOKIE. The front coins one, the vertex mints
-    # him a guest, and his store grows click by click.
+    # 2. A VISITOR ARRIVES WITH NO COOKIE. The front coins one and the request
+    # travels ANONYMOUS to the reception; the SITE names the guest while
+    # serving, and the fold of its announcement writes the vertex's indexes —
+    # the doctrine of 2026-08-21: the cookie routes, the site baptises.
     first = await browse(server, "/catalog")
     cid = minted_cid(first)
     guest = f"{GUEST_PREFIX}{cid}"
 
-    assert identity_of(first) == guest
+    assert identity_of(first) == "None"
     assert vertex.connection_user_map[cid] == guest
     assert group.user_worker_map[guest] == reception.name
-    assert trail_of(await browse(server, "/catalog/lamps", cid)) == "/catalog /catalog/lamps"
+    second = await browse(server, "/catalog/lamps", cid)
+    assert identity_of(second) == guest
+    assert trail_of(second) == "/catalog /catalog/lamps"
 
     # 3. HE LOGS IN, in the middle of a request the site is serving.
     logged = await browse(server, f"{LOGIN_PATH}mario", cid)
@@ -355,12 +372,15 @@ async def test_a_day_of_the_site_from_the_front_to_the_child(server):
     assert group.get_occupancy_percent(reception.worker_snapshot) == 70.0
     assert group.get_worker_cap(reception) == 30.0
 
-    # A second browser of the same person arrives as a stranger and lands on the
-    # new process, because the reception has no room for him.
+    # A second browser of the same person arrives ANONYMOUS, and anonymous
+    # requests go to the reception BY CONSTRUCTION, room or no room (doctrine
+    # of 2026-08-21): its reserve is the declared gate, never the walk — the
+    # capacity-aware landing belongs to identities, and mario_admin exercises
+    # it at step 7.
     joining = await browse(server, "/joining")
     second_cid = minted_cid(joining)
 
-    assert served_by(joining) == spare.name
+    assert served_by(joining) == reception.name
     assert trail_of(joining) == "/joining"
 
     await browse(server, f"{LOGIN_PATH}mario", second_cid)
@@ -419,6 +439,13 @@ async def test_a_death_where_nothing_of_his_is_left_does_not_take_him(server, st
     board, and a wild death of THAT process reported him among the lost: the
     vertex forgot his row, his connections and everything of his in the deposit,
     while he was being served by another process the whole time.
+
+    Reception-first is what stages it. Every anonymous browser is received by the
+    reception, so the process that releases without losing is the RECEPTION, and
+    the person lives on the spare: an identity born of a login has no measured
+    cost, and the walk of his own next click puts him where there is room. His
+    second browser then logs in as him at the reception, which is where the death
+    strikes.
     """
     front = server.applications[APP_CODE]
     vertex = front.commander
@@ -428,36 +455,46 @@ async def test_a_death_where_nothing_of_his_is_left_does_not_take_him(server, st
 
     first = await browse(server, "/catalog")
     cid = minted_cid(first)
-    await browse(server, f"{LOGIN_PATH}mario", cid)
-    await browse(server, "/orders", cid)
 
-    # A second process, and the second browser of the same person on it: his
-    # login leaves nothing of him there, and the deposit holds his connection.
+    # A second process, and the person carried onto it by his own login: born at
+    # the reception with nothing measured on him, he is placed on the spare —
+    # the reception stands at 70% against a cap of 30 and takes nobody back.
     group.memory_concession_bytes = GROWTH_CONCESSION_BYTES
     await group.check_occupancy(now=True)
     spare = group.worker_handler_map[f"{BASE_GROUP}_0002"]
+
+    await browse(server, f"{LOGIN_PATH}mario", cid)
+    settled = await browse(server, "/orders", cid)
+
+    assert served_by(settled) == spare.name
+    assert group.user_worker_map["mario"] == spare.name
+    assert trail_of(settled) == f"/catalog {LOGIN_PATH}mario /orders"
+
+    # The second browser of the same person is received by the RECEPTION, and his
+    # login there leaves nothing of him: mario resides on the spare, so the row
+    # born of that login is released and the deposit holds his connection.
     joining = await browse(server, "/joining")
     second_cid = minted_cid(joining)
     await browse(server, f"{LOGIN_PATH}mario", second_cid)
 
-    assert served_by(joining) == spare.name
-    assert "mario" not in spare.hosted_users
+    assert served_by(joining) == reception.name
+    assert "mario" not in reception.hosted_users
     assert freezer.read_connection_register_item("mario", second_cid) is not None
 
     # That process dies wild, and the round settles the death.
-    spare.process.kill()
-    await wait_for(lambda: spare.state == "aborted", timeout=DEATH_TIMEOUT)
+    reception.process.kill()
+    await wait_for(lambda: reception.state == "aborted", timeout=DEATH_TIMEOUT)
     await group.ping()
 
-    assert spare.name not in group.worker_handler_map
+    assert reception.name not in group.worker_handler_map
     # Nothing of his went with it: the row, the two connections, the deposit.
     assert "mario" in vertex.user_map
     assert vertex.connection_user_map[cid] == "mario"
     assert vertex.connection_user_map[second_cid] == "mario"
-    assert group.user_worker_map["mario"] == reception.name
+    assert group.user_worker_map["mario"] == spare.name
     assert freezer.read_connection_register_item("mario", second_cid) is not None
     # And he is served as ever, with everything he has done still under him.
     served = await browse(server, "/orders/9", cid)
 
-    assert served_by(served) == reception.name
+    assert served_by(served) == spare.name
     assert trail_of(served) == f"/catalog {LOGIN_PATH}mario /orders /orders/9"

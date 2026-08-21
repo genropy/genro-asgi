@@ -45,6 +45,18 @@ MEMORY_CEILING = 1_000_000
 HOLD_TIMEOUT = 5.0
 
 
+
+def minted(commander, cid: str) -> str:
+    """The identity the site would baptise for this cookie, learned by the vertex.
+
+    The old mint died with the doctrine (the cookie routes, the site names):
+    tests stage the junction the fold of ``new_connection`` would have written.
+    """
+    user = f"guest_{cid}"
+    commander.record_connection_user(cid, user)
+    return user
+
+
 class ConnectorDouble:
     """The wire seen from the chain: what it was called with, and what it answers.
 
@@ -106,32 +118,47 @@ def request(path: str = "/invoices") -> dict[str, Any]:
     }
 
 
-async def test_a_newcomer_is_minted_placed_and_served(commander, group):
+async def test_a_newcomer_travels_anonymous_and_the_site_baptises(commander, group):
+    """The doctrine of 2026-08-21: the vertex mints nobody — the cookie routes
+    to the reception, the site names, the fold writes the indexes at the fact."""
     worker_handler = worker_at(group, "standard_0001")
 
     reply = await commander.serve_request("cid-a", request(), hold_timeout=HOLD_TIMEOUT)
 
     assert reply == {"result": {"status": 200}}
-    # Minted at the desk, placed by the group, written on both rungs.
-    user = commander.connection_user_map["cid-a"]
-    assert user == "guest_cid-a"
-    assert commander.user_map[user]["group"] == "standard"
-    assert group.user_worker_map[user] == "standard_0001"
-    # What went down the wire is the ratified form, and nothing else.
+    # Nothing was minted: the request travelled anonymous, to the reception.
+    assert commander.connection_user_map == {}
+    assert commander.user_map == {}
     path, payload = worker_handler.connector.calls[0]
     assert path == f"{SITE_PATH_PREFIX}/invoices"
     assert payload == {
         "http": {**request(), "cid": "cid-a"},
-        "identity": user,
+        "identity": None,
         "user_frozen": False,
     }
+    # The site baptised while serving; its announcement is what writes the rungs.
+    worker_handler.read_envelope(
+        {
+            "worker_events": [
+                {
+                    "op": "new_connection",
+                    "worker": "standard_0001",
+                    "user": "guest_legacy1",
+                    "session_id": "legacy-conn-1",
+                    "sticky_cid": "cid-a",
+                }
+            ]
+        }
+    )
+    assert commander.connection_user_map == {"cid-a": "guest_legacy1"}
+    assert "guest_legacy1" in commander.user_map
+    assert group.user_worker_map["guest_legacy1"] == "standard_0001"
 
 
 async def test_a_resident_goes_to_his_own_worker_and_is_placed_again_by_nobody(commander, group):
     first = worker_at(group, "standard_0001", occupancy_percent=70.0)
     second = worker_at(group, "standard_0002", occupancy_percent=10.0)
-    commander.connection_user_map["cid-a"] = "mario"
-    commander.resolve_user("cid-a")
+    commander.record_connection_user("cid-a", "mario")
     group.user_worker_map["mario"] = "standard_0002"
     commander.record_user_group("mario", "standard")
 
@@ -144,8 +171,7 @@ async def test_a_resident_goes_to_his_own_worker_and_is_placed_again_by_nobody(c
 
 async def test_the_freezer_verdict_travels_with_the_request(commander, group):
     worker_handler = worker_at(group, "standard_0001")
-    commander.connection_user_map["cid-a"] = "mario"
-    commander.resolve_user("cid-a")
+    commander.record_connection_user("cid-a", "mario")
     commander.mark_user_frozen("mario", 4.0)
     commander.record_user_group("mario", "standard")
 
@@ -177,8 +203,7 @@ async def test_a_user_wakes_in_the_group_he_was_frozen_on(commander, short_root)
     )
     on_stable = worker_at(stable, "stable_0001")
     on_canary = worker_at(canary, "canary_0001")
-    commander.connection_user_map["cid-a"] = "mario"
-    commander.resolve_user("cid-a")
+    commander.record_connection_user("cid-a", "mario")
     commander.record_user_group("mario", "canary")
     commander.mark_user_frozen("mario", 4.0)
 
@@ -199,8 +224,7 @@ async def test_a_pool_that_takes_nobody_refuses_and_says_when_to_come_back(comma
 
 async def test_a_request_for_a_user_on_hold_leaves_the_moment_he_is_home(commander, group):
     worker_at(group, "standard_0001")
-    commander.connection_user_map["cid-a"] = "mario"
-    commander.resolve_user("cid-a")
+    commander.record_connection_user("cid-a", "mario")
     commander.record_user_group("mario", "standard")
     commander.hold_user("mario", "transfer_flag T")
 
@@ -218,8 +242,7 @@ async def test_a_request_for_a_user_on_hold_leaves_the_moment_he_is_home(command
 
 async def test_a_hold_that_outlives_the_budget_is_a_refusal(commander, group):
     worker_at(group, "standard_0001")
-    commander.connection_user_map["cid-a"] = "mario"
-    commander.resolve_user("cid-a")
+    commander.record_connection_user("cid-a", "mario")
     commander.hold_user("mario", "transfer_flag T")
 
     with pytest.raises(AssignmentRefused) as refused:
@@ -239,8 +262,7 @@ async def test_the_budget_is_the_whole_wait_and_not_one_of_them(commander, group
     request gave, and the clock is what says which of the two happened.
     """
     worker_at(group, "standard_0001")
-    commander.connection_user_map["cid-a"] = "mario"
-    commander.resolve_user("cid-a")
+    commander.record_connection_user("cid-a", "mario")
     commander.hold_user("mario", "transfer_flag T")
 
     async def let_go_and_hold_again() -> None:
@@ -278,7 +300,10 @@ async def test_a_wire_that_is_gone_falls_through_to_the_caller(commander, group)
         await commander.serve_request("cid-a", request(), hold_timeout=HOLD_TIMEOUT)
 
 
-async def test_two_requests_of_the_same_unknown_land_on_one_worker(commander, group):
+async def test_two_requests_of_the_same_unknown_land_on_the_reception(commander, group):
+    """Anonymous requests all go to ONE door by construction: the reception is
+    the oldest living worker, so two unknowns cannot split before the site
+    has baptised either of them."""
     first = worker_at(group, "standard_0001", occupancy_percent=70.0)
     second = worker_at(group, "standard_0002", occupancy_percent=10.0)
 
@@ -287,9 +312,7 @@ async def test_two_requests_of_the_same_unknown_land_on_one_worker(commander, gr
         commander.serve_request("cid-a", request("/orders"), hold_timeout=HOLD_TIMEOUT),
     )
 
-    # Whichever the walk chose, it chose it ONCE: the group is the single mutator
-    # of the placement, and the second request finds the map already written.
-    served = [worker for worker in (first, second) if worker.connector.calls]
-    assert len(served) == 1
-    assert len(served[0].connector.calls) == 2
-    assert list(group.user_worker_map) == ["guest_cid-a"]
+    assert len(first.connector.calls) == 2
+    assert second.connector.calls == []
+    # And no placement was written: the fold of the site's baptism owns that.
+    assert group.user_worker_map == {}

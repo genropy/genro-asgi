@@ -49,6 +49,18 @@ WORKER_NAME = "standard_0001"
 CALL_TIMEOUT = 5.0
 
 
+
+def minted(commander, cid: str) -> str:
+    """The identity the site would baptise for this cookie, learned by the vertex.
+
+    The old mint died with the doctrine (the cookie routes, the site names):
+    tests stage the junction the fold of ``new_connection`` would have written.
+    """
+    user = f"guest_{cid}"
+    commander.record_connection_user(cid, user)
+    return user
+
+
 def envelope(*worker_events: dict[str, Any], photo: dict[str, Any] | None = None) -> dict[str, Any]:
     """One envelope as a child composes it: its worker events, and its photo if due."""
     made: dict[str, Any] = {ENVELOPE_SLOT_WORKER_EVENTS: list(worker_events)}
@@ -121,8 +133,8 @@ async def test_an_urgent_photo_brings_the_groups_round_forward(handler, group):
 
 
 async def test_a_user_the_photo_shows_leaving_is_put_in_the_waiting_room(handler, commander):
-    commander.resolve_user("cid-a")
-    commander.resolve_user("cid-b")
+    minted(commander, "cid-a")
+    minted(commander, "cid-b")
 
     handler.read_envelope(
         envelope(photo=photo_of(**{"guest_cid-a": "T", "guest_cid-b": None}))
@@ -136,13 +148,13 @@ async def test_a_user_the_photo_shows_leaving_is_put_in_the_waiting_room(handler
 
 
 async def test_the_births_of_the_reception_find_the_rows_already_written(handler, commander):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
     row = dict(commander.user_map[user])
 
     handler.read_envelope(
         envelope(
             {"op": "new_user", "worker": WORKER_NAME, "user": user},
-            {"op": "new_connection", "worker": WORKER_NAME, "user": user, "session_id": "cid-a"},
+            {"op": "new_connection", "worker": WORKER_NAME, "user": user, "session_id": "cid-a", "sticky_cid": None},
         )
     )
 
@@ -178,7 +190,7 @@ async def test_a_cascade_of_pages_goes_in_one_worker_event(handler, commander):
 
 
 async def test_a_connection_leaves_its_pages_and_keeps_its_identity(handler, commander):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
     handler.read_envelope(
         envelope({"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a", "table_subscriptions": []})
     )
@@ -189,12 +201,12 @@ async def test_a_connection_leaves_its_pages_and_keeps_its_identity(handler, com
 
     assert commander.page_connection_map == {}
     assert commander.connection_user_map == {"cid-a": user}
-    assert commander.resolve_user("cid-a") == user
+    assert minted(commander, "cid-a") == user
 
 
 async def test_several_connections_leave_in_one_worker_event(handler, commander):
-    commander.resolve_user("cid-a")
-    commander.resolve_user("cid-b")
+    minted(commander, "cid-a")
+    minted(commander, "cid-b")
     handler.read_envelope(
         envelope(
             {"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a", "table_subscriptions": []},
@@ -213,7 +225,7 @@ async def test_several_connections_leave_in_one_worker_event(handler, commander)
 
 
 async def test_a_user_who_is_gone_leaves_nothing_behind(handler, commander, group):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
     group.user_worker_map[user] = WORKER_NAME
     handler.read_envelope(
         envelope({"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "session_id": "cid-a", "table_subscriptions": []})
@@ -232,7 +244,7 @@ async def test_a_user_who_is_gone_leaves_nothing_behind(handler, commander, grou
 async def test_the_photo_is_read_before_the_worker_events_of_its_own_envelope(
     handler, commander
 ):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
 
     handler.read_envelope(
         envelope(
@@ -248,7 +260,7 @@ async def test_the_photo_is_read_before_the_worker_events_of_its_own_envelope(
 
 
 async def test_a_freeze_is_a_mark_above_and_a_placement_to_assign_below(handler, commander, group):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
     group.user_worker_map[user] = WORKER_NAME
     # The estimate is COMPOSED by the bottom rung, never sent by the child: the
     # worker's abstract occupancy (the group's gauge reads this envelope's own
@@ -268,8 +280,8 @@ async def test_a_freeze_is_a_mark_above_and_a_placement_to_assign_below(handler,
 
 
 async def test_a_batch_of_freezes_shares_the_worker_they_left(handler, commander, group):
-    first = commander.resolve_user("cid-a")
-    second = commander.resolve_user("cid-b")
+    first = minted(commander, "cid-a")
+    second = minted(commander, "cid-b")
     group.urgent_snapshots = True  # the stub's gauge reads 100.0
 
     handler.read_envelope(
@@ -287,7 +299,7 @@ async def test_a_batch_of_freezes_shares_the_worker_they_left(handler, commander
 
 
 async def test_an_adoption_turns_the_mark_off_and_drains_what_was_waiting(handler, commander):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
     handler.read_envelope(
         envelope(
             {"op": "user_frozen", "worker": WORKER_NAME, "user": user, "placement": None}
@@ -304,7 +316,7 @@ async def test_an_adoption_turns_the_mark_off_and_drains_what_was_waiting(handle
 
 
 async def test_a_hold_is_lifted_by_the_freeze_it_was_waiting_for(handler, commander):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
     handler.read_envelope(envelope(photo=photo_of(**{user: "T"})))
     with pytest.raises(UserOnHold):
         commander.resolve_user("cid-a")
@@ -313,7 +325,7 @@ async def test_a_hold_is_lifted_by_the_freeze_it_was_waiting_for(handler, comman
         envelope({"op": "user_frozen", "worker": WORKER_NAME, "user": user, "placement": None})
     )
 
-    assert commander.resolve_user("cid-a") == user
+    assert minted(commander, "cid-a") == user
 
 
 async def test_a_worker_event_no_layer_knows_is_ignored(handler, commander):
@@ -327,8 +339,8 @@ async def test_a_worker_event_no_layer_knows_is_ignored(handler, commander):
 async def test_the_ordered_death_freezes_the_flagged_and_discards_the_rest(
     handler, commander, group
 ):
-    staying = commander.resolve_user("cid-a")
-    leaving = commander.resolve_user("cid-b")
+    staying = minted(commander, "cid-a")
+    leaving = minted(commander, "cid-b")
     handler.hosted_users.update({staying, leaving})
     group.user_worker_map[staying] = WORKER_NAME
     group.user_worker_map[leaving] = WORKER_NAME
@@ -353,9 +365,9 @@ async def test_a_death_does_not_take_whoever_was_only_passing_through(handler, c
     death read off the placement alone would erase somebody the group had sent
     here who had not yet arrived, whose parcel is untouched in the deposit.
     """
-    passing = commander.resolve_user("cid-a")
-    expected = commander.resolve_user("cid-b")
-    resident = commander.resolve_user("cid-c")
+    passing = minted(commander, "cid-a")
+    expected = minted(commander, "cid-b")
+    resident = minted(commander, "cid-c")
     handler.hosted_users.update({passing, resident})   # in this process's memory
     group.user_worker_map[passing] = "standard_0002"   # but he lives elsewhere
     group.user_worker_map[expected] = WORKER_NAME      # sent here, never arrived
@@ -374,7 +386,7 @@ async def test_the_wild_death_saves_nobody_and_its_parcels_are_discarded(
     handler, commander, group, caplog
 ):
     caplog.set_level(logging.INFO)
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
     handler.hosted_users.add(user)
     group.user_worker_map[user] = WORKER_NAME          # this worker is where he LIVES
     # What a freeze leaves on disk, written the way a worker writes it: under the
@@ -418,7 +430,7 @@ async def test_a_real_child_announces_and_the_vertex_learns_it(
     handler, commander, group, repo_on_pythonpath, caplog
 ):
     caplog.set_level(logging.INFO)
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
 
     # BORN. The photo it presents itself with is all this side knows of it, and
     # the answer to that presentation carries nothing back.

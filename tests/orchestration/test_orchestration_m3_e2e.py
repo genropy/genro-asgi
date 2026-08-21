@@ -80,7 +80,6 @@ from genro_asgi.spa.orchestration import (
     SpaCommander,
     UserOnHold,
 )
-from genro_asgi.spa.orchestration.spa_commander import GUEST_PREFIX
 
 from .conftest import wait_for
 from .x_spa_worker import EXECUTE_ORDER, PLAN_ORDER, X_SpaWorker
@@ -168,9 +167,16 @@ class X_SpaWorker_m3(X_SpaWorker):
 
     def site(self, environ: dict[str, Any], start_response: Any) -> list[bytes]:
         """The WSGI callable: say back who asked, for what, and which process served it."""
+        identity = environ["genro.identity"]
+        cid = self.request_slot.cid
+        if identity is not None and self._connection_for_cid(cid) is None:
+            # A real site registers its connection while serving (doctrine of
+            # 2026-08-21: the rows are the site's) — keyed by the cookie, the
+            # core-only world where no site renames it.
+            self.new_connection(cid, user=identity)
         start_response("200 OK", [("Content-Type", "text/plain"), ("X-Worker", self.name)])
         return [f"{environ['REQUEST_METHOD']} {environ['PATH_INFO']} "
-                f"for {environ['genro.identity']}".encode()]
+                f"for {identity}".encode()]
 
 
 def http_call(cid: str, identity: str, *, path: str, **payload: Any) -> dict[str, Any]:
@@ -344,11 +350,13 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     # reserve it keeps for receiving whoever arrives unplaced. So a newcomer
     # nobody admits is refused, and the refusal rings the wake.
     group.memory_concession_bytes = TIGHT_CONCESSION_BYTES
-    guest = vertex.resolve_user("cid-c")
-    assert guest == f"{GUEST_PREFIX}cid-c"          # whoever shows up is a user in full
+    # The newcomer is a person the site has already baptised: reception-first
+    # keeps a guest at the reception, so the one who takes the capacity walk is
+    # an identity (doctrine of 2026-08-21).
+    carla = known_at_the_vertex(vertex, "cid-c", "carla")
     assert group.get_occupancy_percent(reception.worker_snapshot) == 70.0
     with pytest.raises(AssignmentRefused, match="no worker of std admits him"):
-        group.assign_user(guest)
+        group.assign_user(carla)
     assert group.ping_now_event.is_set() is True
 
     await group.ping()
@@ -357,10 +365,10 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     # His retry lands on the new one: same reading, different setpoint — the
     # reception has a reserve and the other has not.
     spare = group.worker_handler_map[f"{GROUP}_0002"]
-    assert group.assign_user(guest) == spare.name
-    served = await serve(group, guest, "cid-c", "/catalog")
-    assert body_of(served) == f"GET /catalog for {guest}"
-    assert spare.hosted_users == {guest}
+    assert group.assign_user(carla) == spare.name
+    served = await serve(group, carla, "cid-c", "/catalog")
+    assert body_of(served) == f"GET /catalog for {carla}"
+    assert spare.hosted_users == {carla}
 
     # 6. THE POOL SHRINKS BY WASTE. The machine grew — what ``need_resources``
     # asks the world for — so the share of the second one is capacity the
@@ -374,7 +382,7 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     assert spare.state == "quitted"
     await wait_for(lambda: spare.process.poll() is not None, timeout=DEATH_TIMEOUT)
     assert spare.process.poll() == 0
-    assert freezer.read_user_register_item(guest) is not None
+    assert freezer.read_user_register_item(carla) is not None
 
     # And the round that reads that ended state takes it out of the group, with
     # the placements that pointed at it: her state is in the freezer, and her
@@ -382,8 +390,8 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     await group.ping()
 
     assert list(group.worker_handler_map) == [f"{GROUP}_0001"]
-    assert vertex.user_is_frozen(guest) is True
-    assert group.user_worker_map[guest] is None
+    assert vertex.user_is_frozen(carla) is True
+    assert group.user_worker_map[carla] is None
 
     # 7. A PROCESS DIES WILD, with two people on board, and the real clock is
     # running: nobody drives what follows.
@@ -406,10 +414,10 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
 
     assert mario not in vertex.user_map
     assert anna not in vertex.user_map
-    assert vertex.connection_user_map == {"cid-c": guest}
-    assert group.user_worker_map == {guest: None}
-    assert vertex.user_is_frozen(guest) is True
-    assert freezer.user_folders == {freezer.user_to_userkey(guest)}
+    assert vertex.connection_user_map == {"cid-c": carla}
+    assert group.user_worker_map == {carla: None}
+    assert vertex.user_is_frozen(carla) is True
+    assert freezer.user_folders == {freezer.user_to_userkey(carla)}
     assert group.reception is group.worker_handler_map[f"{GROUP}_0003"]
     assert group.state == "running"
 

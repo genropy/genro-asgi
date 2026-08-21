@@ -37,6 +37,18 @@ from genro_asgi.spa.orchestration.spa_commander import GUEST_PREFIX
 WORKER_NAME = "standard_0001"
 
 
+
+def minted(commander, cid: str) -> str:
+    """The identity the site would baptise for this cookie, learned by the vertex.
+
+    The old mint died with the doctrine (the cookie routes, the site names):
+    tests stage the junction the fold of ``new_connection`` would have written.
+    """
+    user = f"guest_{cid}"
+    commander.record_connection_user(cid, user)
+    return user
+
+
 @pytest.fixture
 def commander(short_root):
     return SpaCommander(short_root / "frozen_users")
@@ -52,7 +64,7 @@ def parked_state(commander: SpaCommander, user: str) -> None:
 
 
 def test_whoever_shows_up_is_minted_before_anything_descends(commander):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
 
     assert user == f"{GUEST_PREFIX}cid-a"
     assert commander.connection_user_map == {"cid-a": user}
@@ -67,10 +79,10 @@ def test_whoever_shows_up_is_minted_before_anything_descends(commander):
 
 
 def test_a_cid_already_known_is_answered_and_nothing_is_written_twice(commander):
-    first = commander.resolve_user("cid-a")
+    first = minted(commander, "cid-a")
     commander.user_map[first]["occupancy_percent"] = 9.0
 
-    assert commander.resolve_user("cid-a") == first
+    assert minted(commander, "cid-a") == first
     assert commander.user_map[first]["occupancy_percent"] == 9.0
 
 
@@ -82,7 +94,7 @@ def test_a_cookie_that_outlived_its_row_is_still_that_person(commander):
 
 
 def test_a_user_on_his_way_out_is_not_routed_but_raised(commander):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
     commander.hold_user(user, "transfer_flag T")
 
     with pytest.raises(UserOnHold) as refusal:
@@ -94,7 +106,7 @@ def test_a_user_on_his_way_out_is_not_routed_but_raised(commander):
 
 
 def test_the_cause_of_a_hold_is_the_one_that_explains_the_wait(commander):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
     commander.hold_user(user, "transfer_flag T")
     commander.hold_user(user, "transfer_flag X")
 
@@ -102,7 +114,7 @@ def test_the_cause_of_a_hold_is_the_one_that_explains_the_wait(commander):
 
 
 def test_nobody_is_frozen_until_it_is_written_down(commander):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
 
     assert commander.user_is_frozen("somebody nobody knows") is False
     assert commander.user_is_frozen(user) is False
@@ -113,7 +125,7 @@ def test_nobody_is_frozen_until_it_is_written_down(commander):
 
 
 def test_a_freeze_that_carries_no_estimate_leaves_the_last_one_alone(commander):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
     commander.mark_user_frozen(user, 6.0)
 
     commander.mark_user_frozen(user, None)
@@ -122,16 +134,16 @@ def test_a_freeze_that_carries_no_estimate_leaves_the_last_one_alone(commander):
 
 
 def test_a_freeze_ends_the_wait_it_was_the_reason_for(commander):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
     commander.hold_user(user, "transfer_flag T")
 
     commander.mark_user_frozen(user, 6.0)
 
-    assert commander.resolve_user("cid-a") == user
+    assert minted(commander, "cid-a") == user
 
 
 def test_an_adoption_empties_the_row_of_what_was_waiting(commander):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
     commander.mark_user_frozen(user, 6.0)
     commander.user_map[user]["pending_dbevents"] = [{"table": "invoices"}]
 
@@ -152,7 +164,7 @@ def test_dropping_what_is_already_gone_is_that_same_outcome(commander):
 
 
 def test_a_user_who_is_gone_takes_his_connections_pages_and_freezer_state_with_him(commander):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
     commander.connection_user_map["cid-b"] = user
     commander.page_connection_map["p1"] = "cid-a"
     commander.page_connection_map["p2"] = "cid-b"
@@ -173,9 +185,9 @@ def test_a_user_who_is_gone_takes_his_connections_pages_and_freezer_state_with_h
 
 def test_what_a_dead_process_left_on_disk_is_discarded_and_counted(commander, caplog):
     caplog.set_level(logging.INFO)
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
     parked_state(commander, user)
-    without_state = commander.resolve_user("cid-b")
+    without_state = minted(commander, "cid-b")
 
     commander.drop_users([user, without_state], cause="process_aborted")
 
@@ -278,7 +290,7 @@ def test_a_vertex_with_nowhere_to_put_a_newcomer_says_so(commander):
 
 
 def test_the_group_of_a_user_is_recorded_where_the_placement_decided_it(commander):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
 
     commander.record_user_group(user, "stable")
 
@@ -286,7 +298,7 @@ def test_the_group_of_a_user_is_recorded_where_the_placement_decided_it(commande
 
 
 async def test_a_request_for_a_user_on_hold_waits_for_his_release(commander):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
     commander.hold_user(user, "transfer_flag T")
 
     waiting = asyncio.ensure_future(commander.await_user_release(user, timeout=5.0))
@@ -297,11 +309,11 @@ async def test_a_request_for_a_user_on_hold_waits_for_his_release(commander):
 
     await waiting
     assert commander.user_hold_event_map == {}
-    assert commander.resolve_user("cid-a") == user
+    assert minted(commander, "cid-a") == user
 
 
 async def test_the_freezer_mark_releases_the_wait_too(commander):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
     commander.hold_user(user, "transfer_flag F")
     waiting = asyncio.ensure_future(commander.await_user_release(user, timeout=5.0))
     await asyncio.sleep(0)
@@ -313,7 +325,7 @@ async def test_the_freezer_mark_releases_the_wait_too(commander):
 
 
 async def test_a_user_dropped_while_held_wakes_whoever_waited_for_him(commander):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
     commander.hold_user(user, "transfer_flag T")
     waiting = asyncio.ensure_future(commander.await_user_release(user, timeout=5.0))
     await asyncio.sleep(0)
@@ -325,7 +337,7 @@ async def test_a_user_dropped_while_held_wakes_whoever_waited_for_him(commander)
 
 
 async def test_a_wait_that_outlives_its_own_deadline_gives_up(commander):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
     commander.hold_user(user, "transfer_flag T")
 
     with pytest.raises(TimeoutError):
@@ -336,13 +348,13 @@ async def test_a_wait_that_outlives_its_own_deadline_gives_up(commander):
 
 
 async def test_nobody_waits_on_a_user_who_is_not_held(commander):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
 
     await commander.await_user_release(user, timeout=0.01)
 
 
 def test_a_hold_already_up_keeps_its_first_cause_and_its_own_door(commander):
-    user = commander.resolve_user("cid-a")
+    user = minted(commander, "cid-a")
     commander.hold_user(user, "transfer_flag T")
     door = commander.user_hold_event_map[user]
 

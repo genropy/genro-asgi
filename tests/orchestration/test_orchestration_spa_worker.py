@@ -345,23 +345,23 @@ async def test_a_connection_found_in_the_deposit_arrives_with_its_pages(worker, 
     assert deposit.read_connection_register_item("mario", "cid-b") is None
 
 
-async def test_a_connection_the_deposit_never_had_starts_empty(worker, deposit):
+async def test_a_connection_the_deposit_never_had_is_nobodys_to_bear(worker, deposit):
+    """The doctrine of 2026-08-21: the rows are the site's — nothing parked
+    means NO row and no announcement; the site baptises again while served."""
     worker.add_page("page-1", "cid-a", "mario")
     worker.worker_events.clear()
 
     item = await worker.adopt_connection("mario", "cid-b")
 
-    assert announced(worker) == ["new_connection"]
-    assert item["user"] == "mario"
-    assert item["pages"] == set()
+    assert item is None
+    assert announced(worker) == []
+    assert "cid-b" not in worker.connection_register
     assert deposit.connection_reads == 1
 
 
-async def test_the_first_connection_of_a_stranger_brings_its_user_with_it(worker, deposit):
-    item = await worker.adopt_connection("mario", "cid-a")
-
-    assert announced(worker) == ["new_user", "new_connection"]
-    assert item["user"] == "mario"
+async def test_a_stranger_gets_no_row_out_of_the_adoption(worker, deposit):
+    assert await worker.adopt_connection("mario", "cid-a") is None
+    assert "mario" not in worker.user_register
 
 
 async def test_a_connection_already_held_costs_no_trip(worker, deposit):

@@ -115,6 +115,13 @@ class DrivenWorker(SpaWorker):
 
     def tiny_site(self, environ: dict[str, Any], start_response: Any) -> list[bytes]:
         """The WSGI callable: say back who asked, for what, and what this process holds."""
+        identity = environ["genro.identity"]
+        cid = self.request_slot.cid
+        if identity is not None and self._connection_for_cid(cid) is None:
+            # A real site registers its connection while serving (doctrine of
+            # 2026-08-21: the rows are the site's) — keyed by the cookie, the
+            # core-only world where no site renames it.
+            self.new_connection(cid, user=identity)
         start_response(
             "200 OK",
             [
@@ -123,7 +130,7 @@ class DrivenWorker(SpaWorker):
             ],
         )
         return [f"{environ['REQUEST_METHOD']} {environ['PATH_INFO']} "
-                f"for {environ['genro.identity']}".encode()]
+                f"for {identity}".encode()]
 
     async def answer_call(self, frame: Any) -> None:
         """Answer the two orders of the driver, and hand everything else upstairs.
@@ -332,7 +339,7 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     # placement is to be assigned again.
     assert commander.user_is_frozen("mario") is True
     assert commander.user_map["mario"]["on_hold"] is None
-    assert group.user_worker_map == {"mario": None}
+    assert group.user_worker_map == {"mario": None, "anna": "standard_0001"}
     photo = parked[ENVELOPE_SLOT_WORKER_SNAPSHOT]
     assert "mario" not in photo["users"]
     assert photo["users"]["anna"]["item"]["state"] == "active"
