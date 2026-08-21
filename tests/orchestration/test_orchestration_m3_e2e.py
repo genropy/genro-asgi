@@ -139,6 +139,7 @@ class ServerConfiguration(AsgiConfigBuilder):
         )
         commander.groups().group(
             name="{group}",
+            worker_memory_max_percent=100.0,
             occupancy_max_percent=80.0,
             restart_occupancy_max_percent=95.0,
             reception_reserved_percent=20.0,

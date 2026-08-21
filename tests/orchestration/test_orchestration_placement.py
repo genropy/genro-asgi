@@ -50,11 +50,14 @@ def commander(tmp_path):
 
 @pytest.fixture
 def group(commander, tmp_path):
-    """A group nobody has launched anything in: its policies are the defaults."""
+    """A group whose ONE worker may hold the whole quota: the arithmetic below
+    reads occupancies against the quota itself (the core default sizes a group
+    for ``worker_max_number`` workers, pinned away here on purpose)."""
     return GroupHandler(
         commander,
         "standard",
         memory_concession_bytes=MEMORY_CEILING,
+        worker_memory_max_percent=100.0,
         instance_dir=tmp_path / "i",
         frozen_users_path=tmp_path / "frozen_users",
         entry_module="never.launched",

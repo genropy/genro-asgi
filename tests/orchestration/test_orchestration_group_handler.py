@@ -133,6 +133,9 @@ def group_settings(instance_root):
         "instance_dir": instance_root / "i",
         "frozen_users_path": instance_root / "frozen_users",
         "entry_module": CHILD_MODULE,
+        # The scenarios of this file size ONE worker over the whole quota; the
+        # core default sizes a group for worker_max_number workers instead.
+        "worker_memory_max_percent": 100.0,
         "worker_kwargs": {
             "behaviour": "answer",
             "users": [],

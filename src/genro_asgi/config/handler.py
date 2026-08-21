@@ -356,6 +356,7 @@ class ConfigurationHandler(ConfigHandler):
             kwargs = self.closed_attrs(
                 path,
                 "memory_max_percent",
+                "worker_max_number",
                 "worker_memory_max_percent",
                 "occupancy_max_percent",
                 "restart_occupancy_max_percent",

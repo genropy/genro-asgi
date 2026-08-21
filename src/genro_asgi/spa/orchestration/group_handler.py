@@ -50,7 +50,12 @@ none reads 0, which is what a worker nobody has measured yet honestly is.
 One total is always handed in — ``memory_concession_bytes``, what the machine
 concedes — and everything below it is a share: ``memory_max_percent`` is this group's share
 of the concession, and ``worker_memory_max_percent`` is what ONE worker may hold
-of the group's own quota. So the gate on the growth compares
+of the group's own quota. The worker share is usually not written at all:
+``worker_max_number`` names how many workers the quota is SIZED FOR — an
+intuitive count of slots instead of a percentage — and the share is derived as
+``100 / worker_max_number``. It is a divisor of the size and nothing else: the
+number of processes stays a reading, never a setting. An explicit
+``worker_memory_max_percent`` wins over the derivation. So the gate on the growth compares
 ``memory_occupied_percent``, what the living workers hold read against the
 concession, with ``memory_max_percent``: percent against percent, never a byte
 count against a byte count. A concession nobody has measured makes every reading
@@ -113,6 +118,11 @@ from .worker_handler import WorkerHandler
 #: the round that reads it, and it is nobody's candidate.
 DEAD_STATES = ("quitted", "aborted")
 
+#: How many workers a group's quota is sized for when the recipe says nothing:
+#: the per-worker memory ceiling defaults to quota / this. A divisor of the
+#: size only — the number of living processes stays a reading, never a setting.
+WORKER_MAX_NUMBER = 6
+
 # How many turns of the group pass between two readings of its own shape. The
 # health of a process is every turn's business; the shape of the group is a
 # slower thing, and the number lives here because the knowledge does.
@@ -143,8 +153,13 @@ class GroupHandler:
         memory_concession_bytes: what the machine concedes the whole pool, in
             bytes — the total every percentage below is read against.
         memory_max_percent: this group's share of that concession.
+        worker_max_number: how many workers the group's quota is sized for —
+            the per-worker ceiling divisor, never a cap on how many processes
+            exist. It replaces the bridge-era RAM×0.8/workers derivation with
+            one intuitive number of slots.
         worker_memory_max_percent: what ONE worker of this group may hold, as a
-            share of the group's own quota.
+            share of the group's own quota; None derives it as
+            ``100 / worker_max_number``, and an explicit value wins.
         worker_settings: what every ``WorkerHandler`` of this group is built
             with — the child's identity and the installation's paths — handed
             over verbatim.
@@ -162,7 +177,8 @@ class GroupHandler:
         newcomer_reserve_count: int = 1,
         memory_concession_bytes: int,
         memory_max_percent: float = 100.0,
-        worker_memory_max_percent: float = 100.0,
+        worker_max_number: int = WORKER_MAX_NUMBER,
+        worker_memory_max_percent: float | None = None,
         **worker_settings: Any,
     ) -> None:
         self.spa_commander = spa_commander
@@ -174,7 +190,12 @@ class GroupHandler:
         self.newcomer_reserve_count = newcomer_reserve_count
         self.memory_concession_bytes = memory_concession_bytes
         self.memory_max_percent = memory_max_percent
-        self.worker_memory_max_percent = worker_memory_max_percent
+        self.worker_max_number = worker_max_number
+        self.worker_memory_max_percent = (
+            100.0 / worker_max_number
+            if worker_memory_max_percent is None
+            else worker_memory_max_percent
+        )
         self.worker_settings = worker_settings
         self.envelope_handler = GroupEnvelopeHandler(self, spa_commander.envelope_handler)
         #: Where each user of this group lives, by worker name; None says his

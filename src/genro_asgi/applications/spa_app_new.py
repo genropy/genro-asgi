@@ -122,6 +122,7 @@ class SpaApplicationGrammarNew(ApplicationGrammar):
         self,
         name: str = None,
         memory_max_percent: float | BagResolver = None,
+        worker_max_number: int | BagResolver = None,
         worker_memory_max_percent: float | BagResolver = None,
         occupancy_max_percent: float | BagResolver = None,
         restart_occupancy_max_percent: float | BagResolver = None,
@@ -143,7 +144,12 @@ class SpaApplicationGrammarNew(ApplicationGrammar):
 
         **Nothing here says how many workers there are.** The group brings its
         reception into being at boot and then grows on demand and shrinks by
-        waste, so the count is a reading and never a setting.
+        waste, so the count is a reading and never a setting —
+        ``worker_max_number`` included: it says how many workers the quota is
+        SIZED FOR (the per-worker ceiling becomes quota / that number, 6 when
+        nothing is declared), and caps nothing. It replaces the bridge-era
+        RAM-share-over-workers derivation with one intuitive count of slots;
+        an explicit ``worker_memory_max_percent`` wins over it.
 
         The POLICIES: ``memory_max_percent`` is this group's share of the
         server's concession and ``worker_memory_max_percent`` what ONE worker may

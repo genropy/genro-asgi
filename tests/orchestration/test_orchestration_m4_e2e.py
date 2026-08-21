@@ -153,6 +153,7 @@ class ServerConfiguration(AsgiConfigBuilder):
         for name in ("{other_group}", "{base_group}"):
             groups.group(
                 name=name,
+                worker_memory_max_percent=100.0,
                 occupancy_max_percent=80.0,
                 restart_occupancy_max_percent=95.0,
                 reception_reserved_percent=50.0,
