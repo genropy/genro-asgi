@@ -124,7 +124,17 @@ WORKER_ENV_VAR = "GENRO_ASGI_WORKER"
 PING_OP_PATH = "/op/ping"
 
 #: The debug door: evaluate one expression inside the child, repr back.
-INSPECT_OP_PATH = "/op/inspect"
+EVAL_OP_PATH = "/op/eval"
+
+#: The structured reading of a whole process: every register, JSON-safe, in
+#: one answer. Unlike the photo it is not periodic and nobody acts on it — it
+#: exists to be shown to a human.
+CENSUS_OP_PATH = "/op/census"
+
+#: The switch of the observation: whether the process reports every register
+#: mutation of its own up the lane, as it happens. Off unless somebody is
+#: watching — an observer must not change what it observes.
+OBSERVE_OP_PATH = "/op/observe"
 
 #: The routing key of the order to leave: the process drains and ends itself.
 #: Its answer comes back at once, carrying the photo with every user flagged for
@@ -154,9 +164,11 @@ PROCESS_PING_TIMEOUT = 10.0
 WAIT_POLL_INTERVAL = 0.05
 
 __all__ = [
+    "CENSUS_OP_PATH",
     "DROP_CONNECTION_OP_PATH",
     "DROP_USER_OP_PATH",
-    "INSPECT_OP_PATH",
+    "EVAL_OP_PATH",
+    "OBSERVE_OP_PATH",
     "PING_OP_PATH",
     "PROCESS_PING_INTERVAL",
     "PROCESS_PING_TIMEOUT",
@@ -234,6 +246,8 @@ class WorkerHandler:
         self._death_wait: asyncio.Future[None] | None = None
         self._listening = False
         self._last_envelope_ts = 0.0
+        self._observation_switched = False
+        self._observation_switch_tasks: set[asyncio.Task[Any]] = set()
 
     @property
     def requires_beat_ping(self) -> bool:
@@ -300,7 +314,16 @@ class WorkerHandler:
         Stamps the instant this process was last heard from.
         """
         self._last_envelope_ts = time.monotonic()
+        if not self._observation_switched and self.group_handler.spa_commander.observation_watched:
+            self._observation_switched = True
+            self._fire_observation_switch()
         return self.envelope_handler(envelope)
+
+    def _fire_observation_switch(self) -> None:
+        """Turn this process's observation on without holding up the envelope it presented with."""
+        task = asyncio.create_task(self.connector.call(OBSERVE_OP_PATH, {"on": True}))
+        self._observation_switch_tasks.add(task)
+        task.add_done_callback(self._observation_switch_tasks.discard)
 
     def serve_child_call(self, path: str, data: dict[str, Any]) -> Any:
         """Hand a CALL the child placed on the lane to the desk that serves it.

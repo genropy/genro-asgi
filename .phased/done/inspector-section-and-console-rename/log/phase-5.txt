@@ -1,0 +1,3 @@
+✓ Phase 5 completed: The inspector page — HTML+JS, tree view, live updates, stop/resume
+
+Il placeholder è sostituito dalla pagina reale: pannello commander (una card per SPA front, gruppi e delivery desk), griglia con una card per worker con l'albero user → connections → pages, log dei 50 eventi grezzi, refetch debounced 200 ms su ogni observation, stop/resume che chiude e riapre l'EventSource. Suite completa 2112 passed / 2 skipped, `ruff check src/ tests/` pulito, commit `de6c442`. Resta il `Verify: now` per te — la passata in browser con `GNR_ASGI_INSPECTOR=1`, annotata anche in `verify.md`.

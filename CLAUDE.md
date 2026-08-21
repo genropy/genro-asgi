@@ -62,6 +62,16 @@ spool, executor) mount like any other app.
 
 ### The SPA machine (`spa/` + `applications/spa_app.py`)
 
+**Two stacks, and the words for them (until Macro 6).** Everything in this
+section describes the **pre_refactoring** stack — `spa/worker.py`
+(`UserStickyWorker`), `spa/commander.py` (`UserStickyCommander`),
+`applications/spa_app.py` (`SpaApplication`) — which is what genropy-asgi runs
+on today and which the orchestration rebuild has not touched by a single line.
+The **new core** is `spa/orchestration/` + `applications/spa_app_new.py`. Say
+neither of them "legacy": in this code that word already names the genropy SITE
+(`WsgiSeam`, "legacy WSGI sites"). The pre_refactoring stack goes at the Macro 6
+cutover, and this note with it.
+
 **Identity.** `SpaApplication` is a thin front: it reads/mints the
 `sticky_cid` cookie ONCE per request (the cid), derives the routing identity
 from the commander's own surface — `connection_user.get(cid, cid)` — and
@@ -119,15 +129,22 @@ die by age (the reaper). `hard_restart` is the declared exception to
 same name, refill lazily. `dump`/`restore` carry the whole surface across a
 full server restart.
 
-**In progress.** The commander (4200 lines) is being split into
-`Commander → n GroupHandler → n WorkerHandler` (placement points at the
-stable handle; `relaunch()` in place of condemn-and-move; per-group
-user→seat maps with commander-level indexes). Decision log:
-`temp/interview_handler_2026-08-15.md`; skeletons:
-`temp/skeletons_handler_2026-08-15.py`.
+**Where the rebuild stands.** The split the pre_refactoring commander needed —
+`SpaCommander → n GroupHandler → n WorkerHandler` — is BUILT and on main, under
+`spa/orchestration/` (Macro 1-4: foundations, worker process, commander and
+groups, request chain and login), fronted by `SpaApplicationNew`. It knows who
+lives where, how a request reaches its worker, the freezer, the deaths, the
+groups and the occupancy — and nothing of the data plane: no datachanges, no
+table events, no store writes from the hosted site, no hot move, no
+`dump`/`restore`. That is why genropy-asgi cannot run on it yet. Macro 5 builds
+the data plane — the minimum measured in
+`temp/minimo_genropy_pre_alpha_2026-08-19.md` — and Macro 6 is the cutover, when
+the pre_refactoring stack is removed. Decision register:
+`temp/interview_handler_2026-08-15.md` (F1-F49); design:
+`temp/design_orchestrazione_v4_2026-08-17.md`.
 
 ---
 
 **All general policies are inherited from the parent document: [meta-genro-modules CLAUDE.md](https://github.com/softwellsrl/meta-genro-modules/blob/main/CLAUDE.md)**
 
-**Last Updated**: 2026-08-15
+**Last Updated**: 2026-08-19

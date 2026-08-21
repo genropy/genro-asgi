@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Framework e bundle applicativi — panoramica del progetto</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #232733;
+    --surface3: #2a2f3e;
+    --border: #303646;
+    --text: #e7e9f1;
+    --dim: #98a0b3;
+    --accent: #6c9eff;
+    --violet: #a78bfa;
+    --green: #4ade80;
+    --orange: #fb923c;
+    --red: #f87171;
+    --cyan: #22d3ee;
+    --yellow: #facc15;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    display: flex;
+    flex-direction: column;
+    color: var(--text);
+    background: var(--bg);
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    line-height: 1.65;
+  }
+  header {
+    flex: 0 0 auto;
+    padding: 1.05rem 1.7rem 0.85rem;
+    text-align: center;
+    background:
+      radial-gradient(ellipse 520px 180px at 50% 0%, rgba(108,158,255,.12), transparent 70%),
+      linear-gradient(180deg, #171a26, var(--bg));
+  }
+  header h1 {
+    font-size: clamp(1.35rem, 2.7vw, 2rem);
+    line-height: 1.2;
+    letter-spacing: -.035em;
+    background: linear-gradient(120deg, var(--accent), var(--violet));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  header p { margin-top: .3rem; color: var(--dim); font-size: .9rem; }
+  .status-line {
+    display: flex;
+    gap: .45rem;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-top: .6rem;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: .18rem .62rem;
+    color: var(--dim);
+    background: rgba(26,29,39,.7);
+    font-size: .69rem;
+    font-weight: 650;
+    letter-spacing: .02em;
+  }
+  .dot { width: .48rem; height: .48rem; border-radius: 50%; background: var(--orange); }
+  .tab-bar {
+    display: flex;
+    flex: 0 0 auto;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding: 0 1rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .tab-bar::-webkit-scrollbar { display: none; }
+  .tab-btn {
+    appearance: none;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    padding: .73rem .92rem;
+    color: var(--dim);
+    background: transparent;
+    font: 550 .8rem/1 inherit;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  .tab-btn:hover { color: var(--text); background: rgba(255,255,255,.02); }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-panels { flex: 1 1 auto; position: relative; overflow: hidden; }
+  .tab-panel {
+    display: none;
+    position: absolute;
+    inset: 0;
+    overflow-y: auto;
+    padding: 1.7rem 1.5rem 3rem;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .tab-panel.active { display: block; }
+  .content { width: min(100%, 980px); margin: 0 auto; }
+  h2 { font-size: 1.55rem; line-height: 1.25; letter-spacing: -.025em; margin-bottom: .65rem; }
+  h3 { color: var(--accent); font-size: 1.05rem; margin: 1.65rem 0 .6rem; }
+  h4 { font-size: .93rem; margin-bottom: .35rem; }
+  p { margin-bottom: .85rem; }
+  p.lead { color: #c8cddd; font-size: 1.04rem; max-width: 780px; }
+  p.dim, .dim { color: var(--dim); }
+  strong { color: #f1f3f8; }
+  ul, ol { margin: .8rem 0 1rem 1.35rem; color: var(--dim); }
+  li { margin: .3rem 0; padding-left: .12rem; }
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: .9rem;
+    margin: 1rem 0 1.3rem;
+  }
+  .card {
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    padding: 1rem 1.05rem;
+    background: var(--surface);
+  }
+  .card p { color: var(--dim); font-size: .84rem; margin: 0; }
+  .card .icon { font-size: 1.25rem; margin-bottom: .45rem; }
+  .card.blue { border-top: 2px solid var(--accent); }
+  .card.violet { border-top: 2px solid var(--violet); }
+  .card.green { border-top: 2px solid var(--green); }
+  .card.orange { border-top: 2px solid var(--orange); }
+  .callout {
+    border-left: 3px solid var(--accent);
+    border-radius: 0 9px 9px 0;
+    padding: .82rem 1rem;
+    margin: 1rem 0;
+    background: rgba(108,158,255,.07);
+  }
+  .callout.warning { border-left-color: var(--orange); background: rgba(251,146,60,.07); }
+  .callout.success { border-left-color: var(--green); background: rgba(74,222,128,.07); }
+  .callout p { margin: 0; font-size: .88rem; }
+  .diagram {
+    display: flex;
+    justify-content: center;
+    overflow-x: auto;
+    margin: 1.1rem 0 1.4rem;
+    padding: 1rem;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+  }
+  .diagram svg { width: 100%; min-width: 650px; height: auto; }
+  .legend { display: flex; gap: .8rem; flex-wrap: wrap; margin: -.5rem 0 1rem; color: var(--dim); font-size: .75rem; }
+  .legend span { display: inline-flex; align-items: center; gap: .35rem; }
+  .legend i { display: inline-block; width: .65rem; height: .65rem; border-radius: 3px; }
+  table { width: 100%; border-collapse: collapse; margin: .85rem 0 1.3rem; font-size: .84rem; }
+  th, td { text-align: left; vertical-align: top; padding: .62rem .75rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--dim); text-transform: uppercase; letter-spacing: .045em; font-size: .7rem; }
+  td:first-child { color: #dce0ea; }
+  pre {
+    position: relative;
+    overflow-x: auto;
+    margin: .8rem 0 1.2rem;
+    padding: 1rem 3.5rem 1rem 1.1rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #151821;
+    color: #d9dce6;
+    font: .8rem/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  code.il { padding: .12rem .38rem; border-radius: 5px; background: var(--surface2); font-size: .82em; }
+  .kw { color: var(--violet); }
+  .key { color: var(--accent); }
+  .str { color: var(--green); }
+  .num { color: var(--orange); }
+  .cmt { color: var(--dim); font-style: italic; }
+  .copy-btn {
+    position: absolute;
+    right: .55rem;
+    top: .55rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: .25rem .48rem;
+    background: var(--surface2);
+    color: var(--dim);
+    font: .68rem inherit;
+    cursor: pointer;
+  }
+  .copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .copy-btn.copied { color: var(--green); border-color: var(--green); }
+  .flow {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    align-items: stretch;
+    gap: .55rem;
+    margin: 1.1rem 0;
+  }
+  .flow-step {
+    position: relative;
+    padding: .82rem .65rem;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--surface);
+    text-align: center;
+    font-size: .78rem;
+  }
+  .flow-step:not(:last-child)::after {
+    content: "›";
+    position: absolute;
+    right: -.48rem;
+    top: 50%;
+    transform: translate(50%,-50%);
+    z-index: 2;
+    color: var(--accent);
+    font-size: 1.3rem;
+  }
+  .flow-step b { display: block; color: var(--text); margin-bottom: .18rem; }
+  .flow-step span { color: var(--dim); }
+  .state-row { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; margin: 1rem 0; }
+  .state {
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: .35rem .6rem;
+    color: var(--dim);
+    background: var(--surface);
+    font: 700 .69rem ui-monospace, monospace;
+  }
+  .state.active { color: var(--green); border-color: rgba(74,222,128,.45); }
+  .arrow { color: var(--accent); }
+  .truth-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; margin: 1rem 0; }
+  .truth {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem;
+    background: var(--surface);
+  }
+  .truth h4 { display: flex; align-items: center; gap: .45rem; }
+  .truth ul { font-size: .82rem; margin-bottom: 0; }
+  .truth.now h4 { color: var(--green); }
+  .truth.future h4 { color: var(--orange); }
+  .footer {
+    margin-top: 2rem;
+    padding: 1.2rem 0;
+    border-top: 1px solid var(--border);
+    text-align: center;
+    color: var(--dim);
+    font-size: .75rem;
+  }
+  @media (max-width: 760px) {
+    header { padding-inline: .8rem; }
+    header p { font-size: .8rem; }
+    .tab-panel { padding: 1.1rem .85rem 2rem; }
+    .flow { grid-template-columns: 1fr; }
+    .flow-step:not(:last-child)::after { content: "⌄"; right: 50%; top: auto; bottom: -.72rem; }
+    .truth-grid { grid-template-columns: 1fr; }
+    pre { white-space: pre-wrap; word-break: break-word; font-size: .73rem; }
+    .diagram svg { min-width: 590px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Aggiornare le applicazioni senza ricostruire il Framework</h1>
+  <p>Un’immagine comune, bundle applicativi su S3 e gruppi di worker aggiornabili a server vivo</p>
+  <div class="status-line">
+    <span class="pill"><span class="dot"></span> Proposta architetturale</span>
+    <span class="pill">Genro ASGI · nuovo core</span>
+    <span class="pill">20 agosto 2026</span>
+  </div>
+</header>
+
+<nav class="tab-bar" aria-label="Sezioni della presentazione">
+  <button class="tab-btn active" data-tab="perche">Perché</button>
+  <button class="tab-btn" data-tab="mappa">Mappa globale</button>
+  <button class="tab-btn" data-tab="framework">Immagine Framework</button>
+  <button class="tab-btn" data-tab="bundle">Bundle e CI</button>
+  <button class="tab-btn" data-tab="s3">Deposito S3</button>
+  <button class="tab-btn" data-tab="gruppi">Gruppi vivi</button>
+  <button class="tab-btn" data-tab="storia">Mario e Luigi</button>
+  <button class="tab-btn" data-tab="kube">Kubernetes</button>
+  <button class="tab-btn" data-tab="reale">Oggi e domani</button>
+  <button class="tab-btn" data-tab="scheda">Scheda rapida</button>
+</nav>
+
+<main class="tab-panels">
+
+<!-- PERCHÉ -->
+<section class="tab-panel active" id="tab-perche">
+<div class="content">
+  <h2>Il problema: una modifica piccola può coinvolgere molti repository</h2>
+  <p class="lead">Un cliente chiede una modifica alle fatture. Lo sviluppatore interviene sull’applicativo, su un modulo GenroPy legacy e su due package condivisi. Il risultato da collaudare non è un singolo file: è una combinazione precisa di quattro repository.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 850 280" role="img" aria-label="Dal problema tradizionale al modello proposto">
+      <defs>
+        <marker id="aw1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#98a0b3"/></marker>
+      </defs>
+      <text x="205" y="27" text-anchor="middle" fill="#f87171" font-size="13" font-weight="700">SE TUTTO È NELL’IMMAGINE</text>
+      <rect x="35" y="47" width="340" height="170" rx="14" fill="#232733" stroke="#f87171"/>
+      <text x="205" y="78" text-anchor="middle" fill="#e7e9f1" font-size="12" font-weight="650">Ogni correzione applicativa</text>
+      <text x="205" y="101" text-anchor="middle" fill="#98a0b3" font-size="11">richiede una nuova immagine container</text>
+      <line x1="205" y1="116" x2="205" y2="145" stroke="#98a0b3" marker-end="url(#aw1)"/>
+      <rect x="88" y="151" width="234" height="42" rx="8" fill="#1a1d27" stroke="#fb923c"/>
+      <text x="205" y="176" text-anchor="middle" fill="#fb923c" font-size="11">deploy + riavvio + rollback immagine</text>
+
+      <text x="645" y="27" text-anchor="middle" fill="#4ade80" font-size="13" font-weight="700">CON FRAMEWORK + BUNDLE</text>
+      <rect x="475" y="47" width="340" height="170" rx="14" fill="#232733" stroke="#4ade80"/>
+      <rect x="515" y="70" width="260" height="42" rx="8" fill="#1a1d27" stroke="#6c9eff"/>
+      <text x="645" y="95" text-anchor="middle" fill="#6c9eff" font-size="11" font-weight="650">Immagine Framework invariata</text>
+      <line x1="645" y1="112" x2="645" y2="141" stroke="#98a0b3" marker-end="url(#aw1)"/>
+      <rect x="515" y="147" width="260" height="46" rx="8" fill="#1a1d27" stroke="#a78bfa"/>
+      <text x="645" y="166" text-anchor="middle" fill="#a78bfa" font-size="11" font-weight="650">Nuovo bundle applicativo</text>
+      <text x="645" y="182" text-anchor="middle" fill="#98a0b3" font-size="9">aggiunto a server vivo</text>
+
+      <rect x="180" y="240" width="490" height="30" rx="8" fill="#1a1d27" stroke="#303646"/>
+      <text x="425" y="260" text-anchor="middle" fill="#98a0b3" font-size="10">La piattaforma cambia raramente. Le applicazioni possono evolvere spesso e per piccoli gruppi di utenti.</text>
+    </svg>
+  </div>
+
+  <div class="cards">
+    <div class="card blue"><div class="icon">🧱</div><h4>Framework stabile</h4><p>La stessa immagine Genro viene distribuita a tutti i clienti e contiene ciò che deve essere comune.</p></div>
+    <div class="card violet"><div class="icon">📦</div><h4>Applicazione separata</h4><p>Ogni combinazione esatta di codice e dipendenze diventa un bundle autonomo.</p></div>
+    <div class="card green"><div class="icon">👥</div><h4>Collaudo selettivo</h4><p>Mario e Luigi provano la modifica; tutti gli altri continuano a usare la versione precedente.</p></div>
+    <div class="card orange"><div class="icon">↩</div><h4>Ritorno semplice</h4><p>Se la nuova build non va bene, il gruppo torna a un bundle già noto senza ricostruire nulla.</p></div>
+  </div>
+
+  <div class="callout success"><p><strong>L’idea chiave:</strong> l’immagine contiene la macchina che sa eseguire le applicazioni; il bundle contiene l’applicazione concreta da eseguire.</p></div>
+</div>
+</section>
+
+<!-- MAPPA GLOBALE -->
+<section class="tab-panel" id="tab-mappa">
+<div class="content">
+  <h2>La mappa globale in una schermata</h2>
+  <p class="lead">Ci sono due catene indipendenti che si incontrano sul server: la piattaforma produce l’immagine Framework; ogni applicazione produce i propri bundle.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 940 500" role="img" aria-label="Architettura globale immagini framework e bundle applicativi">
+      <defs>
+        <marker id="aw2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#98a0b3"/></marker>
+      </defs>
+      <text x="188" y="27" text-anchor="middle" fill="#6c9eff" font-size="12" font-weight="700">CATENA DEL FRAMEWORK</text>
+      <rect x="35" y="48" width="140" height="52" rx="10" fill="#232733" stroke="#6c9eff"/>
+      <text x="105" y="70" text-anchor="middle" fill="#e7e9f1" font-size="10" font-weight="650">Repo Genro ASGI</text>
+      <text x="105" y="87" text-anchor="middle" fill="#98a0b3" font-size="9">piattaforma comune</text>
+      <line x1="175" y1="74" x2="215" y2="74" stroke="#98a0b3" marker-end="url(#aw2)"/>
+      <rect x="220" y="48" width="140" height="52" rx="10" fill="#232733" stroke="#6c9eff"/>
+      <text x="290" y="70" text-anchor="middle" fill="#e7e9f1" font-size="10" font-weight="650">CI Framework</text>
+      <text x="290" y="87" text-anchor="middle" fill="#98a0b3" font-size="9">build e test</text>
+      <line x1="290" y1="100" x2="290" y2="134" stroke="#98a0b3" marker-end="url(#aw2)"/>
+      <rect x="220" y="140" width="140" height="55" rx="10" fill="#232733" stroke="#22d3ee"/>
+      <text x="290" y="163" text-anchor="middle" fill="#22d3ee" font-size="10" font-weight="650">Registry OCI</text>
+      <text x="290" y="180" text-anchor="middle" fill="#98a0b3" font-size="9">immagine per digest</text>
+
+      <text x="752" y="27" text-anchor="middle" fill="#a78bfa" font-size="12" font-weight="700">CATENA DELL’APPLICAZIONE</text>
+      <rect x="580" y="48" width="145" height="52" rx="10" fill="#232733" stroke="#a78bfa"/>
+      <text x="652" y="70" text-anchor="middle" fill="#e7e9f1" font-size="10" font-weight="650">Repo applicativo</text>
+      <text x="652" y="87" text-anchor="middle" fill="#98a0b3" font-size="9">lock dei repository</text>
+      <line x1="725" y1="74" x2="765" y2="74" stroke="#98a0b3" marker-end="url(#aw2)"/>
+      <rect x="770" y="48" width="135" height="52" rx="10" fill="#232733" stroke="#a78bfa"/>
+      <text x="837" y="70" text-anchor="middle" fill="#e7e9f1" font-size="10" font-weight="650">CI applicativa</text>
+      <text x="837" y="87" text-anchor="middle" fill="#98a0b3" font-size="9">crea il bundle</text>
+      <line x1="837" y1="100" x2="837" y2="134" stroke="#98a0b3" marker-end="url(#aw2)"/>
+      <rect x="770" y="140" width="135" height="55" rx="10" fill="#232733" stroke="#4ade80"/>
+      <text x="837" y="163" text-anchor="middle" fill="#4ade80" font-size="10" font-weight="650">Amazon S3</text>
+      <text x="837" y="180" text-anchor="middle" fill="#98a0b3" font-size="9">bundle immutabili</text>
+
+      <path d="M290 195 L290 235 L470 235 L470 270" fill="none" stroke="#98a0b3" marker-end="url(#aw2)"/>
+      <path d="M837 195 L837 235 L650 235 L650 292" fill="none" stroke="#98a0b3" marker-end="url(#aw2)"/>
+
+      <rect x="185" y="270" width="570" height="190" rx="16" fill="#1a1d27" stroke="#6c9eff" stroke-width="1.5"/>
+      <text x="470" y="295" text-anchor="middle" fill="#6c9eff" font-size="12" font-weight="700">CONTAINER GENRO FRAMEWORK · IDENTICO PER TUTTI I CLIENTI</text>
+      <rect x="215" y="316" width="180" height="105" rx="11" fill="#232733" stroke="#6c9eff"/>
+      <text x="305" y="339" text-anchor="middle" fill="#6c9eff" font-size="10" font-weight="650">CONTROL RUNTIME</text>
+      <text x="305" y="358" text-anchor="middle" fill="#e7e9f1" font-size="9">Python A · ASGI · Commander</text>
+      <text x="305" y="377" text-anchor="middle" fill="#98a0b3" font-size="9">risolve bundle e gruppi</text>
+      <text x="305" y="396" text-anchor="middle" fill="#98a0b3" font-size="9">non importa codice cliente</text>
+
+      <rect x="430" y="316" width="290" height="105" rx="11" fill="#232733" stroke="#a78bfa"/>
+      <text x="575" y="339" text-anchor="middle" fill="#a78bfa" font-size="10" font-weight="650">WORKER RUNTIME COMUNE · PYTHON B</text>
+      <rect x="452" y="355" width="112" height="43" rx="7" fill="#1a1d27" stroke="#4ade80"/>
+      <text x="508" y="373" text-anchor="middle" fill="#4ade80" font-size="9">produzione</text>
+      <text x="508" y="388" text-anchor="middle" fill="#98a0b3" font-size="8">bundle 017</text>
+      <rect x="586" y="355" width="112" height="43" rx="7" fill="#1a1d27" stroke="#fb923c"/>
+      <text x="642" y="373" text-anchor="middle" fill="#fb923c" font-size="9">collaudo</text>
+      <text x="642" y="388" text-anchor="middle" fill="#98a0b3" font-size="8">bundle 005</text>
+      <line x1="395" y1="368" x2="430" y2="368" stroke="#98a0b3" marker-end="url(#aw2)"/>
+      <text x="470" y="445" text-anchor="middle" fill="#98a0b3" font-size="9">Il container fornisce il motore. S3 fornisce il contenuto applicativo scelto per ciascun gruppo.</text>
+    </svg>
+  </div>
+
+  <div class="legend">
+    <span><i style="background:#6c9eff"></i> piattaforma</span>
+    <span><i style="background:#a78bfa"></i> applicazione</span>
+    <span><i style="background:#4ade80"></i> artefatti pronti</span>
+    <span><i style="background:#fb923c"></i> coorte di collaudo</span>
+  </div>
+
+  <div class="callout"><p><strong>Le due catene hanno ritmi diversi:</strong> un aggiornamento Framework sostituisce l’immagine per tutti; un aggiornamento applicativo aggiunge un bundle e può riguardare soltanto un gruppo.</p></div>
+</div>
+</section>
+
+<!-- FRAMEWORK -->
+<section class="tab-panel" id="tab-framework">
+<div class="content">
+  <h2>L’immagine Framework: la macchina comune</h2>
+  <p class="lead">È un’immagine container riproducibile, pubblicata in un registry OCI e utilizzabile sia su un server tradizionale sia dentro Kubernetes. Non contiene l’applicazione del cliente.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 850 360" role="img" aria-label="Due runtime Python nell’immagine framework">
+      <defs><marker id="aw3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#98a0b3"/></marker></defs>
+      <rect x="70" y="30" width="710" height="300" rx="18" fill="#1a1d27" stroke="#6c9eff" stroke-width="1.5"/>
+      <text x="425" y="58" text-anchor="middle" fill="#6c9eff" font-size="13" font-weight="700">IMMAGINE GENRO FRAMEWORK · RELEASE P17</text>
+
+      <rect x="105" y="88" width="255" height="170" rx="13" fill="#232733" stroke="#6c9eff"/>
+      <text x="232" y="116" text-anchor="middle" fill="#6c9eff" font-size="11" font-weight="700">CONTROL RUNTIME</text>
+      <text x="232" y="140" text-anchor="middle" fill="#e7e9f1" font-size="10">Python 3.14</text>
+      <text x="130" y="171" fill="#98a0b3" font-size="9">• server ASGI</text>
+      <text x="130" y="192" fill="#98a0b3" font-size="9">• commander e gruppi</text>
+      <text x="130" y="213" fill="#98a0b3" font-size="9">• catalogo e cache bundle</text>
+      <text x="130" y="234" fill="#98a0b3" font-size="9">• controllo operativo</text>
+
+      <rect x="490" y="88" width="255" height="170" rx="13" fill="#232733" stroke="#a78bfa"/>
+      <text x="617" y="116" text-anchor="middle" fill="#a78bfa" font-size="11" font-weight="700">WORKER RUNTIME</text>
+      <text x="617" y="140" text-anchor="middle" fill="#e7e9f1" font-size="10">Python 3.12 · comune a tutti i bundle</text>
+      <text x="515" y="171" fill="#98a0b3" font-size="9">• bootstrap del worker</text>
+      <text x="515" y="192" fill="#98a0b3" font-size="9">• protocollo con il commander</text>
+      <text x="515" y="213" fill="#98a0b3" font-size="9">• dipendenze comuni dichiarate</text>
+      <text x="515" y="234" fill="#98a0b3" font-size="9">• caricamento del bundle</text>
+
+      <line x1="360" y1="173" x2="490" y2="173" stroke="#98a0b3" marker-end="url(#aw3)"/>
+      <text x="425" y="160" text-anchor="middle" fill="#98a0b3" font-size="8">socket + messaggi</text>
+      <rect x="250" y="285" width="350" height="25" rx="7" fill="#232733" stroke="#303646"/>
+      <text x="425" y="302" text-anchor="middle" fill="#98a0b3" font-size="9">Stessa immagine per ACME, BETA, GAMMA…</text>
+    </svg>
+  </div>
+
+  <h3>Perché due Python?</h3>
+  <div class="cards">
+    <div class="card blue"><h4>Il Framework può evolvere</h4><p>Il control plane può adottare una versione Python adatta al server senza imporla alle applicazioni.</p></div>
+    <div class="card violet"><h4>I bundle hanno un contratto stabile</h4><p>Tutti vengono costruiti per lo stesso Python worker e la stessa piattaforma.</p></div>
+    <div class="card green"><h4>Processi realmente separati</h4><p>Commander e worker comunicano via socket: non condividono interprete, memoria o moduli importati.</p></div>
+  </div>
+
+  <table>
+    <tr><th>Cambiamento</th><th>Conseguenza</th></tr>
+    <tr><td>Nuova build applicativa</td><td>Si produce un nuovo bundle; l’immagine Framework non cambia.</td></tr>
+    <tr><td>Nuovo Python del control plane</td><td>Si produce una nuova immagine; i bundle possono restare validi.</td></tr>
+    <tr><td>Nuovo Python dei worker</td><td>È un cambio di piattaforma: tutti i bundle vanno ricostruiti o ricollaudati.</td></tr>
+    <tr><td>Nuova versione Genro ASGI</td><td>Aggiornamento globale e coordinato dell’immagine, non per singolo gruppo.</td></tr>
+  </table>
+</div>
+</section>
+
+<!-- BUNDLE E CI -->
+<section class="tab-panel" id="tab-bundle">
+<div class="content">
+  <h2>Il bundle: una fotografia completa dell’applicazione</h2>
+  <p class="lead">L’applicativo possiede il proprio repository e la propria CI. Il suo lock descrive i commit esatti di tutti i repository che formano quella build.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 340" role="img" aria-label="Pipeline CI dal tag al bundle">
+      <defs><marker id="aw4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#98a0b3"/></marker></defs>
+      <rect x="30" y="35" width="185" height="245" rx="13" fill="#232733" stroke="#a78bfa"/>
+      <text x="122" y="62" text-anchor="middle" fill="#a78bfa" font-size="11" font-weight="700">REPO APPLICATIVO</text>
+      <text x="55" y="94" fill="#e7e9f1" font-size="9">applicativo</text><text x="184" y="94" text-anchor="end" fill="#4ade80" font-size="9">commit A</text>
+      <text x="55" y="119" fill="#e7e9f1" font-size="9">GenroPy legacy</text><text x="184" y="119" text-anchor="end" fill="#4ade80" font-size="9">commit B</text>
+      <text x="55" y="144" fill="#e7e9f1" font-size="9">package contabilità</text><text x="184" y="144" text-anchor="end" fill="#4ade80" font-size="9">commit C</text>
+      <text x="55" y="169" fill="#e7e9f1" font-size="9">package esterno</text><text x="184" y="169" text-anchor="end" fill="#4ade80" font-size="9">commit D</text>
+      <rect x="55" y="195" width="135" height="35" rx="7" fill="#1a1d27" stroke="#6c9eff"/>
+      <text x="122" y="217" text-anchor="middle" fill="#6c9eff" font-size="9">uv.lock</text>
+      <rect x="55" y="239" width="135" height="24" rx="6" fill="#1a1d27" stroke="#303646"/>
+      <text x="122" y="256" text-anchor="middle" fill="#98a0b3" font-size="8">tag: …/005</text>
+
+      <line x1="215" y1="157" x2="275" y2="157" stroke="#98a0b3" marker-end="url(#aw4)"/>
+      <rect x="280" y="65" width="250" height="185" rx="13" fill="#232733" stroke="#6c9eff"/>
+      <text x="405" y="93" text-anchor="middle" fill="#6c9eff" font-size="11" font-weight="700">CI DELL’APPLICAZIONE</text>
+      <text x="310" y="125" fill="#98a0b3" font-size="9">1. ricostruisce dai commit bloccati</text>
+      <text x="310" y="149" fill="#98a0b3" font-size="9">2. usa il builder del worker Python</text>
+      <text x="310" y="173" fill="#98a0b3" font-size="9">3. esegue test e controlli</text>
+      <text x="310" y="197" fill="#98a0b3" font-size="9">4. crea manifest e checksum</text>
+      <text x="310" y="221" fill="#98a0b3" font-size="9">5. pubblica senza sovrascrivere</text>
+
+      <line x1="530" y1="157" x2="590" y2="157" stroke="#98a0b3" marker-end="url(#aw4)"/>
+      <rect x="595" y="65" width="275" height="185" rx="13" fill="#232733" stroke="#4ade80"/>
+      <text x="732" y="93" text-anchor="middle" fill="#4ade80" font-size="11" font-weight="700">BUNDLE IMMUTABILE</text>
+      <text x="625" y="126" fill="#e7e9f1" font-size="9">application/</text><text x="840" y="126" text-anchor="end" fill="#98a0b3" font-size="9">codice runtime</text>
+      <text x="625" y="151" fill="#e7e9f1" font-size="9">python/</text><text x="840" y="151" text-anchor="end" fill="#98a0b3" font-size="9">dipendenze app</text>
+      <text x="625" y="176" fill="#e7e9f1" font-size="9">assets/</text><text x="840" y="176" text-anchor="end" fill="#98a0b3" font-size="9">risorse</text>
+      <text x="625" y="201" fill="#e7e9f1" font-size="9">manifest.json</text><text x="840" y="201" text-anchor="end" fill="#98a0b3" font-size="9">provenienza</text>
+      <text x="625" y="226" fill="#e7e9f1" font-size="9">checksums.sha256</text><text x="840" y="226" text-anchor="end" fill="#98a0b3" font-size="9">integrità</text>
+
+      <rect x="220" y="295" width="460" height="28" rx="7" fill="#1a1d27" stroke="#303646"/>
+      <text x="450" y="314" text-anchor="middle" fill="#98a0b3" font-size="9">Il bundle non contiene un altro Framework e non viene assemblato sul server di produzione.</text>
+    </svg>
+  </div>
+
+  <h3>Un esempio di manifest leggibile</h3>
+  <pre><code><span class="key">application</span>: <span class="str">fatture</span>
+<span class="key">bundle_name</span>: <span class="str">collaudo-fatture</span>
+<span class="key">build</span>: <span class="str">"005"</span>
+<span class="key">source</span>:
+  <span class="key">tag</span>: <span class="str">bundle/collaudo-fatture/005</span>
+  <span class="key">commit</span>: <span class="str">8ab31e...</span>
+<span class="key">worker_contract</span>:
+  <span class="key">python_abi</span>: <span class="str">cp312</span>
+  <span class="key">runtime</span>: <span class="str">genro-worker-P17</span>
+<span class="key">repositories</span>:
+  <span class="key">genropy</span>: <span class="str">71ac9f...</span>
+  <span class="key">package_contabilita</span>: <span class="str">c19d02...</span>
+<span class="key">bundle_sha256</span>: <span class="str">c7f1...</span></code></pre>
+
+  <div class="callout warning"><p><strong>Il tag non basta:</strong> il manifest conserva sempre i commit e il checksum effettivi. Così “build 005” resta verificabile anche mesi dopo.</p></div>
+</div>
+</section>
+
+<!-- S3 -->
+<section class="tab-panel" id="tab-s3">
+<div class="content">
+  <h2>S3: un deposito semplice, leggibile e protetto</h2>
+  <p class="lead">Le versioni applicative sono cartelle logiche con nomi espliciti. Il versioning nativo di S3 resta attivo come rete di sicurezza, non come nome principale della release.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 860 390" role="img" aria-label="Struttura S3 per bundle e canali">
+      <rect x="55" y="30" width="750" height="330" rx="16" fill="#1a1d27" stroke="#4ade80" stroke-width="1.5"/>
+      <text x="430" y="58" text-anchor="middle" fill="#4ade80" font-size="12" font-weight="700">s3://genro-bundles/customers/acme/applications/fatture/</text>
+      <line x1="430" y1="75" x2="430" y2="330" stroke="#303646" stroke-dasharray="4 5"/>
+
+      <text x="220" y="102" text-anchor="middle" fill="#a78bfa" font-size="11" font-weight="700">BUNDLES /</text>
+      <rect x="90" y="122" width="260" height="72" rx="10" fill="#232733" stroke="#a78bfa"/>
+      <text x="110" y="147" fill="#e7e9f1" font-size="9">collaudo-fatture / 004 /</text>
+      <text x="125" y="170" fill="#98a0b3" font-size="8">bundle.tar.zst · manifest · checksum</text>
+      <rect x="90" y="208" width="260" height="72" rx="10" fill="#232733" stroke="#a78bfa"/>
+      <text x="110" y="233" fill="#e7e9f1" font-size="9">collaudo-fatture / 005 /</text>
+      <text x="125" y="256" fill="#98a0b3" font-size="8">bundle.tar.zst · manifest · checksum</text>
+      <rect x="90" y="294" width="260" height="42" rx="10" fill="#232733" stroke="#6c9eff"/>
+      <text x="110" y="319" fill="#e7e9f1" font-size="9">release-2026.08 / 001 / …</text>
+
+      <text x="625" y="102" text-anchor="middle" fill="#6c9eff" font-size="11" font-weight="700">CHANNELS /</text>
+      <rect x="505" y="122" width="240" height="72" rx="10" fill="#232733" stroke="#6c9eff"/>
+      <text x="525" y="147" fill="#e7e9f1" font-size="9">produzione.json</text>
+      <text x="525" y="171" fill="#4ade80" font-size="8">→ release-2026.08 / 001</text>
+      <rect x="505" y="208" width="240" height="72" rx="10" fill="#232733" stroke="#fb923c"/>
+      <text x="525" y="233" fill="#e7e9f1" font-size="9">collaudo.json</text>
+      <text x="525" y="257" fill="#fb923c" font-size="8">→ collaudo-fatture / 005</text>
+      <rect x="505" y="294" width="240" height="42" rx="10" fill="#232733" stroke="#303646"/>
+      <text x="625" y="319" text-anchor="middle" fill="#98a0b3" font-size="8">versioning S3 = protezione operativa</text>
+    </svg>
+  </div>
+
+  <div class="cards">
+    <div class="card green"><h4>Build mai sovrascritta</h4><p>La CI fallisce se la destinazione esiste già. Ogni prefisso identifica contenuti immutabili.</p></div>
+    <div class="card blue"><h4>Canale leggibile</h4><p><code class="il">collaudo.json</code> è un piccolo puntatore che può avanzare o tornare indietro.</p></div>
+    <div class="card violet"><h4>Cache locale per digest</h4><p>Il server scarica, verifica ed estrae una sola volta ogni contenuto.</p></div>
+  </div>
+
+  <h3>Dal canale alla cache</h3>
+  <div class="flow">
+    <div class="flow-step"><b>Risolvi</b><span>collaudo → build 005</span></div>
+    <div class="flow-step"><b>Scarica</b><span>in area temporanea</span></div>
+    <div class="flow-step"><b>Verifica</b><span>manifest + SHA-256</span></div>
+    <div class="flow-step"><b>Estrai</b><span>senza esporre file parziali</span></div>
+    <div class="flow-step"><b>Attiva</b><span>cache/sha256-c7f1</span></div>
+  </div>
+
+  <div class="callout"><p>Il worker non scarica direttamente da S3. Riceve un percorso locale già verificato dal control plane.</p></div>
+</div>
+</section>
+
+<!-- GRUPPI -->
+<section class="tab-panel" id="tab-gruppi">
+<div class="content">
+  <h2>I gruppi sono vivi: si aggiungono e si tolgono senza fermare il server</h2>
+  <p class="lead">Un gruppo non è un’immagine container. È una scelta runtime: nome, bundle risolto, policy e insieme di worker equivalenti.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 365" role="img" aria-label="Gruppi dinamici con utenti assegnati">
+      <defs><marker id="aw5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#98a0b3"/></marker></defs>
+      <rect x="40" y="42" width="170" height="260" rx="13" fill="#232733" stroke="#6c9eff"/>
+      <text x="125" y="69" text-anchor="middle" fill="#6c9eff" font-size="11" font-weight="700">COMMANDER</text>
+      <text x="65" y="102" fill="#98a0b3" font-size="9">utente → gruppo</text>
+      <text x="65" y="128" fill="#e7e9f1" font-size="9">Anna → produzione</text>
+      <text x="65" y="151" fill="#e7e9f1" font-size="9">Carlo → produzione</text>
+      <text x="65" y="174" fill="#fb923c" font-size="9">Mario → collaudo</text>
+      <text x="65" y="197" fill="#fb923c" font-size="9">Luigi → collaudo</text>
+      <text x="65" y="233" fill="#98a0b3" font-size="9">decide il gruppo,</text>
+      <text x="65" y="250" fill="#98a0b3" font-size="9">non il singolo worker</text>
+
+      <line x1="210" y1="127" x2="285" y2="127" stroke="#98a0b3" marker-end="url(#aw5)"/>
+      <line x1="210" y1="198" x2="285" y2="237" stroke="#98a0b3" marker-end="url(#aw5)"/>
+
+      <rect x="290" y="42" width="570" height="130" rx="13" fill="#1a1d27" stroke="#4ade80"/>
+      <text x="315" y="69" fill="#4ade80" font-size="11" font-weight="700">GRUPPO PRODUZIONE</text>
+      <text x="315" y="91" fill="#98a0b3" font-size="9">bundle release-2026.08/001 · checksum 91ab…</text>
+      <rect x="315" y="108" width="155" height="42" rx="8" fill="#232733" stroke="#4ade80"/>
+      <text x="392" y="133" text-anchor="middle" fill="#e7e9f1" font-size="9">worker produzione_0001</text>
+      <rect x="495" y="108" width="155" height="42" rx="8" fill="#232733" stroke="#4ade80"/>
+      <text x="572" y="133" text-anchor="middle" fill="#e7e9f1" font-size="9">worker produzione_0002</text>
+      <text x="685" y="132" fill="#98a0b3" font-size="9">Anna · Carlo · …</text>
+
+      <rect x="290" y="195" width="570" height="130" rx="13" fill="#1a1d27" stroke="#fb923c"/>
+      <text x="315" y="222" fill="#fb923c" font-size="11" font-weight="700">GRUPPO COLLAUDO-FATTURE</text>
+      <text x="315" y="244" fill="#98a0b3" font-size="9">bundle collaudo-fatture/005 · checksum c7f1…</text>
+      <rect x="315" y="261" width="185" height="42" rx="8" fill="#232733" stroke="#fb923c"/>
+      <text x="407" y="286" text-anchor="middle" fill="#e7e9f1" font-size="9">worker collaudo_0001</text>
+      <text x="535" y="286" fill="#fb923c" font-size="9">Mario · Luigi</text>
+    </svg>
+  </div>
+
+  <h3>Aggiunta di un gruppo</h3>
+  <div class="state-row">
+    <span class="state">RESOLVING</span><span class="arrow">→</span>
+    <span class="state">FETCHING</span><span class="arrow">→</span>
+    <span class="state">VERIFYING</span><span class="arrow">→</span>
+    <span class="state">WARMING</span><span class="arrow">→</span>
+    <span class="state active">ACTIVE</span>
+  </div>
+
+  <h3>Aggiornamento dello stesso nome logico</h3>
+  <pre><code><span class="cmt"># Vista concettuale — non è ancora un’API implementata</span>
+<span class="key">collaudo-fatture</span> · generazione 3 · build <span class="str">004</span> · ACTIVE
+<span class="key">collaudo-fatture</span> · generazione 4 · build <span class="str">005</span> · WARMING
+
+<span class="cmt"># Solo dopo la verifica:</span>
+generazione 4 → ACTIVE
+generazione 3 → DRAINING → REMOVED</code></pre>
+
+  <div class="callout warning"><p><strong>Regola di sicurezza:</strong> worker di build diverse non devono convivere nella stessa generazione. Il nome resta uguale, ma il contenuto fisico cambia attraverso una sostituzione controllata.</p></div>
+</div>
+</section>
+
+<!-- STORIA -->
+<section class="tab-panel" id="tab-storia">
+<div class="content">
+  <h2>Un esempio completo: la modifica provata da Mario e Luigi</h2>
+  <p class="lead">Questa storia copre sia il collaudo iterativo sia la possibile trasformazione della modifica in una vera release.</p>
+
+  <div class="flow">
+    <div class="flow-step"><b>1 · Richiesta</b><span>nuovo calcolo fattura</span></div>
+    <div class="flow-step"><b>2 · Sviluppo</b><span>4 repository modificati</span></div>
+    <div class="flow-step"><b>3 · Tag</b><span>collaudo-fatture/004</span></div>
+    <div class="flow-step"><b>4 · CI</b><span>test + bundle</span></div>
+    <div class="flow-step"><b>5 · S3</b><span>build immutabile</span></div>
+  </div>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 355" role="img" aria-label="Sequenza di collaudo Mario e Luigi">
+      <defs><marker id="aw6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#98a0b3"/></marker></defs>
+      <line x1="92" y1="65" x2="808" y2="65" stroke="#303646" stroke-width="2"/>
+      <circle cx="110" cy="65" r="11" fill="#6c9eff"/><circle cx="280" cy="65" r="11" fill="#a78bfa"/><circle cx="450" cy="65" r="11" fill="#fb923c"/><circle cx="620" cy="65" r="11" fill="#f87171"/><circle cx="790" cy="65" r="11" fill="#4ade80"/>
+      <text x="110" y="40" text-anchor="middle" fill="#6c9eff" font-size="10" font-weight="700">PUBBLICA</text>
+      <text x="280" y="40" text-anchor="middle" fill="#a78bfa" font-size="10" font-weight="700">AGGIUNGE</text>
+      <text x="450" y="40" text-anchor="middle" fill="#fb923c" font-size="10" font-weight="700">ASSEGNA</text>
+      <text x="620" y="40" text-anchor="middle" fill="#f87171" font-size="10" font-weight="700">CORREGGE</text>
+      <text x="790" y="40" text-anchor="middle" fill="#4ade80" font-size="10" font-weight="700">PROMUOVE</text>
+
+      <rect x="35" y="98" width="150" height="82" rx="10" fill="#232733" stroke="#6c9eff"/>
+      <text x="110" y="121" text-anchor="middle" fill="#e7e9f1" font-size="9">build 004 su S3</text>
+      <text x="110" y="143" text-anchor="middle" fill="#98a0b3" font-size="8">commit A+B+C+D</text>
+      <text x="110" y="162" text-anchor="middle" fill="#98a0b3" font-size="8">checksum verificato</text>
+
+      <rect x="205" y="98" width="150" height="82" rx="10" fill="#232733" stroke="#a78bfa"/>
+      <text x="280" y="121" text-anchor="middle" fill="#e7e9f1" font-size="9">gruppo collaudo</text>
+      <text x="280" y="143" text-anchor="middle" fill="#98a0b3" font-size="8">worker caldo</text>
+      <text x="280" y="162" text-anchor="middle" fill="#98a0b3" font-size="8">nessun utente ancora</text>
+
+      <rect x="375" y="98" width="150" height="82" rx="10" fill="#232733" stroke="#fb923c"/>
+      <text x="450" y="121" text-anchor="middle" fill="#fb923c" font-size="9">Mario + Luigi</text>
+      <text x="450" y="143" text-anchor="middle" fill="#98a0b3" font-size="8">restano sticky</text>
+      <text x="450" y="162" text-anchor="middle" fill="#98a0b3" font-size="8">gli altri su produzione</text>
+
+      <rect x="545" y="98" width="150" height="82" rx="10" fill="#232733" stroke="#f87171"/>
+      <text x="620" y="121" text-anchor="middle" fill="#e7e9f1" font-size="9">build 005</text>
+      <text x="620" y="143" text-anchor="middle" fill="#98a0b3" font-size="8">stesso nome logico</text>
+      <text x="620" y="162" text-anchor="middle" fill="#98a0b3" font-size="8">nuova generazione</text>
+
+      <rect x="715" y="98" width="150" height="82" rx="10" fill="#232733" stroke="#4ade80"/>
+      <text x="790" y="121" text-anchor="middle" fill="#4ade80" font-size="9">produzione → 005</text>
+      <text x="790" y="143" text-anchor="middle" fill="#98a0b3" font-size="8">stesso checksum</text>
+      <text x="790" y="162" text-anchor="middle" fill="#98a0b3" font-size="8">nessuna ricostruzione</text>
+
+      <path d="M110 180 L110 218 L450 218 L450 244" fill="none" stroke="#98a0b3" marker-end="url(#aw6)"/>
+      <path d="M620 180 L620 218 L450 218" fill="none" stroke="#98a0b3"/>
+      <rect x="270" y="250" width="360" height="70" rx="11" fill="#1a1d27" stroke="#303646"/>
+      <text x="450" y="276" text-anchor="middle" fill="#e7e9f1" font-size="10" font-weight="650">Se la build 005 non parte, la 004 resta attiva.</text>
+      <text x="450" y="298" text-anchor="middle" fill="#98a0b3" font-size="9">Il cambio diventa visibile soltanto dopo download, verifica e warm-up.</text>
+    </svg>
+  </div>
+
+  <h3>La correzione continua</h3>
+  <pre><code><span class="cmt"># Tag sorgente progressivi; nome logico invariato</span>
+bundle/collaudo-fatture/<span class="num">004</span>  → S3 …/collaudo-fatture/004/
+bundle/collaudo-fatture/<span class="num">005</span>  → S3 …/collaudo-fatture/005/
+bundle/collaudo-fatture/<span class="num">006</span>  → S3 …/collaudo-fatture/006/
+
+gruppo visibile: <span class="str">collaudo-fatture</span>
+build effettiva: checksum sempre esplicito</code></pre>
+
+  <div class="callout success"><p>Una modifica sperimentale e una release vera usano lo stesso meccanismo. Cambiano soltanto durata, ampiezza della coorte e decisione finale di promozione.</p></div>
+</div>
+</section>
+
+<!-- KUBERNETES -->
+<section class="tab-panel" id="tab-kube">
+<div class="content">
+  <h2>Compatibile con Kubernetes, senza delegargli le decisioni applicative</h2>
+  <p class="lead">Kubernetes esegue e sorveglia l’immagine Framework. Genro continua a sapere quali utenti appartengono a quali gruppi e quali worker devono eseguire un bundle.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 900 400" role="img" aria-label="Ruoli di Kubernetes e Genro">
+      <defs><marker id="aw7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#98a0b3"/></marker></defs>
+      <rect x="50" y="35" width="800" height="330" rx="18" fill="#151821" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="450" y="62" text-anchor="middle" fill="#22d3ee" font-size="12" font-weight="700">KUBERNETES CLUSTER</text>
+      <rect x="90" y="88" width="180" height="75" rx="11" fill="#232733" stroke="#6c9eff"/>
+      <text x="180" y="113" text-anchor="middle" fill="#6c9eff" font-size="10" font-weight="700">REGISTRY OCI</text>
+      <text x="180" y="136" text-anchor="middle" fill="#98a0b3" font-size="9">genro-framework@sha256…</text>
+      <line x1="270" y1="126" x2="340" y2="126" stroke="#98a0b3" marker-end="url(#aw7)"/>
+
+      <rect x="345" y="88" width="465" height="225" rx="14" fill="#1a1d27" stroke="#6c9eff"/>
+      <text x="577" y="114" text-anchor="middle" fill="#6c9eff" font-size="11" font-weight="700">POD DEL CLIENTE · IMMAGINE FRAMEWORK</text>
+      <rect x="375" y="138" width="160" height="135" rx="10" fill="#232733" stroke="#6c9eff"/>
+      <text x="455" y="163" text-anchor="middle" fill="#6c9eff" font-size="10">Control runtime</text>
+      <text x="455" y="186" text-anchor="middle" fill="#98a0b3" font-size="9">commander</text>
+      <text x="455" y="207" text-anchor="middle" fill="#98a0b3" font-size="9">bundle cache</text>
+      <text x="455" y="228" text-anchor="middle" fill="#98a0b3" font-size="9">gruppi e utenti</text>
+      <text x="455" y="249" text-anchor="middle" fill="#98a0b3" font-size="9">health applicativa</text>
+
+      <rect x="570" y="138" width="205" height="135" rx="10" fill="#232733" stroke="#a78bfa"/>
+      <text x="672" y="163" text-anchor="middle" fill="#a78bfa" font-size="10">Worker runtime</text>
+      <rect x="592" y="183" width="72" height="55" rx="7" fill="#1a1d27" stroke="#4ade80"/>
+      <text x="628" y="205" text-anchor="middle" fill="#4ade80" font-size="8">prod</text>
+      <text x="628" y="222" text-anchor="middle" fill="#98a0b3" font-size="7">017</text>
+      <rect x="681" y="183" width="72" height="55" rx="7" fill="#1a1d27" stroke="#fb923c"/>
+      <text x="717" y="205" text-anchor="middle" fill="#fb923c" font-size="8">test</text>
+      <text x="717" y="222" text-anchor="middle" fill="#98a0b3" font-size="7">005</text>
+      <line x1="535" y1="205" x2="570" y2="205" stroke="#98a0b3" marker-end="url(#aw7)"/>
+
+      <rect x="90" y="225" width="180" height="75" rx="11" fill="#232733" stroke="#4ade80"/>
+      <text x="180" y="250" text-anchor="middle" fill="#4ade80" font-size="10" font-weight="700">S3 BUNDLE STORE</text>
+      <text x="180" y="273" text-anchor="middle" fill="#98a0b3" font-size="9">applicazioni versionate</text>
+      <path d="M270 263 L310 263 L310 236 L345 236" fill="none" stroke="#98a0b3" marker-end="url(#aw7)"/>
+
+      <rect x="255" y="330" width="390" height="24" rx="7" fill="#232733" stroke="#303646"/>
+      <text x="450" y="347" text-anchor="middle" fill="#98a0b3" font-size="8">Kubernetes governa il Pod · Genro governa utenti, gruppi e worker</text>
+    </svg>
+  </div>
+
+  <table>
+    <tr><th>Kubernetes decide</th><th>Genro decide</th></tr>
+    <tr><td>Quale immagine Framework eseguire</td><td>Quale bundle usa ciascun gruppo</td></tr>
+    <tr><td>Avvio, riavvio e salute del Pod</td><td>Quanti worker applicativi servono</td></tr>
+    <tr><td>Risorse, rete e storage del container</td><td>Dove vive l’utente e quando cambia gruppo</td></tr>
+    <tr><td>Distribuzione infrastrutturale</td><td>Warm-up, drain, promozione e rollback applicativi</td></tr>
+  </table>
+
+  <div class="callout warning"><p><strong>Limite dichiarato:</strong> il primo progetto può funzionare in un singolo Pod. Più Pod coordinati richiedono directory condivisa, lease e fencing: appartengono alla successiva architettura distribuita, non vanno finti in questa fase.</p></div>
+</div>
+</section>
+
+<!-- OGGI E DOMANI -->
+<section class="tab-panel" id="tab-reale">
+<div class="content">
+  <h2>Cosa esiste già e cosa deve costruire il progetto</h2>
+  <p class="lead">Il nuovo core di Genro ASGI ha già le fondamenta del processo worker e dell’affinità utente. La distribuzione dei bundle e il lifecycle dinamico non sono ancora implementati.</p>
+
+  <div class="truth-grid">
+    <div class="truth now">
+      <h4>● Esiste oggi nel nuovo core</h4>
+      <ul>
+        <li>configurazione per gruppo;</li>
+        <li>interprete, entry module e worker class per gruppo;</li>
+        <li>processi worker collegati via socket;</li>
+        <li>avvio e arresto dei worker;</li>
+        <li>memoria dell’assegnazione utente → gruppo;</li>
+        <li>gruppo predefinito per i nuovi utenti;</li>
+        <li>affinità dell’utente al proprio gruppo.</li>
+      </ul>
+    </div>
+    <div class="truth future">
+      <h4>● Deve essere progettato e implementato</h4>
+      <ul>
+        <li>formato definitivo del bundle;</li>
+        <li>risoluzione S3 e cache transazionale;</li>
+        <li>caricamento isolato del bundle nel worker;</li>
+        <li>ambiente pulito fra i due Python;</li>
+        <li>API pubblica add/refresh/remove group;</li>
+        <li>generazioni interne del gruppo;</li>
+        <li>gestione della coorte e promozione;</li>
+        <li>identità del bundle nella presentazione del worker.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Il collaudo cresce per prove piccole</h3>
+  <table>
+    <tr><th>Fase</th><th>Domanda a cui risponde</th><th>Prova concreta</th></tr>
+    <tr><td>B0 · Formato</td><td>Il bundle è davvero autonomo?</td><td>Due bundle con stessi moduli e risultati diversi.</td></tr>
+    <tr><td>B1 · Due Python</td><td>Control e worker sono davvero isolati?</td><td>Commander su Python A, worker su Python B.</td></tr>
+    <tr><td>B2 · S3</td><td>Un contenuto parziale può diventare visibile?</td><td>Checksum errato, download interrotto, cache concorrente.</td></tr>
+    <tr><td>B3 · Gruppi vivi</td><td>La produzione resta attiva?</td><td>Aggiunta e rimozione del gruppo di collaudo.</td></tr>
+    <tr><td>B4 · Revisioni</td><td>Possiamo correggere più volte?</td><td>004 → 005 → 006, guasto e rollback.</td></tr>
+    <tr><td>B5 · Promozione</td><td>Promuoviamo proprio ciò che è stato testato?</td><td>Stesso SHA-256 dal collaudo alla produzione.</td></tr>
+  </table>
+
+  <div class="callout warning"><p>Il nuovo core non contiene ancora tutto il data plane GenroPy. Le prime prove useranno un worker diagnostico; il pilot cliente richiederà anche il completamento delle Macro 5 e 6.</p></div>
+</div>
+</section>
+
+<!-- SCHEDA RAPIDA -->
+<section class="tab-panel" id="tab-scheda">
+<div class="content">
+  <h2>Scheda rapida</h2>
+  <p class="lead">Il vocabolario e le operazioni principali, senza gergo superfluo.</p>
+
+  <h3>Concetti</h3>
+  <table>
+    <tr><th>Quando dico…</th><th>Intendo…</th></tr>
+    <tr><td>Immagine Framework</td><td>Il container comune con control runtime, worker runtime e dipendenze possedute dalla piattaforma.</td></tr>
+    <tr><td>Bundle</td><td>Una build immutabile dell’applicazione e delle sue dipendenze applicative.</td></tr>
+    <tr><td>Canale</td><td>Un nome mobile, come produzione o collaudo, che indica un bundle.</td></tr>
+    <tr><td>Gruppo</td><td>Un insieme vivo di worker equivalenti che usano lo stesso bundle risolto.</td></tr>
+    <tr><td>Generazione</td><td>Una incarnazione interna del gruppo, necessaria per sostituire il bundle senza modificarlo in uso.</td></tr>
+    <tr><td>Coorte</td><td>Gli utenti scelti per usare un gruppo, per esempio Mario e Luigi.</td></tr>
+    <tr><td>Worker Python</td><td>La versione Python comune con cui vengono eseguiti tutti i bundle.</td></tr>
+  </table>
+
+  <h3>Azioni</h3>
+  <table>
+    <tr><th>Voglio…</th><th>Il sistema deve…</th></tr>
+    <tr><td>Pubblicare una modifica</td><td>Taggare il repo applicativo, costruire in CI e creare un nuovo prefisso immutabile su S3.</td></tr>
+    <tr><td>Far provare una build</td><td>Aggiungere un gruppo, scaldare un worker e poi assegnare una coorte esplicita.</td></tr>
+    <tr><td>Correggere il collaudo</td><td>Creare una nuova build e sostituire la generazione del gruppo solo dopo il warm-up.</td></tr>
+    <tr><td>Ritirare il test</td><td>Impedire nuovi ingressi, gestire gli utenti residenti, fermare i worker e rimuovere il gruppo.</td></tr>
+    <tr><td>Promuovere</td><td>Associare la produzione allo stesso checksum già collaudato, senza ricostruirlo.</td></tr>
+    <tr><td>Tornare indietro</td><td>Riattivare un bundle precedente già verificato e conservato in cache/S3.</td></tr>
+    <tr><td>Aggiornare Genro ASGI</td><td>Produrre e distribuire globalmente una nuova immagine Framework.</td></tr>
+  </table>
+
+  <h3>Responsabilità</h3>
+  <div class="cards">
+    <div class="card violet"><h4>Sviluppatore applicativo</h4><p>Blocca i commit, crea il tag, interpreta i test e pubblica il bundle tramite CI.</p></div>
+    <div class="card blue"><h4>Genro ASGI</h4><p>Verifica il bundle, governa cache, gruppi, worker, coorti e lifecycle.</p></div>
+    <div class="card green"><h4>S3</h4><p>Conserva artefatti immutabili, manifest, checksum e puntatori di canale.</p></div>
+    <div class="card orange"><h4>Sysop / Kubernetes</h4><p>Distribuisce l’immagine, concede risorse e osserva il container; non sceglie gli utenti del gruppo.</p></div>
+  </div>
+
+  <div class="callout success"><p><strong>Riassunto in una frase:</strong> Kubernetes porta il motore, S3 porta le applicazioni, Genro decide quale applicazione alimenta ogni gruppo di worker e quali utenti vi entrano.</p></div>
+
+  <div class="footer">Proposta di progetto · Genro ASGI · documento introduttivo autosufficiente<br>Derivato dal progetto dettagliato del 20 agosto 2026 · Stato: da revisionare</div>
+</div>
+</section>
+
+</main>
+
+<script>
+const buttons = [...document.querySelectorAll('.tab-btn')];
+const panels = [...document.querySelectorAll('.tab-panel')];
+
+function openTab(name, updateHash = true) {
+  buttons.forEach(button => button.classList.toggle('active', button.dataset.tab === name));
+  panels.forEach(panel => panel.classList.toggle('active', panel.id === 'tab-' + name));
+  const current = document.getElementById('tab-' + name);
+  if (current) current.scrollTop = 0;
+  if (updateHash) history.replaceState(null, '', '#' + name);
+}
+
+buttons.forEach(button => button.addEventListener('click', () => openTab(button.dataset.tab)));
+
+document.addEventListener('keydown', event => {
+  if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+  const active = Math.max(0, buttons.findIndex(button => button.classList.contains('active')));
+  const delta = event.key === 'ArrowRight' ? 1 : -1;
+  const next = (active + delta + buttons.length) % buttons.length;
+  buttons[next].focus();
+  openTab(buttons[next].dataset.tab);
+});
+
+document.querySelectorAll('pre').forEach(pre => {
+  const button = document.createElement('button');
+  button.className = 'copy-btn';
+  button.textContent = 'Copia';
+  button.addEventListener('click', async () => {
+    const code = pre.querySelector('code');
+    try {
+      await navigator.clipboard.writeText((code || pre).textContent);
+      button.textContent = 'Copiato!';
+      button.classList.add('copied');
+      setTimeout(() => { button.textContent = 'Copia'; button.classList.remove('copied'); }, 1400);
+    } catch (_) {
+      button.textContent = 'Seleziona';
+      const range = document.createRange();
+      range.selectNodeContents(code || pre);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+  });
+  pre.appendChild(button);
+});
+
+const initial = location.hash.slice(1);
+if (buttons.some(button => button.dataset.tab === initial)) openTab(initial, false);
+</script>
+</body>
+</html>

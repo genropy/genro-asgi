@@ -168,7 +168,7 @@ from .envelope_handler import CommanderEnvelopeHandler
 from .exceptions import AssignmentRefused, UserOnHold, SiteFailedRequest
 from .freeze_handler import FreezeHandler
 from .group_handler import CHECK_OCCUPANCY_BEATS, GroupHandler
-from .worker_handler import INSPECT_OP_PATH
+from .worker_handler import CENSUS_OP_PATH, EVAL_OP_PATH, OBSERVE_OP_PATH
 
 #: What a user with no name of his own is called: the prefix plus his cid. The
 #: name itself carries the rule — whoever reads it knows nobody logged in here.
@@ -310,6 +310,20 @@ class DeliveryDesk:
                 never a silent discard.
         """
         return getattr(self, f"op_{path.removeprefix(DESK_PATH_PREFIX)}")(**data)
+
+    def op_observation(self, kind: str, source: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Take one observation off the lane and hand it to whoever watches.
+
+        Args:
+            kind: the mutation the child reports.
+            source: the worker it happened in.
+            data: the keys that name it.
+
+        Returns:
+            Nothing: the child does not read this answer, it only needs one.
+        """
+        self.spa_commander.publish_observation(kind, source, data)
+        return {}
 
     def install_page_subscriptions(self, page_id: str, tables: list[str]) -> None:
         """File a page's announced subscriptions: the index rebuilt from the row.
@@ -669,6 +683,9 @@ class SpaCommander:
         self.state = "running"
         #: The aggregate counts, one key per thing worth counting.
         self.counters: Counter[str] = Counter()
+        #: The queues watching the observation stream: empty means nobody is
+        #: looking, which is what keeps the workers silent.
+        self._observation_queues: set[asyncio.Queue[dict[str, Any]]] = set()
         #: The anagraph: one row per identity the machine knows. Read it through
         #: the predicates, and leave the writing to the mutators.
         self.user_map: dict[str, dict[str, Any]] = {}
@@ -822,14 +839,14 @@ class SpaCommander:
         return refusal
 
     @property
-    def inspect_targets(self) -> list[str]:
+    def console_targets(self) -> list[str]:
         """Every process the debug door can look into: this vertex, then the workers."""
         names = ["commander"]
         for group_handler in self.group_map.values():
             names.extend(group_handler.worker_handler_map)
         return names
 
-    async def inspect_target(self, target: str, expr: str) -> str:
+    async def eval_in_target(self, target: str, expr: str) -> str:
         """Evaluate one debug expression in one process of the pool, repr back.
 
         Args:
@@ -846,20 +863,167 @@ class SpaCommander:
             RuntimeError: the child refused the expression — its error verbatim.
 
         Full eval power by construction: the door exists only where the
-        inspector surface was mounted on purpose, never in production.
+        console surface was mounted on purpose, never in production.
         """
         if target == "commander":
             return repr(eval(expr, {"commander": self}))
         for group_handler in self.group_map.values():
             worker_handler = group_handler.worker_handler_map.get(target)
             if worker_handler is not None:
-                reply = await worker_handler.connector.call(INSPECT_OP_PATH, {"expr": expr})
+                reply = await worker_handler.connector.call(EVAL_OP_PATH, {"expr": expr})
                 if "error" in reply:
                     raise RuntimeError(str(reply["error"]))
                 return reply["result"]["repr"]
         raise KeyError(
-            f"inspect: no target {target!r} here — have: {', '.join(self.inspect_targets)}"
+            f"eval: no target {target!r} here — have: {', '.join(self.console_targets)}"
         )
+
+    async def subscribe_observation(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
+        """Put one queue on the observation stream, switching the workers on if it is the first.
+
+        Args:
+            queue: where every observation is put from now on.
+
+        Acts on the pool: the first subscriber turns the reporting on in every
+        living process, so nothing is paid for while nobody watches.
+        """
+        first = not self._observation_queues
+        self._observation_queues.add(queue)
+        if first:
+            await self.switch_observation(True)
+
+    async def unsubscribe_observation(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
+        """Take one queue off the stream, switching the workers off with the last of them.
+
+        Args:
+            queue: the queue that stops watching; one that never subscribed is
+                no error, the stream is a debug surface.
+
+        Acts on the pool: the last leaving turns the reporting off everywhere.
+        """
+        self._observation_queues.discard(queue)
+        if not self._observation_queues:
+            await self.switch_observation(False)
+
+    @property
+    def observation_watched(self) -> bool:
+        """Whether anybody is on the observation stream right now."""
+        return bool(self._observation_queues)
+
+    async def switch_observation(self, on: bool) -> None:
+        """Tell every living worker whether to report its mutations.
+
+        Args:
+            on: True to report, False to fall silent.
+
+        Acts on the processes. A worker that does not answer is logged and
+        skipped: the stream is best-effort and never holds up the pool.
+        """
+        for group_handler in self.group_map.values():
+            for worker_handler in group_handler.living_workers:
+                try:
+                    await worker_handler.connector.call(OBSERVE_OP_PATH, {"on": on})
+                except Exception as exc:
+                    self._logger.debug(
+                        "Observation switch %s refused by %s (%s)", on, worker_handler.name, exc
+                    )
+
+    def publish_observation(self, kind: str, source: str, data: dict[str, Any]) -> None:
+        """Put one observation on every watching queue, and never raise.
+
+        Args:
+            kind: the mutation being reported.
+            source: the worker it happened in, or ``commander`` for a fold here.
+            data: the keys that name it.
+
+        A full queue drops the event: a slow observer loses what it could not
+        read, and the pool does not wait for it.
+        """
+        event = {"kind": kind, "source": source, "data": data}
+        for queue in list(self._observation_queues):
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                self._logger.debug("Observation %s dropped: a watcher is not reading", kind)
+
+    async def get_pool_census(self) -> dict[str, Any]:
+        """The whole pool read out for a human: this vertex, then every worker.
+
+        Returns:
+            The routing maps and counters of the vertex, the delivery desk's
+            queue lengths, one entry per group with its placements and shape,
+            and one census per living worker under ``workers`` — a worker that
+            does not answer appears as ``{"error": ...}`` instead of raising.
+
+        JSON-safe by construction: no live store and no object is in here.
+        """
+        desk = self.delivery_desk
+        census: dict[str, Any] = {
+            "user_map": {
+                user: {
+                    "group": row["group"],
+                    "frozen": row["frozen"],
+                    "on_hold": row["on_hold"],
+                    "occupancy_percent": row["occupancy_percent"],
+                    "pending_dbevents": len(row["pending_dbevents"]),
+                    "pending_datachanges": len(row["pending_datachanges"]),
+                }
+                for user, row in self.user_map.items()
+            },
+            "connection_user_map": dict(self.connection_user_map),
+            "page_connection_map": dict(self.page_connection_map),
+            "counters": dict(self.counters),
+            "default_group": self.default_group,
+            "groups": {},
+            "delivery_desk": {
+                "subscribed_tables": desk.subscribed_tables,
+                "event_max_age_seconds": desk.event_max_age_seconds,
+                "page_dbevent_map": {
+                    page_id: len(queue) for page_id, queue in desk.page_dbevent_map.items()
+                },
+                "page_datachange_map": {
+                    page_id: len(queue) for page_id, queue in desk.page_datachange_map.items()
+                },
+                "user_store_change_map": {
+                    user: len(queue) for user, queue in desk.user_store_change_map.items()
+                },
+            },
+            "workers": {},
+        }
+        for name, group_handler in self.group_map.items():
+            census["groups"][name] = {
+                "user_worker_map": dict(group_handler.user_worker_map),
+                "living_workers": [
+                    worker_handler.name for worker_handler in group_handler.living_workers
+                ],
+                "memory_occupied_percent": group_handler.memory_occupied_percent,
+                "worker_max_number": group_handler.worker_max_number,
+                "workers": {
+                    worker_handler.name: {
+                        "state": worker_handler.state,
+                        "occupancy_percent": group_handler.get_occupancy_percent(
+                            worker_handler.worker_snapshot
+                        ),
+                        "worker_cap": group_handler.get_worker_cap(worker_handler),
+                    }
+                    for worker_handler in group_handler.living_workers
+                },
+            }
+            for worker_handler in group_handler.living_workers:
+                census["workers"][worker_handler.name] = await self._get_worker_census(
+                    worker_handler
+                )
+        return census
+
+    async def _get_worker_census(self, worker_handler: Any) -> dict[str, Any]:
+        """One worker's census off the lane, or the error entry when it does not answer."""
+        try:
+            reply = await worker_handler.connector.call(CENSUS_OP_PATH, {})
+        except Exception as exc:
+            return {"error": f"{type(exc).__name__}: {exc}"}
+        if "error" in reply:
+            return {"error": str(reply["error"])}
+        return dict(reply["result"])
 
     def resolve_user(self, cid: str) -> str | None:
         """Whose cid this is — None for a cookie the site has not baptised yet.

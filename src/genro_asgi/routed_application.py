@@ -72,6 +72,7 @@ from genro_routes import RoutingClass, is_result_wrapper
 from .application import BaseApplication
 from .exceptions import HTTPBadRequest, HTTPForbidden, HTTPNotFound, HTTPUnauthorized
 from .request import Request
+from .streaming import StreamingResponse
 
 if TYPE_CHECKING:
     from genro_routes import Router, RouterNode
@@ -163,6 +164,10 @@ class RoutedApplication(BaseApplication, RoutingClass):
         unbindable-argument ``TypeError``, both mapped through the node's single
         ``validation_error`` seam — surfaces as ``HTTPBadRequest`` (400, never a
         500), the original error kept as ``__cause__``.
+
+        A handler that answers with a ``StreamingResponse`` — an SSE stream, a
+        long download — speaks the wire itself: it is called with the ASGI
+        triple and nothing is buffered.
         """
         server = self.server
         if server is None:
@@ -180,6 +185,9 @@ class RoutedApplication(BaseApplication, RoutingClass):
         except _HandlerArgumentsInvalid as exc:
             detail = exc.__cause__ or exc
             raise HTTPBadRequest(f"Invalid request arguments: {detail}") from exc
+        if isinstance(result, StreamingResponse):
+            await result(scope, receive, send)
+            return
         if is_result_wrapper(result):
             request.response.set_result(result.value, {**node.metadata, **result.metadata})
         else:

@@ -253,9 +253,11 @@ from .worker_connector import (
     CommanderCallFailed,
 )
 from .worker_handler import (
+    CENSUS_OP_PATH,
     DROP_CONNECTION_OP_PATH,
     DROP_USER_OP_PATH,
-    INSPECT_OP_PATH,
+    EVAL_OP_PATH,
+    OBSERVE_OP_PATH,
     PING_OP_PATH,
     QUIT_OP_PATH,
 )
@@ -307,6 +309,10 @@ DESK_STORE_GET_PATH = "/desk/store_get"
 DESK_STORE_LOCK_PATH = "/desk/store_lock"
 DESK_STORE_UNLOCK_PATH = "/desk/store_unlock"
 
+#: The routing key one observation climbs: a mutation of this process's
+#: registers, as it happens, for whoever is watching at the vertex.
+DESK_OBSERVATION_PATH = "/desk/observation"
+
 #: The address kind that names a page itself: the change is a SIGNAL and lands
 #: as a deposit on that page's collector — no Bag write, no residue.
 SIGNAL_KIND = "page"
@@ -316,6 +322,11 @@ SIGNAL_KIND = "page"
 #: real Bag write; nothing on this worker produces one, the site writing its
 #: own stores through the Bag it holds.
 STATE_KINDS = frozenset({"page_store", "user_store", "connection_store"})
+
+# What the census puts in place of a field it cannot carry as JSON: the field is
+# left out of the reading entirely, and a sentinel says so without colliding
+# with a legitimate None.
+_NOT_JSON_SAFE = object()
 
 # The connection-row fields a parcel leaves behind: the edges of the ownership
 # tree, which the adoption rebuilds from the rows it lands, and the reserved key
@@ -473,11 +484,16 @@ class SpaWorker:
         #: told it: the source filter of this worker, at most one exchange out
         #: of date, which is the price of asking nobody.
         self.subscribed_tables: set[str] = set()
+        #: Whether every register mutation of this process is reported up the
+        #: lane as it happens. Off until somebody watches, and switched only by
+        #: the vertex: a debug surface must not cost anything when unobserved.
+        self.observation_on = False
         #: One slot per traffic-pool thread. A request is served on one thread
         #: from end to end, so the thread IS the request and two of them served
         #: at once never see each other's events.
         self._request_slots = threading.local()
         self._worker_events: list[dict[str, Any]] = []
+        self._observation_tasks: set[asyncio.Task[None]] = set()
         self._unfreeze_waits: dict[str, asyncio.Event] = {}
         self._pendings: dict[str, int] = {}
         self._transfer_flags: dict[str, str] = {}
@@ -634,6 +650,8 @@ class SpaWorker:
         """
         event = {"op": op, "worker": self.name, **payload}
         self._worker_events.append(event)
+        if self.observation_on:
+            self.report_observation(op, payload)
         if op in POPULATION_WORKER_EVENTS:
             self._population_changed = True
         return event
@@ -1498,7 +1516,7 @@ class SpaWorker:
                 "Worker %s: unexpected envelope %s from its handler", self.name, frame.method
             )
 
-    def inspect_expression(self, expr: str) -> str:
+    def eval_expression(self, expr: str) -> str:
         """Evaluate one debug expression against this process, repr back.
 
         Args:
@@ -1510,10 +1528,104 @@ class SpaWorker:
 
         Evaluates under ``dispatch_lock``, so the rows it reads are coherent.
         Full eval power by construction: the door exists only where the
-        inspector surface was mounted on purpose, never in production.
+        console surface was mounted on purpose, never in production.
         """
         with self.dispatch_lock:
             return repr(eval(expr, {"worker": self}))
+
+    def report_observation(self, kind: str, data: dict[str, Any]) -> None:
+        """Send one observation up the lane, and forget about it.
+
+        Args:
+            kind: the mutation it reports, named as the worker event is.
+            data: the keys that name what moved, JSON-safe as they travel.
+
+        Best-effort by design: the answer is never read and a failure is logged
+        and dropped. Nothing here may raise into the traffic path — an observer
+        that changes what it observes is worse than no observer.
+        """
+        payload = {"kind": kind, "source": self.name, "data": data}
+        try:
+            self.loop.call_soon_threadsafe(self._start_observation_call, payload)
+        except (AttributeError, RuntimeError) as exc:
+            self._logger.debug("Worker %s: observation %s dropped (%s)", self.name, kind, exc)
+
+    def _start_observation_call(self, payload: dict[str, Any]) -> None:
+        """Put one observation on the lane as a detached task, on the loop."""
+        task = asyncio.create_task(self._deliver_observation(payload))
+        self._observation_tasks.add(task)
+        task.add_done_callback(self._observation_tasks.discard)
+
+    async def _deliver_observation(self, payload: dict[str, Any]) -> None:
+        """Await the observation's own answer, so a failure is logged and no more."""
+        try:
+            await self.call(DESK_OBSERVATION_PATH, payload)
+        except Exception as exc:
+            self._logger.debug(
+                "Worker %s: observation %s lost (%s)", self.name, payload["kind"], exc
+            )
+
+    def census(self) -> dict[str, Any]:
+        """The whole process read out for a human: every register, JSON-safe.
+
+        Returns:
+            The three registers key by key with their scalar fields, the cookie
+            map, the subscribed tables and how many table-event deposits wait
+            per table. Live objects are left out by construction — only what
+            survives ``json.dumps`` is in here.
+        """
+        with self.dispatch_lock:
+            deposit_counts: dict[str, int] = {}
+            for page_id in self.page_register.keys():
+                for deposit in self.page_register.get(page_id)["dbevents"]:
+                    table = deposit["table"]
+                    deposit_counts[table] = deposit_counts.get(table, 0) + 1
+            return {
+                "name": self.name,
+                "group": self.group,
+                "pid": os.getpid(),
+                "user_register": self._census_register(self.user_register),
+                "connection_register": self._census_register(self.connection_register),
+                "page_register": self._census_register(self.page_register),
+                "cid_connection_map": dict(self.cid_connection_map),
+                "subscribed_tables": sorted(self.subscribed_tables),
+                "dbevent_deposit": deposit_counts,
+            }
+
+    def _census_register(self, register: Register) -> dict[str, Any]:
+        """One register key by key, each item reduced to its JSON-safe fields."""
+        return {
+            key: {
+                field: self._census_field(value)
+                for field, value in register.get(key).items()
+                if self._census_field(value) is not _NOT_JSON_SAFE
+            }
+            for key in register.keys()
+        }
+
+    def _census_field(self, value: Any) -> Any:
+        """One field as the census carries it, or ``_NOT_JSON_SAFE`` to leave it out.
+
+        Args:
+            value: whatever the item holds under that name.
+
+        Returns:
+            The value itself when it is a scalar, the sorted elements of a
+            container of scalars (the keys, for a dict), the count when those
+            elements are objects — never the objects themselves.
+        """
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, dict):
+            value = list(value)
+        if isinstance(value, (set, frozenset, list, tuple)):
+            if all(
+                element is None or isinstance(element, (str, int, float, bool))
+                for element in value
+            ):
+                return sorted(str(element) for element in value)
+            return len(value)
+        return _NOT_JSON_SAFE
 
     async def answer_call(self, frame: Frame) -> None:
         """Answer one CALL: the beat, the http form, one of the four ops, or nothing known.
@@ -1538,9 +1650,14 @@ class SpaWorker:
             if connection is not None:
                 self.drop_connection(connection["user"], payload["cid"])
             await self.send_reply(frame, result={})
-        elif frame.path == INSPECT_OP_PATH:
+        elif frame.path == OBSERVE_OP_PATH:
+            self.observation_on = bool(payload["on"])
+            await self.send_reply(frame, result={})
+        elif frame.path == CENSUS_OP_PATH:
+            await self.send_reply(frame, result=self.census())
+        elif frame.path == EVAL_OP_PATH:
             try:
-                result = {"repr": self.inspect_expression(payload["expr"])}
+                result = {"repr": self.eval_expression(payload["expr"])}
             except Exception as exc:
                 await self.send_reply(frame, error=f"{type(exc).__name__}: {exc}")
             else:

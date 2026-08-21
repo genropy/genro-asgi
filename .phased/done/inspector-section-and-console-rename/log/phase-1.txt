@@ -1,0 +1,6 @@
+Phase 4 chiusa e committata (889523e).
+
+- `InspectorSection`: `page` (HTML da `resources/inspector.html`, placeholder con i cinque id strutturali), `census` (JSON, un `get_pool_census()` per ogni `SpaApplicationNew` montata), `stream` (SSE via `SseStream`: evento `census` all'apertura, poi le observation; subscribe all'apertura, unsubscribe alla chiusura del lettore).
+- Montata in `ServerApplication.__init__` solo se `GNR_ASGI_INSPECTOR` è valorizzata, nessun `auth_rule`: il mount è il gate.
+- Una cucitura fuori dai file elencati era necessaria: `RoutedApplication.__call__` ora lascia parlare il wire a un handler che risponde con `StreamingResponse` — prima non esisteva modo di fare streaming da una route. È annotato nel Done della fase.
+- 5 test contract verdi (404 senza env var, page HTML, census JSON, nessun `sticky_cid`, stream che apre col census), suite 2111 passed / 2 skipped, ruff pulito.

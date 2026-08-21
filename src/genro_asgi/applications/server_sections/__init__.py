@@ -21,15 +21,25 @@ the login methods), ``UsersSection`` (SUPERADMIN-gated user management at
 ``users``), ``TokensSection`` (issued credentials — api keys and JWTs — at
 ``tokens``), ``TasksSection`` (the task backbone — schedules and spool — at
 ``tasks``) and ``MonitorSection`` (the live view of the running server at
-``monitor``, gated SERVER_ADMIN).
+``monitor``, gated SERVER_ADMIN). ``InspectorSection`` (the SPA pool watched
+live at ``inspector``) is attached only where ``GNR_ASGI_INSPECTOR`` says so.
 """
 
 from __future__ import annotations
 
 from .auth_section import AuthSection
+from .inspector_section import INSPECTOR_ENV_VAR, InspectorSection
 from .monitor_section import MonitorSection
 from .tasks_section import TasksSection
 from .tokens_section import TokensSection
 from .users_section import UsersSection
 
-__all__ = ["AuthSection", "MonitorSection", "TasksSection", "TokensSection", "UsersSection"]
+__all__ = [
+    "INSPECTOR_ENV_VAR",
+    "AuthSection",
+    "InspectorSection",
+    "MonitorSection",
+    "TasksSection",
+    "TokensSection",
+    "UsersSection",
+]

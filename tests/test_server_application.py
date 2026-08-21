@@ -18,9 +18,22 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from genro_routes import RoutingClass, route
 
 from genro_asgi import AsgiServer, BaseApplication, ServerApplication
+from genro_asgi.applications.server_sections import INSPECTOR_ENV_VAR
+
+
+@pytest.fixture(autouse=True)
+def _inspector_unmounted(monkeypatch):
+    """The section list these tests photograph is the default one.
+
+    The inspector is opt-in and read from the environment at construction, so a
+    developer who exported ``GNR_ASGI_INSPECTOR`` to open the page would
+    otherwise see two contract tests fail for a reason unrelated to his work.
+    """
+    monkeypatch.delenv(INSPECTOR_ENV_VAR, raising=False)
 
 
 class DemoSection(RoutingClass):

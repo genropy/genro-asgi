@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from genro_asgi.applications.spa_inspector import SpaInspector, SpaInspectorMcpApplication
+from genro_asgi.applications.spa_console import SpaConsole, SpaConsoleMcpApplication
 from genro_asgi.spa.orchestration.spa_worker import GUEST_PREFIX
 
 
@@ -33,17 +33,17 @@ def wired_lane(desk_lane):
 async def test_the_commander_answers_about_itself(wired_lane):
     wired_lane.commander.record_connection_user("cid-a", "guest_legacy1")
 
-    assert await wired_lane.commander.inspect_target("commander", "len(commander.user_map)") == "1"
+    assert await wired_lane.commander.eval_in_target("commander", "len(commander.user_map)") == "1"
 
 
 async def test_a_worker_answers_over_the_lane(wired_lane):
     wired_lane.worker.add_connection("a1b2")
     wired_lane.worker.add_page("page-0", "a1b2")
 
-    connections = await wired_lane.commander.inspect_target(
+    connections = await wired_lane.commander.eval_in_target(
         "standard_0001", "len(worker.connection_register)"
     )
-    pages = await wired_lane.commander.inspect_target(
+    pages = await wired_lane.commander.eval_in_target(
         "standard_0001", "sorted(worker.page_register.keys())"
     )
 
@@ -53,16 +53,16 @@ async def test_a_worker_answers_over_the_lane(wired_lane):
 
 async def test_an_expression_that_fails_in_the_child_travels_back_as_the_error(wired_lane):
     with pytest.raises(RuntimeError, match="NameError"):
-        await wired_lane.commander.inspect_target("standard_0001", "no_such_name")
+        await wired_lane.commander.eval_in_target("standard_0001", "no_such_name")
 
 
 async def test_an_unknown_target_names_the_ones_there_are(wired_lane):
     with pytest.raises(KeyError, match="commander, standard_0001"):
-        await wired_lane.commander.inspect_target("standard_9999", "1")
+        await wired_lane.commander.eval_in_target("standard_9999", "1")
 
 
 class XT_Server:
-    """The one attribute of a server the inspector reads: its applications."""
+    """The one attribute of a server the console reads: its applications."""
 
     def __init__(self, applications):
         self.applications = applications
@@ -73,14 +73,14 @@ async def test_the_tools_reach_the_front_and_list_the_targets(wired_lane):
 
     spa_front = SpaApplicationNew.__new__(SpaApplicationNew)
     spa_front._commander = wired_lane.commander
-    inspector_app = SpaInspectorMcpApplication(code="inspect")
-    inspector_app.server = XT_Server({"shop": spa_front, "other": object()})
-    inspector = SpaInspector(inspector_app)
+    console_app = SpaConsoleMcpApplication(code="console")
+    console_app.server = XT_Server({"shop": spa_front, "other": object()})
+    console = SpaConsole(console_app)
 
     wired_lane.worker.add_connection("a1b2")
     guest = f"{GUEST_PREFIX}a1b2"
 
-    assert await inspector.targets() == {"shop": ["commander", "standard_0001"]}
+    assert await console.targets() == {"shop": ["commander", "standard_0001"]}
 
-    answer = await inspector.inspect("sorted(worker.user_register.keys())", "standard_0001")
+    answer = await console.eval("sorted(worker.user_register.keys())", "standard_0001")
     assert answer == {"target": "standard_0001", "repr": f"['{guest}']"}

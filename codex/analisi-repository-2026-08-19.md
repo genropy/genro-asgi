@@ -1,58 +1,75 @@
 # Analisi del repository genro-asgi
 
 Data: 19 agosto 2026  
-Branch analizzato: `wf/orchestration-m4-request-login` (`bce7e19`)  
-Confronto principale: `main` (`ca75bfb`) e tag `v0.34.0` (`fab91f3`)
+Revisione: 19 agosto 2026, ore 17:58 CEST  
+Branch analizzato: `main` (`2063616`), due commit avanti a `origin/main`
+(`3353582`) dopo `git fetch`  
+Snapshot precedente del rapporto: `wf/orchestration-m4-request-login`
+(`bce7e19`)  
+Confronto principale: `main` pre-Macro 4 (`ca75bfb`) e tag `v0.34.0`
+(`fab91f3`)
 
 ## Sintesi esecutiva
 
 Il repository non è in una rifattorizzazione ordinaria: sta sostituendo il cuore
 di orchestrazione SPA conservando temporaneamente in parallelo la macchina
-legacy. La strategia è sensata e disciplinata: nuovo stack isolato, contratti
-legacy mantenuti come sentinelle, fasi piccole, decisioni registrate e test ad
-alta copertura.
+`pre_refactoring`. La strategia è sensata e disciplinata: nuovo core isolato,
+contratti `pre_refactoring` mantenuti come sentinelle, fasi piccole, decisioni
+registrate e test ad alta copertura.
 
 Lo stato reale al 19 agosto 2026 è:
 
 - il server ASGI generale è maturo e largamente operativo;
-- la vecchia orchestrazione SPA continua a essere quella pubblica e completa;
-- la nuova orchestrazione ha completato Macro 1–3;
-- Macro 4 ha completato 4 fasi su 5: request chain, login e nuovo front sono
-  implementati, ma manca l'end-to-end reale dell'intera giornata operativa;
+- l'orchestrazione SPA `pre_refactoring` continua a essere quella pubblica e
+  completa;
+- la nuova orchestrazione ha completato Macro 1–4;
+- Macro 4 ha chiuso tutte le cinque fasi e ora include un end-to-end ASGI con
+  due processi figli reali, sito WSGI reale, login, secondo browser,
+  freeze/wake, due gruppi e rifiuto 503 sotto pressione;
+- l'end-to-end ha trovato difetti reali nella fold del login e nella gestione
+  delle morti, poi corretti e coperti da regressioni; resta da eseguire la
+  verifica manuale dichiarata su un'installazione GenroPy reale;
 - Macro 5 deve ancora portare il data plane, completare l'integrazione delle
   manovre operative, la persistenza di riavvio e l'osservabilità;
-- Macro 6 farà il cutover, esporrà il nuovo front e rimuoverà il legacy.
+- Macro 6 farà il cutover, esporrà il nuovo front e rimuoverà il
+  `pre_refactoring`.
 
 Giudizio complessivo: **rifattorizzazione ben governata e con buona evidenza di
 correttezza, ma non ancora pronta per il cutover**. Il rischio principale non è
-la qualità locale del codice già scritto; è la quantità di comportamento
-operativo ancora concentrata nel legacy e da migrare in Macro 5.
+più la chiusura della request chain: è la quantità di comportamento operativo
+ancora concentrata nel `pre_refactoring` e da migrare in Macro 5. La modifica
+più recente ha inoltre reso esplicito un nuovo confine di rischio: una fold che
+fallisce è considerata un difetto del parent e non uccide più il worker, ma
+l'envelope può
+restare applicato solo in parte e oggi manca ancora la relativa escalation
+parent-side.
 
 ## Evidenze raccolte
 
-- Worktree pulito all'inizio; al termine l'unica aggiunta è questo rapporto
-  nella cartella `codex/` autorizzata.
+- Worktree applicativo pulito all'inizio della revisione; Codex ha modificato
+  soltanto i due rapporti. Durante il lavoro è comparso anche un aggiornamento
+  concorrente di `CLAUDE.md`, letto ma non modificato da Codex. `main` è due
+  commit avanti a `origin/main`: il commit dei rapporti e il successivo cambio
+  di policy sulla envelope chain.
 - `ruff check --no-cache src/ tests/`: superato.
-- Suite completa, eseguita consentendo i socket Unix ma mettendo cache e
-  copertura in `/tmp`: **1.988 passed, 2 skipped**, 2 avvisi di deprecazione.
-- Copertura complessiva: **97%** su 9.660 statement.
-- Nuova orchestrazione: 5.172 righe fisiche in `spa/orchestration/`.
-- Cuore legacy ancora presente: 6.602 righe fra `spa/commander.py` e
+- Suite completa su Python 3.14.6 free-threaded, eseguita consentendo i socket
+  Unix ma mettendo cache e copertura in `/tmp`: **1.996 passed, 2 skipped**.
+- Copertura complessiva: **97%** su 9.671 statement.
+- Verifica mirata di Macro 4 e della nuova policy della fold: **56 passed**.
+- Nuova orchestrazione: 5.241 righe fisiche in `spa/orchestration/`.
+- Cuore `pre_refactoring` ancora presente: 6.602 righe fra `spa/commander.py` e
   `spa/worker.py`, oltre al vecchio front.
-- Da `v0.34.0` a HEAD: 83 file toccati, 23.280 righe aggiunte e 627 rimosse.
-- Rispetto a `main`, il branch Macro 4 aggiunge circa 2.885 righe nette in 21
-  file; la maggioranza è costituita da piano, note e test.
+- Da `v0.34.0` a HEAD: 87 file toccati, 25.559 righe aggiunte e 627 rimosse.
+- Rispetto al `main` pre-Macro 4 (`ca75bfb`), l'HEAD aggiunge 5.227 righe e ne
+  rimuove 231 in 28 file; nel delta rientrano anche i due rapporti Codex.
 - `mypy src/` è non bloccante per policy e oggi segnala **124 errori in 19
   file**. Ventinove sono nel nuovo front, in gran parte dovuti all'idioma della
   grammatica con default `None`; altri riguardano invarianti runtime non visibili
   al type checker. È debito reale, anche se non è un gate di progetto.
-- Sul repository collegato `genropy-asgi`: **132 test superati**, controllo
-  `ruff` pulito e 16 segnalazioni mypy, 13 delle quali sono import GenroPy senza
-  stub. Le modifiche locali già presenti nei documenti e la cartella `users/`
-  non sono state toccate.
-- Verifica mirata delle policy del nuovo orchestratore: **186 test superati**
-  su gruppi, accoglienza, capacità, partenze, freezer, request chain e
-  configurazione multi-versione.
+- La verifica precedente sul repository collegato `genropy-asgi` aveva dato
+  **132 test superati**, `ruff` pulito e 16 segnalazioni mypy. Non è stata
+  rieseguita in questa revisione: il bridge resta quindi un'evidenza storica,
+  non una convalida dell'HEAD corrente di entrambi i repository.
 - Benchmark locale Pandas 3.0.2: per DataFrame di pochi KB pickle/unpickle resta
   sotto il millisecondo; su un DataFrame numerico da circa 80 MB ha richiesto
   rispettivamente circa 43 ms e 28 ms. Il costo da sorvegliare nei casi
@@ -75,7 +92,7 @@ Il nucleo segue una separazione coerente:
 Questa parte è sostanzialmente allineata fra codice, test e prima parte
 dell'ebook.
 
-### SPA legacy, ancora pubblica
+### SPA `pre_refactoring`, ancora pubblica
 
 `applications/spa_app.py` esporta `SpaApplication`, che possiede
 `UserStickyCommander` e `UserStickyWorker`. Qui vivono ancora tutte le capacità
@@ -83,7 +100,8 @@ operative complete: datachange e dbevent, sottoscrizioni, global store, move
 live, ladder di bilanciamento, riciclo, hard restart, dump/restore, monitor e
 worker locale.
 
-Il legacy non è semplicemente codice morto: oggi è il riferimento di continuità
+Il `pre_refactoring` non è semplicemente codice morto: oggi è il riferimento di
+continuità
 e la macchina che serve il traffico reale.
 
 ### Nuovo stack
@@ -115,7 +133,8 @@ ordinata di un worker e il risveglio di un utente. La richiesta che incontra un
 utente fra due case attende sulla barrier; la nuova assegnazione viene decisa
 sulla fotografia aggiornata del gruppo.
 
-Il trasferimento diretto worker-to-worker e il `move live` del legacy non sono
+Il trasferimento diretto worker-to-worker e il `move live` del
+`pre_refactoring` non sono
 quindi requisiti mancanti da riprodurre: sono complessità intenzionalmente
 eliminate. L'ipotesi di progetto è che lo stato ordinario sia piccolo — oggi
 tipicamente pochi KB — e che freeze/unfreeze sia saltuario. I benchmark svolti
@@ -168,13 +187,26 @@ le metriche che possono invalidare in futuro l'assunzione.
 - Macro 3: gruppi, commander, placement, heartbeat, fold e indici.
 - Macro 4 / fase 1: gruppi posseduti dal commander, barrier e lifecycle.
 - Macro 4 / fase 2: request chain completa e rifiuti tipizzati.
-- Macro 4 / fase 3: login e relabel uniforme.
+- Macro 4 / fase 3: login e cambio uniforme di `connection_user`.
 - Macro 4 / fase 4: nuovo front montabile, configurazione e traduzioni HTTP.
+- Macro 4 / fase 5: giornata end-to-end attraverso `AsgiServer.__call__`, con
+  due processi reali, sito WSGI, login, secondo browser, wake dal freezer,
+  avatar switch e 503 sotto pressione.
+- Fix successivi alla review: fold del login coerenti con R8, rilascio delle
+  righe annunciato, transfer flag e claim sempre restituiti, identità persa su
+  morte calcolata come intersezione fra placement e presenza effettiva.
 
 ### Mancante prima del cutover
 
-1. Macro 4 / fase 5: end-to-end con processi reali, sito WSGI reale, due gruppi,
-   login, secondo browser, wake dal freezer, avatar switch e 503 sotto pressione.
+1. Chiusura operativa di Macro 4:
+   - verifica manuale dichiarata con una vera installazione avviata tramite il
+     bridge `genropy-asgi`;
+   - decisione e implementazione dell'escalation parent-side quando una fold
+     lascia un envelope applicato solo in parte;
+   - risoluzione o accettazione esplicita dei residui della review: login
+     concorrenti sulla stessa connessione, pubblicazione anticipata dal ping,
+     barriera guest, doppio cambio identità, ritorno al gruppo di default e
+     placement `None` residui.
 2. Macro 5:
    - datachange/dbevent indirizzati;
    - sottoscrizioni e mailbox pendenti;
@@ -195,7 +227,7 @@ le metriche che possono invalidare in futuro l'assunzione.
 `genropy-asgi` non è un semplice adattatore WSGI. È il consumer più esigente
 dell'orchestrazione SPA e oggi fornisce:
 
-- `GenropySpaApplication`, sottoclasse del front SPA legacy;
+- `GenropySpaApplication`, sottoclasse del front SPA `pre_refactoring`;
 - `GenropyWorker`, sottoclasse di `UserStickyWorker`;
 - un `GnrWsgiSite` reale dietro il seam `wsgi_app`;
 - `GenropyRegisterClient`, che traduce il contratto del vecchio daemon in
@@ -204,17 +236,19 @@ dell'orchestrazione SPA e oggi fornisce:
   cartelle di connessione;
 - CLI `gnrasgiserve`, modalità single e pool daemonless.
 
-Il bridge corrente è funzionante sul legacy: la suite include un E2E single e
+Il bridge corrente è funzionante sul `pre_refactoring`: la suite include un E2E
+single e
 un E2E CLI con un vero worker subprocess. È però ancora legato esplicitamente a:
 
 - `genro_asgi.applications.spa_app.SpaApplication`;
 - `genro_asgi.spa.UserStickyWorker` e `RegisterRegistry`;
 - `genro_asgi.channel.hub.EVENT_METHOD`;
 - `genro_asgi.spa.global_store`;
-- il vocabolario legacy del worker (`new_connection`, `new_page`,
+- il vocabolario `pre_refactoring` del worker (`new_connection`, `new_page`,
   `change_connection_user`, datachange, sottoscrizioni, dbevent e global lock).
 
-Di conseguenza, Macro 6 non può cancellare il legacy nel solo repository
+Di conseguenza, Macro 6 non può cancellare il `pre_refactoring` nel solo
+repository
 `genro-asgi`: deve essere preceduta da una versione compatibile di
 `genropy-asgi`, provata contro il nuovo front e il nuovo worker.
 
@@ -261,7 +295,8 @@ Questi scenari devono diventare gate cross-repository prima del cutover.
 ### Versionamento e documentazione del bridge
 
 `genropy-asgi` dichiara `genro-asgi>=0.33.0` senza limite superiore. Una release
-di `genro-asgi` che rimuovesse le classi legacy potrebbe quindi rompere il bridge
+di `genro-asgi` che rimuovesse le classi `pre_refactoring` potrebbe quindi
+rompere il bridge
 senza che il resolver segnali incompatibilità. Il cutover richiede una delle
 seguenti strategie:
 
@@ -280,7 +315,8 @@ moduli interni di channel, SPA e global store.
 
 ### 1. Strategia di migrazione prudente
 
-Il nuovo stack non importa il legacy e viceversa. I test del vecchio front
+Il nuovo core non importa il `pre_refactoring` e viceversa. I test del vecchio
+front
 restano immutati e fungono da contratto. Questo riduce il rischio di un cutover
 graduale ambiguo e rende possibile una sostituzione atomica in Macro 6.
 
@@ -303,7 +339,8 @@ con concorrenza, recovery e stato distribuito.
 La suite copre sia contratti pubblici sia implementazione dell'orchestrazione,
 con processi reali e socket reali. Il 97% globale non è da solo una garanzia,
 ma qui è accompagnato da scenari di concorrenza, morte del worker, freezer,
-login, move legacy, freeze/reassign nuovo e fold. La suite completa è verde sul
+login, move `pre_refactoring`, freeze/reassign nuovo e fold. La suite completa
+è verde sul
 branch corrente.
 
 ### 5. Disciplina sul volume
@@ -314,12 +351,43 @@ ha 108 statement coperti al 98%; il nuovo commander ha 275 statement coperti al
 
 ## Rischi e incoerenze da risolvere
 
+### P0 — Una fold fallita lascia il parent potenzialmente incoerente
+
+Il commit `2063616` corregge l'attribuzione del guasto: un'eccezione mentre il
+parent applica un envelope non dimostra che il processo figlio sia guasto. Il
+worker non viene quindi più terminato, la risposta in corso viene risolta e
+l'errore viene registrato con stack trace. Questa scelta evita che un bug del
+parent provochi un ciclo di uccisioni di worker sani.
+
+Il prezzo è però dichiarato nel codice e non ancora governato: gli eventi già
+applicati restano applicati, quelli successivi nell'envelope possono andare
+persi e il worker continua a servire mentre la superficie single-writer del
+parent può non rappresentare più quella del figlio. Il test corrente dimostra
+che il processo resta vivo, ma non dimostra isolamento del traffico, riparazione
+del parent o risincronizzazione.
+
+Il docstring richiama una futura escalation `F48`, mentre il commit dichiara una
+decisione `F49`; nessuno dei due punti è rintracciabile nel registro F1–F47 o
+nei documenti di autorità presenti nel repository. Prima del traffico reale va
+ratificata una politica che distingua almeno:
+
+1. health del worker, che non va punito per un difetto del parent;
+2. stato del gruppo/commander, che non può continuare silenziosamente come sano;
+3. rifiuto o sospensione delle richieste che dipendono dalla superficie dubbia;
+4. risincronizzazione tramite fotografia completa, replay idempotente o restart
+   controllato del solo parent;
+5. escalation operativa e prova end-to-end del percorso di recupero.
+
+La scelta concreta spetta al titolare; l'assenza di una politica non è invece
+compatibile con il cutover.
+
 ### P0 — Il cutover dipende da una Macro 5 molto più ampia delle precedenti
 
 Macro 5 accorpa data plane, manovre freeze/reassign, boot/shutdown,
 osservabilità e worker locale. Sono aree con failure mode diversi. È il punto
 più rischioso del programma perché concentra gran parte delle capacità per cui
-l'ebook definisce operativo il sistema legacy. La recovery trasparente da morte
+l'ebook definisce operativo il sistema `pre_refactoring`. La recovery
+trasparente da morte
 improvvisa del worker non va inclusa come requisito implicito: la policy
 accettata è far ripartire i pochi utenti coinvolti.
 
@@ -396,16 +464,23 @@ Esempi concreti:
 
 - `docs/architecture/overview.md` è marcato “DA REVISIONARE” ma si presenta
   ancora come sintesi della fonte normativa;
-- `CLAUDE.md` descrive soprattutto il legacy e dice ancora che il commander è
-  “in corso” di suddivisione, mentre Macro 1–4 sono già implementate;
+- `CLAUDE.md` è stato aggiornato durante questa revisione da un altro autore e
+  ora distingue correttamente `pre_refactoring` e nuovo core, ma dichiara il
+  registro esteso a F1–F49 mentre il file indicato contiene ancora F1–F47;
 - l'ebook è aggiornato al 13 agosto e chiama “operativo” il comportamento del
-  legacy senza distinguere ciò che è già portato nel nuovo stack;
+  `pre_refactoring` senza distinguere ciò che è già portato nel nuovo core;
 - il piano Macro 4 dice che l'accesso filesystem passa solo da storage nodes,
   mentre `FreezeHandler` dichiara esplicitamente di essere un'eccezione e usa
   `os`, `Path` e pickle direttamente.
+- `.phased/roadmap.md` chiama ancora Macro 4 “current”, il workflow resta sotto
+  `active/` e l'handoff di Macro 5 descrive come vigente il comportamento
+  `d93ff52` che uccideva il worker su fold fallita, rovesciato da `2063616`;
+- `F48` e `F49` sono citate da codice e commit ma non compaiono nel registro
+  documentale rintracciabile.
 
 **Raccomandazione:** una sola matrice di parità, aggiornata per macro, con colonne
-“legacy operativo”, “nuovo implementato”, “nuovo E2E”, “pubblico dopo cutover”.
+“pre_refactoring operativo”, “nuovo implementato”, “nuovo E2E”, “pubblico dopo
+cutover”.
 
 ### P1 — Debito di typing non misurato come delta
 
@@ -447,7 +522,7 @@ L'ebook è molto efficace come vista concettuale. Descrive correttamente:
 Va però letto come combinazione di tre livelli:
 
 1. server generale già operativo;
-2. orchestrazione completa oggi operativa nel legacy;
+2. orchestrazione completa oggi operativa nel `pre_refactoring`;
 3. architettura target ancora in costruzione nel nuovo stack.
 
 La roadmap interna del libro non mostra questo terzo asse e, dopo l'avvio del
@@ -465,7 +540,7 @@ La direzione è buona:
 - il worker handler è una identità stabile sopra processi sostituibili;
 - la fold è single-writer;
 - il front resta stateless e non conosce il wire;
-- il legacy viene rimosso in una singola fase dichiarata.
+- il `pre_refactoring` viene rimosso in una singola fase dichiarata.
 
 Le due decisioni che richiedono ancora verifica operativa sono:
 
@@ -478,40 +553,48 @@ unifica compattazione, sostituzione e risveglio, elimina il coordinamento
 peer-to-peer e lascia la destinazione libera fino alla richiesta successiva. Il
 move diretto va considerato un'ottimizzazione futura solo se misure reali
 dimostrassero insufficiente questo modello, non un obiettivo di parità col
-legacy.
+`pre_refactoring`.
 
 ## Sequenza consigliata
 
-1. Chiudere Macro 4 fase 5 esattamente come pianificata, prima di aggiungere
-   altro comportamento.
-2. Produrre una matrice di parità legacy/nuovo e usarla come gate di Macro 5.
-3. Separare formalmente freezer transitorio e snapshot di reboot, oppure
+1. Registrare e ratificare `F48`/`F49`, definendo il comportamento parent-side
+   dopo una fold parzialmente applicata; aggiungere un test della degradazione e
+   del recupero, non soltanto della sopravvivenza del worker.
+2. Archiviare formalmente Macro 4 e svolgere la verifica manuale dichiarata su
+   installazione reale attraverso `genropy-asgi`.
+3. Produrre una matrice di parità `pre_refactoring`/nuovo e usarla come gate di
+   Macro 5.
+4. Separare formalmente freezer transitorio e snapshot di reboot, oppure
    rafforzare il formato corrente prima di soft boot/dump/restore; non estendere
    per questo il requisito alla recovery trasparente del singolo worker.
-4. Decidere se la concessione memoria multi-front è preventiva o reattiva.
-5. Spezzare Macro 5 in sottogate con E2E e failure injection propri.
-6. Fissare il baseline mypy e allargare la matrice CI.
-7. Prima di Macro 6, eseguire un test di parità su installazione reale con
+5. Decidere se la concessione memoria multi-front è preventiva o reattiva.
+6. Spezzare Macro 5 in sottogate con E2E e failure injection propri.
+7. Fissare il baseline mypy e allargare la matrice CI.
+8. Prima di Macro 6, eseguire un test di parità su installazione reale con
    restart ordinato, morte worker, ripartenza controllata degli utenti colpiti,
    login concorrente, freeze/reassign, data plane e degradazione 503.
-8. Eseguire la stessa matrice attraverso `gnrasgiserve` con almeno due worker,
+9. Eseguire la stessa matrice attraverso `gnrasgiserve` con almeno due worker,
    includendo identità, datachange, dbevent e global store cross-worker.
-9. Pubblicare o vincolare una versione di `genropy-asgi` compatibile col nuovo
+10. Pubblicare o vincolare una versione di `genropy-asgi` compatibile col nuovo
    stack.
-10. Solo allora fare cutover, rename di `SpaApplicationNew`, esportazione API e
-   cancellazione simultanea del legacy e delle sue sentinelle.
+11. Solo allora fare cutover, rename di `SpaApplicationNew`, esportazione API e
+   cancellazione simultanea del `pre_refactoring` e delle sue sentinelle.
 
 ## Conclusione
 
 Il repository mostra una qualità di processo superiore alla media: decisioni
 esplicite, test numerosi, migrazione isolata e ownership architetturale chiara.
-Il nuovo stack ha già una base credibile e il branch corrente è verde.
+Il nuovo stack ha ora una request chain completa, una giornata end-to-end
+credibile e l'HEAD corrente è verde sull'intera suite.
 
-La lettura prudente, però, è che il progetto si trova circa a metà del rischio,
-non a metà delle righe: request chain, mobilità fondamentale e login sono
-pronti, mentre data plane, soft boot e integrazione delle manovre operative sono
-le parti che determinano la sicurezza del cutover. La recovery trasparente da
-crash del singolo worker non è un requisito: la ripartenza del gruppo ristretto
-di utenti coinvolti è un rischio esplicito e ragionevole finché crash e impatto
-restano rari e osservabili. La priorità dovrebbe quindi essere ridurre e
-verificare Macro 5, non accelerare la rimozione del legacy.
+La lettura prudente resta però che il progetto si trova circa a metà del rischio,
+non a metà delle righe: Macro 4 ha chiuso request chain, mobilità fondamentale e
+login, mentre data plane, soft boot e integrazione delle manovre operative sono
+le parti che determinano la sicurezza del cutover. In più, la nuova policy della
+fold ha correttamente separato il guasto del parent dalla salute del worker, ma
+non ha ancora definito come il parent recupera una superficie parzialmente
+applicata. La recovery trasparente da crash del singolo worker non è un requisito:
+la ripartenza del gruppo ristretto di utenti coinvolti è un rischio esplicito e
+ragionevole finché crash e impatto restano rari e osservabili. La priorità è
+quindi chiudere il contratto di coerenza della fold e poi ridurre e verificare
+Macro 5, non accelerare la rimozione del `pre_refactoring`.

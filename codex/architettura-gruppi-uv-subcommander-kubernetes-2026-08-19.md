@@ -1,8 +1,33 @@
 # Architettura di deployment: gruppi, UV, subcommander e Kubernetes
 
 Data: 19 agosto 2026  
+Revisione sul codice: 19 agosto 2026, ore 17:58 CEST, `main` @ `2063616`  
 Stato: proposta architetturale per sessione di analisi e ratifica  
 Perimetro: evoluzione dell'orchestrazione user-sticky di `genro-asgi`
+
+## Revisione rispetto all'HEAD corrente
+
+La direzione generale del documento resta valida, ma il codice locale ha
+compiuto due passi rilevanti dopo la prima stesura:
+
+- Macro 4 è completa su `main`: esiste una giornata end-to-end che attraversa
+  il front ASGI, il commander, il gruppo, due processi figli e un sito WSGI
+  reale, includendo login, secondo browser, freeze/wake e pressione di capacità;
+- `2063616` ha stabilito che un errore della fold nel parent non deve uccidere
+  il worker: il figlio può essere sano e non è responsabile di un campo
+  divergente o di un bug nella catena superiore.
+
+La seconda decisione è importante anche per Kubernetes: un errore del control
+plane applicativo non deve essere tradotto automaticamente nella terminazione
+di un Pod sano. Il codice corrente, tuttavia, si limita a registrare l'eccezione
+e lascia possibile un envelope applicato solo in parte. Prima della
+distribuzione gerarchica servono quindi un contratto di degradazione del parent,
+un meccanismo di risincronizzazione e una escalation osservabile.
+
+Questa revisione non rileva implementazione Kubernetes o subcommander nel
+repository: il documento resta una proposta futura. L'E2E di Macro 4 rafforza
+la base locale su cui costruire, ma non prova lease, fencing, directory
+distribuite o recovery multi-nodo.
 
 ## 1. Obiettivo
 
@@ -42,6 +67,8 @@ servono, quali utenti ospitano o quale versione deve ricevere traffico.
   coinvolti; è un rischio operativo accettato.
 - In Kubernetes il commander, non HPA, decide crescita e riduzione dei worker.
 - UV è lo strumento previsto per produrre ambienti Python riproducibili.
+- Un errore della fold nel parent non dimostra un guasto del worker e non deve,
+  da solo, provocare la terminazione del processo o del futuro Pod.
 
 ### Orientamenti da consolidare
 
@@ -51,6 +78,8 @@ servono, quali utenti ospitano o quale versione deve ricevere traffico.
 - Un worker Kubernetes è un Pod controllato logicamente dal commander.
 - Un gruppo di versione dovrebbe riferirsi a un'immagine immutabile, costruita
   con un ambiente UV, invece di creare il virtualenv durante l'avvio del Pod.
+- Una fold parzialmente applicata deve degradare il ramo interessato e avviare
+  escalation/riparazione, senza continuare a presentarlo come coerente.
 
 ### Decisioni ancora da ratificare
 
@@ -63,6 +92,8 @@ servono, quali utenti ospitano o quale versione deve ricevere traffico.
 - Forma delle risorse Kubernetes: Pod diretti, CRD dedicata o controller
   separato.
 - Failure model di root commander e subcommander.
+- Contratto di risincronizzazione dopo una fold fallita: fotografia autoritativa,
+  replay idempotente oppure ricostruzione del parent.
 
 ## 3. Principi architetturali
 
@@ -121,6 +152,30 @@ RESIDENT
 ```
 
 Non devono esistere due copie residenti e autoritative dello stesso utente.
+
+### 3.4 Salute del worker e coerenza del parent sono domini distinti
+
+La catena degli envelope aggiorna una superficie gerarchica single-writer. Se
+una fold alza un'eccezione, il difetto può essere interamente nel parent: nome
+di campo divergente, handler incompleto o invariante locale violata. Riavviare
+il worker o ricreare il Pod non ripara questa classe di errore.
+
+Il parent deve invece entrare in uno stato esplicito, per esempio `degraded` o
+`inconsistent`, che impedisca nuove decisioni basate sulla porzione dubbia. Il
+recupero deve usare una fonte completa e versionata:
+
+```text
+fold failure
+    → ramo degradato
+    → richieste dipendenti sospese o rifiutate
+    → fotografia completa / replay idempotente
+    → verifica di generation e revisione
+    → ramo nuovamente operativo oppure escalation
+```
+
+Il log dell'eccezione è necessario ma non sufficiente. Continuare a servire con
+la superficie solo parzialmente applicata viola la distinzione fra desired e
+observed state su cui si basa la riconciliazione Kubernetes.
 
 ## 4. Gruppi e versioni applicative
 
@@ -599,6 +654,22 @@ Node loss, eviction, OOM e rifiuto per quota non sono decisioni concorrenti di
 Kubernetes: sono fatti esterni. Il commander li osserva, li registra e decide
 la risposta applicativa.
 
+### 11.6 Errore della fold nel parent
+
+Non è un worker crash e non autorizza automaticamente `terminate_process` o la
+cancellazione del Pod. Il worker resta osservabile e può continuare a rispondere
+ai probe di health, mentre il ramo del parent che non ha applicato l'envelope
+perde la qualifica di fonte coerente.
+
+La prima implementazione distribuita deve definire:
+
+- quale livello viene marcato degradato: worker handle, gruppo o subcommander;
+- quali richieste possono ancora essere servite senza consultare lo stato dubbio;
+- come si ottiene una fotografia completa con revisione/generation verificabile;
+- quando una risincronizzazione è sufficiente e quando va ricostruito il parent;
+- come viene notificato l'operatore senza trasformare l'errore in un restart
+  loop di Pod sani.
+
 ## 12. Data path: alternative da analizzare
 
 ### Alternativa A — Root nel data path
@@ -672,6 +743,15 @@ Metriche minime:
 
 ## 14. Percorso di implementazione raccomandato
 
+### Fase K0 — Chiudere il contratto locale di coerenza
+
+- completare Macro 5 e il bridge reale `genropy-asgi` prima di distribuire il
+  control plane;
+- ratificare la politica dopo una fold parzialmente applicata;
+- introdurre stato degradato, escalation e risincronizzazione su processo locale;
+- provare che un difetto del parent non uccide il worker ma nemmeno lascia il
+  ramo operativo con una superficie incoerente.
+
 ### Fase K1 — Runtime astratto
 
 - Estrarre `WorkerRuntime` dal `WorkerHandler`.
@@ -735,7 +815,9 @@ Il disegno può considerarsi validato quando:
 9. il restart di un subcommander non crea doppia ownership;
 10. il root può ricostruire uno stato coerente dopo il proprio restart;
 11. quote e fusibili impediscono una crescita incontrollata;
-12. ogni decisione è ricostruibile dal log di orchestrazione.
+12. ogni decisione è ricostruibile dal log di orchestrazione;
+13. una fold fallita non uccide un worker sano, ma il ramo dubbio non continua a
+    operare come coerente e possiede un percorso di risincronizzazione provato.
 
 ## 16. Valutazione
 
@@ -747,9 +829,13 @@ La scelta di lasciare al commander tutte le decisioni e a Kubernetes la realtà
 infrastrutturale evita conflitti con HPA e conserva una sola fonte di policy.
 Il rischio principale non è Kubernetes, ma la distribuzione dell'autorità:
 directory, lease, epoch e fencing devono essere parte del modello fin dal primo
-subcommander.
+subcommander. L'HEAD corrente aggiunge un esempio concreto dello stesso problema
+prima ancora del cluster: una fold può lasciare divergenti la superficie del
+parent e quella del worker. La futura gerarchia deve trattare questa divergenza
+come guasto del control plane, non come health failure del Pod.
 
 Se questi invarianti vengono rispettati, il passaggio al cluster non richiede
 di abbandonare user-sticky, gruppi, freezer o single-writer. Richiede di rendere
 espliciti i confini che sul singolo processo erano garantiti implicitamente
-dalla memoria e dal sistema operativo.
+dalla memoria e dal sistema operativo, e di aggiungere un protocollo esplicito
+per riconoscere e riparare una superficie solo parzialmente applicata.

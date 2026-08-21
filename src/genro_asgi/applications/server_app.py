@@ -82,6 +82,7 @@ keep today's bare app.
 
 from __future__ import annotations
 
+import os
 import time
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -91,7 +92,9 @@ from ..auth import AuthMethod, OidcMethod, PasswordMethod
 from ..session import Avatar
 from .openapi import RESOURCES_DIR, OpenApiApplication
 from .server_sections import (
+    INSPECTOR_ENV_VAR,
     AuthSection,
+    InspectorSection,
     MonitorSection,
     TasksSection,
     TokensSection,
@@ -139,6 +142,8 @@ class ServerApplication(OpenApiApplication):
         self.attach_section(TokensSection(self), name="tokens")
         self.attach_section(TasksSection(self), name="tasks")
         self.attach_section(MonitorSection(self), name="monitor")
+        if os.environ.get(INSPECTOR_ENV_VAR):
+            self.attach_section(InspectorSection(self), name="inspector")
 
     @staticmethod
     def _oidc_method_id(code: str) -> str:

@@ -359,8 +359,16 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
             Nothing at all: the descent carries no payload of its own any more —
             the global store used to ride the presentation and now lives on the
             lane, where the worker asks for it.
+
+        What the fold wrote is published on the observation stream from here —
+        the single writer is also the single place a watcher hears about it.
         """
         self.work_on_envelope(envelope)
+        if self.spa_commander.observation_watched:
+            for worker_event in envelope.get(ENVELOPE_SLOT_WORKER_EVENTS) or ():
+                self.spa_commander.publish_observation(
+                    worker_event["op"], "commander", dict(worker_event)
+                )
         return {}
 
     def on_worker_snapshot(self, photo: dict[str, Any]) -> None:

@@ -1,0 +1,5 @@
+Fase 6 chiusa. Nessun canale foreman raggiungibile in questa sessione (né `list_sessions`/`send_message` desktop né `ListAgents`): notifica saltata in silenzio, come previsto dal protocollo.
+
+✓ Phase 6 completed: Coherence review and auto-fix (final, mandatory)
+
+`review.md` è nel plan directory con le tre sezioni; un solo auto-fix di formattazione (l'`__all__` di `server_sections/__init__.py` era a 133 caratteri contro il `line-length = 100` dichiarato, invisibile a ruff perché `E501` non è nel suo `select`), e sette voci flagged per te — nessuna è un errore di logica o una divergenza dai pattern reference. Convergenza in un ciclo: lint pulito → fix → lint pulito → suite verde (2112 passed, 2 skipped), commit `5bd4450`, tree pulito. Resta il `Verify: now` di fase 5 in `verify.md` — la passata in browser con `GNR_ASGI_INSPECTOR=1` — e il piano è ora tutto `[x]`, pronto per `/quality-check` e `/finalize-workflow`.

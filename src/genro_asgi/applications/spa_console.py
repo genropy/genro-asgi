@@ -14,7 +14,7 @@
 
 """The pool's debug door, served as MCP tools: ask a live server anything.
 
-One mechanism, no predicted questions: ``inspect`` evaluates a Python
+One mechanism, no predicted questions: ``eval`` evaluates a Python
 expression in one process of an SPA pool — ``commander`` in the server
 process, or any worker by name, reached over the lane the commander already
 holds to every child — and answers the value's ``repr``. Whatever was not
@@ -24,7 +24,7 @@ foreseen is readable by composing an expression: ``len(commander.user_map)``,
 
 **Mounting IS the gate.** The door is full eval by construction — there is no
 read-only eval in Python — so it exists only where the recipe mounts
-:class:`SpaInspectorMcpApplication` on purpose, and must never be mounted in
+:class:`SpaConsoleMcpApplication` on purpose, and must never be mounted in
 production. An MCP client (Claude included) connects to the app's endpoint
 and asks in natural language; ``targets`` lists what can be looked into.
 """
@@ -38,10 +38,10 @@ from genro_routes import RoutingClass, route
 from .mcp import McpApplication
 from .spa_app_new import SpaApplicationNew
 
-__all__ = ["SpaInspector", "SpaInspectorMcpApplication"]
+__all__ = ["SpaConsole", "SpaConsoleMcpApplication"]
 
 
-class SpaInspector(RoutingClass):
+class SpaConsole(RoutingClass):
     """The tool surface: every route is an MCP tool.
 
     Args:
@@ -58,11 +58,11 @@ class SpaInspector(RoutingClass):
     async def targets(self) -> dict:
         """Every process the door can look into, by SPA application code."""
         return {
-            code: front.commander.inspect_targets for code, front in self.spa_fronts.items()
+            code: front.commander.console_targets for code, front in self.spa_fronts.items()
         }
 
     @route()
-    async def inspect(self, expr: str, target: str = "commander", app: str = "") -> dict:
+    async def eval(self, expr: str, target: str = "commander", app: str = "") -> dict:
         """Evaluate a Python expression in one process of the pool.
 
         Args:
@@ -76,7 +76,7 @@ class SpaInspector(RoutingClass):
             The target and the value's ``repr``.
         """
         front = self.spa_front(app)
-        return {"target": target, "repr": await front.commander.inspect_target(target, expr)}
+        return {"target": target, "repr": await front.commander.eval_in_target(target, expr)}
 
     @property
     def spa_fronts(self) -> dict[str, SpaApplicationNew]:
@@ -105,14 +105,14 @@ class SpaInspector(RoutingClass):
         )
 
 
-class SpaInspectorMcpApplication(McpApplication):
+class SpaConsoleMcpApplication(McpApplication):
     """The MCP app whose whole tool surface is the pool's debug door.
 
     Recipe-friendly: mount it and the door exists, leave it out and it does
     not — mounting is the gate, and a production recipe never mounts it.
     """
 
-    mcp_name = "genro-spa-inspector"
+    mcp_name = "genro-spa-console"
 
     def __init__(self, **kwargs: Any) -> None:
-        super().__init__(routing_class=SpaInspector(self), **kwargs)
+        super().__init__(routing_class=SpaConsole(self), **kwargs)

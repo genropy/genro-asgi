@@ -1,0 +1,87 @@
+# Copyright 2025 Softwell S.r.l.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""The census: the whole pool read out as JSON, for a human to look at."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+
+class XT_MuteWorkerHandler:
+    """A worker handler whose lane answers nothing: the census must survive it."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.state = "running"
+        self.worker_snapshot = None
+        self.connector = self
+
+    async def call(self, path: str, data: dict) -> dict:
+        raise ConnectionError("the wire is gone")
+
+
+@pytest.fixture
+def wired_lane(desk_lane):
+    """The lane, with its handler hanging in the group map like a launched one."""
+    group = desk_lane.commander.group_map["standard"]
+    group.worker_handler_map[desk_lane.worker_handler.name] = desk_lane.worker_handler
+    return desk_lane
+
+
+@pytest.fixture
+async def populated_lane(wired_lane):
+    """One user with one connection and one page, both sides knowing about him."""
+    wired_lane.worker.add_connection("a1b2", sticky_cid="cid-a")
+    wired_lane.worker.add_page("page-0", "a1b2")
+    wired_lane.commander.record_connection_user("cid-a", "guest_a1b2")
+    return wired_lane
+
+
+async def test_the_worker_census_holds_its_three_registers(populated_lane):
+    census = populated_lane.worker.census()
+
+    assert census["name"] == "standard_0001"
+    assert "guest_a1b2" in census["user_register"]
+    assert "a1b2" in census["connection_register"]
+    assert "page-0" in census["page_register"]
+    assert census["cid_connection_map"] == {"cid-a": "a1b2"}
+
+
+async def test_the_pool_census_carries_the_user_on_both_sides(populated_lane):
+    census = await populated_lane.commander.get_pool_census()
+
+    assert "guest_a1b2" in census["user_map"]
+    assert census["connection_user_map"] == {"cid-a": "guest_a1b2"}
+    assert census["default_group"] == "standard"
+    worker_census = census["workers"]["standard_0001"]
+    assert "guest_a1b2" in worker_census["user_register"]
+
+
+async def test_the_whole_census_is_json(populated_lane):
+    census = await populated_lane.commander.get_pool_census()
+
+    assert json.loads(json.dumps(census))["workers"]["standard_0001"]["name"] == "standard_0001"
+
+
+async def test_a_worker_that_does_not_answer_is_an_error_entry(populated_lane):
+    group = populated_lane.commander.group_map["standard"]
+    group.worker_handler_map["standard_0002"] = XT_MuteWorkerHandler("standard_0002")
+
+    census = await populated_lane.commander.get_pool_census()
+
+    assert "the wire is gone" in census["workers"]["standard_0002"]["error"]
+    assert "guest_a1b2" in census["workers"]["standard_0001"]["user_register"]
