@@ -371,6 +371,74 @@ async def test_a_resident_keeps_his_own_store_and_the_guests_dies(worker, deposi
     assert worker.user_register.get("mario")["store"]["cart.item"] == "his own lamp"
 
 
+def stale_generation(deposit, user: str, cid: str, sticky_cid: str) -> None:
+    """An older connection of the same browser cookie, parked in the deposit.
+
+    The shape a real deposit accumulates across restarts and re-logins: the
+    cookie survives in the browser, the connection id is minted anew by the
+    site each time, and every login's tail leaves one parcel — so a user's
+    folder ends up holding several parcels whose rows carry the SAME
+    ``sticky_cid`` under different connection ids.
+    """
+    deposit.take_lock(user, WORKER_NAME)
+    deposit.write_connection_register_item(
+        user,
+        cid,
+        {
+            "connection_id": cid,
+            "connection": {"sticky_cid": sticky_cid},
+            "pages": {},
+        },
+        writer=WORKER_NAME,
+        cause="login",
+        group="standard",
+    )
+    deposit.release_lock(user, WORKER_NAME)
+
+
+async def test_every_generation_of_one_cookie_comes_back(worker, deposit):
+    """THE LOGIN UNDONE (collaudo 2026-08-21) — two parcels of one cookie.
+
+    The site looks its connection up by ITS OWN id, read from its own cookie;
+    the front routes by ``sticky_cid``. When the user's folder holds parcels of
+    more than one connection GENERATION under the same sticky cookie, a claim
+    that installs an arbitrary one may leave the very connection the site's
+    cookie names in the deposit: the site finds nothing, falls back to a fresh
+    guest, and its ``new_connection`` overwrites the junction — the login is
+    undone and the folder becomes unreachable for good. Every generation must
+    come home; the site serves on the one it knows.
+    """
+    stale_generation(deposit, "mario", "old1", "spa-a1b2")
+    browsing_guest(worker)
+    worker.change_connection_user("a1b2", "mario")
+    assert await worker.freeze_connection("a1b2") is True
+
+    await worker.adopt_connection("mario", "spa-a1b2")
+
+    assert "a1b2" in worker.connection_register
+    assert "old1" in worker.connection_register
+    assert deposit.read_connection_register_item("mario", "a1b2") is None
+    assert deposit.read_connection_register_item("mario", "old1") is None
+
+
+async def test_a_live_connection_does_not_bury_a_deposited_sibling(worker, deposit):
+    """A generation already living here must not mask the deposited one.
+
+    The early answer for a connection the worker already holds is right only
+    when the deposit holds nothing else for this user: the site may be asking
+    for the SIBLING its own cookie names, and a claim that never happens is a
+    guest fallback on the very next validate.
+    """
+    worker.add_connection("a1b2", "mario", sticky_cid="spa-a1b2")
+    stale_generation(deposit, "mario", "gen2", "spa-a1b2")
+
+    await worker.adopt_connection("mario", "spa-a1b2")
+
+    assert "gen2" in worker.connection_register
+    assert worker.connection_register.get("a1b2")["user"] == "mario"
+    assert deposit.read_connection_register_item("mario", "gen2") is None
+
+
 async def test_the_user_parcel_is_installed_before_the_connection_one(worker, deposit):
     """THE RATIFIED INVARIANT — it is what makes the resident win on a wake.
 

@@ -1862,7 +1862,7 @@ class SpaWorker:
         return item
 
     async def adopt_connection(self, user: str, cid: str) -> dict[str, Any] | None:
-        """Look for a connection of ``user`` in the deposit and install what is there.
+        """Look for the cookie's connections of ``user`` in the deposit, install what is there.
 
         Args:
             user: the user the connection belongs to.
@@ -1871,37 +1871,40 @@ class SpaWorker:
                 row travels with.
 
         Returns:
-            The connection register item carrying the pages the parcel had —
-            or None when nothing is held and nothing is parked: the rows are
-            the site's to bear, and it baptises again while being served.
+            The connection register item the cookie now reaches — or None when
+            nothing is held and nothing is parked: the rows are the site's to
+            bear, and it baptises again while being served.
 
-        Reads the parcel by itself (no verdict authorises a connection), deletes
-        it from the deposit and brings the connection and its pages into being
-        through the ordinary mutators: the worker events are the natural
-        ``new_connection``/``new_page``, never one of its own. A connection
-        already held costs no trip at all; the question is asked again on the
-        way back, because the trip is a handoff and a sister may have installed
-        it meanwhile.
+        Reads the parcels by itself (no verdict authorises a connection),
+        deletes them from the deposit and brings each connection and its pages
+        into being through the ordinary mutators: the worker events are the
+        natural ``new_connection``/``new_page``, never one of its own. EVERY
+        generation of the cookie comes home, because the site looks its row up
+        by ITS OWN id and an arbitrary pick would leave the one it names in the
+        deposit (the 2026-08-21 login undone); for the same reason a connection
+        already held spares the trip only while the user's folder is empty — a
+        deposited sibling must not stay buried behind a living one. Each
+        install is judged per id on the way back, because the trip is a
+        handoff and a sister may have installed some of them meanwhile.
         """
         with self.dispatch_lock:
             item = self._connection_for_cid(cid)
-            if item is not None:
-                return item
-        found = await self._take_from_deposit(user, self._find_connection_parcel, cid)
+        if item is not None and (
+            self.freeze_handler.user_to_userkey(user) not in self.freeze_handler.user_folders
+        ):
+            return item
+        found = await self._take_from_deposit(user, self._claim_connection_parcels, cid)
         with self.dispatch_lock:
-            item = self._connection_for_cid(cid)
-            if item is None:
-                if found is None:
-                    return None
-                connection_id, parcel = found
+            for connection_id, parcel in found:
+                if self.connection_register.get(connection_id) is not None:
+                    continue
                 resident = user in self.user_register
-                item = self.add_connection(connection_id, user, **parcel.get("connection", {}))
-                cid = connection_id
+                installed = self.add_connection(connection_id, user, **parcel.get("connection", {}))
                 for page_id, fields in parcel.get("pages", {}).items():
                     replayed = {
                         key: fields.pop(key) for key in PARCEL_PAGE_REPLAYED_FIELDS if key in fields
                     }
-                    page = self._add_page_item(page_id, cid, **fields)
+                    page = self._add_page_item(page_id, connection_id, **fields)
                     self._install_page_subscriptions(page_id, replayed)
                     # Announced AFTER the replay, so the event carries the
                     # subscriptions the vertex rebuilds its index from.
@@ -1909,11 +1912,11 @@ class SpaWorker:
                         "new_page",
                         user=self.registry.page_user(page_id),
                         page_id=page_id,
-                        sticky_cid=item["sticky_cid"],
+                        sticky_cid=installed["sticky_cid"],
                         table_subscriptions=sorted(page["table_subscriptions"]),
                     )
                 self._install_carried_store(user, parcel.get("store"), resident)
-            return item
+            return self._connection_for_cid(cid) or item
 
     def _install_carried_store(self, user: str, store: Any, resident: bool) -> None:
         """Give a login's store to the row it belongs to, or let it die out loud.
@@ -2884,25 +2887,30 @@ class SpaWorker:
         self.freeze_handler.drop_connection_register_item(user, cid)
         return payload
 
-    def _find_connection_parcel(self, user: str, cid: str) -> tuple[str, Any] | None:
-        """One parcel of ``user`` for this request's cookie, taken off the deposit.
+    def _claim_connection_parcels(self, user: str, cid: str) -> list[tuple[str, Any]]:
+        """Every parcel of ``user`` this request's cookie reaches, taken off the deposit.
 
         The direct key first — the cookie IS the connection id where no site
-        renamed it — then the match on the ``sticky_cid`` the parcel's row
-        carries: the rows are the site's, keyed by its own ids, and the cookie
-        reaches them through that field.
+        renamed it — then every parcel whose row carries the cookie in
+        ``sticky_cid``: the rows are the site's, keyed by its own ids, and the
+        cookie reaches them through that field. One browser leaves one parcel
+        per connection GENERATION (each login's tail parts its own), and the
+        site asks for its row by ITS OWN id — so all of them are claimed, never
+        an arbitrary one, or the generation the site's cookie names could stay
+        in the deposit while a stale one comes home in its place.
 
         Returns:
-            ``(connection_id, payload)``, or None when the deposit holds
-            nothing for this cookie.
+            The claimed ``(connection_id, payload)`` pairs, in deposit order;
+            empty when the deposit holds nothing for this cookie.
         """
+        claimed: list[tuple[str, Any]] = []
         payload = self.freeze_handler.read_connection_register_item(user, cid)
         if payload is not None:
             self.freeze_handler.drop_connection_register_item(user, cid)
-            return cid, payload
+            claimed.append((cid, payload))
         for payload in self.freeze_handler.read_connection_register_items(user):
-            if payload.get("connection", {}).get("sticky_cid") == cid:
-                connection_id = payload["connection_id"]
+            connection_id = payload["connection_id"]
+            if connection_id != cid and payload.get("connection", {}).get("sticky_cid") == cid:
                 self.freeze_handler.drop_connection_register_item(user, connection_id)
-                return connection_id, payload
-        return None
+                claimed.append((connection_id, payload))
+        return claimed
