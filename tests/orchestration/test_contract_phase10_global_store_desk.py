@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-from genro_asgi.spa.orchestration import FreezeHandler, SpaCommander
+from genro_asgi.spa.orchestration import FreezeHandler, SpaCommander, SpaWorker
 from genro_asgi.spa.orchestration import spa_commander as spa_commander_module
 from genro_asgi.spa.orchestration import spa_worker as spa_worker_module
 from genro_asgi.spa.orchestration import worker_connector as worker_connector_module
@@ -192,14 +192,14 @@ async def test_the_replica_machinery_is_gone(desk_lane):
         assert not hasattr(worker_connector_module, gone)
     for gone in (
         "global_replica",
+        "global_store",
         "global_register_item_tytx",
         "record_global_write",
         "_global_writes",
         "_take_global_store",
     ):
         assert not hasattr(desk_lane.worker, gone)
-    # `global_store` exists again since 2026-08-20, as the READ-ONLY published
-    # view (owner decision) — a view is not a replica: nothing rides envelopes.
+    assert not hasattr(SpaWorker, "global_store")
     assert not hasattr(SpaCommander, "apply_global_writes")
 
     written = "".join(

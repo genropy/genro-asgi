@@ -45,7 +45,6 @@ from .exceptions import (
 )
 from .beats import every
 from .freeze_handler import FreezeHandler
-from .global_store_view import GlobalStorePublisher, GlobalStoreView
 from .group_handler import GroupHandler
 from .spa_commander import SpaCommander
 from .spa_worker import SpaWorker
@@ -58,8 +57,6 @@ __all__ = [
     "CommanderEnvelopeHandler",
     "EnvelopeHandler",
     "FreezeHandler",
-    "GlobalStorePublisher",
-    "GlobalStoreView",
     "GroupEnvelopeHandler",
     "GroupHandler",
     "NoRoomError",

@@ -177,7 +177,6 @@ async def test_the_spawn_payload_carries_the_child_whole_configuration(make_hand
         "aux_threadpool_size": 2,
         "worker_class": "genro_asgi.spa.worker:UserStickyWorker",
         "kwargs": {"behaviour": "answer"},
-        "global_store_path": None,
     }
 
 

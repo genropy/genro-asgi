@@ -17,7 +17,7 @@
 ``python -m genro_asgi.spa.orchestration.worker_entry`` is what a WorkerHandler
 spawns. The child is **monolingual**: it speaks only its handler's socket — no
 HTTP port, no uvicorn, no second door. Its whole configuration arrives in the
-``GENRO_ASGI_WORKER`` environment variable as one JSON object, the eight keys
+``GENRO_ASGI_WORKER`` environment variable as one JSON object, the seven keys
 the handler writes::
 
     {"name": "standard_0001",
@@ -26,8 +26,7 @@ the handler writes::
      "main_threadpool_size": 8,
      "aux_threadpool_size": 2,
      "worker_class": "genro_asgi.spa.orchestration.spa_worker:SpaWorker",
-     "kwargs": {"group": "standard"},
-     "global_store_path": "/var/lib/gnr/global_store.map"}
+     "kwargs": {"group": "standard"}}
 
 ``name``, ``uds_url`` and ``frozen_users_path`` are mandatory — the handler
 always knows all three — and a missing or malformed variable is a spawn
@@ -101,7 +100,6 @@ class WorkerEntry:
         self.aux_threadpool_size: int | None = self.config.get("aux_threadpool_size")
         self.worker_class: str = self.config.get("worker_class") or DEFAULT_WORKER_CLASS
         self.kwargs: dict[str, Any] = self.config.get("kwargs") or {}
-        self.global_store_path: str | None = self.config.get("global_store_path")
         self.worker: SpaWorker | None = None
         self.logger = logging.getLogger(__name__)
 
@@ -164,7 +162,6 @@ class WorkerEntry:
             freeze_handler=FreezeHandler(self.frozen_users_path),
             main_threadpool_size=self.main_threadpool_size,
             aux_threadpool_size=self.aux_threadpool_size,
-            global_store_path=self.global_store_path,
             **self.kwargs,
         )
 

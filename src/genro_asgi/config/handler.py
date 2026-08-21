@@ -319,7 +319,6 @@ class ConfigurationHandler(ConfigHandler):
         kwargs = self.closed_attrs(
             section,
             "frozen_users_path",
-            "global_store_path",
             "memory_max_percent",
             "machine_memory_alarm_percent",
             "orchestration_log_path",
@@ -350,9 +349,7 @@ class ConfigurationHandler(ConfigHandler):
         node = self.node(f"{section}.groups")
         if node is None:
             return {}
-        shared = self.closed_attrs(
-            section, "frozen_users_path", "instance_dir", "global_store_path"
-        )
+        shared = self.closed_attrs(section, "frozen_users_path", "instance_dir")
         groups: dict[str, dict[str, Any]] = {}
         for child in node.value:
             path = f"{section}.groups.{child.label}"

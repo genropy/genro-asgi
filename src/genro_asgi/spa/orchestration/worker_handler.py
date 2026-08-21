@@ -198,7 +198,6 @@ class WorkerHandler:
         aux_threadpool_size: int | None = None,
         worker_class: str | None = None,
         worker_kwargs: dict[str, Any] | None = None,
-        global_store_path: str | Path | None = None,
         executable: str | None = None,
         process_ping_interval: float = PROCESS_PING_INTERVAL,
         process_ping_timeout: float = PROCESS_PING_TIMEOUT,
@@ -212,7 +211,6 @@ class WorkerHandler:
         self.aux_threadpool_size = aux_threadpool_size
         self.worker_class = worker_class
         self.worker_kwargs = worker_kwargs or {}
-        self.global_store_path = global_store_path
         self.executable = executable or sys.executable
         self.process_ping_interval = process_ping_interval
         self.process_ping_timeout = process_ping_timeout
@@ -258,9 +256,6 @@ class WorkerHandler:
             "aux_threadpool_size": self.aux_threadpool_size,
             "worker_class": self.worker_class,
             "kwargs": self.worker_kwargs,
-            "global_store_path": (
-                str(self.global_store_path) if self.global_store_path else None
-            ),
         }
 
     def assign_user(self, user: str, occupancy_percent: float) -> None:
