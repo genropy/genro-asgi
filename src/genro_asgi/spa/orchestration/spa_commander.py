@@ -485,6 +485,25 @@ class DeliveryDesk:
         self.spa_commander.global_register.pop(path)
         return {"path": path}
 
+    def op_store_get(self, path: str) -> dict[str, Any]:
+        """Read one path of the store, and answer what it holds right now.
+
+        Args:
+            path: the path to read.
+
+        Returns:
+            The path and its value, TYTX-encoded so datetimes and nested Bags
+            travel whole; a path the store does not hold answers None — the
+            Bag's own read semantics, exactly what the caller would have seen
+            reading the master itself.
+
+        Acts on nothing: a read of the only copy there is.
+        """
+        return {
+            "path": path,
+            "value": to_tytx(self.spa_commander.global_register.get_item(path), "json"),
+        }
+
     async def op_store_lock(
         self, worker: str, request_id: str
     ) -> dict[str, Any]:

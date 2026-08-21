@@ -302,6 +302,7 @@ DESK_EXCHANGE_PATH = "/desk/exchange"
 #: nowhere else: two blind writes, and the two halves of one grant.
 DESK_STORE_SET_PATH = "/desk/store_set"
 DESK_STORE_DEL_PATH = "/desk/store_del"
+DESK_STORE_GET_PATH = "/desk/store_get"
 DESK_STORE_LOCK_PATH = "/desk/store_lock"
 DESK_STORE_UNLOCK_PATH = "/desk/store_unlock"
 
@@ -357,6 +358,7 @@ __all__ = [
     "DEPOSIT_LOCK_WAIT_LIMIT",
     "DESK_EXCHANGE_PATH",
     "DESK_STORE_DEL_PATH",
+    "DESK_STORE_GET_PATH",
     "DESK_STORE_LOCK_PATH",
     "DESK_STORE_SET_PATH",
     "DESK_STORE_UNLOCK_PATH",
@@ -1330,6 +1332,27 @@ class SpaWorker:
             CommanderCallFailed: the desk refused the removal.
         """
         return self.run_on_loop(self.call(DESK_STORE_DEL_PATH, {"path": path}))
+
+    def store_get(self, identity: str, path: str, **addressing: Any) -> Any:
+        """Read one path of the global store: a CALL on the lane, the current value back.
+
+        Args:
+            identity: whose request this is — the site's own first positional.
+            path: the path of the store to read.
+            addressing: the addressing the site passes and the store ignores.
+
+        Returns:
+            The value the master holds at that path — decoded whole, datetimes
+            and nested Bags included; None when the store holds nothing there,
+            the Bag's own read semantics. A read pays its round trip on the
+            lane and never holds a stale copy: what it answers is the master
+            at the moment it was asked.
+
+        Raises:
+            CommanderCallFailed: the desk refused the read.
+        """
+        reply = self.run_on_loop(self.call(DESK_STORE_GET_PATH, {"path": path}))
+        return from_tytx(reply["value"], "json")
 
     def global_store_lock(self) -> GlobalStoreLease:
         """One read-modify-write hold of the global store: ``with`` or ``async with``.
