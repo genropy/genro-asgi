@@ -244,6 +244,7 @@ from ..global_store import CapturingGlobalStore, GlobalStoreLease
 from ..register import Register
 from ..register_registry import RegisterRegistry
 from .freeze_handler import FreezeHandler
+from .global_store_view import GlobalStoreView
 from .worker_connector import (
     CALL_METHOD,
     ENVELOPE_SLOT_PRESENTATION,
@@ -430,6 +431,7 @@ class SpaWorker:
         main_threadpool_size: int | None = None,
         aux_threadpool_size: int | None = None,
         worker_snapshot_ttl: float = WORKER_SNAPSHOT_TTL,
+        global_store_path: str | None = None,
     ) -> None:
         self.name = name
         self.freeze_handler = freeze_handler
@@ -460,6 +462,11 @@ class SpaWorker:
         #: The rows of the three registers, and the lifecycle vocabulary that
         #: moves them: the shared registry, built through its own hook.
         self.registry = self.build_registry()
+        #: The read side of the global store, when configured: the commander
+        #: publishes, this view reads locally — writes stay on the lane.
+        self.global_store_view = (
+            GlobalStoreView(global_store_path) if global_store_path else None
+        )
         #: The tables somebody subscribes somewhere, as the last exchange reply
         #: told it: the source filter of this worker, at most one exchange out
         #: of date, which is the price of asking nobody.
@@ -1296,6 +1303,26 @@ class SpaWorker:
             "reason": reason,
             "ts": time.time(),
         }
+
+    @property
+    def global_store(self) -> Bag:
+        """The published global store, read locally at its latest whole version.
+
+        Returns:
+            The Bag of the shared view — this process's own working copy:
+            reading it is free of the lane, writing it changes nothing
+            anywhere. Writes travel as ``store_set``/``store_del``, and a
+            read-modify-write holds the ``global_store_lock`` grant, as ever.
+
+        Raises:
+            RuntimeError: this worker was built without a ``global_store_path``,
+                so there is no published view to read.
+        """
+        if self.global_store_view is None:
+            raise RuntimeError(
+                f"Worker {self.name}: no global_store_path configured, nothing to read"
+            )
+        return self.global_store_view.store
 
     def store_set(self, identity: str, path: str, value: Any = None, **addressing: Any) -> Any:
         """Write one path of the global store: a CALL on the lane, answered once it landed.

@@ -163,6 +163,7 @@ from .beats import every
 from .envelope_handler import CommanderEnvelopeHandler
 from .exceptions import AssignmentRefused, UserOnHold, SiteFailedRequest
 from .freeze_handler import FreezeHandler
+from .global_store_view import GlobalStorePublisher
 from .group_handler import CHECK_OCCUPANCY_BEATS, GroupHandler
 
 #: What a user with no name of his own is called: the prefix plus his cid. The
@@ -469,6 +470,7 @@ class DeliveryDesk:
         and the second one is the truth.
         """
         self.spa_commander.global_register.set_item(path, value)
+        self.spa_commander.publish_global_store()
         return {"path": path}
 
     def op_store_del(self, path: str) -> dict[str, Any]:
@@ -483,6 +485,7 @@ class DeliveryDesk:
         Acts on ``global_register``.
         """
         self.spa_commander.global_register.pop(path)
+        self.spa_commander.publish_global_store()
         return {"path": path}
 
     async def op_store_lock(
@@ -532,6 +535,7 @@ class DeliveryDesk:
             )
             return {"applied": False}
         GlobalStore(self.spa_commander.global_register).apply_changes(from_tytx(changes, "json"))
+        self.spa_commander.publish_global_store()
         self.spa_commander.global_lock.release()
         return {"applied": True}
 
@@ -622,6 +626,7 @@ class SpaCommander:
         machine_memory_alarm_percent: float = 90.0,
         memory_max_percent: float = 100.0,
         event_max_age_seconds: float = EVENT_MAX_AGE_SECONDS,
+        global_store_path: str | Path | None = None,
     ) -> None:
         self.freeze_handler = FreezeHandler(frozen_users_path)
         self.user_expiry_hours = user_expiry_hours
@@ -632,6 +637,12 @@ class SpaCommander:
         #: ONLY copy there is. Every read and every write of the hosted sites
         #: reaches it as a CALL on the lane, answered once it has landed.
         self.global_register = Bag()
+        #: The read side of that store, when configured: the whole register is
+        #: published to a shared memory-mapped file after every applied write,
+        #: and every worker reads it locally through a ``GlobalStoreView``.
+        self.global_store_publisher = (
+            GlobalStorePublisher(global_store_path) if global_store_path else None
+        )
         #: The grant of that store for a read-modify-write hold: FIFO, one
         #: holder, and a holder whose process dies releases it applying nothing.
         self.global_lock = GlobalStoreLock()
@@ -777,6 +788,15 @@ class SpaCommander:
         self.counters["requests_refused"] += 1
         refusal.retry_after = SHAPE_REVIEW_SECONDS
         return refusal
+
+    def publish_global_store(self) -> None:
+        """Push the register's current content to the shared view, when one is configured.
+
+        Acts on the map file through the publisher; without one (the path was
+        not configured) there is nothing to keep current and nothing happens.
+        """
+        if self.global_store_publisher is not None:
+            self.global_store_publisher.publish(self.global_register)
 
     def resolve_user(self, cid: str) -> str:
         """The reception desk: whose cid this is, minting him if he is new.
