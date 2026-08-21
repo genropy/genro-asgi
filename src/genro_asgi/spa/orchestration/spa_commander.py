@@ -1016,7 +1016,7 @@ class SpaCommander:
         """The login, as the surface sees it: a connection changes owner.
 
         Args:
-            cid: the connection that logged in.
+            cid: the routing cookie of the connection that logged in.
             user: the identity it belongs to from now on.
             previous_user: who it belonged to a moment ago.
 

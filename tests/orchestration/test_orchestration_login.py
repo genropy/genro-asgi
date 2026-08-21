@@ -57,8 +57,13 @@ def worker(deposit):
 
 
 def browsing_guest(worker: SpaWorker, cid: str = "a1b2", pages: int = 1) -> str:
-    """A visitor who arrived anonymous, opened a page and filled his store a little."""
-    worker.add_connection(cid)
+    """A visitor who arrived anonymous, opened a page and filled his store a little.
+
+    His connection carries a routing cookie of its own, a prefix apart from the
+    register key: the two identifiers are different strings, the way a real site
+    and the front make them.
+    """
+    worker.add_connection(cid, sticky_cid=f"spa-{cid}")
     guest = f"{GUEST_PREFIX}{cid}"
     for index in range(pages):
         worker.add_page(f"page-{index}", cid)
@@ -179,7 +184,7 @@ async def test_the_login_travels_on_the_reply(worker):
             "worker": WORKER_NAME,
             "user": "mario",
             "previous_user": guest,
-            "session_id": "a1b2",
+            "sticky_cid": "spa-a1b2",
         }
     ]
 
@@ -438,7 +443,7 @@ def user_changed_envelope(user: str, previous_user: str) -> dict[str, Any]:
                 "worker": WORKER_NAME,
                 "user": user,
                 "previous_user": previous_user,
-                "session_id": "a1b2",
+                "sticky_cid": "spa-a1b2",
             }
         ]
     }
@@ -476,4 +481,4 @@ async def test_a_previous_identity_who_is_no_guest_keeps_his_place(tmp_path):
 
     assert worker_handler.hosted_users == {"mario", "mario_admin"}
     assert group.user_worker_map["mario"] == WORKER_NAME
-    assert group.spa_commander.connection_user_map["a1b2"] == "mario_admin"
+    assert group.spa_commander.connection_user_map["spa-a1b2"] == "mario_admin"

@@ -99,6 +99,11 @@ STORY_WORKER = f"{__name__}:X_SpaWorker_m4"
 #: The path the site reads as a login; what follows it is the identity.
 LOGIN_PATH = "/login/"
 
+#: What the story's site prefixes its OWN connection ids with. The routing cookie
+#: and the site's session id are two different strings — which is what makes the
+#: junction between them observable at all.
+SITE_SESSION_PREFIX = "site-"
+
 #: The silence past which a worker parks a user, as the recipe declares it, and
 #: the gate the departures wait out — both shrunk to fractions of a second.
 IDLE_SECONDS = 0.5
@@ -194,23 +199,29 @@ class X_SpaWorker_m4(X_SpaWorker):
     def site(self, environ: dict[str, Any], start_response: Any) -> list[bytes]:
         """Serve one page: log in when asked, add to the trail, render it back.
 
-        Like a real site it BAPTISES on first sight (doctrine of 2026-08-21):
-        a cookie with no connection registers one, named by the site itself —
-        here the cookie's own value, the core-only world.
+        Like a real site it BAPTISES on first sight (doctrine of 2026-08-21) and
+        it names the connection ITSELF, with an id of its own that is NOT the
+        routing cookie — the two identifiers are a prefix apart here, which is
+        all it takes for a test to see the difference between them.
         """
         identity = environ["genro.identity"]
         path = environ["PATH_INFO"]
-        if self._connection_for_cid(cid_of(environ)) is None:
-            self.new_connection(cid_of(environ), user=identity)
+        session_id = self.site_session_id(cid_of(environ))
+        if self.connection_register.get(session_id) is None:
+            self.new_connection(session_id, user=identity)
         if path.startswith(LOGIN_PATH):
-            self.change_connection_user(cid_of(environ), path[len(LOGIN_PATH) :])
+            self.change_connection_user(session_id, path[len(LOGIN_PATH) :])
         with self.dispatch_lock:
-            owner = self.connection_register.get(cid_of(environ))["user"]
+            owner = self.connection_register.get(session_id)["user"]
             store = self.user_register.get(owner)["store"]
             store["trail"] = f"{store['trail'] or ''}{path} "
             trail = store["trail"]
         start_response("200 OK", [("Content-Type", "text/plain"), ("X-Worker", self.name)])
         return [f"{identity}|{trail}".encode()]
+
+    def site_session_id(self, cid: str) -> str:
+        """This site's own id for the browser behind that cookie, its own to mint."""
+        return f"{SITE_SESSION_PREFIX}{cid}"
 
 
 def cid_of(environ: dict[str, Any]) -> str:
@@ -309,7 +320,8 @@ async def test_a_day_of_the_site_from_the_front_to_the_child(server):
     # the doctrine of 2026-08-21: the cookie routes, the site baptises.
     first = await browse(server, "/catalog")
     cid = minted_cid(first)
-    guest = f"{GUEST_PREFIX}{cid}"
+    # The guest's name is the SITE's, built on the id the site minted for itself.
+    guest = f"{GUEST_PREFIX}{SITE_SESSION_PREFIX}{cid}"
 
     assert identity_of(first) == "None"
     assert vertex.connection_user_map[cid] == guest
@@ -479,7 +491,7 @@ async def test_a_death_where_nothing_of_his_is_left_does_not_take_him(server, st
 
     assert served_by(joining) == reception.name
     assert "mario" not in reception.hosted_users
-    assert freezer.read_connection_register_item("mario", second_cid) is not None
+    assert freezer.read_connection_register_item("mario", f"{SITE_SESSION_PREFIX}{second_cid}") is not None
 
     # That process dies wild, and the round settles the death.
     reception.process.kill()
@@ -492,7 +504,7 @@ async def test_a_death_where_nothing_of_his_is_left_does_not_take_him(server, st
     assert vertex.connection_user_map[cid] == "mario"
     assert vertex.connection_user_map[second_cid] == "mario"
     assert group.user_worker_map["mario"] == spare.name
-    assert freezer.read_connection_register_item("mario", second_cid) is not None
+    assert freezer.read_connection_register_item("mario", f"{SITE_SESSION_PREFIX}{second_cid}") is not None
     # And he is served as ever, with everything he has done still under him.
     served = await browse(server, "/orders/9", cid)
 

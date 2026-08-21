@@ -418,10 +418,17 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
         self.spa_commander.drop_user(worker_event["user"])
 
     def on_connection_user_changed(self, worker_event: dict[str, Any]) -> None:
-        """A connection changed owner: the surface says so, and decides nothing."""
-        self.spa_commander.change_connection_user(
-            worker_event["session_id"], worker_event["user"], worker_event["previous_user"]
-        )
+        """A connection changed owner: the surface says so, and decides nothing.
+
+        Written under the ROUTING COOKIE, which is the key of the index
+        ``resolve_user`` reads — never under the connection id, which belongs to
+        the hosted site. A connection no cookie routes joins nothing, exactly as
+        it joined nothing when it was born.
+        """
+        if worker_event["sticky_cid"] is not None:
+            self.spa_commander.change_connection_user(
+                worker_event["sticky_cid"], worker_event["user"], worker_event["previous_user"]
+            )
 
     def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
         """A user is in the freezer: the mark goes on, with what he is expected to cost."""

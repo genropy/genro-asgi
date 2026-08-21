@@ -1852,7 +1852,11 @@ class SpaWorker:
         guest KEEPS his: he stays here with whatever else he holds, the round
         that promised his departure still means it, and cancelling it would leave
         the wait on him at the vertex with nothing to release it. Announces the
-        login, which is what the vertex folds.
+        login, which is what the vertex folds: the announcement carries the
+        connection's ROUTING COOKIE, read off the row, because the index the
+        vertex keeps is the cookie's and not this register's key. The row is the
+        only place that always knows it — a login called outside a request has
+        no slot to read it from.
         """
         if user.startswith(GUEST_PREFIX):
             raise ValueError(f"{user!r} is reserved: nobody logs in as a guest")
@@ -1866,7 +1870,10 @@ class SpaWorker:
             if previous_user.startswith(GUEST_PREFIX):
                 self._transfer_flags.pop(previous_user, None)
             self.add_worker_event(
-                "connection_user_changed", user=user, previous_user=previous_user, session_id=cid
+                "connection_user_changed",
+                user=user,
+                previous_user=previous_user,
+                sticky_cid=connection["sticky_cid"],
             )
 
     def open_request(self, user: str) -> None:
