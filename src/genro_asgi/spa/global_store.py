@@ -12,16 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The global store: one master Bag above, one replica per worker below.
+"""The global store: one master Bag, living ONLY on the commander.
 
 Homogeneity comes from having a SINGLE WRITER — the commander — so there are no
-versions and no gate anywhere in here (the legacy master's own comment: "single
-writer, pushes to every worker").
+versions and no gate anywhere in here. There are no replicas either: a worker
+reads with a call on the lane (``store_get``) and writes through the lock.
 
-- :class:`GlobalStore` is the replica shape: a Bag written from outside. It
-  applies what the commander pushes and captures nothing — 2b puts no collector
-  on a replica because nothing consumes one (ratified; if a consumer appears it
-  is a local attach, not a protocol change).
+- :class:`GlobalStore` is the applying shape: a Bag written from outside. It
+  applies a drained batch and captures nothing.
 - :class:`CapturingGlobalStore` is the same Bag under a capture-all
   :class:`~genro_bag.datachange.DataChangeCollector`. Two objects have that
   shape: the commander's MASTER, whose captures are what propagates, and the
@@ -43,15 +41,14 @@ or a body that raises — has written nothing anywhere.
 
 **The grant carries the store.** A lock is granted together with the master's
 current content (``to_tytx``, small by ratification), so the holder never has to
-ask whether its replica was current: what it mounts IS the master at grant time.
+ask whether its copy is current: what it mounts IS the master at grant time.
 The working copy is hydrated BEFORE its collector attaches — a captured
 hydration would ship the whole store back as changes.
 
 **The wire is TYTX.** A change dict carries a node value (a Bag when the write
 created an intermediate node) and a ``change_ts`` datetime, so every global-store
-payload — snapshot, grant, change batch — travels ``to_tytx(..., "json")`` and is
-hydrated by its reader. The three descending paths are declared here because they
-are this module's protocol, and both halves of the pair import them from it.
+payload — the grant and the change batch — travels ``to_tytx(..., "json")`` and
+is hydrated by its reader.
 """
 
 from __future__ import annotations
@@ -63,31 +60,16 @@ from typing import Any
 
 from genro_bag import Bag
 from genro_bag.datachange import DataChangeCollector
-from genro_tytx import from_tytx, to_tytx
-
 __all__ = [
-    "GLOBAL_CHANGES_PATH",
-    "GLOBAL_GRANT_PATH",
-    "GLOBAL_SNAPSHOT_PATH",
     "CapturingGlobalStore",
     "GlobalStore",
     "GlobalStoreLease",
     "GlobalStoreLock",
 ]
 
-#: The bootstrap seed: the whole master, shipped to a worker at its REGISTER so
-#: its replica is born aligned and every later change applies on top.
-GLOBAL_SNAPSHOT_PATH = "/global/snapshot"
-
-#: The incremental rail: ONE EVENT per worker carrying what the master captured.
-GLOBAL_CHANGES_PATH = "/global/changes"
-
-#: The grant of the lock, carrying the master's content with it.
-GLOBAL_GRANT_PATH = "/global/grant"
-
 
 class GlobalStore:
-    """A global-store Bag written from outside: the replica shape."""
+    """A global-store Bag written from outside: the applying shape."""
 
     def __init__(self, bag: Bag | None = None) -> None:
         """Args:
@@ -95,19 +77,6 @@ class GlobalStore:
             passes one has already hydrated it — the working copy of a lock.
         """
         self.bag = Bag() if bag is None else bag
-
-    def snapshot(self) -> Any:
-        """The whole content, TYTX-encoded for the wire."""
-        return to_tytx(self.bag, "json")
-
-    def load_snapshot(self, encoded: Any) -> None:
-        """Replace the whole content with a shipped snapshot.
-
-        The Bag itself survives (``worker.global_store`` hands out this very
-        object), so a reader holding a reference reads the new content.
-        """
-        self.bag.clear()
-        self.bag.update(from_tytx(encoded, "json"))
 
     def apply_changes(self, changes: list[dict[str, Any]]) -> None:
         """Apply a drained batch in the order it was captured."""

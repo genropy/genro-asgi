@@ -21,12 +21,12 @@ drained) is pinned end to end by the orchestration contract tests
 (``tests/orchestration/test_contract_phase10_global_store_desk.py`` and
 ``test_orchestration_store_get.py``). What belongs here is the module
 itself: a ``CapturingGlobalStore`` captures what changed, a ``GlobalStore``
-applies a drained batch faithfully, a snapshot seed keeps the Bag identity.
+applies a drained batch faithfully.
 """
 
 from __future__ import annotations
 
-from genro_tytx import from_tytx
+from genro_tytx import from_tytx, to_tytx
 
 from genro_asgi.spa.global_store import CapturingGlobalStore, GlobalStore
 
@@ -59,27 +59,12 @@ def test_a_delete_removes_the_node_rather_than_nulling_it() -> None:
     assert "a" not in applied.bag["gnr"].keys()
 
 
-def test_a_snapshot_round_trip_keeps_the_bag_identity() -> None:
-    """``load_snapshot`` refills the Bag in place, so a seed must not swap it."""
-    master = CapturingGlobalStore()
-    master.set("gnr.a", 1)
-    store = GlobalStore()
-    held = store.bag
-    store.bag.set_item("stale", "gone")
-
-    store.load_snapshot(master.snapshot())
-
-    assert store.bag is held
-    assert held["gnr.a"] == 1
-    assert "stale" not in held.keys()
-
-
 def test_a_working_copy_captures_nothing_of_its_own_hydration() -> None:
     """The grant's order, here too: hydrate the Bag first, attach the collector after."""
     master = CapturingGlobalStore()
     master.set("gnr.a", 1)
     master.drain()
-    hydrated = from_tytx(master.snapshot(), "json")
+    hydrated = from_tytx(to_tytx(master.bag, "json"), "json")
 
     copy = CapturingGlobalStore(hydrated)
 
