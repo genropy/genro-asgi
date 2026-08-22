@@ -48,23 +48,40 @@ verifiable in the code; a claim in `design.md` needs no code at all.
 | [restart](restart/) | soft/hard restart liturgy, dump/restore — second pass |
 | [deployment-bundles](deployment-bundles/) | 🔴 proposal: dynamic groups, immutable bundles, S3 |
 
+## Diagrams
+
+Flows, steps and the registers involved are drawn as **mermaid** blocks
+inside the doc they illustrate (GitHub renders them natively); a standalone
+SVG file beside the doc only when mermaid cannot express it. Every named box
+must exist in the code — a diagram with an invented name is worse than no
+diagram.
+
 ## Interaction map
 
-Who stands on whom. An arrow means "uses / is carried by".
+An arrow means "uses / is carried by".
 
-```text
-spa-application ──► orchestration ──► channel
-                        │  ├──► global-store
-                        │  ├──► datachanges ◄─► dbevents   (one DeliveryDesk)
-                        │  ├──► storage (freezer parcels)
-                        │  └──► restart (park / refill)
-console ──► orchestration (eval over the lane)   inspector ──► spa-application
-monitor ──► every app (snapshot/panel contract)
-server-application ──► {monitor, inspector, tasks, authentication}
-task-thermometers ──► tasks (spool) + live event channel
-middleware ──► {authentication, sessions}
-routing ──► {OpenAPI, MCP} faces — console rides the MCP face
-configuration ──► every feature (each reads its recipe subtree)
+```mermaid
+flowchart TD
+    CFG[configuration] -.->|each reads its recipe subtree| ALL[every feature]
+    SPA[spa-application] --> ORC[orchestration]
+    ORC --> CH[channel]
+    ORC --> GS[global-store]
+    ORC --> DC[datachanges]
+    ORC --> DB[dbevents]
+    DC <-->|one DeliveryDesk| DB
+    ORC --> ST["storage (freezer parcels)"]
+    ORC --> RS["restart (park / refill)"]
+    CON[console] -->|eval over the lane| ORC
+    INS[inspector] --> SPA
+    MON[monitor] -->|snapshot/panel contract| ALL
+    SRV[server-application] --> MON
+    SRV --> INS
+    SRV --> TSK[tasks]
+    SRV --> AUTH[authentication]
+    TH[task-thermometers] --> TSK
+    MW[middleware] --> AUTH
+    MW --> SES[sessions]
+    RT[routing] -->|MCP face| CON
 ```
 
 Cross-feature seams that deserve watching are recorded in each feature's

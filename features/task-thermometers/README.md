@@ -10,3 +10,16 @@ batch reads at its own pace, and the intermediate 'stopping' state stays
 visible.
 
 Interactions: tasks (spool = source of truth) · SSE/event hub (the live courier).
+
+## The pairing
+
+```mermaid
+flowchart LR
+    B[running batch] --> M["TaskManager.publish_progress"]
+    M --> S["spool: progress.json — the source of truth"]
+    M --> H["EventHub.publish — the live courier"]
+    H --> P["SSE to the page: the bar moves"]
+```
+
+One paired call, always both legs: a progress written anywhere else than the
+task's ACTIVE worker is a bug, not a variant.
