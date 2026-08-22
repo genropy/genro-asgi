@@ -139,7 +139,17 @@ table events, no store writes from the hosted site, no hot move, no
 `dump`/`restore`. That is why genropy-asgi cannot run on it yet. Macro 5 builds
 the data plane — the minimum measured in
 `temp/minimo_genropy_pre_alpha_2026-08-19.md` — and Macro 6 is the cutover, when
-the pre_refactoring stack is removed. Decision register:
+the pre_refactoring stack is removed. **One identity, in the new core only**
+(owner decision 2026-08-22): the `spa_connection_id` cookie carries the hosted
+site's OWN connection id — the front mints nothing, the site names the
+connection while serving, the answer carries that id back and the cookie is
+written with it (rewritten only when it differs from the one that came in). So
+`connection_user_map` and `page_connection_map` are keyed by real connection
+ids, the worker's `cid_connection_map` is gone with the `sticky_cid` field and
+every event that carried it, and the deposit files one parcel per connection
+under that same id. The cookie lives 24 hours, the life the site gives its own.
+The pre_refactoring front still mints `sticky_cid`, and the Identity section
+above describes THAT one. Decision register:
 `temp/interview_handler_2026-08-15.md` (F1-F49); design:
 `temp/design_orchestrazione_v4_2026-08-17.md`.
 

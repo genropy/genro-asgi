@@ -119,11 +119,11 @@ def request(path: str = "/invoices") -> dict[str, Any]:
 
 
 async def test_a_newcomer_travels_anonymous_and_the_site_baptises(commander, group):
-    """The doctrine of 2026-08-21: the vertex mints nobody — the cookie routes
-    to the reception, the site names, the fold writes the indexes at the fact."""
+    """The vertex mints nobody: a request with no connection goes to the
+    reception, the site names one, and the fold writes the indexes at the fact."""
     worker_handler = worker_at(group, "standard_0001")
 
-    reply = await commander.serve_request("cid-a", request(), hold_timeout=HOLD_TIMEOUT)
+    reply = await commander.serve_request(None, request(), hold_timeout=HOLD_TIMEOUT)
 
     assert reply == {"result": {"status": 200}}
     # Nothing was minted: the request travelled anonymous, to the reception.
@@ -132,7 +132,7 @@ async def test_a_newcomer_travels_anonymous_and_the_site_baptises(commander, gro
     path, payload = worker_handler.connector.calls[0]
     assert path == f"{SITE_PATH_PREFIX}/invoices"
     assert payload == {
-        "http": {**request(), "cid": "cid-a"},
+        "http": {**request(), "cid": None},
         "identity": None,
         "user_frozen": False,
     }
@@ -145,12 +145,11 @@ async def test_a_newcomer_travels_anonymous_and_the_site_baptises(commander, gro
                     "worker": "standard_0001",
                     "user": "guest_legacy1",
                     "connection_id": "legacy-conn-1",
-                    "sticky_cid": "cid-a",
                 }
             ]
         }
     )
-    assert commander.connection_user_map == {"cid-a": "guest_legacy1"}
+    assert commander.connection_user_map == {"legacy-conn-1": "guest_legacy1"}
     assert "guest_legacy1" in commander.user_map
     assert group.user_worker_map["guest_legacy1"] == "standard_0001"
 

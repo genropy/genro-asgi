@@ -39,12 +39,14 @@ import json
 import logging
 import os
 import time
+from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 
+from genro_asgi.applications.spa_app_new import SPA_CONNECTION_ID_COOKIE
 from genro_asgi.channel.frame import Frame, FrameStream
 from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker, WorkerEntry, WorkerHandler
 from genro_asgi.spa.orchestration.worker_connector import (
@@ -87,16 +89,16 @@ class EchoWorker(SpaWorker):
     def echo_site(self, environ: dict[str, Any], start_response: Any) -> list[bytes]:
         """The WSGI callable: say back who asked, and for what — or break on demand.
 
-        Like a real site, it BAPTISES while serving (the doctrine of 2026-08-21:
-        the rows are the site's to bear): a named identity with no connection
-        under this request's cookie registers one, keyed by the cookie itself —
-        the core-only world, where no site renames the connection.
+        Like a real site, it BAPTISES while serving (the rows are the site's to
+        bear): a named identity whose connection this worker does not hold
+        registers one, under the id the cookie carries — the core-only world,
+        where the site is content with the id it was given.
         """
         if environ["PATH_INFO"] == BROKEN_PATH:
             raise RuntimeError("the site fell over")
         identity = environ["genro.identity"]
-        cid = self.request_slot.cid
-        if identity is not None and self._connection_for_cid(cid) is None:
+        cid = cid_of(environ)
+        if identity is not None and self.connection_register.get(cid) is None:
             self.new_connection(cid, user=identity)
         start_response("200 OK", [("Content-Type", "text/plain"), ("X-Worker", self.name)])
         return [f"{environ['REQUEST_METHOD']} {environ['PATH_INFO']} "
@@ -274,13 +276,22 @@ def http_call(
             "method": "GET",
             "path": path,
             "query_string": "",
-            "headers": [["host", "site.example:8080"]],
+            "headers": [
+                ["host", "site.example:8080"],
+                ["cookie", f"{SPA_CONNECTION_ID_COOKIE}={cid}"],
+            ],
             "body": "",
             "cid": cid,
         },
         "identity": identity,
         **payload,
     }
+
+
+def cid_of(environ: dict[str, Any]) -> str | None:
+    """The connection a request carries, read where a real site reads it."""
+    morsel = SimpleCookie(environ.get("HTTP_COOKIE", "")).get(SPA_CONNECTION_ID_COOKIE)
+    return None if morsel is None else morsel.value
 
 
 def body_of(reply: dict[str, Any]) -> str:

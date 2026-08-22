@@ -68,7 +68,7 @@ def test_new_page_builds_the_whole_chain_and_announces_it_in_order(worker):
     assert announced(worker) == ["new_user", "new_connection", "new_page"]
     page_event = worker.worker_events[-1]
     assert page_event["page_id"] == "p1"
-    assert page_event["sticky_cid"] is None
+    assert page_event["connection_id"] == "s1"
     assert page_event["user"] == "alice"
 
 

@@ -379,29 +379,22 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
                 self.spa_commander.hold_user(user, f"transfer_flag {flag}")
 
     def on_new_connection(self, worker_event: dict[str, Any]) -> None:
-        """A connection born under a routing cookie joins that cookie to its user.
+        """A connection was born: the vertex learns whose it is.
 
-        The junction of the whole identity design: the vertex mints nobody,
-        it LEARNS — the site baptised while serving, the worker attached the
-        request's cookie, and this fold writes the indexes at the fact. A
-        connection born outside a routed request carries None and joins
-        nothing.
+        The vertex mints nobody, it LEARNS — the site baptised the connection
+        while serving, and this fold writes the indexes at the fact.
         """
-        if worker_event["sticky_cid"] is not None:
-            self.spa_commander.record_connection_user(
-                worker_event["sticky_cid"], worker_event["user"]
-            )
+        self.spa_commander.record_connection_user(
+            worker_event["connection_id"], worker_event["user"]
+        )
 
     def on_new_page(self, worker_event: dict[str, Any]) -> None:
-        """A page was born (or woke): it belongs to its ROUTING COOKIE, and the desk
+        """A page was born (or woke): it belongs to its connection, and the desk
         files the subscriptions the announcement carries — the index is a
-        projection of the page rows, and this is where it is rebuilt. A page of
-        a connection no cookie routes joins no index, but its subscriptions are
-        filed all the same: the exchange finds it by page_id."""
-        if worker_event["sticky_cid"] is not None:
-            self.spa_commander.page_connection_map[worker_event["page_id"]] = worker_event[
-                "sticky_cid"
-            ]
+        projection of the page rows, and this is where it is rebuilt."""
+        self.spa_commander.page_connection_map[worker_event["page_id"]] = worker_event[
+            "connection_id"
+        ]
         self.spa_commander.delivery_desk.install_page_subscriptions(
             worker_event["page_id"], worker_event["table_subscriptions"]
         )
@@ -416,32 +409,23 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
             self.spa_commander.drop_page(page_id)
 
     def on_drop_connection(self, worker_event: dict[str, Any]) -> None:
-        """A connection is gone: its pages with it, its identity kept (the cookie is eternal)."""
-        if worker_event["sticky_cid"] is not None:
-            self.spa_commander.drop_connection(worker_event["sticky_cid"])
+        """A connection is gone: its pages with it, its identity kept."""
+        self.spa_commander.drop_connection(worker_event["connection_id"])
 
     def on_drop_connections(self, worker_event: dict[str, Any]) -> None:
         """Several connections at once — the cascade of a user leaving."""
-        for sticky_cid in worker_event["sticky_cids"]:
-            if sticky_cid is not None:
-                self.spa_commander.drop_connection(sticky_cid)
+        for connection_id in worker_event["connection_ids"]:
+            self.spa_commander.drop_connection(connection_id)
 
     def on_drop_user(self, worker_event: dict[str, Any]) -> None:
         """A user is gone: his row, his connections and whatever was waiting for him."""
         self.spa_commander.drop_user(worker_event["user"])
 
     def on_connection_user_changed(self, worker_event: dict[str, Any]) -> None:
-        """A connection changed owner: the surface says so, and decides nothing.
-
-        Written under the ROUTING COOKIE, which is the key of the index
-        ``resolve_user`` reads — never under the connection id, which belongs to
-        the hosted site. A connection no cookie routes joins nothing, exactly as
-        it joined nothing when it was born.
-        """
-        if worker_event["sticky_cid"] is not None:
-            self.spa_commander.change_connection_user(
-                worker_event["sticky_cid"], worker_event["user"], worker_event["previous_user"]
-            )
+        """A connection changed owner: the surface says so, and decides nothing."""
+        self.spa_commander.change_connection_user(
+            worker_event["connection_id"], worker_event["user"], worker_event["previous_user"]
+        )
 
     def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
         """A user is in the freezer: the mark goes on, with what he is expected to cost."""

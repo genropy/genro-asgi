@@ -48,8 +48,10 @@ answers its own 403 natively and never leaks the site behind it.
 **The forward is one line.** Everything the pool does — the identity, the wait of
 a user between two homes, the placement, the wire — happens inside
 ``SpaCommander.serve_request``. This front never names a group, a worker or a
-wire, and keeps no state of its own: the cookie it mints is the only thing it
-decides, and it decides it once per request.
+wire, and keeps no state of its own. It mints nothing either: the cookie carries
+the hosted site's own connection id, read off the answer and written back on the
+way out, so the identity the browser holds and the identity the site keeps are
+one and the same.
 
 **What comes back out.** The site's own answer, rebuilt from the reply. A refusal
 — nobody could take this user, or he stayed between two homes longer than this
@@ -66,7 +68,6 @@ from __future__ import annotations
 
 import base64
 import logging
-import uuid
 from typing import TYPE_CHECKING, Any
 
 from genro_bag import BagResolver
@@ -81,8 +82,16 @@ from ..spa.orchestration import AssignmentRefused, SiteFailedRequest, SpaCommand
 if TYPE_CHECKING:
     from ..types import Receive, Scope, Send
 
-#: The connection cookie, legacy name and legacy attributes.
-STICKY_CID_COOKIE = "sticky_cid"
+#: The routing cookie. Its value is the hosted site's OWN connection id, never a
+#: number of ours: one identity space, so the chain from the cookie to the worker
+#: translates nothing.
+SPA_CONNECTION_ID_COOKIE = "spa_connection_id"
+
+#: How long that cookie lives. The same 24 hours the site gives its own connection
+#: cookie (``CONNECTION_TIMEOUT * 24``, gnrwebpage_proxy/connection.py): ours must
+#: not die first, or a browser the site still recognises would come back with no
+#: connection named and be routed anonymous for the rest of the day.
+CONNECTION_COOKIE_MAX_AGE = 24 * 3600
 
 #: How long a request may spend, in total, waiting for a user who is between two
 #: homes. It is NOT derived from the beat: a move is an evict and an install,
@@ -298,66 +307,78 @@ class SpaApplicationNew(RoutedApplication):
     async def forward_request(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Serve a site path through the pool: pack, hand over, translate, answer.
 
-        The cookie is read ONCE here and the fact travels down: the packing is
-        told whether the request carried one instead of scanning the headers for
-        it again. A request that carried none is answered with the cookie this
-        front just minted; one that carried it needs nothing.
+        The cookie is read ONCE here and travels down as it came — None included,
+        which is a browser the site has never named. Nothing is minted: the
+        identity is the site's to give, and it gives it while serving. What comes
+        back names the connection the request settled on, and that is what the
+        cookie is written with.
         """
         carried = self.request_cid(scope)
-        cid = carried or uuid.uuid4().hex
-        http = await self.pack_http(scope, receive, cid, carried)
+        http = await self.pack_http(scope, receive, carried)
         try:
             reply = await self.commander.serve_request(
-                cid, http, hold_timeout=REQUEST_HOLD_MAX_SECONDS
+                carried, http, hold_timeout=REQUEST_HOLD_MAX_SECONDS
             )
         except AssignmentRefused as refusal:
             self._logger.warning("Front %s: %s", self.code, refusal)
-            response = self.busy_response(refusal, cid, carried is None)
+            response = self.busy_response(refusal)
         except (SiteFailedRequest, ConnectionError) as failure:
             self._logger.error("Front %s: %s", self.code, failure)
-            response = self.gateway_response(cid, carried is None)
+            response = self.gateway_response()
         else:
-            response = self.build_response(reply, cid, carried is None)
+            response = self.build_response(reply, carried)
         await response(scope, receive, send)
 
-    def busy_response(
-        self, refusal: AssignmentRefused, cid: str, issue_cookie: bool
-    ) -> Response:
-        """The polite 503: come back when the machine will have decided again."""
+    def busy_response(self, refusal: AssignmentRefused) -> Response:
+        """The polite 503: come back when the machine will have decided again.
+
+        No cookie goes out with it: the site never served this request, so there
+        is no connection to name — and a refusal must not overwrite the one the
+        browser already holds.
+        """
         headers = [("content-type", "text/plain; charset=utf-8")]
         if refusal.retry_after is not None:
             headers.append(("retry-after", str(int(refusal.retry_after))))
-        response = Response(content=ERR_503_TEXT, status_code=503, headers=headers)
-        return self.stamp_cookie(response, cid, issue_cookie)
+        return Response(content=ERR_503_TEXT, status_code=503, headers=headers)
 
-    def gateway_response(self, cid: str, issue_cookie: bool) -> Response:
+    def gateway_response(self) -> Response:
         """The 502 of an upstream that broke: what broke is said in the log alone."""
-        response = Response(
+        return Response(
             content=ERR_502_TEXT,
             status_code=502,
             headers=[("content-type", "text/plain; charset=utf-8")],
         )
-        return self.stamp_cookie(response, cid, issue_cookie)
 
-    def build_response(self, reply: dict[str, Any], cid: str, issue_cookie: bool) -> Response:
-        """The outer response, rebuilt from the site's own answer."""
+    def build_response(self, reply: dict[str, Any], carried: str | None) -> Response:
+        """The outer response, rebuilt from the site's own answer.
+
+        The cookie is written when the connection the site settled on is not the
+        one the browser sent: a first visit, and the replacement the site makes
+        whenever the connection its own cookie names does not validate. A request
+        that reused the connection it arrived with names none, and nothing is
+        written.
+        """
         result = reply["result"]
         response = Response(
             content=base64.b64decode(result.get("body") or ""),
             status_code=int(result.get("status", 200)),
             headers=[(str(name), str(value)) for name, value in result.get("headers") or []],
         )
-        return self.stamp_cookie(response, cid, issue_cookie)
-
-    def stamp_cookie(self, response: Response, cid: str, issue_cookie: bool) -> Response:
-        """The one tail that writes the sticky cookie, whatever exit built the response."""
-        if issue_cookie:
-            response.set_cookie(STICKY_CID_COOKIE, cid, path="/", httponly=True, samesite="lax")
+        settled = result.get("connection_id")
+        if settled is not None and settled != carried:
+            response.set_cookie(
+                SPA_CONNECTION_ID_COOKIE,
+                settled,
+                max_age=CONNECTION_COOKIE_MAX_AGE,
+                path="/",
+                httponly=True,
+                samesite="lax",
+            )
         return response
 
     def request_cid(self, scope: Scope) -> str | None:
-        """The ``sticky_cid`` this request carries, or ``None`` when it carries none."""
-        return cookie_value(scope, STICKY_CID_COOKIE)
+        """The connection this request carries, or ``None`` when it carries none."""
+        return cookie_value(scope, SPA_CONNECTION_ID_COOKIE)
 
     async def read_body(self, receive: Receive) -> bytes:
         """Drain the whole request body off the ASGI receive channel."""
@@ -370,14 +391,13 @@ class SpaApplicationNew(RoutedApplication):
         return body
 
     async def pack_http(
-        self, scope: Scope, receive: Receive, cid: str, carried: str | None
+        self, scope: Scope, receive: Receive, cid: str | None
     ) -> dict[str, Any]:
         """Pack the ASGI request into the JSON-safe ``http`` form the child reads.
 
-        The cid travels twice: as its own key, which is what the child routes the
-        row on, and inside the forwarded ``cookie`` header, because the hosted
-        site must see the connection this request already belongs to even when the
-        browser does not carry it yet.
+        The headers are forwarded as they came: our cookie is ours to route on
+        and the hosted site has no use for it — it reads its own, and the value
+        in both is its own connection id anyway.
         """
         query_string = scope.get("query_string") or b""
         client = scope.get("client") or None
@@ -385,29 +405,12 @@ class SpaApplicationNew(RoutedApplication):
             "method": str(scope.get("method", "GET")),
             "path": str(scope.get("path", "/")),
             "query_string": query_string.decode("latin-1"),
-            "headers": self.pack_headers(scope, cid, carried),
+            "headers": [
+                [name.decode("latin-1"), value.decode("latin-1")]
+                for name, value in scope.get("headers") or []
+            ],
             "body": base64.b64encode(await self.read_body(receive)).decode("ascii"),
             "client": list(client) if client else [],
             "scheme": str(scope.get("scheme", "http")),
             "cid": cid,
         }
-
-    def pack_headers(self, scope: Scope, cid: str, carried: str | None) -> list[list[str]]:
-        """The request headers as a pair-list, with ``sticky_cid`` guaranteed present.
-
-        A minted cid JOINS the request's own ``cookie`` header (``"; "``, RFC
-        6265): a second ``cookie`` pair would be comma-joined by the PEP 3333
-        reassembly on the serving side, mangling every cookie in it.
-        """
-        headers = [
-            [name.decode("latin-1"), value.decode("latin-1")]
-            for name, value in scope.get("headers") or []
-        ]
-        if carried is None:
-            for pair in headers:
-                if pair[0] == "cookie":
-                    pair[1] = f"{pair[1]}; {STICKY_CID_COOKIE}={cid}"
-                    break
-            else:
-                headers.append(["cookie", f"{STICKY_CID_COOKIE}={cid}"])
-        return headers

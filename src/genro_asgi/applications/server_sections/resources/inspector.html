@@ -204,7 +204,6 @@ function workerTree(worker) {
       if (connections[cid].user !== user) continue;
       const connectionNode = make("li");
       connectionNode.appendChild(make("span", "node-conn", cid));
-      connectionNode.appendChild(make("span", "fields", fieldsOf(connections[cid], ["sticky_cid"])));
       const pageList = make("ul");
       for (const pageId of Object.keys(pages).sort()) {
         if (pages[pageId].connection_id !== cid) continue;

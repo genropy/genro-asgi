@@ -33,18 +33,17 @@ Reading a row's meaning goes through the predicates (``user_is_frozen``), and
 ``on_hold`` is not read at all: it is RAISED, as ``UserOnHold``, by the one step
 that resolves an identity. So a caller cannot forget to look at it.
 
-**The cookie routes, the site baptises.** The front mints the cookie and keeps
-no state; the vertex mints NOBODY. A cid the indexes do not carry travels
-ANONYMOUS to the default group's reception, and the hosted site names its own
-connection and its own guest while serving — the worker attaches the request's
-cookie to that birth, and the fold of ``new_connection`` is what writes
-``connection_user_map`` and the user row, at the fact (``record_connection_user``).
-This replaced the founding doctrine ("routing somebody the indexes do not carry
-is exactly what cannot be done, so the writing comes first", owner decision
-2026-08-21): the identity and the guest name belong to the site, and a parallel
-vocabulary at the vertex made every visitor exist twice. A cid whose USER ROW is
-gone — a cookie that outlived it — is healed with an empty row: the browser is
-still known, its state is not.
+**One identity, and it is the site's.** The cookie carries the hosted site's own
+connection id: the front mints nothing and keeps no state, and the vertex mints
+nobody. A request with no cookie travels ANONYMOUS to the default group's
+reception, the site names its own connection and its own guest while serving,
+and the fold of ``new_connection`` writes ``connection_user_map`` and the user
+row at the fact (``record_connection_user``). The answer carries that id back to
+the front, which writes it in the cookie, so the next request routes on it. This
+is what replaced the minted ``sticky_cid`` and the index that translated it
+(owner decision 2026-08-22): one identity space, no junction, and the maps say
+what their names promise. A cid whose USER ROW is gone — a cookie that outlived
+it — is healed with an empty row: the browser is still known, its state is not.
 
 **The master of the store lives here, and it is a Bag.** Every worker holds a
 replica of it and never writes it: what a worker wants written travels up, is
@@ -752,12 +751,13 @@ class SpaCommander:
         return name
 
     async def serve_request(
-        self, cid: str, http: dict[str, Any], *, hold_timeout: float
+        self, cid: str | None, http: dict[str, Any], *, hold_timeout: float
     ) -> dict[str, Any]:
         """Serve one request of the hosted site, from the cookie to the answer.
 
         Args:
-            cid: the connection the request carries.
+            cid: the connection the request carries, None when it carries none —
+                a browser the site has never named.
             http: the request in the form the child reads, without the cid.
             hold_timeout: the WHOLE time this request may spend waiting for a user
                 who is between two homes, however many times it has to wait.
@@ -771,10 +771,11 @@ class SpaCommander:
             SiteFailedRequest: his worker answered with a failure.
             ConnectionError: the wire of his worker is gone.
 
-        Acts on the indexes only through the chain: a cid never seen travels
-        ANONYMOUS to the default group's reception — the site baptises while
-        serving, and the fold of its own announcements is what writes the
-        indexes. A known user with no home is placed, as ever.
+        Acts on the indexes only through the chain: a request with no connection,
+        or with one the indexes never saw, travels ANONYMOUS to the default
+        group's reception — the site baptises while serving, and the fold of its
+        own announcements is what writes the indexes. A known user with no home
+        is placed, as ever.
         """
         deadline = asyncio.get_running_loop().time() + hold_timeout
         while True:
@@ -795,7 +796,10 @@ class SpaCommander:
             # refusal. A guest already inside is served as ever.
             if reception is None or (user is None and group_handler.state == "saturated"):
                 raise self._refused(
-                    AssignmentRefused(cid, "no room for a newcomer: the pool is restricted")
+                    AssignmentRefused(
+                        user or cid or "a newcomer",
+                        "no room for a newcomer: the pool is restricted",
+                    )
                 ) from None
             worker_handler = reception
         else:
@@ -1025,11 +1029,11 @@ class SpaCommander:
             return {"error": str(reply["error"])}
         return dict(reply["result"])
 
-    def resolve_user(self, cid: str) -> str | None:
-        """Whose cid this is — None for a cookie the site has not baptised yet.
+    def resolve_user(self, cid: str | None) -> str | None:
+        """Whose cid this is — None for a browser the site has not named yet.
 
         Args:
-            cid: the identity the cookie carries.
+            cid: the connection the cookie carries, or None for no cookie.
 
         Returns:
             The user this connection belongs to, or None: the vertex MINTS
@@ -1058,7 +1062,7 @@ class SpaCommander:
         """The junction, written at the fact: the routing cookie learns whose it is.
 
         Args:
-            cid: the ``sticky_cid`` the request travelled under.
+            cid: the connection the site named while serving.
             user: the identity the site baptised while serving it.
 
         Acts on ``connection_user_map`` and, for an identity never seen, on
@@ -1180,7 +1184,7 @@ class SpaCommander:
         """The login, as the surface sees it: a connection changes owner.
 
         Args:
-            cid: the routing cookie of the connection that logged in.
+            cid: the connection that logged in.
             user: the identity it belongs to from now on.
             previous_user: who it belonged to a moment ago.
 

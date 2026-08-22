@@ -72,6 +72,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 import tempfile
+import uuid
 from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any
@@ -79,7 +80,7 @@ from typing import Any
 import pytest
 
 from genro_asgi import AsgiServer
-from genro_asgi.applications.spa_app_new import STICKY_CID_COOKIE
+from genro_asgi.applications.spa_app_new import SPA_CONNECTION_ID_COOKIE
 from genro_asgi.spa.orchestration import FreezeHandler, GroupHandler
 from genro_asgi.spa.orchestration.spa_commander import GUEST_PREFIX
 
@@ -99,9 +100,9 @@ STORY_WORKER = f"{__name__}:X_SpaWorker_m4"
 #: The path the site reads as a login; what follows it is the identity.
 LOGIN_PATH = "/login/"
 
-#: What the story's site prefixes its OWN connection ids with. The routing cookie
-#: and the site's connection id are two different strings — which is what makes
-#: the junction between them observable at all.
+#: What the story's site prefixes the connection ids it mints with. The cookie
+#: carries them verbatim, so the prefix is what makes it visible, in every
+#: assertion of this story, that the routing identity is the SITE's own.
 SITE_CONNECTION_PREFIX = "site-"
 
 #: The silence past which a worker parks a user, as the recipe declares it, and
@@ -199,15 +200,17 @@ class X_SpaWorker_m4(X_SpaWorker):
     def site(self, environ: dict[str, Any], start_response: Any) -> list[bytes]:
         """Serve one page: log in when asked, add to the trail, render it back.
 
-        Like a real site it BAPTISES on first sight (doctrine of 2026-08-21) and
-        it names the connection ITSELF, with an id of its own that is NOT the
-        routing cookie — the two identifiers are a prefix apart here, which is
-        all it takes for a test to see the difference between them.
+        The connection is the SITE's, minted here and nowhere else, exactly as
+        GenroPy mints it in ``Connection.create``: a request whose cookie names
+        no connection this process holds gets a brand new one. That id is what
+        travels back out and becomes the cookie, so every later request of the
+        same browser is recognised by it and nothing is minted again.
         """
         identity = environ["genro.identity"]
         path = environ["PATH_INFO"]
-        connection_id = self.site_connection_id(cid_of(environ))
-        if self.connection_register.get(connection_id) is None:
+        connection_id = cid_of(environ)
+        if connection_id is None or self.connection_register.get(connection_id) is None:
+            connection_id = f"{SITE_CONNECTION_PREFIX}{uuid.uuid4().hex}"
             self.new_connection(connection_id, user=identity)
         if path.startswith(LOGIN_PATH):
             self.change_connection_user(connection_id, path[len(LOGIN_PATH) :])
@@ -219,37 +222,37 @@ class X_SpaWorker_m4(X_SpaWorker):
         start_response("200 OK", [("Content-Type", "text/plain"), ("X-Worker", self.name)])
         return [f"{identity}|{trail}".encode()]
 
-    def site_connection_id(self, cid: str) -> str:
-        """This site's own id for the browser behind that cookie, its own to mint."""
-        return f"{SITE_CONNECTION_PREFIX}{cid}"
 
-
-def cid_of(environ: dict[str, Any]) -> str:
-    """The connection a request belongs to, read where a real site reads it."""
-    return SimpleCookie(environ.get("HTTP_COOKIE", ""))[STICKY_CID_COOKIE].value
+def cid_of(environ: dict[str, Any]) -> str | None:
+    """The connection a request carries, read where a real site reads it."""
+    cookie = SimpleCookie(environ.get("HTTP_COOKIE", ""))
+    morsel = cookie.get(SPA_CONNECTION_ID_COOKIE)
+    return None if morsel is None else morsel.value
 
 
 async def browse(server: AsgiServer, path: str, cid: str | None = None) -> dict[str, Any]:
     """One click of a browser: the cookie it carries, and the answer it gets."""
-    return await ask_app(server, path, cookies={STICKY_CID_COOKIE: cid} if cid else None)
+    return await ask_app(
+        server, path, cookies={SPA_CONNECTION_ID_COOKIE: cid} if cid else None
+    )
 
 
-def minted_cid(answer: dict[str, Any]) -> str:
-    """The cid the front has just coined, out of the cookie it stamped.
+def connection_cookie(answer: dict[str, Any]) -> str:
+    """The connection this answer named, out of the cookie it wrote.
 
     Args:
         answer: what a click got back.
 
     Returns:
-        The value of the ``sticky_cid`` the front minted.
+        The connection id the site settled on, which is the cookie's value.
 
     Raises:
-        AssertionError: this answer stamped none.
+        AssertionError: this answer wrote none.
     """
     for name, value in answer["headers"]:
-        if name.lower() == "set-cookie" and value.startswith(f"{STICKY_CID_COOKIE}="):
-            return str(SimpleCookie(value)[STICKY_CID_COOKIE].value)
-    raise AssertionError("the answer carries no sticky cid")
+        if name.lower() == "set-cookie" and value.startswith(f"{SPA_CONNECTION_ID_COOKIE}="):
+            return str(SimpleCookie(value)[SPA_CONNECTION_ID_COOKIE].value)
+    raise AssertionError("the answer names no connection")
 
 
 def served_by(answer: dict[str, Any]) -> str | None:
@@ -314,14 +317,15 @@ async def test_a_day_of_the_site_from_the_front_to_the_child(server):
     assert vertex.group_map[OTHER_GROUP].worker_handler_map == {}
     reception = group.reception
 
-    # 2. A VISITOR ARRIVES WITH NO COOKIE. The front coins one and the request
-    # travels ANONYMOUS to the reception; the SITE names the guest while
-    # serving, and the fold of its announcement writes the vertex's indexes —
-    # the doctrine of 2026-08-21: the cookie routes, the site baptises.
+    # 2. A VISITOR ARRIVES WITH NO COOKIE. The request travels ANONYMOUS to the
+    # reception; the SITE names its own connection and its own guest while
+    # serving, the fold of its announcement writes the vertex's indexes, and the
+    # answer carries that very id back as the cookie — one identity, no junction.
     first = await browse(server, "/catalog")
-    cid = minted_cid(first)
-    # The guest's name is the SITE's, built on the id the site minted for itself.
-    guest = f"{GUEST_PREFIX}{SITE_CONNECTION_PREFIX}{cid}"
+    cid = connection_cookie(first)
+    guest = f"{GUEST_PREFIX}{cid}"
+
+    assert cid.startswith(SITE_CONNECTION_PREFIX)
 
     assert identity_of(first) == "None"
     assert vertex.connection_user_map[cid] == guest
@@ -348,7 +352,7 @@ async def test_a_day_of_the_site_from_the_front_to_the_child(server):
     # 5. SOMEBODY GOES QUIET AND IS PARKED. Anna arrives, logs in, clicks once so
     # she is resident, and then falls silent past the recipe's own silence.
     anna_first = await browse(server, "/invoices")
-    anna_cid = minted_cid(anna_first)
+    anna_cid = connection_cookie(anna_first)
     await browse(server, f"{LOGIN_PATH}anna", anna_cid)
     await browse(server, "/invoices/7", anna_cid)
 
@@ -390,7 +394,7 @@ async def test_a_day_of_the_site_from_the_front_to_the_child(server):
     # capacity-aware landing belongs to identities, and mario_admin exercises
     # it at step 7.
     joining = await browse(server, "/joining")
-    second_cid = minted_cid(joining)
+    second_cid = connection_cookie(joining)
 
     assert served_by(joining) == reception.name
     assert trail_of(joining) == "/joining"
@@ -436,7 +440,9 @@ async def test_a_day_of_the_site_from_the_front_to_the_child(server):
     assert list(group.worker_handler_map) == [reception.name, spare.name]
     assert refused["status"] == 503
     assert get_answer_header(refused, "retry-after") == RETRY_AFTER
-    assert STICKY_CID_COOKIE in (get_answer_header(refused, "set-cookie") or "")
+    # The site never served it, so there is no connection to name: the refusal
+    # writes no cookie of ours (the server's own session cookie is another thing).
+    assert SPA_CONNECTION_ID_COOKIE not in (get_answer_header(refused, "set-cookie") or "")
     assert vertex.counters["requests_refused"] == 1
     assert resident["status"] == 200
     assert identity_of(resident) == "mario"
@@ -466,7 +472,7 @@ async def test_a_death_where_nothing_of_his_is_left_does_not_take_him(server, st
     freezer = FreezeHandler(story_root / "frozen_users")
 
     first = await browse(server, "/catalog")
-    cid = minted_cid(first)
+    cid = connection_cookie(first)
 
     # A second process, and the person carried onto it by his own login: born at
     # the reception with nothing measured on him, he is placed on the spare —
@@ -486,12 +492,12 @@ async def test_a_death_where_nothing_of_his_is_left_does_not_take_him(server, st
     # login there leaves nothing of him: mario resides on the spare, so the row
     # born of that login is released and the deposit holds his connection.
     joining = await browse(server, "/joining")
-    second_cid = minted_cid(joining)
+    second_cid = connection_cookie(joining)
     await browse(server, f"{LOGIN_PATH}mario", second_cid)
 
     assert served_by(joining) == reception.name
     assert "mario" not in reception.hosted_users
-    assert freezer.read_connection_register_item("mario", f"{SITE_CONNECTION_PREFIX}{second_cid}") is not None
+    assert freezer.read_connection_register_item("mario", second_cid) is not None
 
     # That process dies wild, and the round settles the death.
     reception.process.kill()
@@ -504,7 +510,7 @@ async def test_a_death_where_nothing_of_his_is_left_does_not_take_him(server, st
     assert vertex.connection_user_map[cid] == "mario"
     assert vertex.connection_user_map[second_cid] == "mario"
     assert group.user_worker_map["mario"] == spare.name
-    assert freezer.read_connection_register_item("mario", f"{SITE_CONNECTION_PREFIX}{second_cid}") is not None
+    assert freezer.read_connection_register_item("mario", second_cid) is not None
     # And he is served as ever, with everything he has done still under him.
     served = await browse(server, "/orders/9", cid)
 

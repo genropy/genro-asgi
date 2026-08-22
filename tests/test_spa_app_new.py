@@ -33,8 +33,9 @@ from genro_routes import route
 from genro_asgi import AsgiServer
 from genro_asgi.config.builder import AsgiConfigBuilder
 from genro_asgi.applications.spa_app_new import (
+    CONNECTION_COOKIE_MAX_AGE,
     ERR_503_TEXT,
-    STICKY_CID_COOKIE,
+    SPA_CONNECTION_ID_COOKIE,
     ERR_502_TEXT,
     SpaApplicationNew,
 )
@@ -192,26 +193,49 @@ async def test_a_path_of_the_site_is_forwarded(started):
 # -- the cookie --
 
 
-async def test_a_request_with_no_cookie_is_answered_with_one(started):
+async def test_a_request_with_no_cookie_travels_with_none_and_mints_nothing(started):
     front = started.applications["site0"]
+
+    await ask_app(front, "/invoices")
+
+    cid, http = front.commander.calls[0]
+    assert cid is None
+    assert http["cid"] is None
+    # Nothing of ours is added to what the browser sent.
+    assert all(SPA_CONNECTION_ID_COOKIE not in value for _, value in http["headers"])
+
+
+async def test_the_connection_the_site_named_becomes_the_cookie(started):
+    front = started.applications["site0"]
+    front.commander.reply = {"result": {"status": 200, "connection_id": "site-1"}}
 
     answer = await ask_app(front, "/invoices")
 
-    cid, http = front.commander.calls[0]
-    assert f"{STICKY_CID_COOKIE}={cid}" in get_answer_header(answer, "set-cookie")
-    # The site must see the connection this request already belongs to.
-    assert any(
-        name == "cookie" and f"{STICKY_CID_COOKIE}={cid}" in value for name, value in http["headers"]
-    )
+    cookie = get_answer_header(answer, "set-cookie")
+    assert f"{SPA_CONNECTION_ID_COOKIE}=site-1" in cookie
+    # The same life the hosted site gives its own connection cookie.
+    assert f"Max-Age={CONNECTION_COOKIE_MAX_AGE}" in cookie
 
 
-async def test_a_request_that_carries_the_cookie_is_answered_without_one(started):
+async def test_a_request_that_reused_its_connection_is_answered_without_a_cookie(started):
     front = started.applications["site0"]
+    front.commander.reply = {"result": {"status": 200, "connection_id": "site-1"}}
 
-    answer = await ask_app(front, "/invoices", cookies={STICKY_CID_COOKIE: "c0ffee"})
+    answer = await ask_app(front, "/invoices", cookies={SPA_CONNECTION_ID_COOKIE: "site-1"})
 
     assert get_answer_header(answer, "set-cookie") is None
-    assert front.commander.calls[0][0] == "c0ffee"
+    assert front.commander.calls[0][0] == "site-1"
+
+
+async def test_a_connection_the_site_replaced_overwrites_the_cookie(started):
+    """The site validates its own cookie and creates a fresh connection when it
+    does not: the browser must be told, or it would route on a dead id forever."""
+    front = started.applications["site0"]
+    front.commander.reply = {"result": {"status": 200, "connection_id": "site-2"}}
+
+    answer = await ask_app(front, "/invoices", cookies={SPA_CONNECTION_ID_COOKIE: "site-1"})
+
+    assert f"{SPA_CONNECTION_ID_COOKIE}=site-2" in get_answer_header(answer, "set-cookie")
 
 
 # -- the two refusals --
@@ -250,11 +274,12 @@ async def test_a_wire_that_is_gone_is_the_same_502(started):
     assert answer["status"] == 502
 
 
-async def test_a_refusal_still_answers_with_the_cookie_it_minted(started):
+async def test_a_refusal_names_no_connection_and_writes_no_cookie(started):
+    """The site never served it, so there is nothing to name — and a refusal must
+    not overwrite the connection the browser already holds."""
     front = started.applications["site0"]
     front.commander.failure = AssignmentRefused("mario", "no worker admits him", retry_after=30.0)
 
-    answer = await ask_app(front, "/invoices")
+    answer = await ask_app(front, "/invoices", cookies={SPA_CONNECTION_ID_COOKIE: "site-1"})
 
-    cid = front.commander.calls[0][0]
-    assert f"{STICKY_CID_COOKIE}={cid}" in get_answer_header(answer, "set-cookie")
+    assert get_answer_header(answer, "set-cookie") is None

@@ -57,13 +57,8 @@ def worker(deposit):
 
 
 def browsing_guest(worker: SpaWorker, cid: str = "a1b2", pages: int = 1) -> str:
-    """A visitor who arrived anonymous, opened a page and filled his store a little.
-
-    His connection carries a routing cookie of its own, a prefix apart from the
-    register key: the two identifiers are different strings, the way a real site
-    and the front make them.
-    """
-    worker.add_connection(cid, sticky_cid=f"spa-{cid}")
+    """A visitor who arrived anonymous, opened a page and filled his store a little."""
+    worker.add_connection(cid)
     guest = f"{GUEST_PREFIX}{cid}"
     for index in range(pages):
         worker.add_page(f"page-{index}", cid)
@@ -184,7 +179,7 @@ async def test_the_login_travels_on_the_reply(worker):
             "worker": WORKER_NAME,
             "user": "mario",
             "previous_user": guest,
-            "sticky_cid": "spa-a1b2",
+            "connection_id": "a1b2",
         }
     ]
 
@@ -371,72 +366,17 @@ async def test_a_resident_keeps_his_own_store_and_the_guests_dies(worker, deposi
     assert worker.user_register.get("mario")["store"]["cart.item"] == "his own lamp"
 
 
-def stale_generation(deposit, user: str, cid: str, sticky_cid: str) -> None:
-    """An older connection of the same browser cookie, parked in the deposit.
-
-    The shape a real deposit accumulates across restarts and re-logins: the
-    cookie survives in the browser, the connection id is minted anew by the
-    site each time, and every login's tail leaves one parcel — so a user's
-    folder ends up holding several parcels whose rows carry the SAME
-    ``sticky_cid`` under different connection ids.
-    """
-    deposit.take_lock(user, WORKER_NAME)
-    deposit.write_connection_register_item(
-        user,
-        cid,
-        {
-            "connection_id": cid,
-            "connection": {"sticky_cid": sticky_cid},
-            "pages": {},
-        },
-        writer=WORKER_NAME,
-        cause="login",
-        group="standard",
-    )
-    deposit.release_lock(user, WORKER_NAME)
-
-
-async def test_every_generation_of_one_cookie_comes_back(worker, deposit):
-    """THE LOGIN UNDONE (collaudo 2026-08-21) — two parcels of one cookie.
-
-    The site looks its connection up by ITS OWN id, read from its own cookie;
-    the front routes by ``sticky_cid``. When the user's folder holds parcels of
-    more than one connection GENERATION under the same sticky cookie, a claim
-    that installs an arbitrary one may leave the very connection the site's
-    cookie names in the deposit: the site finds nothing, falls back to a fresh
-    guest, and its ``new_connection`` overwrites the junction — the login is
-    undone and the folder becomes unreachable for good. Every generation must
-    come home; the site serves on the one it knows.
-    """
-    stale_generation(deposit, "mario", "old1", "spa-a1b2")
+async def test_a_parked_connection_comes_home_on_its_own_id(worker, deposit):
+    """One identity, one key: the deposit files the parcel under the connection id
+    the cookie carries, and the wake asks for that one and no other."""
     browsing_guest(worker)
     worker.change_connection_user("a1b2", "mario")
     assert await worker.freeze_connection("a1b2") is True
 
-    await worker.adopt_connection("mario", "spa-a1b2")
+    await worker.adopt_connection("mario", "a1b2")
 
     assert "a1b2" in worker.connection_register
-    assert "old1" in worker.connection_register
     assert deposit.read_connection_register_item("mario", "a1b2") is None
-    assert deposit.read_connection_register_item("mario", "old1") is None
-
-
-async def test_a_live_connection_does_not_bury_a_deposited_sibling(worker, deposit):
-    """A generation already living here must not mask the deposited one.
-
-    The early answer for a connection the worker already holds is right only
-    when the deposit holds nothing else for this user: the site may be asking
-    for the SIBLING its own cookie names, and a claim that never happens is a
-    guest fallback on the very next validate.
-    """
-    worker.add_connection("a1b2", "mario", sticky_cid="spa-a1b2")
-    stale_generation(deposit, "mario", "gen2", "spa-a1b2")
-
-    await worker.adopt_connection("mario", "spa-a1b2")
-
-    assert "gen2" in worker.connection_register
-    assert worker.connection_register.get("a1b2")["user"] == "mario"
-    assert deposit.read_connection_register_item("mario", "gen2") is None
 
 
 async def test_the_user_parcel_is_installed_before_the_connection_one(worker, deposit):
@@ -511,7 +451,7 @@ def user_changed_envelope(user: str, previous_user: str) -> dict[str, Any]:
                 "worker": WORKER_NAME,
                 "user": user,
                 "previous_user": previous_user,
-                "sticky_cid": "spa-a1b2",
+                "connection_id": "a1b2",
             }
         ]
     }
@@ -549,4 +489,4 @@ async def test_a_previous_identity_who_is_no_guest_keeps_his_place(tmp_path):
 
     assert worker_handler.hosted_users == {"mario", "mario_admin"}
     assert group.user_worker_map["mario"] == WORKER_NAME
-    assert group.spa_commander.connection_user_map["spa-a1b2"] == "mario_admin"
+    assert group.spa_commander.connection_user_map["a1b2"] == "mario_admin"

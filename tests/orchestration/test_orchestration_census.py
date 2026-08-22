@@ -45,9 +45,9 @@ def wired_lane(desk_lane):
 @pytest.fixture
 async def populated_lane(wired_lane):
     """One user with one connection and one page, both sides knowing about him."""
-    wired_lane.worker.add_connection("a1b2", sticky_cid="cid-a")
+    wired_lane.worker.add_connection("a1b2")
     wired_lane.worker.add_page("page-0", "a1b2")
-    wired_lane.commander.record_connection_user("cid-a", "guest_a1b2")
+    wired_lane.commander.record_connection_user("a1b2", "guest_a1b2")
     return wired_lane
 
 
@@ -58,14 +58,13 @@ async def test_the_worker_census_holds_its_three_registers(populated_lane):
     assert "guest_a1b2" in census["user_register"]
     assert "a1b2" in census["connection_register"]
     assert "page-0" in census["page_register"]
-    assert census["cid_connection_map"] == {"cid-a": "a1b2"}
 
 
 async def test_the_pool_census_carries_the_user_on_both_sides(populated_lane):
     census = await populated_lane.commander.get_pool_census()
 
     assert "guest_a1b2" in census["user_map"]
-    assert census["connection_user_map"] == {"cid-a": "guest_a1b2"}
+    assert census["connection_user_map"] == {"a1b2": "guest_a1b2"}
     assert census["default_group"] == "standard"
     worker_census = census["workers"]["standard_0001"]
     assert "guest_a1b2" in worker_census["user_register"]

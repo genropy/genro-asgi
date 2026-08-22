@@ -396,15 +396,18 @@ class RequestSlot:
     ``dbevents`` the table-event deposits that go up the lane; ``own_dbevents``
     are the ``local_only`` deposits of the hidden transaction, which never
     leave this process and reach the origin page's own collect alone.
+    ``connection_id`` is the one field that travels back OUT: the front reads
+    it off the reply to write its cookie with.
     """
 
     def __init__(self) -> None:
         self.datachanges: list[dict[str, Any]] = []
         self.dbevents: list[dict[str, Any]] = []
         self.own_dbevents: list[dict[str, Any]] = []
-        #: The routing cookie the request carried, None outside a routed
-        #: request: what a connection born DURING the request is joined to.
-        self.cid: str | None = None
+        #: The connection the site named while serving this request — born, or
+        #: changed owner. None when it named none, which is every request that
+        #: reused the connection its cookie already carried.
+        self.connection_id: str | None = None
 
 
 class SpaWorker:
@@ -476,10 +479,6 @@ class SpaWorker:
         #: The rows of the three registers, and the lifecycle vocabulary that
         #: moves them: the shared registry, built through its own hook.
         self.registry = self.build_registry()
-        #: The routing cookie of each connection that was born under one:
-        #: ``sticky_cid -> connection id``. Derived from the rows, written only
-        #: by the single-writer mutators — the cookie routes, the site names.
-        self.cid_connection_map: dict[str, str] = {}
         #: The tables somebody subscribes somewhere, as the last exchange reply
         #: told it: the source filter of this worker, at most one exchange out
         #: of date, which is the price of asking nobody.
@@ -690,13 +689,11 @@ class SpaWorker:
         """
         with self.dispatch_lock:
             user = user or GUEST_PREFIX + cid
-            fields.setdefault("sticky_cid", self.request_slot.cid)
             if user not in self.user_register:
                 self.add_user(user)
             item = self._add_connection_item(cid, user, **fields)
-            self.add_worker_event(
-                "new_connection", user=user, sticky_cid=item["sticky_cid"]
-            )
+            self.request_slot.connection_id = cid
+            self.add_worker_event("new_connection", user=user, connection_id=cid)
             return item
 
     def add_page(
@@ -725,7 +722,7 @@ class SpaWorker:
                 "new_page",
                 user=self.registry.page_user(page_id),
                 page_id=page_id,
-                sticky_cid=self.connection_register.get(cid)["sticky_cid"],
+                connection_id=cid,
                 table_subscriptions=sorted(item["table_subscriptions"]),
             )
             return item
@@ -787,11 +784,9 @@ class SpaWorker:
             user = self.registry.page_user(page_id)
             self._remove_page_item(page_id)
             self.add_worker_event("drop_page", user=user, page_id=page_id)
-            connection = self.connection_register.get(cid)
-            if not connection["pages"]:
-                sticky_cid = connection["sticky_cid"]
+            if not self.connection_register.get(cid)["pages"]:
                 self._remove_connection_item(cid)
-                self.add_worker_event("drop_connection", user=user, sticky_cid=sticky_cid)
+                self.add_worker_event("drop_connection", user=user, connection_id=cid)
                 self._drop_emptied_user(user)
 
     def drop_connection(self, identity: str, connection_id: str) -> None:
@@ -807,8 +802,7 @@ class SpaWorker:
 
         Removes the pages and the connection, announcing ``drop_pages`` (when it
         had any), ``drop_connection``, and ``drop_user`` if it was the user's
-        last. The connection announcement carries the routing cookie — the name
-        the vertex's indexes go by — read off the item before it is removed.
+        last.
         """
         cid = connection_id
         with self.dispatch_lock:
@@ -816,14 +810,13 @@ class SpaWorker:
             if item is None:
                 raise KeyError(f"drop_connection: no connection {cid!r} here")
             user = item["user"]
-            sticky_cid = item["sticky_cid"]
             page_ids = sorted(item["pages"])
             for page_id in page_ids:
                 self._remove_page_item(page_id)
             if page_ids:
                 self.add_worker_event("drop_pages", user=user, page_ids=page_ids)
             self._remove_connection_item(cid)
-            self.add_worker_event("drop_connection", user=user, sticky_cid=sticky_cid)
+            self.add_worker_event("drop_connection", user=user, connection_id=cid)
             self._drop_emptied_user(user)
 
     def drop_user(self, user: str) -> None:
@@ -841,9 +834,6 @@ class SpaWorker:
             if item is None:
                 return
             connection_ids = sorted(item["connections"])
-            sticky_cids = [
-                self.connection_register.get(cid)["sticky_cid"] for cid in connection_ids
-            ]
             page_ids = sorted(
                 page_id
                 for cid in connection_ids
@@ -856,7 +846,9 @@ class SpaWorker:
             for cid in connection_ids:
                 self._remove_connection_item(cid)
             if connection_ids:
-                self.add_worker_event("drop_connections", user=user, sticky_cids=sticky_cids)
+                self.add_worker_event(
+                    "drop_connections", user=user, connection_ids=connection_ids
+                )
             self._remove_user_item(user)
             self._unfreeze_waits.pop(user, None)
             self.add_worker_event("drop_user", user=user)
@@ -1569,9 +1561,8 @@ class SpaWorker:
         """The whole process read out for a human: every register, JSON-safe.
 
         Returns:
-            The three registers key by key with their scalar fields, the cookie
-            map, the subscribed tables and how many table-event deposits wait
-            per table. Live objects are left out by construction — only what
+            The three registers key by key with their scalar fields, the
+            subscribed tables and how many table-event deposits wait per table. Live objects are left out by construction — only what
             survives ``json.dumps`` is in here.
         """
         with self.dispatch_lock:
@@ -1587,7 +1578,6 @@ class SpaWorker:
                 "user_register": self._census_register(self.user_register),
                 "connection_register": self._census_register(self.connection_register),
                 "page_register": self._census_register(self.page_register),
-                "cid_connection_map": dict(self.cid_connection_map),
                 "subscribed_tables": sorted(self.subscribed_tables),
                 "dbevent_deposit": deposit_counts,
             }
@@ -1862,61 +1852,53 @@ class SpaWorker:
         return item
 
     async def adopt_connection(self, user: str, cid: str) -> dict[str, Any] | None:
-        """Look for the cookie's connections of ``user`` in the deposit, install what is there.
+        """Look for this connection of ``user`` in the deposit, install it if it is there.
 
         Args:
             user: the user the connection belongs to.
-            cid: the routing cookie the request carries — the connection id
-                itself where no site renamed it, or the ``sticky_cid`` its
-                row travels with.
+            cid: the connection the request carries.
 
         Returns:
-            The connection register item the cookie now reaches — or None when
-            nothing is held and nothing is parked: the rows are the site's to
-            bear, and it baptises again while being served.
+            The connection register item — or None when nothing is held and
+            nothing is parked: the rows are the site's to bear, and it baptises
+            again while being served.
 
-        Reads the parcels by itself (no verdict authorises a connection),
-        deletes them from the deposit and brings each connection and its pages
-        into being through the ordinary mutators: the worker events are the
-        natural ``new_connection``/``new_page``, never one of its own. EVERY
-        generation of the cookie comes home, because the site looks its row up
-        by ITS OWN id and an arbitrary pick would leave the one it names in the
-        deposit (the 2026-08-21 login undone); for the same reason a connection
-        already held spares the trip only while the user's folder is empty — a
-        deposited sibling must not stay buried behind a living one. Each
-        install is judged per id on the way back, because the trip is a
-        handoff and a sister may have installed some of them meanwhile.
+        Reads the parcel by itself (no verdict authorises a connection), deletes
+        it from the deposit and brings the connection and its pages into being
+        through the ordinary mutators: the worker events are the natural
+        ``new_connection``/``new_page``, never one of its own. ONE key is looked
+        up, because there is one identity: the deposit files the parcel under
+        the very id the cookie carries. A connection already held is already
+        home and spares the trip — a living row and a parked parcel of the same
+        connection cannot both exist.
         """
         with self.dispatch_lock:
-            item = self._connection_for_cid(cid)
-        if item is not None and (
-            self.freeze_handler.user_to_userkey(user) not in self.freeze_handler.user_folders
-        ):
+            item = self.connection_register.get(cid)
+        if item is not None:
             return item
-        found = await self._take_from_deposit(user, self._claim_connection_parcels, cid)
+        parcel = await self._take_from_deposit(user, self._read_connection_parcel, cid)
+        if parcel is None:
+            return None
         with self.dispatch_lock:
-            for connection_id, parcel in found:
-                if self.connection_register.get(connection_id) is not None:
-                    continue
-                resident = user in self.user_register
-                installed = self.add_connection(connection_id, user, **parcel.get("connection", {}))
-                for page_id, fields in parcel.get("pages", {}).items():
-                    replayed = {
-                        key: fields.pop(key) for key in PARCEL_PAGE_REPLAYED_FIELDS if key in fields
-                    }
-                    page = self._add_page_item(page_id, connection_id, **fields)
-                    self._install_page_subscriptions(page_id, replayed)
-                    # Announced AFTER the replay, so the event carries the
-                    # subscriptions the vertex rebuilds its index from.
-                    self.add_worker_event(
-                        "new_page",
-                        user=self.registry.page_user(page_id),
-                        page_id=page_id,
-                        sticky_cid=installed["sticky_cid"],
-                        table_subscriptions=sorted(page["table_subscriptions"]),
-                    )
-                self._install_carried_store(user, parcel.get("store"), resident)
-            return self._connection_for_cid(cid) or item
+            resident = user in self.user_register
+            self.add_connection(cid, user, **parcel.get("connection", {}))
+            for page_id, fields in parcel.get("pages", {}).items():
+                replayed = {
+                    key: fields.pop(key) for key in PARCEL_PAGE_REPLAYED_FIELDS if key in fields
+                }
+                page = self._add_page_item(page_id, cid, **fields)
+                self._install_page_subscriptions(page_id, replayed)
+                # Announced AFTER the replay, so the event carries the
+                # subscriptions the vertex rebuilds its index from.
+                self.add_worker_event(
+                    "new_page",
+                    user=self.registry.page_user(page_id),
+                    page_id=page_id,
+                    connection_id=cid,
+                    table_subscriptions=sorted(page["table_subscriptions"]),
+                )
+            self._install_carried_store(user, parcel.get("store"), resident)
+            return self.connection_register.get(cid)
 
     def _install_carried_store(self, user: str, store: Any, resident: bool) -> None:
         """Give a login's store to the row it belongs to, or let it die out loud.
@@ -1978,11 +1960,10 @@ class SpaWorker:
         guest KEEPS his: he stays here with whatever else he holds, the round
         that promised his departure still means it, and cancelling it would leave
         the wait on him at the vertex with nothing to release it. Announces the
-        login, which is what the vertex folds: the announcement carries the
-        connection's ROUTING COOKIE, read off the row, because the index the
-        vertex keeps is the cookie's and not this register's key. The row is the
-        only place that always knows it — a login called outside a request has
-        no slot to read it from.
+        login, which is what the vertex folds. The connection is written in this
+        request's slot as well: the login is the second way a request settles on
+        a connection the browser does not carry yet, and the cookie the front
+        writes on the way out is whatever the slot ends up holding.
         """
         if user.startswith(GUEST_PREFIX):
             raise ValueError(f"{user!r} is reserved: nobody logs in as a guest")
@@ -1995,11 +1976,12 @@ class SpaWorker:
             self._login_previous_user_map[cid] = previous_user
             if previous_user.startswith(GUEST_PREFIX):
                 self._transfer_flags.pop(previous_user, None)
+            self.request_slot.connection_id = cid
             self.add_worker_event(
                 "connection_user_changed",
                 user=user,
                 previous_user=previous_user,
-                sticky_cid=connection["sticky_cid"],
+                connection_id=cid,
             )
 
     def open_request(self, user: str) -> None:
@@ -2409,38 +2391,41 @@ class SpaWorker:
         connection found by itself, the clocks stamped), and the stitching on
         the traffic pool: WSGI is synchronous, and neither the loop nor the
         service pool may be held behind it. The end of the call is where a
-        departure that had to wait for it happens.
+        departure that had to wait for it happens — on the connection the
+        SERVICE settled on, which is the one the site named while serving when
+        it named one, and the one the request came in on otherwise.
         """
         cid = payload["http"]["cid"]
         user = payload.get("identity")
+        served: dict[str, Any] = {}
         if user is not None:
             self.open_request(user)
         try:
             await self._resolve_row(user, cid, payload)
             seam = WsgiSeam(self.wsgi_app)
-            return await self._run_in_pool(
+            served = await self._run_in_pool(
                 self.traffic_pool,
                 functools.partial(self._serve_on_thread, seam, payload),
             )
+            return served
         finally:
             if user is not None:
                 await self.close_request(user)
-            with self.dispatch_lock:
-                connection_id = self.cid_connection_map.get(cid, cid)
-            await self.freeze_connection(connection_id)
+            await self.freeze_connection(served.get("connection_id") or cid)
 
-    def _serve_on_thread(self, seam: WsgiSeam, payload: dict[str, Any]) -> Any:
+    def _serve_on_thread(self, seam: WsgiSeam, payload: dict[str, Any]) -> dict[str, Any]:
         """Serve the stitching on the pool thread, under a slot of its own.
 
         The slot is opened HERE and not on the loop, because the thread is what
         makes it this request's: the site's verbs are called on this very
-        thread and find it by asking for it. The slot carries the request's
-        routing cookie, so a connection the site registers while being served
-        is joined to it with nothing passed by the site.
+        thread and find it by asking for it. What the site named while serving
+        LEAVES with the answer — the front has no other way of learning the
+        connection this request settled on, and its cookie is written off it.
         """
         self.open_request_slot()
-        self.request_slot.cid = payload["http"]["cid"]
-        return seam.serve(payload["http"], payload.get("identity"))
+        answer = seam.serve(payload["http"], payload.get("identity"))
+        answer["connection_id"] = self.request_slot.connection_id
+        return answer
 
     async def _resolve_row(self, user: str | None, cid: str, payload: dict[str, Any]) -> None:
         """Put the row of an incoming request in order.
@@ -2463,13 +2448,10 @@ class SpaWorker:
         """Stamp the user a request came in for, and his connection under it.
 
         The http form names no page: what it proves is a real call of that
-        user, which is the clock the valve and the expiry read. The connection
-        is reached through the cookie link when one exists — the rows are the
-        site's, keyed by its own ids — or by the cookie itself where the two
-        coincide.
+        user, which is the clock the valve and the expiry read.
         """
         with self.dispatch_lock:
-            connection = self.connection_register.get(self.cid_connection_map.get(cid, cid))
+            connection = self.connection_register.get(cid)
             row = self.user_register.get(user)
             items = [item for item in (connection, row) if item is not None]
             self._stamp_items(items, ("last_rpc_ts",))
@@ -2653,10 +2635,6 @@ class SpaWorker:
         for cid in connection_parcels:
             self.freeze_handler.drop_connection_register_item(user, cid)
 
-    def _connection_for_cid(self, cid: str) -> dict[str, Any] | None:
-        """The connection row a routing cookie reaches: by link, or by the key itself."""
-        return self.connection_register.get(self.cid_connection_map.get(cid, cid))
-
     def _connection_parcel(self, cid: str) -> dict[str, Any]:
         """One connection with its pages, in the shape the adoption reads back.
 
@@ -2670,7 +2648,7 @@ class SpaWorker:
         item = self.connection_register.get(cid)
         return {
             # The parcel names its own connection: the deposit filename hashes
-            # the id one-way, and the wake that matches by cookie needs it back.
+            # the id one-way, and the wake reads it back from here.
             "connection_id": cid,
             "connection": {
                 key: value
@@ -2753,16 +2731,8 @@ class SpaWorker:
         return self.registry.new_user(user, **self._stamped(**fields))
 
     def _add_connection_item(self, cid: str, user: str, **fields: Any) -> dict[str, Any]:
-        """Put a connection item in the register and join it to its user.
-
-        The routing side of the join is kept here too: a row carrying a
-        ``sticky_cid`` is indexed in ``cid_connection_map``, the link the
-        clocks, the login tail and the wake all resolve the cookie through.
-        """
-        item = self.registry.new_connection(cid, user, **self._stamped(**fields))
-        if item.get("sticky_cid"):
-            self.cid_connection_map[item["sticky_cid"]] = cid
-        return item
+        """Put a connection item in the register and join it to its user."""
+        return self.registry.new_connection(cid, user, **self._stamped(**fields))
 
     def _add_page_item(self, page_id: str, cid: str, **fields: Any) -> dict[str, Any]:
         """Put a page item in the register and join it to its connection."""
@@ -2778,10 +2748,7 @@ class SpaWorker:
         self.registry.drop_page(page_id, cascade=False)
 
     def _remove_connection_item(self, cid: str) -> None:
-        """Take a connection item out of the register, off its user, off the cid link."""
-        item = self.connection_register.get(cid)
-        if item is not None and item.get("sticky_cid"):
-            self.cid_connection_map.pop(item["sticky_cid"], None)
+        """Take a connection item out of the register and off its user."""
         self.registry.drop_connection(cid, cascade=False)
 
     def _remove_user_item(self, user: str) -> None:
@@ -2886,31 +2853,3 @@ class SpaWorker:
         payload = self.freeze_handler.read_connection_register_item(user, cid)
         self.freeze_handler.drop_connection_register_item(user, cid)
         return payload
-
-    def _claim_connection_parcels(self, user: str, cid: str) -> list[tuple[str, Any]]:
-        """Every parcel of ``user`` this request's cookie reaches, taken off the deposit.
-
-        The direct key first — the cookie IS the connection id where no site
-        renamed it — then every parcel whose row carries the cookie in
-        ``sticky_cid``: the rows are the site's, keyed by its own ids, and the
-        cookie reaches them through that field. One browser leaves one parcel
-        per connection GENERATION (each login's tail parts its own), and the
-        site asks for its row by ITS OWN id — so all of them are claimed, never
-        an arbitrary one, or the generation the site's cookie names could stay
-        in the deposit while a stale one comes home in its place.
-
-        Returns:
-            The claimed ``(connection_id, payload)`` pairs, in deposit order;
-            empty when the deposit holds nothing for this cookie.
-        """
-        claimed: list[tuple[str, Any]] = []
-        payload = self.freeze_handler.read_connection_register_item(user, cid)
-        if payload is not None:
-            self.freeze_handler.drop_connection_register_item(user, cid)
-            claimed.append((cid, payload))
-        for payload in self.freeze_handler.read_connection_register_items(user):
-            connection_id = payload["connection_id"]
-            if connection_id != cid and payload.get("connection", {}).get("sticky_cid") == cid:
-                self.freeze_handler.drop_connection_register_item(user, connection_id)
-                claimed.append((connection_id, payload))
-        return claimed

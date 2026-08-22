@@ -54,10 +54,12 @@ import asyncio
 import base64
 import logging
 import time
+from http.cookies import SimpleCookie
 from typing import Any
 
 import pytest
 
+from genro_asgi.applications.spa_app_new import SPA_CONNECTION_ID_COOKIE
 from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker, UserOnHold, WorkerHandler
 from genro_asgi.spa.orchestration.worker_connector import ENVELOPE_SLOT_WORKER_SNAPSHOT
 
@@ -116,8 +118,8 @@ class DrivenWorker(SpaWorker):
     def tiny_site(self, environ: dict[str, Any], start_response: Any) -> list[bytes]:
         """The WSGI callable: say back who asked, for what, and what this process holds."""
         identity = environ["genro.identity"]
-        cid = self.request_slot.cid
-        if identity is not None and self._connection_for_cid(cid) is None:
+        cid = cid_of(environ)
+        if identity is not None and self.connection_register.get(cid) is None:
             # A real site registers its connection while serving (doctrine of
             # 2026-08-21: the rows are the site's) — keyed by the cookie, the
             # core-only world where no site renames it.
@@ -160,13 +162,22 @@ def http_call(cid: str, identity: str, *, path: str, **payload: Any) -> dict[str
             "method": "GET",
             "path": path,
             "query_string": "",
-            "headers": [["host", "site.example:8080"]],
+            "headers": [
+                ["host", "site.example:8080"],
+                ["cookie", f"{SPA_CONNECTION_ID_COOKIE}={cid}"],
+            ],
             "body": "",
             "cid": cid,
         },
         "identity": identity,
         **payload,
     }
+
+
+def cid_of(environ: dict[str, Any]) -> str | None:
+    """The connection a request carries, read where a real site reads it."""
+    morsel = SimpleCookie(environ.get("HTTP_COOKIE", "")).get(SPA_CONNECTION_ID_COOKIE)
+    return None if morsel is None else morsel.value
 
 
 def known_at_the_vertex(commander: Any, cid: str, user: str) -> None:
