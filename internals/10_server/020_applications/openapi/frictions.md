@@ -1,4 +1,4 @@
-# Routing and API surfaces — frictions
+# OpenAPI face — frictions
 
 **Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
 

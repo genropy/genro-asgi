@@ -1,0 +1,10 @@
+# Inspector — frictions
+
+**Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
+
+Open problems, known frictions, accepted risks. Keep it updated: an entry
+leaves this file only when resolved (say where) or explicitly accepted.
+
+- The current implementation contradicts the contribution contract:
+  `inspector_section.py:48` imports `SpaApplication` and `isinstance`-checks
+  the mounted apps — SPA knowledge hardwired into a server section.
