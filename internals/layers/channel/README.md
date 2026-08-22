@@ -1,0 +1,12 @@
+# Channel
+
+**Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
+
+**The shelf.** The shelf every conversation between processes rides: frames on Unix sockets, the hub, the lane.
+
+The wire between processes: `Frame` / `FrameStream` over Unix sockets,
+`ChannelHub` / `ChannelClient` / `LocalChannel`. Consumed by the
+communication mixin (`parent_channel`) and by the orchestration worker wire
+(`worker_connector`, presentation, the lane).
+
+Interactions: orchestration (worker wire) · communication mixin · console (eval over the lane).
