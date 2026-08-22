@@ -42,6 +42,7 @@ than no diagram.
 | Feature | The need |
 |---|---|
 | [configuration](features/010_configuration/) | describe an installation once, start it by name |
+| [cli](features/015_cli/) | drive installations from the shell |
 | [authentication](features/020_authentication/) | only the right people get in; 401 vs 403 |
 | [server-application](features/030_server-application/) | one place where the server is administered |
 | [monitor](features/040_monitor/) | "what is my server doing right now?" — one page |
@@ -56,6 +57,8 @@ than no diagram.
 | [dbevents](features/130_dbevents/) | the database changed a table; the page must learn it |
 | [restart](features/140_restart/) | restart the server without betraying who is working |
 | [deployment-bundles](features/150_deployment-bundles/) | 🔴 proposal: test with named users, promote the accepted build as is |
+| [kubernetes-deploy](features/160_kubernetes-deploy/) | 🔴 proposal: the cluster runs, the commander decides |
+| [subcommanders](features/170_subcommanders/) | 🔴 proposal: delegated authority at scale |
 
 ## The grid — which feature crosses which layer
 
@@ -76,6 +79,9 @@ than no diagram.
 | dbevents | ✓ | | | | |
 | restart | ✓ | | | ✓ | ✓ |
 | deployment-bundles | ✓ | | | | ✓ |
+| cli | | | | | ✓ |
+| kubernetes-deploy | ✓ | | | | ✓ |
+| subcommanders | ✓ | | | | ✓ |
 
 Features also stand on each other — the tall verticals of the SPA world all
 pass through **orchestration**:
@@ -88,6 +94,9 @@ flowchart TD
     DB[dbevents] --> ORC
     RS[restart] --> ORC
     DEP[deployment-bundles] --> ORC
+    K8S[kubernetes-deploy] --> ORC
+    SUB[subcommanders] --> ORC
+    CLI[cli] --> CFG[configuration]
     DC <-->|one DeliveryDesk| DB
     CON[console] -->|eval over the lane| ORC
     INS[inspector] --> SPA
