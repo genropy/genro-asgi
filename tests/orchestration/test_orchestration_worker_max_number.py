@@ -29,7 +29,7 @@ from typing import Any
 import pytest
 
 from genro_asgi import AsgiConfigBuilder, ConfigurationHandler
-from genro_asgi.applications.spa_app_new import SpaApplicationNew
+from genro_asgi.applications.spa_app import SpaApplication
 from genro_asgi.spa.orchestration import GroupHandler, SpaCommander
 from genro_asgi.spa.orchestration.group_handler import WORKER_MAX_NUMBER
 
@@ -84,7 +84,7 @@ class WorkerMaxNumberConfig(AsgiConfigBuilder):
         cfg = root.configuration()
         cfg.server(host="127.0.0.1", port=8000)
         front = cfg.applications().application(
-            code="shop", mount="", app_class=SpaApplicationNew
+            code="shop", mount="", app_class=SpaApplication
         )
         commander = front.commander(
             frozen_users_path="/srv/shop/frozen_users",

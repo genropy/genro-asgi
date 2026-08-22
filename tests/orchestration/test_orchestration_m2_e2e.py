@@ -59,7 +59,7 @@ from typing import Any
 
 import pytest
 
-from genro_asgi.applications.spa_app_new import SPA_CONNECTION_ID_COOKIE
+from genro_asgi.applications.spa_app import SPA_CONNECTION_ID_COOKIE
 from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker, UserOnHold, WorkerHandler
 from genro_asgi.spa.orchestration.worker_connector import ENVELOPE_SLOT_WORKER_SNAPSHOT
 

@@ -36,9 +36,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
-import math
-import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -46,7 +43,6 @@ import pytest
 from genro_toolbox.smartasync import set_sync
 
 from genro_asgi.config import HOME_ENV
-from genro_asgi.spa.commander import UserStickyCommander
 from genro_asgi.types import Message, Scope
 
 # D22 (core 1b): the server's storage API is SYNCHRONOUS — StorageMixin pins
@@ -54,9 +50,6 @@ from genro_asgi.types import Message, Scope
 # under the same dispatch the server runs under, so a storage node answers
 # with a VALUE here exactly as it does in production.
 set_sync()
-
-OCCUPANCY_WORLDS = Path(__file__).parent / "fixtures" / "occupancy"
-WORLD_MEMORY_LIMIT_MB = 1024
 
 
 @pytest.fixture(autouse=True)
@@ -70,65 +63,6 @@ def genro_asgi_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home.mkdir()
     monkeypatch.setenv(HOME_ENV, str(home))
     return home
-
-
-@pytest.fixture
-def occupancy_world(tmp_path: Path) -> Callable[..., UserStickyCommander]:
-    """Fixture: build a real commander whose ``pool_occupancy`` reads a JSON world.
-
-    The worlds live in ``tests/fixtures/occupancy`` and are shaped EXACTLY as
-    ``pool_occupancy`` returns, so a test can assert the picture against the file
-    it was built from. Nothing about the commander is mocked: the readings are
-    seeded where the real ones land — the occupancy window (cpu + executor
-    components, solved so their MAX is the requested saturation and their
-    quadratic MEAN the requested load), the floor series (over the necessity
-    budget, so the quotient is the requested ``memory_pressure``) and the roster
-    user rows (``last_activity_ts`` back-dated by the requested idle age).
-
-    A world whose ``load`` cannot come out of two components — it must sit in
-    ``[saturation / sqrt(2), saturation]`` — is a broken world and raises.
-    """
-
-    def _occupancy_world(name: str, **kwargs: Any) -> UserStickyCommander:
-        world = json.loads((OCCUPANCY_WORLDS / f"{name}.json").read_text())
-        commander = UserStickyCommander(
-            workers=0,
-            path=str(tmp_path / "hub.sock"),
-            memory_limit_mb=WORLD_MEMORY_LIMIT_MB,
-            **kwargs,
-        )
-        targets = commander.evaluator.targets
-        budget = WORLD_MEMORY_LIMIT_MB * 1024 * 1024 * commander.floor_limit_ratio
-        now = time.time()
-        for worker, row in world["workers"].items():
-            saturation, load = row["saturation"], row["load"]
-            squared = 2 * load * load - saturation * saturation
-            if squared < 0.0 or load > saturation:
-                raise ValueError(
-                    f"world {name}: load {load} of {worker} is unreachable "
-                    f"from saturation {saturation}"
-                )
-            commander.worker_roster[worker] = commander.new_roster_row(0, None)
-            commander.worker_roster[worker]["status"] = row["status"]
-            commander.record_occupancy(
-                worker,
-                {
-                    "cpu": saturation * targets["cpu"],
-                    "rss": None,
-                    "reusable": None,
-                    "executor": {"busy": math.sqrt(squared) * targets["executor"], "total": 1.0},
-                },
-            )
-            if row["memory_pressure"]:
-                commander.worker_roster[worker]["floors"].append(
-                    {"ts": now, "floor": row["memory_pressure"] * budget}
-                )
-            for user, idle_age in row["idle_users"].items():
-                commander.assign_user(user, worker)
-                commander.worker_roster[worker]["users"][user]["last_activity_ts"] = now - idle_age
-        return commander
-
-    return _occupancy_world
 
 
 @pytest.fixture

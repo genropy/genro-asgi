@@ -12,29 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The SPA world — the machinery behind UserSticky commanders and workers.
+"""The SPA world — the machinery behind the user-sticky orchestration.
 
 Everything here serves single-page applications: the register machinery
 (`Register`, `RegisterRegistry` — in-process datasets with secondary
-indexes and the users/pages lifecycle vocabulary) and the UserSticky pair
-above it (`UserStickyWorker`, the execution unit; `UserStickyCommander`,
-the pool owner and routing surface, which also holds the worker itself in
-the single role). Nothing in the base server instantiates any of it: this
-package is inert until a runtime (or genropy-asgi) mounts it. It is
-reached by subpackage import — this ``__init__`` is the public face
+indexes and the users/pages lifecycle vocabulary), the shared stores
+(`global_store`, `subscription_index`) and the orchestration package above
+them (`SpaCommander`, `GroupHandler`, `WorkerHandler`, `SpaWorker`).
+Nothing in the base server instantiates any of it: this package is inert
+until a runtime (or genropy-asgi) mounts it. It is reached by subpackage
+import — this ``__init__`` is the public face
 (``from genro_asgi.spa import RegisterRegistry``); nothing is re-exported
 from ``genro_asgi`` top-level.
 """
 
-from .commander import UserStickyCommander
 from .register import Register
 from .register_registry import GUEST_PREFIX, RegisterRegistry
-from .worker import UserStickyWorker
 
 __all__ = [
     "GUEST_PREFIX",
     "Register",
     "RegisterRegistry",
-    "UserStickyCommander",
-    "UserStickyWorker",
 ]

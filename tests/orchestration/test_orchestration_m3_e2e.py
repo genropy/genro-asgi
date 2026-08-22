@@ -73,7 +73,7 @@ from typing import Any
 
 import pytest
 
-from genro_asgi.applications.spa_app_new import SPA_CONNECTION_ID_COOKIE
+from genro_asgi.applications.spa_app import SPA_CONNECTION_ID_COOKIE
 from genro_asgi.config import ConfigurationHandler
 from genro_asgi.spa.orchestration import (
     AssignmentRefused,
@@ -113,7 +113,7 @@ DEATH_TIMEOUT = 15.0
 POOL_CONFIG = '''
 """The pool of the story, as an installation writes it."""
 
-from genro_asgi.applications.spa_app_new import SpaApplicationNew
+from genro_asgi.applications.spa_app import SpaApplication
 from genro_asgi.config import AsgiConfigBuilder
 
 
@@ -125,7 +125,7 @@ class ServerConfiguration(AsgiConfigBuilder):
     def main(self, root):
         cfg = root.configuration()
         front = cfg.applications().application(
-            code="{app_code}", mount="", app_class=SpaApplicationNew
+            code="{app_code}", mount="", app_class=SpaApplication
         )
         commander = front.commander(
             frozen_users_path="{root}/frozen_users",

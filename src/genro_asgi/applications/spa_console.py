@@ -36,7 +36,7 @@ from typing import Any
 from genro_routes import RoutingClass, route
 
 from .mcp import McpApplication
-from .spa_app_new import SpaApplicationNew
+from .spa_app import SpaApplication
 
 __all__ = ["SpaConsole", "SpaConsoleMcpApplication"]
 
@@ -79,15 +79,15 @@ class SpaConsole(RoutingClass):
         return {"target": target, "repr": await front.commander.eval_in_target(target, expr)}
 
     @property
-    def spa_fronts(self) -> dict[str, SpaApplicationNew]:
+    def spa_fronts(self) -> dict[str, SpaApplication]:
         """The SPA fronts mounted on this server, by code."""
         return {
             code: mounted
             for code, mounted in self.application.server.applications.items()
-            if isinstance(mounted, SpaApplicationNew)
+            if isinstance(mounted, SpaApplication)
         }
 
-    def spa_front(self, app: str) -> SpaApplicationNew:
+    def spa_front(self, app: str) -> SpaApplication:
         """The front ``app`` names — or the only one, when the server has one.
 
         Raises:

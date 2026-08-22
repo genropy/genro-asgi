@@ -62,99 +62,62 @@ spool, executor) mount like any other app.
 
 ### The SPA machine (`spa/` + `applications/spa_app.py`)
 
-**Two stacks, and the words for them (until Macro 6).** Everything in this
-section describes the **pre_refactoring** stack — `spa/worker.py`
-(`UserStickyWorker`), `spa/commander.py` (`UserStickyCommander`),
-`applications/spa_app.py` (`SpaApplication`) — which is what genropy-asgi runs
-on today and which the orchestration rebuild has not touched by a single line.
-The **new core** is `spa/orchestration/` + `applications/spa_app_new.py`. Say
-neither of them "legacy": in this code that word already names the genropy SITE
-(`WsgiSeam`, "legacy WSGI sites"). The pre_refactoring stack goes at the Macro 6
-cutover, and this note with it.
+**One stack.** The repository cutover happened on 2026-08-22: `main` and the
+tag `v0.35.0` freeze the last dual-stack state (the pre_refactoring
+`UserStickyCommander`/`UserStickyWorker` and their front), and `develop` —
+the base of all work branches — carries ONLY the new core:
+`spa/orchestration/` fronted by `applications/spa_app.py` (`SpaApplication`,
+which took the vacated name; it was `SpaApplicationNew`). "pre_refactoring"
+now names code that lives only on `main`/`v0.35.0`. Say never "legacy": in
+this code that word names the genropy SITE (`WsgiSeam`, "legacy WSGI
+sites"). genropy-asgi will be rebased on develop; NO PyPI release from
+develop until that bridge is migrated — the published bridge pins the
+frozen tag.
 
-**Identity.** `SpaApplication` is a thin front: it reads/mints the
-`sticky_cid` cookie ONCE per request (the cid), derives the routing identity
-from the commander's own surface — `connection_user.get(cid, cid)` — and
-keeps ZERO state. **Whoever shows up is a user in full**: received by the
-reception worker, named `guest_<cid>` (`GUEST_PREFIX`, the daemon's own
-convention), registered through the fold like anybody else. At login the
-connection is re-labeled onto the root avatar identity
-(`change_connection_user`); nobody can log in AS a guest. A **stranger** is
-an identity the pool holds nothing of — no placement, no frozen parcel
-(a cookie that outlived a restart without dump, a parcel reaped by age).
+**Ownership chain.** server → `SpaApplication` (stateless front: cookie,
+two-stage demux, HTTP translation — 503 with `Retry-After` for a refusal,
+502 for a site failure) → `SpaCommander` (global indexes, lifecycle,
+barrier, request chain, single-writer fold via `EnvelopeHandler`, freezer
+via `FreezeHandler`, `DeliveryDesk`) → n `GroupHandler` (placement,
+capacity, growth and shrink) → n `WorkerHandler` (process, wire,
+surveillance) → `SpaWorker` (the live users/connections/pages state and the
+hosted WSGI site behind `WsgiSeam`). Usersticky principle unchanged: ALL
+pages of a user live in the same process as the user's store.
 
-**The chain.** cookie → cid → `connection_user` (commander index) →
-`user_worker_map` → the worker. Usersticky principle: ALL pages of a user
-live in the same process as the user's store. The surface is a tree —
-users → connections → pages, with inverse maps — written ONLY by the fold
-(single writer); THE MAP IS WRITTEN AT THE DECISION: a user lives where it
-logged in, and if `decide_worker` (reception-first) says it belongs
-elsewhere, a detached move carries it later.
+**Identity — one, the site's own.** The `spa_connection_id` cookie carries
+the hosted site's OWN connection id (owner decision 2026-08-22): the front
+mints nothing, the site names the connection while serving, the answer
+carries that id back and the cookie is written with it (rewritten only when
+it differs from the one that came in). `connection_user_map` and
+`page_connection_map` are keyed by real connection ids and the deposit
+files one parcel per connection under that same id. The cookie lives 24
+hours, the life the site gives its own connection.
 
-**Pool anatomy.** One `UserStickyCommander` (in the server process) speaks to
-N `UserStickyWorker` children over the channel: a `ChannelHub` (UDS or TCP),
-typed frames CALL/REPLY/EVENT, every REPLY carrying three sub-envelopes
-(synchronous class settled in the caller's coroutine — logins included;
-task class drained detached). A `local_worker` variant runs in-process over
-`LocalChannel` — same protocol, no fork. Legacy WSGI sites are served
-in-process by the worker through `WsgiSeam` (WSGI as adapter, never as
-transport). The global store MASTER lives on the commander; replicas on the
-workers, updated by captured changes; read-modify-write goes through the
-global lock grant.
+**Data plane (landed 2026-08-20, 14 phases).** Datachanges and dbevents are
+delivered ADDRESSED through the `DeliveryDesk` (subscriptions, pending
+mailboxes, age-bounded events); the global store lives ONLY on the
+commander — no replicas — with reads as calls on the lane (`store_get`) and
+read-modify-write through the lock grant/release, the grant carrying the
+true master state; never files or shared memory between processes.
 
-**Health vs shape.** Each worker has a `caretaker` probing it every 5s —
-health ONLY: a mute worker (or one sitting on an unanswered `add_user`
-delivery past `max_pending_cycles`) is killed; `reconcile_loop` keeps
-living == target, respawns the shortfall, buries tombstones. The pool's
-SHAPE is decided on a slow clock: `planner` every `decision_interval` reads
-ONE picture (`pool_occupancy`, judged by the evaluator in saturation space)
-and `build_plan` answers with the ordered ladder — **1 FREEZE idle users to
-disk, 2 REBALANCE the hot, 3 REPLACE the condemned (memory-floor NECESSITY
-first, waste CONVENIENCE after; spawn gated on the pool absorbing the users),
-4 SPAWN a spare, 5 COMPACT the slack** — claiming every named worker
-(`retiring`) in the same synchronous breath. `execute_plan` runs steps one
-at a time, re-asking each; a failed spawn leaves the pool `restricted`:
-everybody inside is served as ever, strangers get 503 + `Retry-After` until
-a fresh REGISTER proves the pool can grow again.
+**Mobility and deaths.** One path only: hold → freeze → reassign →
+unfreeze, used for compaction, ordered replacement and wake — the direct
+worker-to-worker move of the pre_refactoring stack was deliberately
+eliminated, not left behind. A request meeting a user between two homes
+parks on the per-user barrier up to `REQUEST_HOLD_MAX_SECONDS`. A sudden
+worker death restarts the small set of users involved: an accepted,
+observable risk, not a gap.
 
-**Moves and the freezer.** A move is FLAG → QUIESCE → evict → install →
-SWITCH, under a per-user barrier every forward parks on; past the evict the
-parcel exists only in the commander's custody, salvaged onto another worker
-if the destination dies. The freezer parks idle users on disk (one parcel
-per user under `frozen_users_dir`, identity flattened by `user_to_userkey`,
-one-way); the wake is LAZY — `resolve_worker` finds the `FROZEN` placement
-and re-installs the parcel on the user's own next request; orphan parcels
-die by age (the reaper). `hard_restart` is the declared exception to
-"successor first": park everybody in the freezer, kill, respawn under the
-same name, refill lazily. `dump`/`restore` carry the whole surface across a
-full server restart.
-
-**Where the rebuild stands.** The split the pre_refactoring commander needed —
-`SpaCommander → n GroupHandler → n WorkerHandler` — is BUILT and on main, under
-`spa/orchestration/` (Macro 1-4: foundations, worker process, commander and
-groups, request chain and login), fronted by `SpaApplicationNew`. It knows who
-lives where, how a request reaches its worker, the freezer, the deaths, the
-groups and the occupancy — and nothing of the data plane: no datachanges, no
-table events, no store writes from the hosted site, no hot move, no
-`dump`/`restore`. That is why genropy-asgi cannot run on it yet. Macro 5 builds
-the data plane — the minimum measured in
-`temp/minimo_genropy_pre_alpha_2026-08-19.md` — and Macro 6 is the cutover, when
-the pre_refactoring stack is removed. **One identity, in the new core only**
-(owner decision 2026-08-22): the `spa_connection_id` cookie carries the hosted
-site's OWN connection id — the front mints nothing, the site names the
-connection while serving, the answer carries that id back and the cookie is
-written with it (rewritten only when it differs from the one that came in). So
-`connection_user_map` and `page_connection_map` are keyed by real connection
-ids, the worker's `cid_connection_map` is gone with the `sticky_cid` field and
-every event that carried it, and the deposit files one parcel per connection
-under that same id. The cookie lives 24 hours, the life the site gives its own.
-The pre_refactoring front still mints `sticky_cid`, and the Identity section
-above describes THAT one. Decision register:
-`temp/interview_handler_2026-08-15.md` (F1-F49); design:
+**Not yet built (second pass).** `dump`/`restore` across a full server
+restart and the restart liturgy (hard/soft, `temp/liturgia_riavvio_orientamenti_2026-08-20.md`);
+pool monitor parity and Prometheus metrics; the in-process local worker;
+the parent-side escalation after a partially applied fold (F48/F49 — cited
+by code and commits, still to be entered in the register). Decision
+registers: `temp/interview_handler_2026-08-15.md` (F1-F49); design:
 `temp/design_orchestrazione_v4_2026-08-17.md`.
 
 ---
 
 **All general policies are inherited from the parent document: [meta-genro-modules CLAUDE.md](https://github.com/softwellsrl/meta-genro-modules/blob/main/CLAUDE.md)**
 
-**Last Updated**: 2026-08-19
+**Last Updated**: 2026-08-22

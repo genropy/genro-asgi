@@ -45,7 +45,7 @@ from genro_routes import RoutingClass, route
 
 from ...sse import SseStream
 from ...streaming import StreamingResponse
-from ..spa_app_new import SpaApplicationNew
+from ..spa_app import SpaApplication
 
 if TYPE_CHECKING:
     from ..server_app import ServerApplication
@@ -68,12 +68,12 @@ class InspectorSection(RoutingClass):
         self.application = application
 
     @property
-    def spa_fronts(self) -> dict[str, SpaApplicationNew]:
+    def spa_fronts(self) -> dict[str, SpaApplication]:
         """The SPA fronts mounted on this server, by application code."""
         return {
             code: mounted
             for code, mounted in self.application.server.applications.items()
-            if isinstance(mounted, SpaApplicationNew)
+            if isinstance(mounted, SpaApplication)
         }
 
     @route(media_type="text/html")

@@ -41,7 +41,7 @@ from genro_asgi import (
     ConfigurationHandler,
 )
 from genro_asgi.__main__ import AppsRegistry
-from genro_asgi.applications.spa_app_new import SpaApplicationNew
+from genro_asgi.applications.spa_app import SpaApplication
 from genro_asgi.config import HOME_ENV, BaseConfiguration, DefaultConfig
 from genro_asgi.exceptions import HTTPUnauthorized
 from genro_asgi.spa.orchestration.spa_commander import ORDERS_LOGGER_NAME
@@ -701,7 +701,7 @@ class SpaPoolConfig(AsgiConfigBuilder):
         cfg = root.configuration()
         cfg.server(host="127.0.0.1", port=8000)
         front = cfg.applications().application(
-            code="shop", mount="", app_class=SpaApplicationNew
+            code="shop", mount="", app_class=SpaApplication
         )
         self.commander_section(front)
 
@@ -875,7 +875,7 @@ class TestCommanderSection:
             def main(self, root: Any) -> None:
                 cfg = root.configuration()
                 front = cfg.applications().application(
-                    code="shop", mount="", app_class=SpaApplicationNew
+                    code="shop", mount="", app_class=SpaApplication
                 )
                 front.commander().group(name="stable")
 

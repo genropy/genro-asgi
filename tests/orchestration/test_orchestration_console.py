@@ -69,9 +69,9 @@ class XT_Server:
 
 
 async def test_the_tools_reach_the_front_and_list_the_targets(wired_lane):
-    from genro_asgi.applications.spa_app_new import SpaApplicationNew
+    from genro_asgi.applications.spa_app import SpaApplication
 
-    spa_front = SpaApplicationNew.__new__(SpaApplicationNew)
+    spa_front = SpaApplication.__new__(SpaApplication)
     spa_front._commander = wired_lane.commander
     console_app = SpaConsoleMcpApplication(code="console")
     console_app.server = XT_Server({"shop": spa_front, "other": object()})
