@@ -31,31 +31,31 @@ than no diagram.
 
 | Layer | The shelf |
 |---|---|
-| [channel](layers/channel/) | frames on Unix sockets, the hub, the lane |
-| [middleware](layers/middleware/) | the uniform ring every HTTP request passes |
-| [routing](layers/routing/) | the route tree and its API faces (REST/OpenAPI, MCP) |
-| [sessions](layers/sessions/) | per-user server-side state between requests |
-| [storage](layers/storage/) | the only door to the filesystem |
+| [010 channel](layers/010_channel/) | frames on Unix sockets, the hub, the lane |
+| [020 storage](layers/020_storage/) | the only door to the filesystem |
+| [030 middleware](layers/030_middleware/) | the uniform ring every HTTP request passes |
+| [040 routing](layers/040_routing/) | the route tree and its API faces (REST/OpenAPI, MCP) |
+| [050 sessions](layers/050_sessions/) | per-user server-side state between requests |
 
 ## The features (vertical)
 
 | Feature | The need |
 |---|---|
-| [configuration](features/configuration/) | describe an installation once, start it by name |
-| [authentication](features/authentication/) | only the right people get in; 401 vs 403 |
-| [server-application](features/server-application/) | one place where the server is administered |
-| [monitor](features/monitor/) | "what is my server doing right now?" — one page |
-| [inspector](features/inspector/) | look into the SPA fronts of a live installation |
-| [console](features/console/) | ask a live pool the questions nobody predicted |
-| [tasks](features/tasks/) | work that is no HTTP request: schedules, batches, spool |
-| [task-thermometers](features/task-thermometers/) | see a batch move, stop it politely |
-| [spa-application](features/spa-application/) | one stable door to the hosted site, no state in the door |
-| [orchestration](features/orchestration/) | many users with live state, scaled across processes, never split |
-| [global-store](features/global-store/) | one shared state, safe read-modify-write |
-| [datachanges](features/datachanges/) | what one page changes, the others must see |
-| [dbevents](features/dbevents/) | the database changed a table; the page must learn it |
-| [restart](features/restart/) | restart the server without betraying who is working |
-| [deployment-bundles](features/deployment-bundles/) | 🔴 proposal: test with named users, promote the accepted build as is |
+| [configuration](features/010_configuration/) | describe an installation once, start it by name |
+| [authentication](features/020_authentication/) | only the right people get in; 401 vs 403 |
+| [server-application](features/030_server-application/) | one place where the server is administered |
+| [monitor](features/040_monitor/) | "what is my server doing right now?" — one page |
+| [inspector](features/050_inspector/) | look into the SPA fronts of a live installation |
+| [console](features/060_console/) | ask a live pool the questions nobody predicted |
+| [tasks](features/070_tasks/) | work that is no HTTP request: schedules, batches, spool |
+| [task-thermometers](features/080_task-thermometers/) | see a batch move, stop it politely |
+| [spa-application](features/090_spa-application/) | one stable door to the hosted site, no state in the door |
+| [orchestration](features/100_orchestration/) | many users with live state, scaled across processes, never split |
+| [global-store](features/110_global-store/) | one shared state, safe read-modify-write |
+| [datachanges](features/120_datachanges/) | what one page changes, the others must see |
+| [dbevents](features/130_dbevents/) | the database changed a table; the page must learn it |
+| [restart](features/140_restart/) | restart the server without betraying who is working |
+| [deployment-bundles](features/150_deployment-bundles/) | 🔴 proposal: test with named users, promote the accepted build as is |
 
 ## The grid — which feature crosses which layer
 
