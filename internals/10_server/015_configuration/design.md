@@ -1,6 +1,6 @@
 # Configuration — design
 
-**Version**: 0.3 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.4 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
 
 **Configuration, with the work finished.** Read this as a report from the day
 everything described here is running: it says what a configuration *is*, and
@@ -321,3 +321,46 @@ not: a non-existent module in the imports, and a storage path the backend
 refuses because it does not exist. The test that executes all of them is
 decided and deferred (owner, 2026-08-23), so until it exists these recipes are
 kept honest by hand.
+
+## Recorded in more than one entry
+
+Found by a reader who had only the documents. Each lives between two or three
+entries, is written in the same words in each, and is settled once for all of
+them.
+
+**S8 — the application contract has three different lengths across the
+dossier.** [020 applications](../020_applications/design.md) §1 splits it four
+and four. [010 server](../010_server/) §2 states a list of its own and adds
+that an application declares what may be done to it. §5 of
+[README.md](README.md) adds the survivable-failure declaration. A reader who
+reads the three in order is told three times that the contract is small and
+gets three different contracts. The split in 020 is that entry's proposal, not
+a ratified shape: settling it means one list, written there and referred to
+from the other two. Recorded in the same wording in
+[010 server](../010_server/design.md) and
+[020 applications](../020_applications/design.md).
+
+**S9 — this entry never documents `BaseConfiguration`'s hooks.** A site recipe
+deviates from the package defaults by overriding one hook — `server_section`,
+`storage_section`, or the `storage_mounts` that the second calls. §3 above names
+none of the three, and the class is described only as the dialect with the
+package's own defaults already written into it.
+
+The cost shows in the recipe of [020 applications](../020_applications/), the
+only one of the three that leans on the inheritance: its `main` calls two
+methods it does not define and it defines a third nothing appears to call. The
+recipes of 010 and of this entry avoid the question by defining every method
+they call, which is a coincidence of how they were written rather than a rule.
+A reader cannot tell whether that recipe works or is broken, and the recipes
+are the one executable thing in each entry. The hooks belong here, and the
+paragraph 020 added above its own recipe is a patch until they are. Recorded in
+the same wording in [020 applications](../020_applications/design.md).
+
+**S10 — the recipe reads as if the storage key were required.** The recipe at
+the foot of [README.md](README.md) passes `storage_key` as a resolver and warns
+that resolving to empty is a boot error. The recipe of
+[010 server](../010_server/) omits the key entirely and boots, because the
+default is `None` and absence is not the same as a resolver that came back
+empty. As written, the two pages read as contradicting each other about whether
+an installation must declare key material. One sentence settles it, and it
+belongs to whichever of §1 or §6 owns the word.

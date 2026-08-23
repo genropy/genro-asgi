@@ -1,6 +1,6 @@
 # Server — design
 
-**Version**: 0.4 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.5 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
 
 **The ground floor, with the work finished.** Read this document as a report
 from the day everything described here is running: it says what the server
@@ -388,3 +388,32 @@ only `__init__.py`, so every test is classified contract and every failure is
 a STOP. Either correct as it stands, or a reclassification is owed — its own
 task, never smuggled into another change. Not the server's to resolve;
 recorded here because the server is the first subject to meet it.
+
+## Recorded in more than one entry
+
+Found by a reader who had only the documents. Each lives between two or three
+entries, is written in the same words in each, and is settled once for all of
+them.
+
+**S13 — two documents answer "how does a handler know which request it is
+serving" differently.** §4 of [README.md](README.md) says the registry answers
+*which request am I serving right now?*, "asked by code buried deep inside a
+handler, which needs the request but was never handed it".
+[020 applications](../020_applications/design.md) §5 says there is no ambient
+current request and that the old pair never returns. Both describe something
+real — the registry holds a thin in-flight record, not the request object — but
+no document draws that line, so the two pages read as opposites. Settling it
+means writing the distinction in both. Recorded in the same wording in
+[020 applications](../020_applications/design.md).
+
+**S14 — the application contract has three different lengths across the
+dossier.** [020 applications](../020_applications/design.md) §1 splits it four
+and four. §2 of [README.md](README.md) states a list of its own and adds that
+an application declares what may be done to it.
+[015 configuration](../015_configuration/) §5 adds the survivable-failure
+declaration. A reader who reads the three in order is told three times that the
+contract is small and gets three different contracts. The split in 020 is that
+entry's proposal, not a ratified shape: settling it means one list, written
+there and referred to from the other two. Recorded in the same wording in
+[020 applications](../020_applications/design.md) and
+[015 configuration](../015_configuration/design.md).
