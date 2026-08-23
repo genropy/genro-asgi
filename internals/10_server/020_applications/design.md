@@ -450,3 +450,12 @@ source and a date beside them, exactly like the two that do exist, and a source
 is a record of a decision rather than of a delivery. A reader cannot tell the
 decided from the delivered by looking, and this friction is what tells them.
 It closes when the members exist, not by editing §1.
+
+**S17 [cross · unratified] — the fixed pair is stated in two entries and armed
+in three moments.** §8 above names two capabilities as fixed structure, on D26's
+authority. A booted application's tree carries **three**: the third is the
+authorization plugin, which the application arms for itself in its own
+constructor rather than receiving it from the server. Nothing states the
+division as a rule, so a reader who counts the always-present plugins gets two
+from the specification and three from the code. Recorded in the same wording in
+[025 plugins](../025_plugins/design.md).
