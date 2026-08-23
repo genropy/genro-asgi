@@ -328,7 +328,7 @@ whether the server was built from a configuration or by hand, so the
 administrative surface is never something an installation can forget.
 
 > The tree, its layers and its vocabulary are
-> [100 configuration](../100_configuration/); the administrative application
+> [015 configuration](../015_configuration/); the administrative application
 > and its sections are
 > [090 server-application](../090_server-application/).
 

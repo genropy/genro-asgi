@@ -21,7 +21,7 @@ is defined in its own page. Everything else in the dossier assumes it.
 |---|---|
 | a capability layer stacked on the server | [025 plugins](../025_plugins/), [030 middleware](../030_middleware/), [040 sessions](../040_sessions/), [050 authentication](../050_authentication/), [060 storage](../060_storage/), [070 tasks](../070_tasks/) |
 | an application it hosts | [020 applications](../020_applications/), [090 server-application](../090_server-application/), [20_spa/010 spa-application](../../20_spa/010_spa-application/) |
-| the thing that supplies its shape | [100 configuration](../100_configuration/) |
+| the thing that supplies its shape | [015 configuration](../015_configuration/) |
 | the thing that boots it | [110 cli](../110_cli/) |
 | the thing that tears it down and rebuilds it | [120 restart](../120_restart/) |
 

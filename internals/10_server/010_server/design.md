@@ -237,7 +237,7 @@ into the hosted application's router — recorded against old finding F3.
 **Source: Ratified 2026-07-29, SPECIFICATION.md:772.** Nothing materializes a
 server from the outside: the class that needs the values reads them.
 Explicitly passed kwargs win over configured ones, **wholesale per kwarg**.
-Detail in [100 configuration](../100_configuration/).
+Detail in [015 configuration](../015_configuration/).
 
 ## 13. Restart is a target, not an afterthought
 
@@ -349,7 +349,7 @@ grows the error-aware half it promises.
 (the only uncovered statements of its module, and the path every deployment
 takes) and the `ValueError` on an unsupported ASGI scope type. Details and
 line numbers in status.md. The first is shared with
-[110 cli](../110_cli/) and [100 configuration](../100_configuration/).
+[110 cli](../110_cli/) and [015 configuration](../015_configuration/).
 
 **S11 — accepted risk: the pool teardown blocks the loop.** The lifespan
 branch joins the worker threads synchronously on the event loop, after the

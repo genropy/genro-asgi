@@ -1,0 +1,299 @@
+# Configuration
+
+**Version**: 0.2 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
+
+How an installation is described, how the description is read while it runs,
+and how each part of the system contributes its own words to it.
+
+## What a configuration is
+
+Two deployments of the same software are not the same installation. One serves
+a shop on port 8000 with a single database; the other serves the shop and an
+administrative surface behind a proxy, with three storage volumes, an identity
+provider and a pool of worker processes. Nothing about that difference belongs
+in the code — the code is identical in both.
+
+So an installation is **described**, once, in one place. That description names
+which applications are installed and where, which databases exist, where files
+live, who is allowed in and how, and how much of the machine the server may
+use. Given the description, the software assembles itself.
+
+Three properties make the description more than a settings file, and they are
+what this page is about.
+
+**It is a document with a grammar, not a bag of keys.** Every word in it is
+declared by the part of the system that consumes it, and a word nobody declared
+is refused when the description is read — not later, when the value would have
+been used.
+
+**It is layered.** The same description is written at three levels — what the
+package ships, what a machine adds, what a site says — and the site wins. So a
+deployment declares only its differences.
+
+**It is alive.** The description is not read once at boot and discarded. It
+stays as a tree the running system watches, and changing the tree changes the
+installation.
+
+## The anatomy
+
+A configuration exists in two forms, and keeping them apart is the whole of
+understanding it.
+
+The form you **write** is a **recipe**: a Python class with one method, calling
+the grammar to build the document. The form the system **reads** is a **tree**:
+what the recipe produced, layered with the recipes under it, watched by whoever
+cares.
+
+```mermaid
+flowchart TB
+    R1["package defaults<br/>a recipe"] --> T["<b>the tree</b><br/>layered, live"]
+    R2["machine defaults<br/>a recipe"] --> T
+    R3["the site's recipe<br/>a recipe — wins"] --> T
+    T --> RD["the read door<br/>one call, four layers"]
+    T --> SUB["subscribers<br/>notified when it changes"]
+    RD --> C["whoever needs a value<br/>server · capability · application"]
+    SUB --> C
+```
+
+| The part | In one line |
+|---|---|
+| the recipe | what you write: a class, one method, calls into a grammar |
+| the grammar | which words exist, declared by whoever consumes them |
+| the layers | package, machine, site — the site wins, per value |
+| the read door | one call answers any path, through four layers of fallback |
+| the live tree | it can be written while running, and it notifies |
+| the sections | what the server itself declares |
+
+---
+
+## 1. The recipe — a description you execute
+
+A configuration is not a data file. It is a **class**, and describing an
+installation means writing one method:
+
+```python
+from genro_asgi.config import AsgiConfigBuilder
+from myshop.app import Application as Shop
+
+class ServerConfiguration(AsgiConfigBuilder):
+    def main(self, root):
+        cfg = root.configuration()
+        cfg.server(host="127.0.0.1", port=8000)
+        cfg.applications(default="shop").application(code="shop", app_class=Shop)
+```
+
+Each call builds one node of the document. The method names are not free text:
+they are the **grammar**, and calling one that does not exist, or putting it
+where it may not go, fails while the recipe runs.
+
+Being code rather than data buys two things that matter. An application class
+is **passed as the class itself**, imported at the top of the recipe — so a
+typo in an application name is an import error at boot, not a lookup failure
+later. And a description that is getting long is split into methods, one per
+section, each small enough to read at a glance.
+
+What a recipe must never contain is a **secret**. A password or a key is
+written as a **resolver** — an object that fetches the value when it is read,
+from the environment or elsewhere — and it is placed exactly where the literal
+would have gone. Some words refuse a literal outright: the bootstrap
+administrator password is declared in a way that rejects one at the recipe
+line, because a secret in a recipe is a secret in version control.
+
+## 2. The grammar — every part declares its own words
+
+Nobody owns the whole vocabulary. **Each part of the system declares the words
+it consumes**, and the description is validated against the union.
+
+The server declares the sections of the top level. A capability that owns a
+subject declares the words of that subject and attaches them where they belong
+— the task backbone declares its own child of the server section. And an
+application declares its own vocabulary entirely: the site's grammar does not
+know it and does not validate it.
+
+That last one is the interesting case, because it is how the description stays
+open without becoming untyped. When a recipe declares an application, it hands
+over **the application class**, and that class carries its grammar. From that
+node down, the words are the application's own — the site dialect steps aside
+and lets the application's grammar govern its own children. So a SPA front
+declares its pool and its groups in its own words, under its own entry, and
+the server never learned what a pool is.
+
+The consequence for anyone adding a feature: **a new capability or application
+brings its own words with it**, declared next to the code that reads them.
+Nothing central has to be edited, and nothing central has to know.
+
+## 3. The layers — three descriptions, the site wins
+
+The same installation is described at three levels, and they stack:
+
+1. **What the package ships.** Defaults written as a recipe like any other, not
+   as fallbacks scattered through constructors — so they are readable in the
+   same language, and a site can override them one value at a time.
+2. **What the machine adds.** The layer a system administrator owns: a volume
+   that exists only on this host, where the key material comes from, the
+   listener. Set once, inherited by every installation deployed there.
+3. **What the site says.** Always last, always winning.
+
+A recipe governs its own inheritance: it declares where its middle layer comes
+from, and it may decline it entirely and sit straight on the package defaults.
+An explicit choice the system cannot honour — a defaults file that is named and
+missing — is a configuration error, never a silent skip.
+
+The layering is done on the **tree**, not on the classes: each recipe is
+executed and the results are folded, lowest first. So a site that subclasses
+the package defaults and a site that subclasses the plain dialect inherit the
+same thing — the layering belongs to the reading, not to the class hierarchy.
+
+## 4. The read door — one call, four layers of fallback
+
+Nothing hands a component its slice of the description. **Whoever needs a value
+asks for it**, by path, through a single door:
+
+```python
+self.server.config("server.host")
+self.config("parameters.title", default="Shop")   # from inside an application
+```
+
+The answer is resolved through four layers, in order:
+
+1. **the written value** — what the recipe wrote. A resolver sitting there is
+   resolved at this moment, so a value that comes from the environment is read
+   when it is asked for, not frozen when the recipe ran;
+2. **the declared default** — the default of the word in the grammar, read now
+   rather than baked in, so the document stays a record of what was *written*;
+3. **the caller's own default** — supplied at the call site;
+4. **a noisy error** naming the path that was asked for.
+
+A component never holds a copy of its subtree; it holds an **address in it**.
+An application asks with paths relative to itself and the door prefixes them,
+so an application can only read its own words, and two installations of the
+same class read different values without either knowing.
+
+## 5. The live tree — writing it, and being told
+
+The tree the system reads is a **live document**: it can be read, it can be
+written, and it tells whoever asked to be told.
+
+That is what makes an installation changeable while it runs. The
+administrative application carries the commands that write into the tree;
+writing fires the tree's own notification; and each part that subscribed to the
+branch it cares about brings itself in line with what the tree now says.
+Installing an application, removing one, adding a volume, changing a policy:
+each is a write, and the running system follows.
+
+The parts do not poll and are not called by name. Each **subscribes to its own
+branch** and reacts to its own changes — the same contribution pattern as the
+grammar, one level up: a part declares its words, then watches them.
+
+A write the system cannot honour is **refused, and refused loudly**: two
+applications claiming one name, a default naming something not installed, a
+class that will not import. The administrator gets an error to read. Nothing is
+half-applied and nothing is absorbed quietly.
+
+> The commands themselves are
+> [090 server-application](../090_server-application/)'s; what each part does
+> when its branch changes is described by that part's own entry.
+
+## 6. The server's own sections
+
+Everything above is mechanism. This is the vocabulary the **server itself**
+declares — the words that are nobody else's.
+
+The top level is a fixed list of sections, each of which may appear at most
+once, so every path is stable and can be written by hand:
+`configuration.server`, `configuration.authentication.oidc.<code>`,
+`configuration.applications.<code>`.
+
+**`server`** — the runtime itself. `host` and `port` are the **listener**:
+where to bind. `external_url` is the **public address**: what the server calls
+itself when it hands its own URL to somebody else. The two differ behind a
+proxy and answer different questions, which is why the public one is declared
+rather than guessed from an incoming request — it must match what a third party
+was told, and a value derived from a client's own header would be a value that
+party rejects. `max_threads` sizes the pool where blocking work runs.
+
+Two children are server-domain and so live here rather than under an
+application: **`session`**, which carries how long a session lives, and
+**`tasks`**, whose words belong to the task backbone and are declared by it.
+
+The remaining sections are named here and described where they belong:
+`middleware`, `authentication`, `storage`, `applications`, `databases`,
+`plugins`, `openapi`.
+
+One is worth a line because its shape recurs: **`storage`** declares no
+vocabulary of its own. It is a mount point, exactly like an application's:
+whoever manages volumes carries the grammar, the mounts are written in that
+grammar's words, and this dialect steps aside.
+
+## A configuration that includes it
+
+A whole installation described once: the server's own section, a site recipe
+inheriting the package defaults, an encrypted volume, and the secret kept out
+of the recipe by a resolver.
+
+```python
+import os
+import tempfile
+
+from genro_bag.resolvers import EnvResolver
+from genro_storage import StorageManager
+
+from genro_asgi import AsgiServer, RoutedApplication
+from genro_asgi.config import BaseConfiguration
+
+
+class Shop(RoutedApplication):
+    """The hosted application — here a bare one, so the recipe stands alone."""
+
+
+# A real deployment names its own directory (/srv/shop); the backend refuses a
+# path that does not exist, so the example creates one.
+SITE_DIR = tempfile.mkdtemp(prefix="shop-")
+
+
+class ServerConfiguration(BaseConfiguration):
+    """One shop on the site root, behind a proxy, with an encrypted volume."""
+
+    def main(self, root):
+        cfg = root.configuration()
+        self.server_section(cfg)
+        self.storage_section(cfg)
+        cfg.applications().application(code="shop", mount="", app_class=Shop)
+
+    def server_section(self, cfg):
+        cfg.server(
+            host="0.0.0.0",
+            port=8000,
+            external_url="https://shop.example.com",
+            max_threads=16,
+        ).session(ttl=3600)
+
+    def storage_section(self, cfg):
+        section = cfg.storage(
+            app=StorageManager,
+            storage_key=EnvResolver("GENRO_STORAGE_KEY"),
+        )
+        section.local(name="site", base_path=SITE_DIR)
+
+
+# The resolver reads the environment when the value is asked for. In a real
+# deployment the key comes from the host; here it is a throwaway so the recipe
+# runs as written. Resolving to empty is a boot error, not a silent skip.
+os.environ.setdefault("GENRO_STORAGE_KEY", "S6z15YMHEgMl9Y_AoSPK837uCFSLKPymuGclKZxO4ig=")
+
+server = AsgiServer(config=ServerConfiguration)
+```
+
+Read back through the door, that installation answers:
+
+| Asked | Answer |
+|---|---|
+| `server.config("server.external_url")` | `https://shop.example.com` |
+| `server.config("server.port")` | `8000` |
+| `server.config("server.session.ttl")` | `3600` |
+| `server.applications["shop"].mount` | `''` — the site root |
+| `sorted(server.applications)` | `['_server', 'shop']` |
+
+The last row is worth noticing: the recipe declared one application and the
+installation has two. The administrative application is there without anyone
+asking for it.

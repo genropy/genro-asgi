@@ -83,6 +83,34 @@ exists to produce a question for the interview, and it dies there.
   that source too**. The correction is part of the answer, not a follow-up.
 - When the section is empty, `design.md` can be ratified 🟢.
 
+### Every entry closes with a working configuration
+
+The mechanism of configuration — the tree, its layers, the read stack, the
+subscribers and their triggers — is explained once, in
+[015 configuration](../10_server/015_configuration/). Every other entry
+declares only **what it adds** to that tree, and does it by ending its
+`README.md` with a **complete recipe that includes its own feature**: not a
+fragment of the section it owns, but a whole installation someone could run,
+with its feature in place.
+
+A fragment cannot be checked; a whole recipe can. Which is the point: these are
+**executable examples, and they are executed, never proof-read** — the same
+rule that caught two broken examples in the published guides.
+
+So the format is fixed even though the check is not written yet:
+
+- one recipe per entry, the LAST section of its `README.md`, under the heading
+  `## A configuration that includes it`;
+- a single fenced `python` block, self-contained — imports included, one
+  `AsgiConfigBuilder` subclass, nothing referenced that the block does not
+  define or import;
+- it must build: `AsgiServer(config=<that class>)` constructs without raising.
+
+**Owed:** a test that collects every one of those blocks and constructs a
+server from each, so a recipe that stops working breaks the suite instead of
+rotting unnoticed. Until it exists, the recipes are kept honest by hand — and
+the longer that lasts, the less they are worth.
+
 ### `design.md` is the fixed pole
 
 Once ratified, **the design does not move.** `status.md` changes with every
@@ -241,6 +269,7 @@ flowchart TB
 | Entry | In one line |
 |---|---|
 | [010 server](../10_server/010_server/) | the ground: BaseServer, mounted applications, demux D3, lifespan |
+| [015 configuration](../10_server/015_configuration/) | the tree every entry reads its own words from: layers, read stack, subscribers |
 | [020 applications](../10_server/020_applications/) | RoutedApplication and the route tree · [openapi](../10_server/020_applications/openapi/) · [mcp](../10_server/020_applications/mcp/) |
 | [025 plugins](../10_server/025_plugins/) | capabilities plugged by name, genro-routes entry points |
 | [030 middleware](../10_server/030_middleware/) | the uniform ring every request passes |
@@ -251,7 +280,6 @@ flowchart TB
 | [070 tasks](../10_server/070_tasks/) | work that is no HTTP request |
 | [080 task-thermometers](../10_server/080_task-thermometers/) | see a batch move, stop it politely |
 | [090 server-application](../10_server/090_server-application/) | the `_server` app and its sections · [monitor](../10_server/090_server-application/monitor/) · [inspector](../10_server/090_server-application/inspector/) |
-| [100 configuration](../10_server/100_configuration/) | describe an installation once — every recipe word is defined by now |
 | [110 cli](../10_server/110_cli/) | drive installations from the shell |
 | [120 restart](../10_server/120_restart/) | born here; enriched by spa → subcommanders → kube |
 
