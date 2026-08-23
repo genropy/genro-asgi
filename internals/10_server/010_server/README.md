@@ -36,7 +36,7 @@ drives it through three kinds of traffic.
 ```mermaid
 flowchart TB
     UV["uvicorn"] -->|"http · websocket · lifespan"| SRV["<b>the server</b><br/>an ASGI callable"]
-    SRV --> IDX["the application<br/>index"]
+    SRV --> IDX["the application index<br/>by code, and by mount"]
     SRV --> LS["the lifespan"]
     SRV --> RR["the request<br/>registry"]
     SRV --> WP["the work pool"]
@@ -82,9 +82,10 @@ own:
 
 - the **bare base**, when you want to embed a single application and nothing
   else;
-- the **public server** — the composition an installation runs, with
+- the **public server** — the composition an installation actually runs, with
   authentication, sessions, the middleware ring, plugins, storage and
-  background work stacked on;
+  background work stacked on. This is the one the recipes at the foot of these
+  pages build, and the class is `AsgiServer`;
 - the **internal server**, which is never exposed: it is composed *without*
   the authentication layer, so a process that must not be reachable cannot be
   made reachable by a configuration mistake. It is not a flag, it is a
@@ -251,6 +252,13 @@ sequence continues**. One application's broken start-up never prevents the
 others from starting, and the protocol always completes. An application's
 error is that application's problem; it never takes the machine down with it.
 
+This is about the hooks, and only about them — the moment when the applications
+are already built and mounted and are being told to start. Whether the
+installation may boot at all is settled earlier and far more strictly: an
+application whose class will not import, or two claiming one prefix, stop the
+boot outright. That earlier gate belongs to
+[015 configuration](../015_configuration/).
+
 ---
 
 ## 6. The work pool — where blocking code runs
@@ -270,12 +278,13 @@ never runs blocking code never creates a thread. It is torn down at shutdown,
 and the teardown leaves it ready to be built again, so a server that is
 started and stopped repeatedly keeps working.
 
-Two gauges are published, and the second one is easy to misread. The **size**
-is how many slots exist. The **load** is how many calls have been handed to
-the pool and not yet come back — which is *demand*, not slots occupied: past
-saturation the surplus is waiting in a queue and still counts, so the load can
-exceed the size. That is deliberate. A gauge that stopped at the ceiling would
-hide exactly the situation you need it for.
+Two gauges are published, `total` and `busy`, and the second name is a trap.
+`total` is how many slots exist. **`busy` is not how many slots are occupied**:
+it counts every call handed to the pool and not yet come back, which past
+saturation includes the ones still waiting in a queue — so `busy` can exceed
+`total`. That is deliberate, and it is why the name misleads: what the gauge
+reports is demand, and a gauge that stopped at the ceiling would hide exactly
+the situation you consult it for.
 
 ---
 
@@ -328,12 +337,11 @@ A change that cannot be honoured is **refused, and refused loudly** — two
 applications claiming one code, two claiming one mount, a default naming
 something that is not installed. A collision is answered with an error the
 administrator reads, never absorbed into a silent misroute that shows up later
-as a request arriving in the wrong place.
+as a request arriving in the wrong place. And refusal is atomic: the change
+lands, or the description is untouched.
 
-Refusal is atomic: the change lands or the description is untouched. Nobody
-works out in advance whether every part can comply — **the attempt is the
-check**, so each part keeps the knowledge only it has. What follows a change
-that *was* accepted may take time, and reports itself as in progress.
+*How* a change is taken on and how the system then comes into line with it is
+[015 configuration](../015_configuration/)'s subject, not this page's.
 
 One application is always present without anyone configuring it: the
 **administrative application**, which carries the monitor, the login surface,
@@ -352,6 +360,10 @@ administrative surface is never something an installation can forget.
 
 A whole installation showing what this page describes: two applications, one of
 them the catch-all on the site root, and a sized thread pool.
+
+The language it is written in — a recipe class, the sections, `app_class` — is
+the subject of [015 configuration](../015_configuration/) and is explained
+there. Read it here for the shape of the result, not for the grammar.
 
 ```python
 import tempfile
@@ -383,6 +395,7 @@ class ServerConfiguration(BaseConfiguration):
     def main(self, root):
         cfg = root.configuration()
         cfg.server(host="127.0.0.1", port=8000, max_threads=8)
+        self.storage_section(cfg)
         apps = cfg.applications()
         apps.application(code="shop", app_class=Shop, mount="")
         apps.application(code="admin", app_class=Admin)

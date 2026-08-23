@@ -49,7 +49,7 @@ flowchart TB
     R1["package defaults<br/>a recipe"] --> T["<b>the tree</b><br/>layered, live"]
     R2["machine defaults<br/>a recipe"] --> T
     R3["the site's recipe<br/>a recipe — wins"] --> T
-    T --> RD["the read door<br/>one call, four layers"]
+    T --> RD["the read door<br/>one call, four fallbacks"]
     T --> SUB["subscribers<br/>notified when it changes"]
     RD --> C["whoever needs a value<br/>server · capability · application"]
     SUB --> C
@@ -59,8 +59,8 @@ flowchart TB
 |---|---|
 | the recipe | what you write: a class, one method, calls into a grammar |
 | the grammar | which words exist, declared by whoever consumes them |
-| the layers | package, machine, site — the site wins, per value |
-| the read door | one call answers any path, through four layers of fallback |
+| the three layers | package, machine, site — the site wins, per value |
+| the read door | one call answers any address, falling back four times |
 | the live tree | it can be written while running, and it notifies |
 | the sections | what the server itself declares |
 
@@ -68,8 +68,11 @@ flowchart TB
 
 ## 1. The recipe — a description you execute
 
-A configuration is not a data file. It is a **class**, and describing an
-installation means writing one method:
+A configuration is not a data file. It is a **class** — a subclass of
+`AsgiConfigBuilder`, the dialect that carries the grammar; the recipes in this
+dossier subclass `BaseConfiguration`, which is that class with the package's own
+defaults already written into it (§3). Describing an installation means writing
+one method:
 
 ```python
 from genro_asgi.config import AsgiConfigBuilder
@@ -122,7 +125,7 @@ The consequence for anyone adding a feature: **a new capability or application
 brings its own words with it**, declared next to the code that reads them.
 Nothing central has to be edited, and nothing central has to know.
 
-## 3. The layers — three descriptions, the site wins
+## 3. The three layers — package, machine, site
 
 The same installation is described at three levels, and they stack:
 
@@ -144,17 +147,51 @@ executed and the results are folded, lowest first. So a site that subclasses
 the package defaults and a site that subclasses the plain dialect inherit the
 same thing — the layering belongs to the reading, not to the class hierarchy.
 
-## 4. The read door — one call, four layers of fallback
+## 4. The read door — asking for a value
 
 Nothing hands a component its slice of the description. **Whoever needs a value
-asks for it**, by path, through a single door:
+asks for it, by address.**
+
+An address is the names you cross to reach the value. `server.host` means: the
+`host` written on the `server` section.
+
+The useful part is that **you can work out an address without opening the
+recipe**, because an address has only two kinds of segment.
+
+**Names the grammar fixes.** There are eight sections and no more, and each may
+be written only once, so a section's name IS its address. This recipe line
+
+```python
+cfg.server(host="127.0.0.1", port=8000)
+```
+
+puts that host at `server.host`. There is nothing to look up, and there is no
+`server_1` to discover, because a second `server` section is refused.
+
+**Names you choose yourself.** Applications and identity providers come in
+several, so `application` cannot name three different nodes. For those the
+grammar uses the `code` written by whoever wrote the recipe. These two lines
+
+```python
+apps.application(code="shop", app_class=Shop)
+apps.application(code="admin", app_class=Admin)
+```
+
+put those applications at `applications.shop` and `applications.admin`.
+
+So every address is either fixed by the grammar or chosen by the author, and a
+caller is never guessing:
 
 ```python
 self.server.config("server.host")
+self.server.config("authentication.oidc.google.issuer")
 self.config("parameters.title", default="Shop")   # from inside an application
 ```
 
-The answer is resolved through four layers, in order:
+### Four fallbacks, in order
+
+An address that is asked for is answered by the first of these that has
+something to say:
 
 1. **the written value** — what the recipe wrote. A resolver sitting there is
    resolved at this moment, so a value that comes from the environment is read
@@ -218,10 +255,8 @@ everything.
 Everything above is mechanism. This is the vocabulary the **server itself**
 declares — the words that are nobody else's.
 
-The top level is a fixed list of sections, each of which may appear at most
-once, so every path is stable and can be written by hand:
-`configuration.server`, `configuration.authentication.oidc.<code>`,
-`configuration.applications.<code>`.
+There are eight sections and no more. Each is written at most once, which is
+what makes its name usable as its address (§4).
 
 **`server`** — the runtime itself. `host` and `port` are the **listener**:
 where to bind. `external_url` is the **public address**: what the server calls

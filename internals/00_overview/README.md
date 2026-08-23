@@ -42,6 +42,15 @@ The one exception is the friction tail of `design.md`, which exists precisely
 to compare the arrival with the present. That is its job, and it disappears
 with the frictions.
 
+**Two different tenses, and only one of them is banned.** What may not appear is
+the tense of the IMPLEMENTATION — "not yet", "currently only", "this is a
+limit". What is welcome is the tense of the READING: *"here is an example of a
+configuration; the next chapter explains it in detail"*. The first says
+something about the state of the code and belongs to `status.md`; the second
+says nothing about the code at all, and simply tells a reader where the longer
+answer lives. Use it freely, and especially where a page has to show something
+whose vocabulary is owned by a later entry.
+
 `design.md` and `status.md` deliberately separate what we WANT from what
 EXISTS: mixing the two is how documents rot. A claim in `status.md` must be
 verifiable in the code — `file:line` or the name of the test that proves it.
@@ -268,7 +277,7 @@ flowchart TB
 
 | Entry | In one line |
 |---|---|
-| [010 server](../10_server/010_server/) | the ground: BaseServer, mounted applications, demux D3, lifespan |
+| [010 server](../10_server/010_server/) | the ground: the server object, the applications it hosts, how a request finds one, ordered start and stop |
 | [015 configuration](../10_server/015_configuration/) | the tree every entry reads its own words from: layers, read stack, subscribers |
 | [020 applications](../10_server/020_applications/) | RoutedApplication and the route tree · [openapi](../10_server/020_applications/openapi/) · [mcp](../10_server/020_applications/mcp/) |
 | [025 plugins](../10_server/025_plugins/) | capabilities plugged by name, genro-routes entry points |
