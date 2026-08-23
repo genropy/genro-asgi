@@ -67,10 +67,13 @@ plugin.
 
 A plugin is a reader of that description, and it can contribute in two ways.
 
-It can **hide a route**, by giving a reason why a particular caller may not
-have it. Authorization works this way: a route the caller may not have does
-not exist for them, the resolution fails as if the path were unknown, and no
-handler code is consulted.
+It can **withhold a route**, by giving a reason why a particular caller may
+not have it. Authorization works this way: the resolution fails, no handler
+code is consulted, and the reason travels with the failure — so a route
+withheld is not confused with a route that does not exist. A caller who
+presented nothing is told to identify themselves; one whose grants are not
+enough is refused. Those two answers, and the distinction between them, belong
+to [020 applications](../020_applications/).
 
 It can **add metadata**, which travels with the route and is read by whoever
 publishes or dispatches it. The schema face of an application is built

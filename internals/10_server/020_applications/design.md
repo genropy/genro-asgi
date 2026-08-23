@@ -459,3 +459,11 @@ constructor rather than receiving it from the server. Nothing states the
 division as a rule, so a reader who counts the always-present plugins gets two
 from the specification and three from the code. Recorded in the same wording in
 [025 plugins](../025_plugins/design.md).
+
+**S18 [cross] — the request id never reaches the log line.** §4 of
+[README.md](README.md) says every request carries an id "so one line in a log
+can be followed across the whole machine". The only layer that writes a log
+line writes the method, the path, the status and the elapsed time, and not the
+id. So the identifier's stated purpose is served by nothing. Either the access
+line carries it, or the reason given here is rewritten. Recorded in the same
+wording in [030 middleware](../030_middleware/design.md).
