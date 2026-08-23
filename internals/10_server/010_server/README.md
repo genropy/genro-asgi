@@ -1,6 +1,6 @@
 # Server
 
-**Version**: 0.4 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.5 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
 
 What a server is, what it is made of, and how a request gets from the
 network to the program that answers it.
@@ -137,6 +137,15 @@ lifespan.
 The installed set is **not sealed**: which applications are installed is a
 fact of the configuration, and it changes while the server runs — the last
 block of this page describes how.
+
+Which does not mean the server may do as it likes with them. **An application
+declares what may be done to it**: one holding live state — people using it,
+pages open, connections held — says whether it can be removed while running and
+put back, and saying so means guaranteeing the mechanism that makes it
+possible. One that cannot does not claim it can, and its change waits for a
+restart. And accepting a change is not finishing it: the change lands
+atomically or not at all, while what follows can take time, because an
+application with people using it warns them and waits before letting go.
 
 > What an application looks like inside is [020 applications](../020_applications/).
 
@@ -321,6 +330,11 @@ something that is not installed. A collision is answered with an error the
 administrator reads, never absorbed into a silent misroute that shows up later
 as a request arriving in the wrong place.
 
+Refusal is atomic: the change lands or the description is untouched. Nobody
+works out in advance whether every part can comply — **the attempt is the
+check**, so each part keeps the knowledge only it has. What follows a change
+that *was* accepted may take time, and reports itself as in progress.
+
 One application is always present without anyone configuring it: the
 **administrative application**, which carries the monitor, the login surface,
 the system endpoints and the commands described just above. It is there
@@ -333,6 +347,67 @@ administrative surface is never something an installation can forget.
 > [090 server-application](../090_server-application/).
 
 ---
+
+## A configuration that includes it
+
+A whole installation showing what this page describes: two applications, one of
+them the catch-all on the site root, and a sized thread pool.
+
+```python
+import tempfile
+
+from genro_storage import StorageManager
+
+from genro_asgi import AsgiServer, RoutedApplication
+from genro_asgi.config import BaseConfiguration
+
+
+class Shop(RoutedApplication):
+    """The catch-all: it answers / and every path no mount claims."""
+
+    mount = ""
+
+
+class Admin(RoutedApplication):
+    """Mounted under /admin, and written as if it owned the site."""
+
+
+# The local backend refuses a directory that is not there; a real deployment
+# names its own.
+SITE_DIR = tempfile.mkdtemp(prefix="shop-")
+
+
+class ServerConfiguration(BaseConfiguration):
+    """Two applications, one of them on the site root, and a sized pool."""
+
+    def main(self, root):
+        cfg = root.configuration()
+        cfg.server(host="127.0.0.1", port=8000, max_threads=8)
+        apps = cfg.applications()
+        apps.application(code="shop", app_class=Shop, mount="")
+        apps.application(code="admin", app_class=Admin)
+
+    def storage_section(self, cfg):
+        cfg.storage(app=StorageManager).local(name="site", base_path=SITE_DIR)
+
+
+server = AsgiServer(config=ServerConfiguration)
+```
+
+Asked who answers what, that installation gives the four branches of the demux:
+
+| Path asked | Application | Path it receives |
+|---|---|---|
+| `/` | `shop` | `/` |
+| `/catalogue` | `shop` — the catch-all | `/catalogue` |
+| `/admin/users` | `admin` | `/users` — the segment stripped |
+| `/admin` | `admin` | `/` |
+
+The third row is the one to notice: `admin` never sees the prefix it is mounted
+under, which is why the same class can be installed twice somewhere else.
+
+And `server.pool.metrics` answers `{'total': 0, 'busy': 0}` — the pool has not
+been built, because no blocking handler has run yet.
 
 ## What stands on this
 

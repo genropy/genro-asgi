@@ -1,6 +1,6 @@
 # Server — design
 
-**Version**: 0.3 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.4 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
 
 **The ground floor, with the work finished.** Read this document as a report
 from the day everything described here is running: it says what the server
@@ -99,6 +99,23 @@ claiming one `code`, two claiming one `mount`, a `default` naming an
 application that is not installed: each is answered with an error the
 administrator reads. A collision is never absorbed into a silent misroute
 that surfaces later as a request arriving in the wrong place.
+
+**An application declares what may be done to it.** Being installed or removed
+while the server runs is not something the server may assume: an application
+that holds live state — users, pages, open connections — says whether it can be
+taken away and put back, and by saying so it **guarantees the mechanism that
+makes that possible**. One that cannot does not claim it can, and then the
+change waits for a restart. Equally, an application may declare that a failure
+of its own mount is survivable, so the server starts without it rather than
+refusing to start.
+
+**Accepting a change and completing it are two different moments.** The change
+is taken on atomically — it lands or it does not. What follows may take time: an
+application with people using it warns them, waits for them to finish, and
+lets go only then. So a change reports itself as accepted and in progress, and
+an administrator is never told "refused" while something was in fact removed.
+The mechanism is [015 configuration](../015_configuration/)'s; what each
+application does when its own entry changes is its own.
 
 **The same shape at every level.** A command changes the configuration, the
 trigger fires, the thing adapts — for the SPA groups and their worker
@@ -314,12 +331,20 @@ is load-bearing in three places, and §4 touches each:
 Are these properties to **keep** — so the hot command is built around them —
 or consequences of immobility that fall with it?
 
-**S6 — who subscribes, and what a refused change looks like.** §4 has the
-`_server` command write the Bag and the trigger carry the change. Unsettled:
-whether the subscriber is the server or each capability; whether a change
-that cannot be applied hot (a mount collision, an application whose class
-fails to import) is refused at write time or reported after the trigger; and
-what the operator sees in each case.
+*Partly answered on 2026-08-23: the second one survives, because accepting a
+change is atomic and validated by the attempt, so `default` is never valid
+against a tree nobody accepted. The first and the third are still open, and the
+third has grown a second half — what "exactly once" means for an application
+that is legitimately removed and put back.*
+
+**S6 — who watches, and at what granularity.** *The "refused when" half was
+settled on 2026-08-23: accepting is atomic and encloses the notification, so a
+failure changes nothing, and feasibility is not pre-computed — the attempt is
+the check. See [015 configuration](../015_configuration/design.md) §6.*
+
+What remains: whether the server watches on behalf of the applications or each
+application watches its own entry, and what becomes of one watching an entry
+that is deleted wholesale.
 
 ## Defects and gaps in what exists
 

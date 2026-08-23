@@ -1,6 +1,6 @@
 # Configuration — design
 
-**Version**: 0.2 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.3 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
 
 **Configuration, with the work finished.** Read this as a report from the day
 everything described here is running: it says what a configuration *is*, and
@@ -141,30 +141,73 @@ macro").
 
 The description is **not read once at boot and discarded.** It stays as a tree
 the running system holds: it can be read, it can be **written**, and it
-**notifies** whoever asked to be told.
+**notifies** whoever asked to be told (the notification is the tree's own —
+`Bag.subscribe`).
 
-That is what makes an installation changeable while it runs:
+### At boot: valid, or no boot
 
-1. the administrative surface carries the **commands that write** into the
-   tree;
-2. the write **fires the tree's own notification**;
-3. each part **subscribed to the branch it owns** brings itself in line with
-   what the tree now says.
+The grammar is checked first. A description that is grammatically wrong does
+not run. A description that is grammatically right but **not actionable** —
+a mount claimed twice, an application class that will not import, a default
+naming something absent — **also does not run**: the installation is described
+wrongly, and the right moment to say so is before serving the first request.
 
-Installing an application, removing one, adding a volume, changing a policy:
-each is a write, and the running system follows. Nothing polls, and nothing is
-called by name — the same contribution shape as §3, one level up: **a part
-declares its words, then watches them.**
+One exception, and it is **declared by the part itself**: an application may
+say that a failure of its own mount is tolerable, and then the server starts
+without it rather than refusing to start at all. The application decides what
+may be survived, not the server.
 
-**A write that cannot be honoured is refused, and refused loudly.** Two
-applications claiming one name, a default naming something not installed, a
-class that will not import: the administrator gets an error to read. Nothing is
-half-applied, and nothing is absorbed into a silence that surfaces later as
-strange behaviour.
+### While running: accept, then converge
 
-**Source: owner, 2026-08-23.** Immobility is never the goal. Where something
-can only be settled at boot, this design says so **and says why** — the reason
-being a limit we have not removed, never a property to prefer.
+A change has **two phases, and they are different in kind.**
+
+**Accepting** is atomic and immediate. The grammar validates the words,
+feasibility is checked, and the write happens **inside a boundary that
+encloses the notification too**: if anything raises while the change is being
+taken on, the description is not changed at all. So the tree is never left
+saying something the installation never accepted.
+
+**Converging** is not a transaction. Once a change is accepted, the tree holds
+the **state that is wanted**, and each part brings itself into line with it at
+its own pace and by its own procedure. A part that holds nothing swaps
+immediately. A part that holds live state does what its own nature requires —
+warning the people using it, waiting for them to finish, and only then letting
+go. That can take minutes, so it cannot sit inside the boundary above: a change
+reports itself as *accepted and in progress*, not as done.
+
+The consequence worth stating plainly: an administrator is never told "refused"
+while something was in fact taken away. Either the change was not accepted and
+nothing happened, or it was accepted and what follows is a declared procedure
+running in the open.
+
+### Reversibility is the declaring part's obligation
+
+**Source: owner, 2026-08-23.** Whoever declares that something of theirs can be
+changed while running is **guaranteeing the mechanism that makes it possible** —
+including undoing it. A part that cannot be taken away and put back does not
+declare that it can.
+
+So the boundary above promises what it can actually deliver: only what is
+reversible takes part in it. This is what keeps the promise honest rather than
+aspirational, and it is why the guarantee belongs to the part rather than to
+the configuration.
+
+### Foreseen everywhere, guaranteed nowhere in particular
+
+**Source: owner, 2026-08-23.** Changing a value while running is an option the
+design **foresees for the whole description**, and **guarantees for no part of
+it in advance**. Whether a given word can be changed hot depends on what reads
+it and how much state that reader holds — which only that reader knows.
+
+So the capability is **declared where the word is declared**: a candidate
+placement is an attribute of the element declaration itself, alongside the
+word's type and default, which would put the answer next to the question. Not
+settled, and deliberately not settled here.
+
+The mechanism arrives in later steps, and it will be built **on the
+collaboration of the individual parts** — not as a central engine that knows
+how to change everything. This design records the shape and the obligation;
+it does not invent the machinery.
 
 ## 7. The server's own sections
 
@@ -208,39 +251,53 @@ This section shrinks to nothing before the design can be ratified.
 
 Interview file: `temp/interview_015_configuration.md`.
 
-## The whole of §6 is unbuilt
+## Settled on 2026-08-23 — no longer open
 
-**S1 — nothing writes, nothing subscribes.** §6 describes a live tree; the code
-has a read door and no more. `apply_configuration` has zero occurrences in
-`src/` and `tests/`, the handler declares no mutator, and no part subscribes to
-anything (details and searches in [status.md](status.md)). The machinery it
-would stand on exists and is unused: the tree is already a `Bag` subclass and
-`Bag.subscribe` already exists.
+Recorded here only so the next reader is not surprised by their absence. The
+answers are in §6.
 
-This is the largest distance between arrival and present here, and it
-is the same friction as S5/S6 of [010 server](../010_server/design.md) seen
-from the other side — there it is "what falls away with immobility", here it is
-"what has to be built".
+- **when a change is refused** — at boot, an unactionable description does not
+  run; while running, accepting is atomic and encloses the notification, so a
+  failure leaves the description unchanged. Feasibility is not pre-computed by
+  the writer: **the attempt is the check**, which keeps the knowledge with the
+  part that has it.
+- **what a partially applied change means** — the question dissolves:
+  reversibility is the obligation of whoever declares their own thing
+  changeable, so only what can be undone takes part. The earlier fear (the tree
+  rolls back, the world does not) presumed parts that had made no such promise.
+- **whether every word is hot-changeable** — no: foreseen everywhere,
+  guaranteed nowhere in advance, declared where the word is declared.
 
-**S2 — who subscribes, and to what granularity.** §6 says each part watches its
-own branch. Unsettled: whether the subscriber is the server on behalf of a
-capability or each capability for itself; whether a part watches a branch or a
-single path; and what happens to a part that is watching a branch which is
-deleted wholesale.
+## Still open
 
-**S3 — what a refused write looks like to the writer.** §6 says a change that
-cannot be honoured is refused loudly. Unsettled: whether the refusal happens at
-**write time** — the command validates before touching the tree — or **after
-the notification**, when a subscriber discovers it cannot comply. The two give
-the administrator very different experiences, and only the first leaves the
-tree always consistent with the running system.
+**S1 — the whole of §6 is unbuilt.** The code has a read door and no more:
+`apply_configuration` has zero occurrences in `src/` and `tests/`, the handler
+declares no mutator, and nothing subscribes to anything (searches in
+[status.md](status.md)). The machinery it would stand on exists and is unused —
+the tree is already a `Bag` subclass and `Bag.subscribe` already exists.
 
-**S4 — a partially applied change.** If one subscriber complies and another
-fails, the tree says one thing and the installation is another. §6 says nothing
-is half-applied, but does not say how. This is the same shape as the
-partially-applied-fold problem recorded as F48/F49 in
-[020 orchestration](../../20_spa/020_orchestration/), and probably wants the
-same answer.
+This is the largest distance between arrival and present here, and it is the
+same subject as S5/S6 of [010 server](../010_server/design.md) seen from the
+other side: there the question is what falls away when immobility goes, here it
+is what has to be built.
+
+**S2 — where the capability is declared.** §6 names one candidate — an
+attribute of the element declaration, next to the word's type and default — and
+deliberately leaves it unsettled. It needs deciding before any word claims to
+be hot-changeable, because it decides where a reader looks to find out.
+
+**S3 — a convergence that does not finish.** A part waiting for the people
+using it may wait for people who never leave. Wait indefinitely, force after a
+declared grace period, or give up and revert: not decided, and deferred with
+the mechanism. It belongs with the restart liturgy
+(`temp/liturgia_riavvio_orientamenti_2026-08-20.md`), which has the same
+question about the same kind of waiting.
+
+**S4 — a visible convergence state.** §6 distinguishes *accepted and in
+progress* from *done*, and nothing in the system can currently express that
+difference. Whatever shows it belongs to the monitor
+([090 server-application](../090_server-application/)), but the state itself
+has to exist first, and nobody owns it yet.
 
 ## Vocabulary and ownership
 
@@ -260,7 +317,7 @@ declares its own words, which reads as promising the opposite.
 **S7 — the recipe in this page must stay executable.** The rule is that every
 entry closes with a complete configuration and that those are run, never
 proof-read. Writing this one found **two real defects in it** that reading had
-not: a non-existent module in the imports, and a storage path that the backend
+not: a non-existent module in the imports, and a storage path the backend
 refuses because it does not exist. The test that executes all of them is
 decided and deferred (owner, 2026-08-23), so until it exists these recipes are
 kept honest by hand.

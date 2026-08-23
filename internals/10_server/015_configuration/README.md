@@ -1,6 +1,6 @@
 # Configuration
 
-**Version**: 0.2 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.3 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
 
 How an installation is described, how the description is read while it runs,
 and how each part of the system contributes its own words to it.
@@ -169,30 +169,49 @@ An application asks with paths relative to itself and the door prefixes them,
 so an application can only read its own words, and two installations of the
 same class read different values without either knowing.
 
-## 5. The live tree — writing it, and being told
+## 5. The live tree — writing it, and converging to it
 
 The tree the system reads is a **live document**: it can be read, it can be
 written, and it tells whoever asked to be told.
 
-That is what makes an installation changeable while it runs. The
-administrative application carries the commands that write into the tree;
-writing fires the tree's own notification; and each part that subscribed to the
-branch it cares about brings itself in line with what the tree now says.
-Installing an application, removing one, adding a volume, changing a policy:
-each is a write, and the running system follows.
+**At boot the rule is strict.** A description that is grammatically wrong does
+not run — and one that is grammatically right but cannot be carried out does
+not run either: a prefix claimed twice, an application class that will not
+import. The installation is described wrongly, and the moment to say so is
+before the first request. The one exception is declared by the part itself: an
+application may say that a failure of its own is survivable, and then the
+server starts without it.
 
-The parts do not poll and are not called by name. Each **subscribes to its own
-branch** and reacts to its own changes — the same contribution pattern as the
-grammar, one level up: a part declares its words, then watches them.
+**While it runs, a change has two phases.**
 
-A write the system cannot honour is **refused, and refused loudly**: two
-applications claiming one name, a default naming something not installed, a
-class that will not import. The administrator gets an error to read. Nothing is
-half-applied and nothing is absorbed quietly.
+**It is accepted** — atomically. The words are validated, the change is
+attempted, and the attempt encloses the notification: if anything refuses, the
+description is not changed at all. Notice what is *not* required here: nobody
+computes in advance whether every part can comply. **The attempt is the check**,
+which is what lets each part keep the knowledge only it has.
 
-> The commands themselves are
-> [090 server-application](../090_server-application/)'s; what each part does
-> when its branch changes is described by that part's own entry.
+**Then the system converges** — and that is not a transaction. Once a change is
+accepted the tree holds the state that is **wanted**, and each part brings
+itself into line at its own pace and by its own procedure. Something holding
+nothing swaps at once. Something holding live state does what its nature
+requires: warning the people using it, waiting for them to finish, letting go
+only then. That can take minutes, so a change reports itself as **accepted and
+in progress**, never as instantly done.
+
+So an administrator is never told "refused" while something was in fact taken
+away. Either nothing happened, or something is happening in the open.
+
+**Whoever declares a thing changeable guarantees the mechanism.** Being
+removable while running means being able to be put back; a part that cannot do
+that does not claim it can. This is why the promise above is honest rather than
+aspirational — only what is reversible takes part in it.
+
+**And the capability is foreseen everywhere, guaranteed nowhere in advance.**
+Whether a particular word can be changed while running depends on what reads it
+and how much state that reader holds, which only that reader knows. So the
+answer is declared where the word is declared, and the parts collaborate to
+carry the change — there is no central engine that knows how to change
+everything.
 
 ## 6. The server's own sections
 
