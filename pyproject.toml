@@ -53,6 +53,11 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0",
 ]
+internals = [
+    # The reader for the internals/ dossier (mkdocs.yml at the repo root).
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.6",
+]
 docs = [
     "sphinx>=7.0",
     "sphinx-rtd-theme>=2.0",

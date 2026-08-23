@@ -1,0 +1,12 @@
+/* A diagram is never squeezed to fit the column: it keeps its natural size and
+   scrolls sideways inside its own box, so the labels stay readable. */
+div.gnr-mermaid {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  padding: 0.4rem 0;
+}
+div.gnr-mermaid svg {
+  max-width: none !important;
+  height: auto;
+}
