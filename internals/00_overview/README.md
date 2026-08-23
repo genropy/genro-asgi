@@ -1,6 +1,6 @@
 # 00 Overview — how to read this folder
 
-**Version**: 0.4 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.5 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
 
 genro-asgi as three worlds, read in order: **10_server** (the machine and
 everything an installation runs on), **20_spa** (the SPA world and its
@@ -119,6 +119,18 @@ So the format is fixed even though the check is not written yet:
 server from each, so a recipe that stops working breaks the suite instead of
 rotting unnoticed. Until it exists, the recipes are kept honest by hand — and
 the longer that lasts, the less they are worth.
+
+**Owed, and bigger:** a place for the **essentials of routing through
+genro-routes**. A path's resolution can be filtered on three independent axes,
+one per bundled plugin of the library — `auth` on the caller's **tags**, `env`
+on the installation's **capabilities**, `channel` on the **channel** a request
+arrived through. The dossier describes the first and never names the other two,
+and one of the unnamed ones is load-bearing:
+[020 applications](../10_server/020_applications/) claims that one tree serves
+several protocols, and *channel* is the mechanism that makes a route visible on
+one and not another. Whether the subject becomes a block in 020, a block in
+[025 plugins](../10_server/025_plugins/), or an entry of its own is open.
+*(Owner, 2026-08-24.)*
 
 ### `design.md` is the fixed pole
 

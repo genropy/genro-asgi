@@ -1,6 +1,6 @@
 # Plugins — design
 
-**Version**: 0.3 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.4 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
 
 **The plugin capability, with the work finished.** Read this as a report from
 the day everything described here is running: it says what a plugin *is*, and
@@ -206,3 +206,29 @@ that ignores it both succeed — which is the shape of a defect nobody discovers
 until something depends on the constraint being real. Whether the verb should
 gate the dispatch, or the document should stop implying it does, is not
 recorded anywhere.
+
+**S8 [placement · cross] — the routing library has three filter dimensions and
+the dossier explains one.** A path's resolution can be filtered on three
+independent axes, one per bundled plugin of the routing library:
+
+| Axis | Plugin | Written at a route as | The question it answers |
+|---|---|---|---|
+| **tags** | `auth` | `auth_rule` | *who* is calling |
+| **capabilities** | `env` | `env_requires` | *what this installation has* — accumulated down the tree, so a child inherits its parents' |
+| **channel** | `channel` | `channel_channels` | *through what* the request arrived (`rest`, `mcp`, `web`, `bot_*`) |
+
+The dossier describes the first and never names the other two.
+
+Two things depend on the ones it does not describe.
+[020 applications](../020_applications/) §8 says one tree serves several
+protocols, and **channel is the mechanism that makes a route visible on one and
+not another** — so the claim is made and its instrument is unmentioned. And
+`env_requires` is how a route disappears where its dependency is absent, which
+is a deployment concern nothing in the dossier currently has a home for.
+
+Owner, 2026-08-24: the essentials of routing through the library — the tree,
+the resolution, and these three axes — need a place. Whether that is a block in
+[020 applications](../020_applications/), a block in this entry, or an entry of
+its own is the question; a subject two entries lean on and neither owns is the
+shape that usually wants its own. Recorded in the same wording in
+[020 applications](../020_applications/design.md).

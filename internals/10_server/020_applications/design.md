@@ -1,6 +1,6 @@
 # Applications — design
 
-**Version**: 0.3 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.4 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
 
 **The application layer, with the work finished.** Read this as a report from
 the day everything described here is running: it says what an application
@@ -467,3 +467,29 @@ line writes the method, the path, the status and the elapsed time, and not the
 id. So the identifier's stated purpose is served by nothing. Either the access
 line carries it, or the reason given here is rewritten. Recorded in the same
 wording in [030 middleware](../030_middleware/design.md).
+
+**S19 [placement · cross] — the routing library has three filter dimensions and
+the dossier explains one.** A path's resolution can be filtered on three
+independent axes, one per bundled plugin of the routing library:
+
+| Axis | Plugin | Written at a route as | The question it answers |
+|---|---|---|---|
+| **tags** | `auth` | `auth_rule` | *who* is calling |
+| **capabilities** | `env` | `env_requires` | *what this installation has* — accumulated down the tree, so a child inherits its parents' |
+| **channel** | `channel` | `channel_channels` | *through what* the request arrived (`rest`, `mcp`, `web`, `bot_*`) |
+
+The dossier describes the first and never names the other two.
+
+Two things depend on the ones it does not describe. **§8 above** says one tree
+serves several protocols, and **channel is the mechanism that makes a route
+visible on one and not another** — so the claim is made here and its instrument
+is unmentioned. And
+`env_requires` is how a route disappears where its dependency is absent, which
+is a deployment concern nothing in the dossier currently has a home for.
+
+Owner, 2026-08-24: the essentials of routing through the library — the tree,
+the resolution, and these three axes — need a place. Whether that is a block in
+this entry, a block in [025 plugins](../025_plugins/), or an entry of its own
+is the question; a subject two entries lean on and neither owns is the shape
+that usually wants its own. Recorded in the same wording in
+[025 plugins](../025_plugins/design.md).
