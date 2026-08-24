@@ -1,6 +1,10 @@
-# OpenAPI face — desired design
+# OpenAPI face
 
 **Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
 
-Everything this entry SHOULD be when finished — the target, not the code.
-To be filled by the documentation audit and ratified by the owner.
+**The need.** A routed surface must be consumable as ordinary REST, documented and explorable, without writing a second API.
+
+`OpenApiApplication`: the route tree served as REST + OpenAPI 3.1 with a
+Swagger docs page.
+
+Interactions: applications (the tree it exposes).

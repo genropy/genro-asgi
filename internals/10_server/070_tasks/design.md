@@ -1,6 +1,11 @@
-# Tasks — desired design
+# Tasks
 
 **Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
 
-Everything this feature SHOULD be when finished — the target, not the code.
-To be filled by the documentation audit and ratified by the owner.
+**The need.** An installation runs work that is no HTTP request: schedules, batches, spooled runs that must survive and be accounted for.
+
+The task subsystem: scheduler (cron-like plans), spool (the on-disk
+truth of every run), executor and manager. Mounts like any other app;
+administered through the `_server/tasks` section.
+
+Interactions: task-thermometers · server-application · storage (spool files).

@@ -66,7 +66,7 @@ wraps innermost-out (`:157-161`), so the lowest number is outermost. Proven by
 | `AuthMiddleware` | 450 | False | authentication.py:42-43 |
 
 Errors is the only one on by default. Driven live on the recipe at the foot of
-[README.md](README.md), walking `server.middleware_chain` outwards gives
+[README.md](design.md), walking `server.middleware_chain` outwards gives
 exactly that order.
 
 **Both ends at construction.** `BaseMiddleware.__init__`
@@ -125,7 +125,7 @@ HTTPException)` branch — and `Response.set_error`
 `set_error` has exactly one production caller in the package, this one. So the
 mapping of `ValueError`/`TypeError` to 400, `FileNotFoundError` to 404 and
 `PermissionError` to 403 is reached by `tests/test_response.py` alone
-(`:282`, `:288`, `:291`, `:296`, `:301`). See [design.md](design.md), friction
+(`:282`, `:288`, `:291`, `:296`, `:301`). See [design.md](decisions.md), friction
 S1.
 
 ## `WellKnownMiddleware` — [wellknown.py:36](../../../src/genro_asgi/middleware/wellknown.py)
@@ -148,7 +148,7 @@ origin is refused), `:122` (a disallowed preflight is a 400).
 that passes a **list** through instead of splitting a comma-separated string —
 every test configures strings. `cors.py:99` and `:105` are the
 `allow_credentials` and `expose_headers` additions on the non-wildcard path.
-See [design.md](design.md), friction S7.
+See [design.md](decisions.md), friction S7.
 
 ## `SessionMiddleware` — [session.py:55](../../../src/genro_asgi/middleware/session.py)
 
@@ -187,7 +187,7 @@ before re-raising. Nothing tests that a failing request is logged.
 to `self.logger.log(self._level, …)` (`:71`, `:89`), so `level="WARNING"` makes
 every access line a warning rather than quietening the log. Driven live: the
 values `WARNING` and `debug` resolve as expected, and **`verbose` and
-`nonsense` both silently become INFO**. See [design.md](design.md), frictions
+`nonsense` both silently become INFO**. See [design.md](decisions.md), frictions
 S4 and S5.
 
 ## The configuration section
@@ -204,11 +204,11 @@ here".
 the `middleware` kwarg (asgi_server.py:160-166). **`middleware_registry` has no
 configuration counterpart**: searched across `src/`, it occurs only in the
 mixin and in `AsgiServer`'s own docstring (asgi_server.py:41). See
-[design.md](design.md), friction S3.
+[design.md](decisions.md), friction S3.
 
 ## Driven live on the recipe
 
-All five rows of the table at the foot of [README.md](README.md) are the
+All five rows of the table at the foot of [README.md](design.md) are the
 probe's own output:
 
 | Request | Answer |
@@ -246,11 +246,11 @@ Every test is a **contract test**; `tests/x/` holds only `__init__.py`.
   challenge negotiation this ring performs.
 - **Invariant 4** (SPECIFICATION.md:674) — an origin gate on WebSocket
   handshakes. **Not held here and not holdable here**: the chain never sees a
-  WebSocket scope. See [design.md](design.md), friction S2.
+  WebSocket scope. See [design.md](decisions.md), friction S2.
 - The `Accept`-driven error body carries a citation to "D4 error-body
   reconciliation" (errors.py:25) that **D4 does not contain** — D4
   (SPECIFICATION.md:67) is about the administrative application. See
-  [design.md](design.md), friction S8.
+  [design.md](decisions.md), friction S8.
 
 ## Three things driven live that the design leans on
 
@@ -262,7 +262,7 @@ Every test is a **contract test**; `tests/x/` holds only `__init__.py`.
 `AsgiServer` the session and identity layers are in the ring whether or not the
 description names them — and an explicit `False` still wins, because
 `setdefault` never overrides. Driven live: the recipe at the foot of
-[README.md](README.md) names three layers and the chain carries six.
+[README.md](design.md) names three layers and the chain carries six.
 
 So the `middleware_default = False` on those two classes is true of the class
 and misleading about the shipped composition.
@@ -278,13 +278,13 @@ the wrapped one it passed inwards. Driven live on one server with `cors` and
 | `GET /home` with `Origin` | 200 | `https://a.example` | present |
 | `GET /boom` with `Origin` (handler raises `HTTPNotFound`) | 404 | **absent** | **absent** |
 
-See [design.md](design.md), friction S9.
+See [design.md](decisions.md), friction S9.
 
 **`errors=False` is accepted and leaves nothing to answer.** The element takes
 it like any of the six, `build_chain` drops the layer, and a raised
 `HTTPNotFound` then **escapes the server uncaught** — driven live, the call to
 the server raises instead of returning a response. Nothing in the grammar, the
-mixin or `build_chain` treats it as structure. See [design.md](design.md),
+mixin or `build_chain` treats it as structure. See [design.md](decisions.md),
 friction S10.
 
 **A middleware of one's own works, end to end.** Driven live: a
@@ -294,4 +294,4 @@ friction S10.
 middleware_registry={"stamp": StampMiddleware})`. The chain becomes
 `ErrorMiddleware · StampMiddleware · SessionMiddleware · AuthMiddleware` and
 every answer carries `x-served-by: web-01`. The block is in
-[README.md](README.md) §7.
+[README.md](design.md) §7.

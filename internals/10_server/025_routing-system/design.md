@@ -1,306 +1,452 @@
-# Routing system — design
+# Routing system
 
-**Version**: 0.5 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.4 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
 
-**The routing system, with the work finished.** Read this as a report from the
-day everything described here is running: it says what a routing class, a walk
-and a plugin *are*, and never what they lack. What the code holds is
-[status.md](status.md)'s subject.
+How a path becomes a method call: what a routing class is, how a tree is walked
+and filtered, and how a capability is added to what a tree does without editing
+the tree, its handlers, or the server.
 
-Every voice carries its source. A voice sourced to the owner and a date was
-decided in conversation before it reached any register.
+## What a routing class is
 
-The **open frictions** are the closing section, and they are the one place here
-that compares this arrival with the present. Each carries a **family tag** in
-brackets, because these frictions are settled in one grouped pass across the
-server skeleton rather than one entry at a time (owner, 2026-08-23).
+An application is a class whose marked methods are its addressable behaviour.
+That property is not the application's own — it comes from being a **routing
+class**, and everything in this page is what a routing class brings with it.
 
----
+A routing class turns a class into a tree. It does it by reading the class
+rather than by being told: a method carrying the route marker becomes a node
+named after the method, and the nodes together are the class's **route tree**.
+Nothing is registered anywhere, and there is no list of paths to keep in step
+with the code.
 
-## 1. Routing is a library, and this entry is where it is explained
+Three things follow, and they are the three halves of this page — the walk, the
+filters, and the plugins.
 
-**Source: owner, 2026-08-24.** The tree, the walk, the filters and the plugins
-come from genro-routes; the core composes them and adds one dialect. They are
-explained **here**, after applications rather than before, on a reading order
-the owner chose: *an application is a routing class*, and once that is said,
-what a routing class is can be explained in full without an application having
-to be described twice.
+**A tree can be assembled from parts.** A routing class written on its own, by
+somebody who never heard of the application it will end up in, is attached
+below a name and its routes hang there.
 
-The consequence for [020 applications](../020_applications/) is deliberate.
-That page states the inheritance and two facts its own blocks need — a route
-may carry options nobody in the handler reads, and a tree can describe itself —
-and sends the mechanism here. An application page that also explained trees
-would be two subjects in one, which is what it was until this entry took the
-second.
+**A walk can be filtered.** Resolving a path is not only *does this node
+exist*: it is *does this node exist for this caller, on this installation,
+through this channel*. Three independent filters answer those, and a node the
+walk excludes is not reached at all.
 
-## 2. A tree is read off the class, never declared beside it
+**A tree can be read as well as walked.** It can describe itself — its nodes,
+their declared parameters, the options written beside them — and everything
+that publishes an application to an outside consumer is built from that
+description rather than from the code.
 
-**Source: the library's design, composed by this package.** A method carrying
-the route marker becomes a node named after the method. There is no table of
-paths, no registration call, no file to keep in step.
+> The application side of this — an application *is* a routing class, and what
+> it does with the request the walk found — is
+> [020 applications](../020_applications/README.md).
 
-The property this buys is the one that matters months later: **a route cannot
-drift from its handler**, because there is no second place where the route is
-written. Renaming the method renames the path, and a path that answers is a
-method that exists.
+## The anatomy
 
-## 3. Options travel beside a route, prefixed by who reads them
+```mermaid
+flowchart TB
+    CLS["a routing class<br/>marked methods"] --> TREE["its route tree"]
+    SUB["another routing class<br/>attached below a name"] --> TREE
+    TREE --> WALK["the walk<br/>path → node"]
+    F["three filters<br/>tags · capabilities · channel"] --> WALK
+    TREE --> DESC["the tree described<br/>nodes, parameters, options"]
+    PLUG["plugins<br/>armed on the tree"] --> F
+    PLUG --> DESC
+```
 
-**Source: the library's convention.** An option written at a route is named for
-the plugin that reads it — the plugin's code, an underscore, the option. A
-prefix nobody armed is ignored rather than refused.
-
-Two things follow. A handler stays **pure**: the options are about the route,
-not about the computation, and no handler body reads its own options. And a
-tree remains readable by a consumer that does not exist yet — a face nobody has
-written can be added later and find the words it needs already written beside
-the routes.
-
-## 4. The walk is filtered on three independent axes
-
-**Source: the library's three bundled filter plugins; owner, 2026-08-24 for
-recording all three here.** Resolving a path is not *does this node exist* but
-*does this node exist for this caller, on this installation, through this
-channel*:
-
-- **tags** (`auth_rule`) — who is calling;
-- **capabilities** (`env_requires`) — what this installation is able to do,
-  **accumulated down the tree**, so a branch inherits its parents' and adds its
-  own;
-- **channel** (`channel_channels`) — the surface the request arrived through.
-
-They are independent, and the design point is that **all three are answered
-during the walk rather than after it**. A node excluded is never reached, so no
-handler contains a check the framework has to trust, and no face publishes a
-route the caller could not have called.
-
-**Source: Invariant 3, SPECIFICATION.md:671.** A node that exists but is
-withheld answers with its own status and never falls through to something else.
-The invariant is recorded from an implementation where the fall-through existed.
-
-**Channel is what makes one tree serve several consumers**, and it is not a
-promise: the tool face walks the tree with its own channel set, so a route
-marked for one surface does not appear on the other. A route callable by a model
-and not by a browser says so once, beside itself, and both faces are built from
-the same tree — which is the mechanism behind the claim
-[020 applications](../020_applications/) makes about its several protocols.
-
-The asymmetry is worth stating, because it is the one a reader gets wrong: the
-**HTTP dispatch passes no channel at all**. Every route is reachable over HTTP
-unless its tags say otherwise, and the channel filter narrows only the faces
-that choose to use it.
-
-## 5. A tree can be read as well as walked
-
-**Source: the library's neutral description; D22 scope ruling,
-SPECIFICATION.md:363.** A tree describes itself — nodes, declared parameters,
-options beside them, branches below — in terms that name no protocol.
-
-That neutrality is the seam the whole core turns on. Every face that presents
-an application to an outside consumer is built by reading the description, so a
-new face is a new reader and never a new obligation on the routes. It is also
-why the two faces this core ships live in it rather than in the library:
-publishing is not a routing concern, and the library should not learn one
-publishing format after another.
-
-## 6. The capability is a mixin, and the base does not know it
-
-**Source: D17, SPECIFICATION.md:229; D2, SPECIFICATION.md:42.** The base server
-owns a closed list, and plugins are not on it. The capability arrives as a
-**mixin composed before the server class**, peeling its own construction
-arguments and forwarding the rest — the cooperative chain of D16.
-
-The consequence is stated rather than implied: a composition without the mixin
-**exposes no arming surface at all**, and a routed application on such a server
-runs with only what it armed for itself. That is a working server, not a
-degraded one.
-
-## 7. A plugin is armed on a tree, not wrapped around a dispatch
-
-**Source: owner, 2026-08-23.** The two extension points of this framework are
-often confused, and the difference is where they attach.
-
-A **middleware** wraps the dispatch: it sees every request the server serves,
-including those bound for applications that have no routes. A **plugin** is
-armed on the route tree of one application: it sees the tree's own description
-and no traffic at all. One is a ring around the door; the other is a property
-of the map.
-
-So a plugin can say things about routes that do not exist yet, and a middleware
-cannot; and a middleware can answer a request no route matched, and a plugin
-cannot.
-
-> The ring is [030 middleware](../030_middleware/).
-
-## 8. Nothing registers itself at import
-
-**Source: the coding rule against module-level state; recorded in the module's
-own contract.** Importing this package registers **no plugin** against the
-routing library. Registration is an explicit act performed while arming, and
-the default mapping of codes to classes is produced by a call rather than held
-at module level, so each server gets its own and no two share one they can both
-write.
-
-The rule buys exactly one thing, and it is worth being precise about which.
-Every server decides for itself **which class it would offer** under a code.
-What it does not decide is **which class a code resolves to** once armed: that
-is the routing library's own registry, it is process-wide, and the first arming
-wins it. So the rule keeps two servers from corrupting each other's intentions,
-and does not keep the second one from being overruled — which is friction S2
-below, and the reason this section stops where it does.
-
-## 9. Two plugins are structure, and cannot be switched off
-
-**Source: D26, SPECIFICATION.md:456** — "as part of #6, `pydantic` and
-`openapi` became FIXED server structure (armed on every router), so per-entry
-OpenAPI controls always apply".
-
-The clause after the comma is the whole argument, and it is worth stating on
-its own. A per-route control that only applies when a capability happens to be
-enabled is a control nobody can rely on: the same words beside a route would
-mean one thing on one installation and nothing on another, and reading a route
-would stop telling you how it behaves.
-
-So asking to disable one of the two is an **error**, not an opt-out. A site
-tunes them and adds to them; it does not remove them.
-
-## 10. Arming is late, once, and safe to repeat
-
-**Source: owner, 2026-08-23.** An application is built before it belongs to a
-server, so while it is being built there is nobody to ask which plugins to arm.
-Arming therefore happens at the **first look at the tree after installation**,
-which is the earliest moment the answer exists.
-
-Repeating it is safe, and by design rather than by luck: a tree already
-carrying a plugin does not receive it a second time, and a class the routing
-library already knows is not registered again. So nothing anywhere has to
-remember whether a given look was the first one, and a debugging line that
-touches a tree cannot change what an installation does.
-
-The lateness has one visible consequence, and it belongs in the design rather
-than in a footnote: **a server that has finished booting has armed nothing
-yet.** The set arrives when something first looks. An installation inspected
-before that shows each tree carrying only what its application armed for
-itself.
-
-## 11. A code names a plugin, and an unknown code is refused loudly
-
-**Source: owner, 2026-08-23.** A site writes a **code** and nothing else. Three
-sources fill it — the routing library's own plugins, the dialect plugins this
-package ships, and a class a site brings — and they share one namespace.
-
-A code nobody can resolve **stops the arming with an error naming it and
-listing what is available**. It is never a silent no-op, because a capability
-that failed to arm is discovered by the absence of an effect nobody was
-watching for: a filter that does not filter looks exactly like a tree with
-nothing to hide.
-
-## 12. A dialect is a plugin, and lives outside the routing library
-
-**Source: D22 scope ruling, SPECIFICATION.md:363; the package layout.** The
-routing library ships the five plugins that are about *routing* —
-authorization, signature reading, logging, and two more. A **dialect** — a way of publishing a tree to an
-outside consumer — is a different kind of thing and lives here, because
-publishing is not a routing concern and the routing library should not learn
-one publishing format after another.
-
-There is one dialect plugin today, and a second face reads the same neutral
-description without being a plugin at all. Both are described where they are
-consumed.
-
-> [020 applications / openapi](../020_applications/openapi/) ·
-> [020 applications / mcp](../020_applications/mcp/)
+| The part | In one line |
+|---|---|
+| the tree | built from the class, grown by attaching others |
+| the walk | how a path finds a node, and the three filters on it |
+| the description | what a tree can say about itself, and who reads it |
+| what a plugin is | the thing that produces a filter or a description |
+| where plugins come from | three sources, one namespace |
+| the fixed pair | what is structure, and what is a choice |
+| when a tree is armed | once, on the first look after installation |
+| what a site writes | the section, and the options beside a route |
+| writing one | the base class, the five hooks, and how it is installed |
 
 ---
 
-# Open frictions
+## 1. The tree, and how it grows
 
-Scaffolding for the interview, not a register. Each voice carries a **family
-tag**: the frictions of the server skeleton — 010, 015, 020, 025, 030 — are
-settled in one grouped pass by family, because forty voices turned out to be
-about eight problems (owner, 2026-08-23).
+A route is a method with a marker on it. The marker takes options, and the
+convention for them is one word: a **prefix naming who reads the option**, an
+underscore, then the option.
 
-Interview file: `temp/interview_025_routing-system.md`.
+```python
+class Catalogue(RoutingClass):
 
-**S1 [placement] — the dossier's own index promises entry points that do not
-exist.** The one-line description of this entry in
-[00 overview](../../00_overview/) reads "capabilities plugged by name,
-genro-routes entry points". There is **no entry-point mechanism**: not in this
-package, not in the routing library, and not in either `pyproject.toml`
-(searched for `entry_point`/`entry-points`, nothing). A plugin a site brings
-arrives as a class handed to the server, which is a different thing. Either the
-line means the library's own plugin registry and is misleading, or it describes
-something intended and unbuilt. Settling it edits the overview.
+    @route()
+    def search(self, q: str = "") -> dict: ...          # answers /search
 
-**S2 [silent] — two servers in one process, one plugin code, two classes: the
-first one wins, and nobody is told.** The registration behind a code is the
-routing library's, and it is **class-level and process-wide**. The first server
-to arm a code registers its class; a second server that brought a different
-class under the same code has its own ignored, silently, and its trees carry
-the first server's plugin. Proven live in [status.md](status.md), where the
-second server asks for one class and gets the other.
+    @route(auth_rule="admin", openapi_method="delete")
+    def drop(self, item_id: int) -> dict: ...           # answers /drop
+```
 
-Two servers in one process is a real shape here — the tests do it, and so does
-a composition that hosts an internal server. Two *different* classes under one
-code is rare. By the probability rule the case may be accepted, **provided it
-ends noisily**, and this one does not.
+Nothing in either handler body reads those options. `auth_rule` is read by the
+filter that decides who may reach the node; `openapi_method` by the reader that
+publishes it. A prefix nobody armed is simply ignored.
 
-**S3 [undocumented] — a plugin of one's own cannot be declared in a
-configuration.** The class travels as a construction argument, and the
-configuration has no counterpart for it: the section names codes only. So a
-site with a plugin of its own must build its server in Python, and the promise
-that a description plus one command is a complete deployment unit
-(SPECIFICATION.md:817) does not hold for it. It also sits against
-[015 configuration](../015_configuration/) §2, which says a new capability
-brings its own words with it and nothing central is edited. The failure is at
-least loud — §11 above — which is why this is a gap and not a defect.
+An option whose value is naturally plural takes a list —
+`openapi_tags=["admin", "catalogue"]` — and a single one may be written bare.
 
-**S4 [unread] — the shipped dialect plugin computes a block nobody reads, and
-that is why six of its seven options have no test.** Its `entry_metadata`
-repackages the per-route publishing options and the description carries the
-result under the plugin's own code. The OpenAPI reader does not look there: it
-reads the raw configuration from a different key of the same description, so
-the plugin's contribution is a duplicate with no consumer. Proven in
-[status.md](status.md), which names both keys.
+**A tree grows by attaching another routing class below a name.** What is
+stated is a *description* of the branch — a name, and what serves it — so the
+branch can be listed and published before anything is built. This is how an
+application is assembled out of parts written independently: a catalogue, an
+ordering API, each of them a plain routing class that knows nothing about where
+it will hang.
 
-The untested half follows from it rather than standing beside it: only the
-method override is exercised, and tags, summary, description, deprecated,
-security scheme and the explicit security override are uncovered — because
-there was nothing to assert them against. Settling this decides whether the
-reader moves to the contributed block or the method goes.
+## 2. The walk, and the three filters on it
 
-**S5 [unratified] — plugins are server-wide, and nothing records the decision.**
-The section belongs to the server, so what it names is armed on **every** routed
-application the server hosts. A site cannot arm one plugin on one application
-only — logging on the administrative surface but not on the shop, for instance.
-Whether that is the design or a limit is written nowhere, and §2 above, which
-insists that a plugin attaches to *one tree*, reads as promising the opposite.
+Resolving a path is a walk from the root, one name at a time, into attached
+branches as it goes. What makes it more than a lookup is that the walk is
+**filtered**, and a node the filter excludes is not reached: the resolution
+fails, and no handler code runs.
 
-**S6 [cross · unratified] — the fixed pair is stated in two entries and armed in
-three moments.** The pair is D26's, but the third always-present plugin —
-authorization, which the application arms for itself — is named in
-[020 applications](../020_applications/) §2 and here, and nothing states the
-division as a rule. A reader who counts the always-present plugins gets two
-from D26 and three from the code. Recorded in the same wording in
-[020 applications](../020_applications/design.md).
+There are three filters, they are independent, and each answers a different
+question:
 
-**S7 [silent] — a published verb is a description that nothing enforces.** A
-route declaring itself a `DELETE` is published as one, and the dispatch does not
-read the verb: the same route answers a `GET` that reaches it. Proven live in
-[status.md](status.md). So the document handed to a consumer states a
-constraint the server does not apply, and a client that respects it and a client
-that ignores it both succeed — which is the shape of a defect nobody discovers
-until something depends on the constraint being real. Whether the verb should
-gate the dispatch, or the document should stop implying it does, is not
-recorded anywhere.
+| Filter | Written at a route as | The question |
+|---|---|---|
+| **tags** | `auth_rule` | *who* is calling |
+| **capabilities** | `env_requires` | *what this installation can do* |
+| **channel** | `channel_channels` | *through what* the request arrived |
 
-## Settled on 2026-08-24 — no longer open
+**Tags** are the caller's grants, and the case worth stating is the empty one:
+a caller who presents nothing supplies no tags, which is the strictest case and
+not the loosest. Every route carrying a rule is closed to them, and what they
+reach is exactly the routes carrying no rule — which is the definition of
+public.
 
-Recorded here only so the next reader is not surprised by its absence.
+**Capabilities** are what the installation has rather than who is asking: a
+route that needs a cache, a queue, a converter, disappears where that thing is
+absent instead of failing when called. They **accumulate down the tree**, so a
+branch inherits what its parents declared and adds its own.
 
-- **where the essentials of routing live.** They live here: this entry was
-  `025_plugins` and became the routing system, with the plugins after the
-  routing rather than instead of it, on the owner's decision. Its counterpart
-  in [020 applications](../020_applications/) is settled the same way — that
-  page states that an application *is* a routing class and sends the mechanism
-  here. The answer is §1 above.
+**Channel** is where the request came from — `rest`, `mcp`, `web`, a bot — and
+it is the mechanism by which one tree presents different surfaces to different
+consumers. A route that should be callable by a model and not by a browser says
+so once, beside itself, and both faces are built from the same tree.
+
+The failure a filter produces is not the failure of a missing path, and the
+distinction survives all the way to the caller: a route withheld for lack of an
+identity, and one withheld because the identity is not enough, are two
+different answers.
+
+> What those answers are on the wire is
+> [020 applications](../020_applications/README.md).
+
+## 3. The tree described
+
+A tree can say what it contains: for every node the name, the declared
+parameters and their types, the options written beside it, and the branches
+below. That description is **neutral** — it names no protocol and no consumer.
+
+It is the seam the whole page turns on. Everything that presents an application
+to something outside — a documented REST interface, a set of tools a model can
+call — is built by reading that description, not by reading the code and not by
+being told route by route. Which is why a handler is written once and appears
+on every face that reads the tree.
+
+> The faces built from it are
+> [020 applications / openapi](../020_applications/openapi/README.md) and
+> [020 applications / mcp](../020_applications/mcp/README.md).
+
+---
+## 4. What a plugin is
+
+A **plugin** is what produces a filter or adds to the description. It is armed
+on a tree by name, it applies to every node in it — attached branches included
+— and it reads what the tree already knows: the names, the parameters, the
+options beside each route.
+
+That is the whole of it, and the two halves are the two of §2 and §3. A plugin
+that **withholds** gives a reason why a caller may not have a node, which is
+how each of the three filters is implemented. A plugin that **describes** adds
+something to the node's description, which is how a publishing face gets what
+it needs.
+
+A plugin may do both, or neither and something else — the full set of hooks is
+in §9.
+
+Two things a plugin is not, and each confusion costs something real.
+
+**Not a middleware.** A middleware wraps the server's dispatch and sees every
+request, including those for applications with no routes at all. A plugin sees
+the tree and none of the traffic. Two consequences make the test sharp: a
+plugin can say things about a route nobody has called yet, and a middleware can
+answer a request no route matched.
+
+**Not the mixin that provides plugins.** The machinery — the resolved set, the
+registry, the arming — is a capability layer of the server, stacked on the
+server class like the others. A plugin is what that machinery installs. The two
+are one word apart and one level apart, and this page uses *plugin* only for
+the installed thing.
+
+> The ring is [030 middleware](../030_middleware/README.md).
+
+---
+
+## 5. Where plugins come from — three sources, one namespace
+
+A plugin is named by a short **code**, and a site writes that code and nothing
+else. Behind the code the class comes from one of three places.
+
+**The routing library ships five**, and three of them are the filters of §2:
+`auth` (tags), `env` (capabilities) and `channel`. The other two are `pydantic`,
+which reads handler signatures into the description, and `logging`. None needs
+a class from anybody — naming the code is enough, because the library already
+knows them.
+
+**This package ships the dialect plugins.** A dialect is a way of *publishing*
+a tree rather than a way of routing it, so it does not belong to the routing
+library. Today there is one, `openapi`. Its class comes from a small default
+mapping the server builds for itself at construction.
+
+**A site brings its own.** A capability nobody anticipated arrives as a class,
+handed to the server, and merged over that mapping under its own code. §9 is
+how one is written.
+
+The three share one namespace, and a code that resolves to nothing **stops the
+arming with an error** naming it and listing what is available. Silence would
+be the wrong answer here, because a capability that failed to arm leaves no
+trace: a filter that never filters looks exactly like a tree with nothing to
+hide, and the absence is noticed only by whoever was already looking for it.
+
+> The dialect this package ships is described where it is consumed:
+> [020 applications / openapi](../020_applications/openapi/README.md).
+
+---
+
+## 6. The fixed pair, and what is a choice
+
+Two plugins are **structure, not configuration**: the one that reads handler
+signatures, and the one that carries the per-route publishing controls. Every
+server arms both on every application it hosts, and a site cannot switch either
+off — asking to is an error, not an opt-out.
+
+The reason is that a control which only works when a capability happens to be
+enabled is a control nobody can rely on. If the publishing options beside a
+route were honoured on some installations and ignored on others, reading a
+route would no longer tell you how it behaves, and the words at the route
+would have to be checked against a configuration file every time.
+
+A third is always present too, and it arrives differently: the application
+arms the **authorization** plugin on its own tree, for itself, in its own
+constructor. It does not wait for a server to do it — an application embedded
+in a server with no plugin machinery at all still filters its protected routes.
+
+Everything beyond those three is a site's choice: named in the configuration,
+armed if named, absent if not.
+
+---
+
+## 7. When a tree is armed
+
+Arming happens **once per application, at the first look at its tree after the
+server has installed it**. Not when the module is imported, not while the
+application is being built, not per request.
+
+The lateness is the point. An application is built before it belongs to
+anybody, so at that moment there is no server to ask which plugins to arm.
+Waiting until the tree is first read means the answer exists by then, and
+nothing has to be sequenced by hand.
+
+It has a visible consequence: a server that has finished booting has **not yet
+armed anything**. Until something looks at an application's tree, that tree
+carries only what the application armed for itself, and the server's set
+arrives on the first look. A reader who inspects a freshly booted installation
+and finds one plugin where they expected three is seeing this, not a fault.
+
+**Arming twice is safe by design, not by luck.** A tree already carrying a
+plugin does not receive it a second time, and a class already known to the
+routing library is not registered again. So nothing anywhere has to remember
+whether a given look was the first, and a debugging line that touches a tree
+cannot change what an installation does.
+
+---
+
+## 8. What a site writes
+
+One section of the description, one entry per plugin, each labelled by its
+code:
+
+```python
+plugins = cfg.plugins()
+plugins.plugin(code="logging")
+plugins.plugin(code="openapi", security_scheme="ApiKeyAuth")
+```
+
+An entry with no options enables the plugin. Options beside the code become
+the plugin's own settings for the whole tree, which the words beside a single
+route then override for that route. And `enabled=False` removes a plugin a
+site does not want — one of its own choices, never one of the fixed pair.
+
+The section is the **server's**, so what it names is armed on every routed
+application the server hosts.
+
+> The section's place in the description, and how a value is read back, is
+> [015 configuration](../015_configuration/README.md).
+
+---
+
+## 9. Writing one
+
+A plugin is a subclass of the routing library's `BasePlugin`, with two class
+attributes — the **code** it will be named by, and a description — and as many
+of five hooks as it needs. All five are optional; a plugin that implements none
+is legal and does nothing.
+
+| Hook | When it runs | What it is for |
+|---|---|---|
+| `configure(**options)` | at arming, and again per route | **declares the words** a route may write beside itself; its parameters *are* the accepted options, and it stores nothing — the base class does |
+| `entry_metadata(router, entry)` | when the tree is described | returns a dict that travels with the route, for whoever publishes it |
+| `deny_reason(entry, **filters)` | during resolution | returns a reason the route is not available to this caller; this is the hiding half |
+| `on_decore(router, func, entry)` | when a route is registered | see the route as it joins the tree |
+| `wrap_handler(router, entry, call_next)` | around every call | wrap the handler itself |
+
+Read the options back with `self.configuration(entry.name)`, which merges what
+was written at the route over what was written for the whole tree.
+
+```python
+from genro_routes.plugins._base_plugin import BasePlugin
+
+
+class OwnerPlugin(BasePlugin):
+    """Names the team responsible for a route."""
+
+    plugin_code = "owner"
+    plugin_description = "Names the team responsible for a route"
+
+    def configure(self, team: str = "", oncall: str = "") -> None:
+        """The words a route may write: owner_team, owner_oncall."""
+
+    def entry_metadata(self, router, entry) -> dict:
+        cfg = self.configuration(entry.name)
+        if not cfg.get("team"):
+            return {}
+        return {"owner": {"team": cfg["team"], "oncall": cfg.get("oncall", "")}}
+```
+
+A route then writes `@route(owner_team="retail")`, and the description of that
+route carries the contribution under the plugin's own code.
+
+**Installing it takes two things, and both are needed.** The class reaches the
+server as a construction argument, and the code is named in the description
+like any other:
+
+```python
+server = AsgiServer(config=ServerConfiguration, plugin_registry={"owner": OwnerPlugin})
+```
+
+```python
+cfg.plugins().plugin(code="owner")
+```
+
+The asymmetry is worth noticing: the class cannot travel in the description.
+A site with a plugin of its own builds its server in Python, where a site using
+only the plugins that already exist does not.
+
+---
+
+## A configuration that includes it
+
+A whole installation that adds one plugin by name, tunes one of the fixed
+pair, and carries a route that tells the publishing plugin how it wants to
+appear.
+
+```python
+import tempfile
+
+from genro_routes import route
+
+from genro_asgi import AsgiServer, RoutedApplication
+from genro_asgi.config import BaseConfiguration
+
+
+class Catalogue(RoutedApplication):
+    """Two handlers, one of them telling the openapi plugin how to publish it."""
+
+    mount = ""
+
+    @route()
+    def search(self, q: str = "") -> dict[str, str]:
+        """Find something."""
+        return {"found": q}
+
+    @route(openapi_method="delete", openapi_tags="admin")
+    def drop(self, item_id: int) -> dict[str, int]:
+        """Remove an item."""
+        return {"deleted": item_id}
+
+
+# The local storage backend refuses a directory that is not there; a real
+# deployment names its own.
+SITE_DIR = tempfile.mkdtemp(prefix="catalogue-")
+
+
+class ServerConfiguration(BaseConfiguration):
+    """A site that adds one plugin by name and tunes one of the fixed pair."""
+
+    def main(self, root):
+        cfg = root.configuration()
+        self.server_section(cfg)
+        self.storage_section(cfg)
+        cfg.applications().application(code="catalogue", app_class=Catalogue)
+        plugins = cfg.plugins()
+        plugins.plugin(code="logging")
+        plugins.plugin(code="openapi", security_scheme="ApiKeyAuth")
+
+    def storage_mounts(self, section):
+        section.local(name="site", base_path=SITE_DIR)
+
+
+server = AsgiServer(config=ServerConfiguration)
+```
+
+`BaseConfiguration` is the package's own defaults written as a recipe, and
+`server_section` / `storage_section` are two of its hooks — which is why `main`
+calls two methods it does not define, and defines a third (`storage_mounts`)
+that the inherited `storage_section` calls. That mechanism belongs to
+[015 configuration](../015_configuration/README.md).
+
+Asked about itself, the installation answers — and every question below is an
+expression you can type, given
+`route = server.applications["catalogue"].route` and
+`spec = router_openapi(route)`:
+
+| Asked | Answer |
+|---|---|
+| `sorted(server.plugins)` | `['logging', 'openapi', 'pydantic']` |
+| `server.plugins["openapi"]` | `{'security_scheme': 'ApiKeyAuth'}` |
+| `sorted(p.name for p in route.iter_plugins())` | `['auth', 'logging', 'openapi', 'pydantic']` |
+| `{p: sorted(o) for p, o in spec["paths"].items()}` | `{'/search': ['get'], '/drop': ['delete']}` |
+| `spec["paths"]["/drop"]["delete"]["tags"]` | `['admin']` |
+
+Four things there are worth reading twice.
+
+**The resolved set is three, and only one of them is an addition.** The recipe
+named `logging` and `openapi`; the second was going to be there anyway, and
+naming it only tuned it. `pydantic`, which the recipe never mentions, is the
+other half of the fixed pair.
+
+**The armed set is four.** `auth` is on the tree because the application put it
+there itself, not because the server did.
+
+**The first line is doing work.** Reading `.route` is what triggers arming; ask
+`iter_plugins` on a tree nobody has looked at yet and the answer is `['auth']`.
+
+**`/drop` is published as a `DELETE`** because of the two words beside that one
+route, while `/search` kept the verb guessed from its signature. Guessed or
+declared, neither constrains what the server will actually answer.
+
+`router_openapi` is the OpenAPI reader of the tree, and it works on any armed
+tree without an OpenAPI application being mounted. It belongs to
+[020 applications / openapi](../020_applications/openapi/README.md).
+
+## What stands on this
+
+The OpenAPI face of an application and the tool face for models are both built
+by reading metadata plugins contributed, so both rest on this. Authorization
+uses the filtering half, and the dispatch of every routed application reads the
+signatures the fixed pair captured.

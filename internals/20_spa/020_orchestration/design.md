@@ -1,18 +1,49 @@
-# Orchestration — desired design
+# Orchestration
 
 **Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
 
-Everything this feature SHOULD be when finished — the target, not the code.
-To be filled by the documentation audit and ratified by the owner.
+**The need.** Many users with LIVE server-side state must scale across processes without a user ever splitting: all his pages live in the process that holds his store.
 
----
+The pool machine: `SpaCommander` (global indexes, lifecycle, per-user
+barrier, request chain, single-writer fold via `EnvelopeHandler`, freezer
+via `FreezeHandler`, `DeliveryDesk`) → n `GroupHandler` (placement,
+capacity, growth and shrink) → n `WorkerHandler` (process, wire,
+surveillance) → `SpaWorker` (live users/connections/pages and the hosted
+WSGI site behind `WsgiSeam`). Usersticky principle: ALL pages of one user
+live in the process that holds the user's store. Mobility has ONE path:
+hold → freeze → reassign → unfreeze. A sudden worker death restarts the
+few users involved — an accepted, observable risk.
 
-# Open frictions
+Interactions: spa-application (above) · channel (below) · global-store, datachanges, dbevents (it carries them) · storage (freezer) · restart.
 
-Scaffolding for the interview, not a register: each voice is a question to
-settle, settling it edits this document, and this section shrinks to nothing
-before the design can be ratified.
+## The chain and its registers
 
-*(Carried over from the entry's former `frictions.md` on 2026-08-23, verbatim.)*
+```mermaid
+flowchart TD
+    F["SpaApplication — stateless front"] --> C["SpaCommander
+    user_map · connection_user_map · page_connection_map · user_hold_event_map
+    EnvelopeHandler · FreezeHandler · DeliveryDesk · global_register + global_lock"]
+    C --> G1["GroupHandler — placement, capacity, growth/shrink"]
+    C --> G2["GroupHandler (one per group)"]
+    G1 --> W1["WorkerHandler — process, wire, surveillance"]
+    G1 --> W2["WorkerHandler (one per worker)"]
+    W1 --> P1["SpaWorker
+    user_register · connection_register · page_register
+    hosted WSGI site behind WsgiSeam"]
+```
 
-- F48/F49: a fold that fails in the parent no longer kills the worker, but the partially applied envelope has no escalation/resync yet; the two decisions are cited by code and commits and still missing from the F1–F47 register.
+Every index above the worker is written ONLY by the single-writer fold of the
+envelope chain: the worker announces, the parent applies.
+
+## Mobility — the one path
+
+```mermaid
+stateDiagram-v2
+    RESIDENT --> ON_HOLD: hold — requests park on the per-user barrier
+    ON_HOLD --> FROZEN: freeze — FreezeHandler writes the parcel
+    FROZEN --> RESIDENT: reassign + unfreeze — the destination worker adopts
+```
+
+Used for compaction, ordered replacement and wake. There is no direct
+worker-to-worker move. A sudden worker death skips the path entirely: the
+users involved restart.

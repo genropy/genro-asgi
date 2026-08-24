@@ -14,20 +14,20 @@ class they subclass. The entry's own pages say nothing about being a feature —
 the classification is editorial and lives here.
 
 Third in reading order, and it assumes the two before it: the identity triplet
-and the demux are [010 server](../010_server/)'s, the recipe and the read door
-are [015 configuration](../015_configuration/)'s. It defines the route tree,
+and the demux are [010 server](../010_server/README.md)'s, the recipe and the read door
+are [015 configuration](../015_configuration/README.md)'s. It defines the route tree,
 which four later entries assume.
 
 ## Who stands on this
 
 | They lean on it as | Entries |
 |---|---|
-| the tree they arm a capability onto | [025 routing system](../025_routing-system/) |
-| the dispatch their ring wraps, and the exceptions they answer | [030 middleware](../030_middleware/) |
-| the request their identity rides on | [050 authentication](../050_authentication/), [040 sessions](../040_sessions/) |
-| a lens on the same tree | [openapi](openapi/), [mcp](mcp/) |
-| the base class they subclass | [090 server-application](../090_server-application/), [20_spa/010 spa-application](../../20_spa/010_spa-application/) |
-| the streaming they push over | [070 tasks](../070_tasks/) (SSE push), [090 inspector](../090_server-application/inspector/) |
+| the tree they arm a capability onto | [025 routing system](../025_routing-system/README.md) |
+| the dispatch their ring wraps, and the exceptions they answer | [030 middleware](../030_middleware/README.md) |
+| the request their identity rides on | [050 authentication](../050_authentication/README.md), [040 sessions](../040_sessions/README.md) |
+| a lens on the same tree | [openapi](openapi/README.md), [mcp](mcp/README.md) |
+| the base class they subclass | [090 server-application](../090_server-application/README.md), [20_spa/010 spa-application](../../20_spa/010_spa-application/README.md) |
+| the streaming they push over | [070 tasks](../070_tasks/README.md) (SSE push), [090 inspector](../090_server-application/inspector/README.md) |
 
 A change to the four obligations reaches every one of them. A change to the
 argument reconciliation reaches the two lenses, because they share the method.
@@ -54,7 +54,7 @@ plugins, the two lenses), `c360f60` (2026-07-24, core 1e: SSE over streaming),
 known).
 
 **The ruling that is not in the log** — the same one that bites
-[010 server](../010_server/): `a1a8f7e` was never appended to
+[010 server](../010_server/README.md): `a1a8f7e` was never appended to
 SPECIFICATION.md, so §4's app-side contract still names `mount_name`. Do not
 search the specification for `code`/`mount` on the application side; the only
 record is that commit message. Friction S1.
@@ -103,7 +103,7 @@ record is that commit message. Friction S1.
 
 Nine probes, all against a composed `AsgiServer` at the ASGI level:
 
-- the README recipe, whose seven-row answer table is the probe's own output;
+- the `design.md` recipe, whose seven-row answer table is the probe's own output;
 - a `POST` with and without `content-type` — `{"sum": 5}` against
   `{"sum": 0}`;
 - a `TypeError` in a sync handler body → **400** with the internal message,
@@ -133,7 +133,7 @@ rather than re-deriving them.
 
 ## Before the next step is written
 
-`design.md` is 🔴 with sixteen frictions, and they do not all belong to the
+`decisions.md` is 🔴 with sixteen frictions, and they do not all belong to the
 same conversation. The interview is `temp/interview_020_applications.md`,
 fourteen turns; S16 has no turn of its own because it closes by building, not
 by deciding.
@@ -155,9 +155,9 @@ first rule requires the reason to be written where the limit is accepted.
 
 **Four cannot be settled inside this entry.** S6 (the WebSocket door) is
 recorded in the same wording in
-[20_spa/030 channel](../../20_spa/030_channel/), S14 in
-[030 middleware](../030_middleware/), S12 in both
-[010 server](../010_server/) and [015 configuration](../015_configuration/),
+[20_spa/030 channel](../../20_spa/030_channel/README.md), S14 in
+[030 middleware](../030_middleware/README.md), S12 in both
+[010 server](../010_server/README.md) and [015 configuration](../015_configuration/README.md),
 S13 in 015, and S11 in 010. All five were seeded there by this audit and carry
 the same text on both sides. Settling one of them means editing two documents
 in one change; answering it in only one place is how the dossier would start

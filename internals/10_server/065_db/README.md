@@ -1,12 +1,9 @@
 # Database
 
-**Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.1 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
 
-**The need.** An installation mounts its databases through the recipe, without the core knowing any concrete backend.
-
-`db.py` — the core's minimal contract: a `database` in the config names a
-`db_class` (builds the real db from connection parameters) and optionally a
-`db_handler_class` (default `AsgiDbHandlerBase`, lifecycle + `__getattr__`
-delegation). Concrete db classes live OUTSIDE the core.
-
-Interactions: configuration (the `database` words) · the hosted applications that consume the handler.
+An installation mounts its databases through the recipe, and the core knows no
+concrete backend. A `database` in the configuration names a `db_class`, which
+builds the real db from connection parameters, and optionally a
+`db_handler_class` for lifecycle and delegation; the concrete db classes live
+outside the core.

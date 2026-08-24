@@ -27,15 +27,15 @@ words live in this tree:
 
 | Section of the tree | Owned by |
 |---|---|
-| `server`, `session` | [010 server](../010_server/), [040 sessions](../040_sessions/) |
-| `server.tasks` | [070 tasks](../070_tasks/) — declares its own grammar |
-| `middleware` | [030 middleware](../030_middleware/) |
-| `authentication` (+ 6 children) | [050 authentication](../050_authentication/), login surface to [090 server-application](../090_server-application/) |
-| `storage` | [060 storage](../060_storage/) — a mount point, no vocabulary here |
-| `applications` | [020 applications](../020_applications/); each entry's children are the app's own |
-| `databases` | [065 db](../065_db/) |
-| `plugins` | [025 routing system](../025_routing-system/) |
-| `applications.<code>.commander` | [20_spa/020 orchestration](../../20_spa/020_orchestration/) — NOT a top-level section |
+| `server`, `session` | [010 server](../010_server/README.md), [040 sessions](../040_sessions/README.md) |
+| `server.tasks` | [070 tasks](../070_tasks/README.md) — declares its own grammar |
+| `middleware` | [030 middleware](../030_middleware/README.md) |
+| `authentication` (+ 6 children) | [050 authentication](../050_authentication/README.md), login surface to [090 server-application](../090_server-application/README.md) |
+| `storage` | [060 storage](../060_storage/README.md) — a mount point, no vocabulary here |
+| `applications` | [020 applications](../020_applications/README.md); each entry's children are the app's own |
+| `databases` | [065 db](../065_db/README.md) |
+| `plugins` | [025 routing system](../025_routing-system/README.md) |
+| `applications.<code>.commander` | [20_spa/020 orchestration](../../20_spa/020_orchestration/README.md) — NOT a top-level section |
 
 A change to the read stack or to the layering reaches all of them. A change to
 one section's words reaches only its owner.
@@ -92,9 +92,9 @@ owner corrected it. `test_config.py:885` is the guard.
 
 ## Before the next step is written
 
-`design.md` is 🔴, with seven open frictions. Four of them (S1-S4) are the
+`decisions.md` is 🔴, with seven open frictions. Four of them (S1-S4) are the
 whole of §6 — the live tree — and they are the same subject as S5/S6 of
-[010 server](../010_server/design.md) seen from the other side: there the
+[010 server](../010_server/decisions.md) seen from the other side: there the
 question is what falls away when immobility goes, here it is what has to be
 built. **They should be settled together, in one conversation, or the two
 entries will drift.**
@@ -105,7 +105,7 @@ subscriber complies and another fails. S4 has a precedent worth reading first �
 the partially-applied-fold problem recorded as F48/F49 in the orchestration
 register.
 
-And S7 is a debt, not a defect: the recipe at the foot of the README must stay
+And S7 is a debt, not a defect: the recipe at the foot of `design.md` must stay
 executable. Writing it found two real defects in it that reading had not (a
 non-existent import, a storage path the backend refuses). The test that runs
 every entry's recipe is decided and deferred — see the note in

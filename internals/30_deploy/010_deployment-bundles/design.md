@@ -1,18 +1,14 @@
-# Dynamic groups and application bundles — desired design
+# Dynamic groups and application bundles
 
 **Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
 
-Everything this feature SHOULD be when finished — the target, not the code.
-To be filled by the documentation audit and ratified by the owner.
+**The need.** A customer tries a change with named users while production runs untouched; the build they accepted is promoted AS IS, never rebuilt.
 
----
+🔴 UNRATIFIED PROPOSAL (from `codex/`): groups as dynamic runtime
+objects — add / refresh / remove while the server lives — each pinned to an
+immutable application bundle built by the application's own CI and
+distributed through S3 (named builds, mutable channels, explicit cohorts
+for iterative acceptance). Horizon: subcommander hierarchy and Kubernetes
+as controlled runtime.
 
-# Open frictions
-
-Scaffolding for the interview, not a register: each voice is a question to
-settle, settling it edits this document, and this section shrinks to nothing
-before the design can be ratified.
-
-*(Carried over from the entry's former `frictions.md` on 2026-08-23, verbatim.)*
-
-- Depends on decisions D1–D7 of `codex/progetto-distribuzione-bundle-applicativi-s3-2026-08-20.md`; nothing is authorized for implementation.
+Interactions: orchestration (GroupHandler lifecycle) · configuration (group grammar) · restart (generation switch).

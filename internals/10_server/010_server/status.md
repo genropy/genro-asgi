@@ -51,7 +51,7 @@ mount `""`, **`None` when there is none** (server.py:103-111),
 `root_application is None`.
 
 **Demux.** Four branches in `demux()` (server.py:213-239), exactly as drawn
-in [README.md](README.md):
+in [README.md](design.md):
 
 | Branch | Code | Test |
 |---|---|---|
@@ -88,7 +88,7 @@ chain.
 
 **Databases.** `databases` and `add_database(code, handler)` live on the base
 (server.py:143-152); a claimed code raises `ValueError` (server.py:150-151).
-The handlers themselves belong to [065 db](../065_db/).
+The handlers themselves belong to [065 db](../065_db/README.md).
 
 **Boot.** `serve(host, port)` builds `uvicorn.Config`/`uvicorn.Server` and
 runs it, blocking (server.py:272-279); `uvicorn_server` exposes the built
@@ -234,13 +234,13 @@ one sync route, one async route and one that raises, deliberately kept out of
   `CommunicationMixin`, verified at
   [communication.py:55](../../../src/genro_asgi/communication.py)); its
   "primary app, always present" clause is **contradicted** by the shipped code
-  — see [design.md](design.md), open friction S1.
+  — see [design.md](decisions.md), open friction S1.
 - **D3** (SPECIFICATION.md:61) — one demux rule for every server. The single
   rule survives; the shipped form has four branches, not two — see
-  [design.md](design.md), open friction S2.
+  [design.md](decisions.md), open friction S2.
 - **D5** (SPECIFICATION.md:73) — one request registry in the base. Duty (2),
   the in-flight picture, is implemented here; duty (1) is not — see
-  [design.md](design.md), open friction S3.
+  [design.md](decisions.md), open friction S3.
 - **D7** (SPECIFICATION.md:93) — phase 0 is the base server plus the app-side
   contract, exercised by a throwaway app; the websocket socket left empty.
   Both hold.

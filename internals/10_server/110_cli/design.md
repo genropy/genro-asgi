@@ -1,6 +1,12 @@
-# CLI — desired design
+# CLI
 
 **Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
 
-Everything this feature SHOULD be when finished — the target, not the code.
-To be filled by the documentation audit and ratified by the owner.
+**The need.** An admin drives installations from the shell: start one by name, see what runs, stop it, remove it.
+
+The `genroasgi` command: `serve` (by instance name, with `--reload` for
+development), `apps`, `stop`, `remove`; the instance registry behind them.
+The CLI reads the same recipe the server reads — it adds no words of its
+own.
+
+Interactions: configuration (the recipe and the instance names) · restart (the stop/serve pair is today's only restart).

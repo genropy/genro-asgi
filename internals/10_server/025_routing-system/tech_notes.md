@@ -14,23 +14,23 @@ for a URL that calls a method, for authorization, for a schema.
 It was `025_plugins` until 2026-08-24, when the owner made the routing system
 its subject and put the plugins after it. Two reasons, both worth keeping: the
 plugins were unreadable without the tree they arm, and
-[020 applications](../020_applications/) was carrying two subjects — what an
+[020 applications](../020_applications/README.md) was carrying two subjects — what an
 application is, and what a route tree is — which is why its friction tail grew
 to twice any other entry's.
 
 Fourth in reading order **and it comes after what it explains**, deliberately:
 020 says an application *is* a routing class, and this entry then explains a
 routing class in full. That inversion is the owner's, recorded as §1 of
-[design.md](design.md).
+[design.md](decisions.md).
 
 ## Who stands on this
 
 | They lean on it as | Entries |
 |---|---|
-| the mechanism that arms their reader of the tree | [020 applications / openapi](../020_applications/openapi/), [020 applications / mcp](../020_applications/mcp/) |
-| the filter half, applied during resolution | [050 authentication](../050_authentication/) |
-| the section it reads its switches from | [015 configuration](../015_configuration/) |
-| the thing it is confused with | [030 middleware](../030_middleware/) |
+| the mechanism that arms their reader of the tree | [020 applications / openapi](../020_applications/openapi/README.md), [020 applications / mcp](../020_applications/mcp/README.md) |
+| the filter half, applied during resolution | [050 authentication](../050_authentication/README.md) |
+| the section it reads its switches from | [015 configuration](../015_configuration/README.md) |
+| the thing it is confused with | [030 middleware](../030_middleware/README.md) |
 
 A change to arming reaches every routed application. A change to the shipped
 dialect plugin reaches only what publishes a schema.
@@ -60,7 +60,7 @@ one is this entry's:
 - `plugin.py` — the router plugin. **This entry.**
 - `translator.py` (307 lines) and `router_openapi` in `__init__.py` — the
   dialect that turns the neutral description into an OpenAPI document.
-  **[020 applications / openapi](../020_applications/openapi/).**
+  **[020 applications / openapi](../020_applications/openapi/README.md).**
 
 The test file splits the same way: of the 32 items in `tests/test_plugins.py`,
 the eleven in `TestTranslator` (`:255`) and `TestRouterOpenapi` (`:311`) are
@@ -117,7 +117,7 @@ nothing; they are real all the same.
 
 Six probes, all building real servers:
 
-- the README recipe, whose five-row answer table is the probe's own output —
+- the `design.md` recipe, whose five-row answer table is the probe's own output —
   including that `@route(openapi_method="delete", openapi_tags="admin")`
   publishes `/drop` as a `DELETE` with `tags: ['admin']`;
 - a recipe naming a plugin code nobody registered: `ValueError`,
@@ -138,7 +138,7 @@ Six probes, all building real servers:
 
 ## Before the next step is written
 
-`design.md` is 🔴 with seven frictions, all tagged by family. None of them is
+`decisions.md` is 🔴 with seven frictions, all tagged by family. None of them is
 settled here: they join the grouped pass over the skeleton (010, 015, 020, 025,
 030) that the owner chose on 2026-08-23.
 

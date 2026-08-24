@@ -1,366 +1,353 @@
-# Configuration — design
+# Configuration
 
-**Version**: 0.4 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.3 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
 
-**Configuration, with the work finished.** Read this as a report from the day
-everything described here is running: it says what a configuration *is*, and
-never what it lacks. What the code holds is [status.md](status.md)'s subject.
+How an installation is described, how the description is read while it runs,
+and how each part of the system contributes its own words to it.
 
-Every voice carries its source. A voice sourced to the owner and a date was
-decided in conversation before it reached any register.
+## What a configuration is
 
-The **open frictions** are the closing section — the one place here that
-compares this arrival with the present. When it is empty, the design stands on
-its own.
+Two deployments of the same software are not the same installation. One serves
+a shop on port 8000 with a single database; the other serves the shop and an
+administrative surface behind a proxy, with three storage volumes, an identity
+provider and a pool of worker processes. Nothing about that difference belongs
+in the code — the code is identical in both.
 
----
+So an installation is **described**, once, in one place. That description names
+which applications are installed and where, which databases exist, where files
+live, who is allowed in and how, and how much of the machine the server may
+use. Given the description, the software assembles itself.
 
-## 1. An installation is described once, and reads itself
+Three properties make the description more than a settings file, and they are
+what this page is about.
 
-**Source: D15, SPECIFICATION.md:171.** One configuration is the whole site;
-each process materializes the projection of its own role.
+**It is a document with a grammar, not a bag of keys.** Every word in it is
+declared by the part of the system that consumes it, and a word nobody declared
+is refused when the description is read — not later, when the value would have
+been used.
 
-**Source: Ratified 2026-07-29, SPECIFICATION.md:772.** Nothing materializes a
-component from the outside: **the class that needs the values reads them.** A
-value passed explicitly at construction wins over the configured one,
-**wholesale per value** — so a configured installation runs on another port
-without a word of its description changing.
+**It is layered.** The same description is written at three levels — what the
+package ships, what a machine adds, what a site says — and the site wins. So a
+deployment declares only its differences.
 
-The consequence worth stating: there is no builder, no factory, no assembler
-that knows the whole system. There is a description, and each part reads its
-own part of it.
+**It is alive.** The description is not read once at boot and discarded. It
+stays as a tree the running system watches, and changing the tree changes the
+installation.
 
-## 2. The description is a recipe: code, not data
+## The anatomy
 
-**Source: Ratified 2026-07-29, SPECIFICATION.md:772** (the config layer
-refounded on genro-builders `contrib/config`).
+A configuration exists in two forms, and keeping them apart is the whole of
+understanding it.
 
-A description is a **class with one method**, calling a grammar to build a
-document. Being executed rather than parsed is what makes it possible to hand
-over **objects** — an application class is imported and passed as itself, so a
-name that does not exist fails at boot with an import error rather than at
-first use with a lookup miss.
+The form you **write** is a **recipe**: a Python class with one method, calling
+the grammar to build the document. The form the system **reads** is a **tree**:
+what the recipe produced, layered with the recipes under it, watched by whoever
+cares.
 
-**Source: owner, 2026-08-23.** A description too long to read at a glance is
-split into methods, one per section, each taking the parent node. The recipe
-orchestrates; the sections describe.
+```mermaid
+flowchart TB
+    R1["package defaults<br/>a recipe"] --> T["<b>the tree</b><br/>layered, live"]
+    R2["machine defaults<br/>a recipe"] --> T
+    R3["the site's recipe<br/>a recipe — wins"] --> T
+    T --> RD["the read door<br/>one call, four fallbacks"]
+    T --> SUB["subscribers<br/>notified when it changes"]
+    RD --> C["whoever needs a value<br/>server · capability · application"]
+    SUB --> C
+```
 
-**Secrets never appear in a recipe.** A value that comes from outside — the
-environment, a file, a vault — is written as a **resolver** placed exactly
-where the literal would have gone, and resolved when it is read. Words whose
-only legitimate source is outside **refuse a literal at the recipe line**: the
-bootstrap administrator password cannot be typed into a description at all.
-
-## 3. Every part declares its own words
-
-**Source: owner, 2026-08-23; the mechanism is the subbuilder-by-reference of
-contrib/config.**
-
-There is no central vocabulary. **Each part declares the words it consumes,
-next to the code that reads them**, and the description is validated against
-the union of those declarations. Adding a capability or an application adds its
-words with it; nothing central is edited and nothing central learns.
-
-The declarations compose three ways, and the difference matters:
-
-- **the server's own sections** — the top level, a closed list;
-- **a capability's words**, attached to the branch they belong to: the part
-  that owns a subject declares that subject's vocabulary and hangs it where it
-  reads it;
-- **an application's whole vocabulary**, which the site's grammar does not know
-  and does not validate. A description names the application *class*, and from
-  that node down the application's own grammar governs. The envelope's
-  attributes stay with the site; the children belong to the application.
-
-**Source: elements.py:55-58 (the pool clause); R11 amended and R12
-superseded on 2026-08-18 by the owner —
-`temp/design_m4_2026-08-18.md:5`, :186, :201.** So a pool is not a section of the site: it
-belongs to the application that owns it, and its words live under that
-application's entry. The same rule sends storage mounts to whoever manages
-volumes: this dialect declares no storage vocabulary of its own, it declares a
-mount point.
-
-**Validation happens when the description is executed**, not when a value is
-used. A word that does not exist, a section in the wrong place, a required
-attribute missing, a singleton written twice: each stops the boot, naming
-itself. A description that runs is a description whose every word was
-understood by whoever will read it.
-
-## 4. Three layers, and the site wins
-
-**Source: Ratified 2026-07-29, SPECIFICATION.md:772; layering policy in
-`default_config.py`'s own contract.**
-
-The same installation is described at three levels, folded lowest first:
-
-1. **the package's defaults** — written as a recipe like any other, not as
-   fallbacks buried in constructors, so they read in the same language and a
-   site overrides them one value at a time;
-2. **the machine's layer** — what a system administrator owns: a volume that
-   exists only on this host, where key material comes from, the listener. Set
-   once, inherited by every installation on that machine;
-3. **the site's own description** — always last, always winning.
-
-**A recipe governs its own inheritance.** It declares where its middle layer
-comes from, and it may decline the layer entirely and sit straight on the
-package defaults. The runtime takes no argument for it: the description decides.
-
-**An explicit choice that cannot be honoured is an error.** A defaults file
-that is named and missing stops the boot; it is never a silent skip.
-
-**The layering is on the tree, not on the class hierarchy.** Each recipe is
-executed and the results are folded, so what a description inherits does not
-depend on which class it happened to subclass.
-
-## 5. One door, four layers of fallback
-
-**Source: Ratified 2026-07-29, SPECIFICATION.md:772** (the inherited four-layer
-read stack).
-
-A value is asked for by **path**, through one call, and the answer is resolved
-in order: the written value (a resolver there resolves now, so a value coming
-from the environment is read when asked and not frozen when the recipe ran) →
-the default declared by the word's own grammar, also read now → the caller's
-own default → a **noisy error naming the path**.
-
-The third layer is what makes the door usable everywhere; the fourth is what
-makes a typo loud. A path nobody wrote and nobody defaulted is a mistake, and
-it says so.
-
-**A part holds an address, never a copy.** An application asks with paths
-relative to itself and the door prefixes them with its own identity, so an
-application can read only its own words — and the same class installed twice
-reads two different sets without either installation knowing.
-
-## 6. The description is alive
-
-**Source: owner, 2026-08-23; direction parked by D23,
-SPECIFICATION.md:418-419** ("the two-stage live-config architecture — config as
-live object, `apply_configuration`, hot/cold changes — stays parked as a future
-macro").
-
-The description is **not read once at boot and discarded.** It stays as a tree
-the running system holds: it can be read, it can be **written**, and it
-**notifies** whoever asked to be told (the notification is the tree's own —
-`Bag.subscribe`).
-
-### At boot: valid, or no boot
-
-The grammar is checked first. A description that is grammatically wrong does
-not run. A description that is grammatically right but **not actionable** —
-a mount claimed twice, an application class that will not import, a default
-naming something absent — **also does not run**: the installation is described
-wrongly, and the right moment to say so is before serving the first request.
-
-One exception, and it is **declared by the part itself**: an application may
-say that a failure of its own mount is tolerable, and then the server starts
-without it rather than refusing to start at all. The application decides what
-may be survived, not the server.
-
-### While running: accept, then converge
-
-A change has **two phases, and they are different in kind.**
-
-**Accepting** is atomic and immediate. The grammar validates the words,
-feasibility is checked, and the write happens **inside a boundary that
-encloses the notification too**: if anything raises while the change is being
-taken on, the description is not changed at all. So the tree is never left
-saying something the installation never accepted.
-
-**Converging** is not a transaction. Once a change is accepted, the tree holds
-the **state that is wanted**, and each part brings itself into line with it at
-its own pace and by its own procedure. A part that holds nothing swaps
-immediately. A part that holds live state does what its own nature requires —
-warning the people using it, waiting for them to finish, and only then letting
-go. That can take minutes, so it cannot sit inside the boundary above: a change
-reports itself as *accepted and in progress*, not as done.
-
-The consequence worth stating plainly: an administrator is never told "refused"
-while something was in fact taken away. Either the change was not accepted and
-nothing happened, or it was accepted and what follows is a declared procedure
-running in the open.
-
-### Reversibility is the declaring part's obligation
-
-**Source: owner, 2026-08-23.** Whoever declares that something of theirs can be
-changed while running is **guaranteeing the mechanism that makes it possible** —
-including undoing it. A part that cannot be taken away and put back does not
-declare that it can.
-
-So the boundary above promises what it can actually deliver: only what is
-reversible takes part in it. This is what keeps the promise honest rather than
-aspirational, and it is why the guarantee belongs to the part rather than to
-the configuration.
-
-### Foreseen everywhere, guaranteed nowhere in particular
-
-**Source: owner, 2026-08-23.** Changing a value while running is an option the
-design **foresees for the whole description**, and **guarantees for no part of
-it in advance**. Whether a given word can be changed hot depends on what reads
-it and how much state that reader holds — which only that reader knows.
-
-So the capability is **declared where the word is declared**: a candidate
-placement is an attribute of the element declaration itself, alongside the
-word's type and default, which would put the answer next to the question. Not
-settled, and deliberately not settled here.
-
-The mechanism arrives in later steps, and it will be built **on the
-collaboration of the individual parts** — not as a central engine that knows
-how to change everything. This design records the shape and the obligation;
-it does not invent the machinery.
-
-## 7. The server's own sections
-
-**Source: elements.py, the grammar as declared.** The top level is a closed
-list of sections, each at most once, so every path is stable and can be written
-by hand.
-
-**`server`** carries the runtime. The **listener** — where to bind — and the
-**public address** — what the server calls itself when it hands its own URL to
-a third party — are two different words, because behind a proxy they are two
-different values and only one of them means anything to an outside caller. The
-public address is **declared, not derived from a request**: it must match what
-the third party was told, and a value taken from a client-supplied header would
-be a value that party rejects. A provider that needs it and does not find it is
-a boot error, not an obscure failure at the first login.
-
-Its children are the words that are server-domain rather than
-application-domain: how long a session lives, and the task backbone's own
-vocabulary, declared by the task backbone.
-
-The other sections — middleware, identity, storage, applications, databases,
-plugins — are named at the top level and described by the entry that owns each.
-
-## 8. What it is not
-
-**Not a settings file.** No free-form keys, no untyped values, no section
-nobody declared.
-
-**Not a service registry.** The description says what is installed, not where
-to find something at runtime.
-
-**Not a secret store.** It names where a secret comes from; it never holds one.
+| The part | In one line |
+|---|---|
+| the recipe | what you write: a class, one method, calls into a grammar |
+| the grammar | which words exist, declared by whoever consumes them |
+| the three layers | package, machine, site — the site wins, per value |
+| the read door | one call answers any address, falling back four times |
+| the live tree | it can be written while running, and it notifies |
+| the sections | what the server itself declares |
 
 ---
 
-# Open frictions
+## 1. The recipe — a description you execute
 
-Scaffolding for the interview, not a register. Settling a voice edits this
-document — and, where the contradiction lives upstream, edits the source too.
-This section shrinks to nothing before the design can be ratified.
+A configuration is not a data file. It is a **class** — a subclass of
+`AsgiConfigBuilder`, the dialect that carries the grammar; the recipes in this
+dossier subclass `BaseConfiguration`, which is that class with the package's own
+defaults already written into it (§3). Describing an installation means writing
+one method:
 
-Interview file: `temp/interview_015_configuration.md`.
+```python
+from genro_asgi.config import AsgiConfigBuilder
+from myshop.app import Application as Shop
 
-## Settled on 2026-08-23 — no longer open
+class ServerConfiguration(AsgiConfigBuilder):
+    def main(self, root):
+        cfg = root.configuration()
+        cfg.server(host="127.0.0.1", port=8000)
+        cfg.applications(default="shop").application(code="shop", app_class=Shop)
+```
 
-Recorded here only so the next reader is not surprised by their absence. The
-answers are in §6.
+Each call builds one node of the document. The method names are not free text:
+they are the **grammar**, and calling one that does not exist, or putting it
+where it may not go, fails while the recipe runs.
 
-- **when a change is refused** — at boot, an unactionable description does not
-  run; while running, accepting is atomic and encloses the notification, so a
-  failure leaves the description unchanged. Feasibility is not pre-computed by
-  the writer: **the attempt is the check**, which keeps the knowledge with the
-  part that has it.
-- **what a partially applied change means** — the question dissolves:
-  reversibility is the obligation of whoever declares their own thing
-  changeable, so only what can be undone takes part. The earlier fear (the tree
-  rolls back, the world does not) presumed parts that had made no such promise.
-- **whether every word is hot-changeable** — no: foreseen everywhere,
-  guaranteed nowhere in advance, declared where the word is declared.
+Being code rather than data buys two things that matter. An application class
+is **passed as the class itself**, imported at the top of the recipe — so a
+typo in an application name is an import error at boot, not a lookup failure
+later. And a description that is getting long is split into methods, one per
+section, each small enough to read at a glance.
 
-## Still open
+What a recipe must never contain is a **secret**. A password or a key is
+written as a **resolver** — an object that fetches the value when it is read,
+from the environment or elsewhere — and it is placed exactly where the literal
+would have gone. Some words refuse a literal outright: the bootstrap
+administrator password is declared in a way that rejects one at the recipe
+line, because a secret in a recipe is a secret in version control.
 
-**S1 — the whole of §6 is unbuilt.** The code has a read door and no more:
-`apply_configuration` has zero occurrences in `src/` and `tests/`, the handler
-declares no mutator, and nothing subscribes to anything (searches in
-[status.md](status.md)). The machinery it would stand on exists and is unused —
-the tree is already a `Bag` subclass and `Bag.subscribe` already exists.
+## 2. The grammar — every part declares its own words
 
-This is the largest distance between arrival and present here, and it is the
-same subject as S5/S6 of [010 server](../010_server/design.md) seen from the
-other side: there the question is what falls away when immobility goes, here it
-is what has to be built.
+Nobody owns the whole vocabulary. **Each part of the system declares the words
+it consumes**, and the description is validated against the union.
 
-**S2 — where the capability is declared.** §6 names one candidate — an
-attribute of the element declaration, next to the word's type and default — and
-deliberately leaves it unsettled. It needs deciding before any word claims to
-be hot-changeable, because it decides where a reader looks to find out.
+The server declares the sections of the top level. A capability that owns a
+subject declares the words of that subject and attaches them where they belong
+— the task backbone declares its own child of the server section. And an
+application declares its own vocabulary entirely: the site's grammar does not
+know it and does not validate it.
 
-**S3 — a convergence that does not finish.** A part waiting for the people
-using it may wait for people who never leave. Wait indefinitely, force after a
-declared grace period, or give up and revert: not decided, and deferred with
-the mechanism. It belongs with the restart liturgy
-(`temp/liturgia_riavvio_orientamenti_2026-08-20.md`), which has the same
-question about the same kind of waiting.
+That last one is the interesting case, because it is how the description stays
+open without becoming untyped. When a recipe declares an application, it hands
+over **the application class**, and that class carries its grammar. From that
+node down, the words are the application's own — the site dialect steps aside
+and lets the application's grammar govern its own children. So a SPA front
+declares its pool and its groups in its own words, under its own entry, and
+the server never learned what a pool is.
 
-**S4 — a visible convergence state.** §6 distinguishes *accepted and in
-progress* from *done*, and nothing in the system can currently express that
-difference. Whatever shows it belongs to the monitor
-([090 server-application](../090_server-application/)), but the state itself
-has to exist first, and nobody owns it yet.
+The consequence for anyone adding a feature: **a new capability or application
+brings its own words with it**, declared next to the code that reads them.
+Nothing central has to be edited, and nothing central has to know.
 
-## Vocabulary and ownership
+## 3. The three layers — package, machine, site
 
-**S5 — `openapi` is grammar with no reader.** The section is declared and
-validated by the grammar (elements.py:362) and **no code consumes it**: the
-only other mention in the package is the handler's own docstring saying so
-(handler.py:49). A word nobody reads is either an obligation not yet met or a
-word that should go; §3 above quietly assumes the first.
+The same installation is described at three levels, and they stack:
 
-**S6 — the middleware switches name a closed registry.** Only the core's own
-middleware can be configured; one registered from outside cannot be. Whether
-that is the design or a limit is not recorded anywhere — and §3 says every part
-declares its own words, which reads as promising the opposite.
+1. **What the package ships.** Defaults written as a recipe like any other, not
+   as fallbacks scattered through constructors — so they are readable in the
+   same language, and a site can override them one value at a time.
+2. **What the machine adds.** The layer a system administrator owns: a volume
+   that exists only on this host, where the key material comes from, the
+   listener. Set once, inherited by every installation deployed there.
+3. **What the site says.** Always last, always winning.
 
-## Owed, not a defect
+A recipe governs its own inheritance: it declares where its middle layer comes
+from, and it may decline it entirely and sit straight on the package defaults.
+An explicit choice the system cannot honour — a defaults file that is named and
+missing — is a configuration error, never a silent skip.
 
-**S7 — the recipe in this page must stay executable.** The rule is that every
-entry closes with a complete configuration and that those are run, never
-proof-read. Writing this one found **two real defects in it** that reading had
-not: a non-existent module in the imports, and a storage path the backend
-refuses because it does not exist. The test that executes all of them is
-decided and deferred (owner, 2026-08-23), so until it exists these recipes are
-kept honest by hand.
+The layering is done on the **tree**, not on the classes: each recipe is
+executed and the results are folded, lowest first. So a site that subclasses
+the package defaults and a site that subclasses the plain dialect inherit the
+same thing — the layering belongs to the reading, not to the class hierarchy.
 
-## Recorded in more than one entry
+## 4. The read door — asking for a value
 
-Found by a reader who had only the documents. Each lives between two or three
-entries, is written in the same words in each, and is settled once for all of
-them.
+Nothing hands a component its slice of the description. **Whoever needs a value
+asks for it, by address.**
 
-**S8 — the application contract has three different lengths across the
-dossier.** [020 applications](../020_applications/design.md) §1 splits it four
-and four. [010 server](../010_server/) §2 states a list of its own and adds
-that an application declares what may be done to it. §5 of
-[README.md](README.md) adds the survivable-failure declaration. A reader who
-reads the three in order is told three times that the contract is small and
-gets three different contracts. The split in 020 is that entry's proposal, not
-a ratified shape: settling it means one list, written there and referred to
-from the other two. Recorded in the same wording in
-[010 server](../010_server/design.md) and
-[020 applications](../020_applications/design.md).
+An address is the names you cross to reach the value. `server.host` means: the
+`host` written on the `server` section.
 
-**S9 — this entry never documents `BaseConfiguration`'s hooks.** A site recipe
-deviates from the package defaults by overriding one hook — `server_section`,
-`storage_section`, or the `storage_mounts` that the second calls. §3 above names
-none of the three, and the class is described only as the dialect with the
-package's own defaults already written into it.
+The useful part is that **you can work out an address without opening the
+recipe**, because an address has only two kinds of segment.
 
-The cost shows in the recipe of [020 applications](../020_applications/), the
-only one of the three that leans on the inheritance: its `main` calls two
-methods it does not define and it defines a third nothing appears to call. The
-recipes of 010 and of this entry avoid the question by defining every method
-they call, which is a coincidence of how they were written rather than a rule.
-A reader cannot tell whether that recipe works or is broken, and the recipes
-are the one executable thing in each entry. The hooks belong here, and the
-paragraph 020 added above its own recipe is a patch until they are. Recorded in
-the same wording in [020 applications](../020_applications/design.md).
+**Names the grammar fixes.** There are eight sections and no more, and each may
+be written only once, so a section's name IS its address. This recipe line
 
-**S10 — the recipe reads as if the storage key were required.** The recipe at
-the foot of [README.md](README.md) passes `storage_key` as a resolver and warns
-that resolving to empty is a boot error. The recipe of
-[010 server](../010_server/) omits the key entirely and boots, because the
-default is `None` and absence is not the same as a resolver that came back
-empty. As written, the two pages read as contradicting each other about whether
-an installation must declare key material. One sentence settles it, and it
-belongs to whichever of §1 or §6 owns the word.
+```python
+cfg.server(host="127.0.0.1", port=8000)
+```
+
+puts that host at `server.host`. There is nothing to look up, and there is no
+`server_1` to discover, because a second `server` section is refused.
+
+**Names you choose yourself.** Applications and identity providers come in
+several, so `application` cannot name three different nodes. For those the
+grammar uses the `code` written by whoever wrote the recipe. These two lines
+
+```python
+apps.application(code="shop", app_class=Shop)
+apps.application(code="admin", app_class=Admin)
+```
+
+put those applications at `applications.shop` and `applications.admin`.
+
+So every address is either fixed by the grammar or chosen by the author, and a
+caller is never guessing:
+
+```python
+self.server.config("server.host")
+self.server.config("authentication.oidc.google.issuer")
+self.config("parameters.title", default="Shop")   # from inside an application
+```
+
+### Four fallbacks, in order
+
+An address that is asked for is answered by the first of these that has
+something to say:
+
+1. **the written value** — what the recipe wrote. A resolver sitting there is
+   resolved at this moment, so a value that comes from the environment is read
+   when it is asked for, not frozen when the recipe ran;
+2. **the declared default** — the default of the word in the grammar, read now
+   rather than baked in, so the document stays a record of what was *written*;
+3. **the caller's own default** — supplied at the call site;
+4. **a noisy error** naming the path that was asked for.
+
+A component never holds a copy of its subtree; it holds an **address in it**.
+An application asks with paths relative to itself and the door prefixes them,
+so an application can only read its own words, and two installations of the
+same class read different values without either knowing.
+
+## 5. The live tree — writing it, and converging to it
+
+The tree the system reads is a **live document**: it can be read, it can be
+written, and it tells whoever asked to be told.
+
+**At boot the rule is strict.** A description that is grammatically wrong does
+not run — and one that is grammatically right but cannot be carried out does
+not run either: a prefix claimed twice, an application class that will not
+import. The installation is described wrongly, and the moment to say so is
+before the first request. The one exception is declared by the part itself: an
+application may say that a failure of its own is survivable, and then the
+server starts without it.
+
+**While it runs, a change has two phases.**
+
+**It is accepted** — atomically. The words are validated, the change is
+attempted, and the attempt encloses the notification: if anything refuses, the
+description is not changed at all. Notice what is *not* required here: nobody
+computes in advance whether every part can comply. **The attempt is the check**,
+which is what lets each part keep the knowledge only it has.
+
+**Then the system converges** — and that is not a transaction. Once a change is
+accepted the tree holds the state that is **wanted**, and each part brings
+itself into line at its own pace and by its own procedure. Something holding
+nothing swaps at once. Something holding live state does what its nature
+requires: warning the people using it, waiting for them to finish, letting go
+only then. That can take minutes, so a change reports itself as **accepted and
+in progress**, never as instantly done.
+
+So an administrator is never told "refused" while something was in fact taken
+away. Either nothing happened, or something is happening in the open.
+
+**Whoever declares a thing changeable guarantees the mechanism.** Being
+removable while running means being able to be put back; a part that cannot do
+that does not claim it can. This is why the promise above is honest rather than
+aspirational — only what is reversible takes part in it.
+
+**And the capability is foreseen everywhere, guaranteed nowhere in advance.**
+Whether a particular word can be changed while running depends on what reads it
+and how much state that reader holds, which only that reader knows. So the
+answer is declared where the word is declared, and the parts collaborate to
+carry the change — there is no central engine that knows how to change
+everything.
+
+## 6. The server's own sections
+
+Everything above is mechanism. This is the vocabulary the **server itself**
+declares — the words that are nobody else's.
+
+There are eight sections and no more. Each is written at most once, which is
+what makes its name usable as its address (§4).
+
+**`server`** — the runtime itself. `host` and `port` are the **listener**:
+where to bind. `external_url` is the **public address**: what the server calls
+itself when it hands its own URL to somebody else. The two differ behind a
+proxy and answer different questions, which is why the public one is declared
+rather than guessed from an incoming request — it must match what a third party
+was told, and a value derived from a client's own header would be a value that
+party rejects. `max_threads` sizes the pool where blocking work runs.
+
+Two children are server-domain and so live here rather than under an
+application: **`session`**, which carries how long a session lives, and
+**`tasks`**, whose words belong to the task backbone and are declared by it.
+
+The remaining sections are named here and described where they belong:
+`middleware`, `authentication`, `storage`, `applications`, `databases`,
+`plugins`, `openapi`.
+
+One is worth a line because its shape recurs: **`storage`** declares no
+vocabulary of its own. It is a mount point, exactly like an application's:
+whoever manages volumes carries the grammar, the mounts are written in that
+grammar's words, and this dialect steps aside.
+
+## A configuration that includes it
+
+A whole installation described once: the server's own section, a site recipe
+inheriting the package defaults, an encrypted volume, and the secret kept out
+of the recipe by a resolver.
+
+```python
+import os
+import tempfile
+
+from genro_bag.resolvers import EnvResolver
+from genro_storage import StorageManager
+
+from genro_asgi import AsgiServer, RoutedApplication
+from genro_asgi.config import BaseConfiguration
+
+
+class Shop(RoutedApplication):
+    """The hosted application — here a bare one, so the recipe stands alone."""
+
+
+# A real deployment names its own directory (/srv/shop); the backend refuses a
+# path that does not exist, so the example creates one.
+SITE_DIR = tempfile.mkdtemp(prefix="shop-")
+
+
+class ServerConfiguration(BaseConfiguration):
+    """One shop on the site root, behind a proxy, with an encrypted volume."""
+
+    def main(self, root):
+        cfg = root.configuration()
+        self.server_section(cfg)
+        self.storage_section(cfg)
+        cfg.applications().application(code="shop", mount="", app_class=Shop)
+
+    def server_section(self, cfg):
+        cfg.server(
+            host="0.0.0.0",
+            port=8000,
+            external_url="https://shop.example.com",
+            max_threads=16,
+        ).session(ttl=3600)
+
+    def storage_section(self, cfg):
+        section = cfg.storage(
+            app=StorageManager,
+            storage_key=EnvResolver("GENRO_STORAGE_KEY"),
+        )
+        section.local(name="site", base_path=SITE_DIR)
+
+
+# The resolver reads the environment when the value is asked for. In a real
+# deployment the key comes from the host; here it is a throwaway so the recipe
+# runs as written. Resolving to empty is a boot error, not a silent skip.
+os.environ.setdefault("GENRO_STORAGE_KEY", "S6z15YMHEgMl9Y_AoSPK837uCFSLKPymuGclKZxO4ig=")
+
+server = AsgiServer(config=ServerConfiguration)
+```
+
+Read back through the door, that installation answers:
+
+| Asked | Answer |
+|---|---|
+| `server.config("server.external_url")` | `https://shop.example.com` |
+| `server.config("server.port")` | `8000` |
+| `server.config("server.session.ttl")` | `3600` |
+| `server.applications["shop"].mount` | `''` — the site root |
+| `sorted(server.applications)` | `['_server', 'shop']` |
+
+The last row is worth noticing: the recipe declared one application and the
+installation has two. The administrative application is there without anyone
+asking for it.

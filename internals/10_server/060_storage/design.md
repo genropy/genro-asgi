@@ -1,18 +1,11 @@
-# Storage — desired design
+# Storage
 
 **Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
 
-Everything this feature SHOULD be when finished — the target, not the code.
-To be filled by the documentation audit and ratified by the owner.
+**The shelf.** The only door to the filesystem: logical volumes, storage nodes, pinned synchronous.
 
----
+Filesystem access goes ONLY through storage nodes: logical volumes
+(`GENROASGI:frozen_users`), pinned synchronous (D22 — `StorageMixin` calls
+`set_sync()`; never `await` a storage node here).
 
-# Open frictions
-
-Scaffolding for the interview, not a register: each voice is a question to
-settle, settling it edits this document, and this section shrinks to nothing
-before the design can be ratified.
-
-*(Carried over from the entry's former `frictions.md` on 2026-08-23, verbatim.)*
-
-- `FreezeHandler` is a DECLARED exception: it uses `os`/`Path`/pickle directly instead of storage nodes.
+Interactions: orchestration (freezer parcels) · sessions (snapshots) · tasks (spool).

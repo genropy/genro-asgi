@@ -21,8 +21,9 @@ the order they are written.
 
 | Role | File | Job |
 |---|---|---|
-| the subject explained | `README.md` | what it is and what it is made of, described in macro-blocks, with the structure drawn in mermaid |
-| **1. the arrival** | `design.md` | the finished product, written WITHOUT looking at the code — plus the open frictions at its foot |
+| the synthesis | `README.md` | half a page: what the subject is, then its parts one line each |
+| **1. the arrival** | `design.md` | the subject explained in full — the macro-blocks, the structure drawn in mermaid, the working recipe that closes it — written WITHOUT looking at the code |
+| the decision register | `decisions.md` | every voice with its source — a ratified decision, a commit, or the owner and a date — and the open frictions at the foot |
 | **2. what exists** | `status.md` | the current state, every claim proven in the code |
 | **3. the next state** | `steps/step_01/design.md` | the intermediate state this step aims at, expressed as a **diff of what exists** |
 | **4. how we reach it** | `steps/step_01/plan.md` | the implementation plan — this entry's part of it |
@@ -30,15 +31,16 @@ the order they are written.
 
 ### One tense per document
 
-`README.md` and `design.md` are both written **from the day the work is
+`design.md` and `decisions.md` are both written **from the day the work is
 finished**: present tense, describing a server that does all of this, with no
 "today", no "not yet", no "currently only". A reader must be able to open
 them in 2027 and find them simply true. Anything of the form "this is a
 current limit", "there is no way to do X yet", "the code has N call sites"
 does not belong there — it is `status.md`'s material, and putting it in the
-other two is what turns a design into a changelog.
+other two is what turns a design into a changelog. The same holds for
+`README.md`, which is a synthesis of `design.md` and inherits its tense.
 
-The one exception is the friction tail of `design.md`, which exists precisely
+The one exception is the friction tail of `decisions.md`, which exists precisely
 to compare the arrival with the present. That is its job, and it disappears
 with the frictions.
 
@@ -55,8 +57,8 @@ whose vocabulary is owned by a later entry.
 EXISTS: mixing the two is how documents rot. A claim in `status.md` must be
 verifiable in the code — `file:line` or the name of the test that proves it.
 A claim in `design.md` needs no code at all, and must not be trimmed to fit
-the code: it carries its **source** instead — a ratified decision, a commit,
-or the owner and a date.
+the code: its **source** — a ratified decision, a commit, or the owner and a
+date — is recorded in `decisions.md`, one voice per claim.
 
 ### Who each document is written for
 
@@ -78,27 +80,69 @@ References to other entries still belong in the three reader-facing
 documents — but as a **pointer at the end of a block**, never woven through a
 sentence. The description has to stand on its own first.
 
-### The frictions live at the foot of `design.md`
+### The style contract
+
+Four rules govern how every document in this dossier is written. They apply to
+`README.md`, `design.md`, `decisions.md` and `status.md` alike.
+
+**1. Rule first, justification after.** Every section opens with the norm, in at
+most two declarative sentences. The why follows separately, after the norm has
+been stated. A reader who stops at the first two sentences must still have the
+rule; one who needs the reasoning reads on.
+
+**2. Headings are searchable noun phrases carrying the official name of the
+thing.** "Middleware order: one integer per layer, lowest outermost" is a
+heading; "Everything in its place" is not. A heading is an index entry: it is
+what somebody scans a table of contents for, and what a search matches.
+
+**3. Only vocabulary that exists in `src/` or in the ratified registers.** A term
+that names a class, a method, a configuration word or a decision uses the name
+the code or the register uses. A new term is the owner's baptism and never the
+document's coinage: a document that invents a word creates a name nobody can
+grep and nobody else will use.
+
+**4. One fact per sentence.** No opening scenes, no personification, no
+metaphors. Short sentences, each carrying one thing, are what makes a page
+reviewable: a sentence carrying three claims cannot be contradicted precisely.
+
+### The blind verification probe
+
+A finished entry is verified by a reader who has ONLY the documents — no code, no
+transcript, no memory of the discussion. The probe is run twice; the second pass
+yields as much as the first. Beyond checking the facts, it applies three tests on
+the text itself.
+
+- **The extraction test.** For every section the probe states the rule in at most
+  two lines. A section it cannot extract a rule from, or extracts the wrong rule
+  from, fails.
+- **The search test.** The probe is given the questions a typical implementer
+  arrives with, and must answer them from the headings alone. A question whose
+  answer is in the text but unreachable from the table of contents fails the
+  heading, not the reader.
+- **The vocabulary test.** Every technical term is grepped in `src/`. A term with
+  no hit and no ratified register behind it is reported as a finding.
+
+### The frictions live at the foot of `decisions.md`
 
 There is no frictions file. A friction is **scaffolding, not a register**: it
 exists to produce a question for the interview, and it dies there.
 
-- The audit writes the open frictions as the closing section of `design.md`,
-  next to the design they block.
+- The audit writes the open frictions as the closing section of `decisions.md`,
+  next to the register of the decisions they block.
 - The interview settles them one at a time, and each answer **deletes or
   shortens** a voice: the section visibly shrinks as the conversation goes.
 - Where a friction was born of a contradiction in a source — the
   specification, a decision register, a docstring — settling it **corrects
   that source too**. The correction is part of the answer, not a follow-up.
-- When the section is empty, `design.md` can be ratified 🟢.
+- When the section is empty, `decisions.md` can be ratified 🟢.
 
 ### Every entry closes with a working configuration
 
 The mechanism of configuration — the tree, its layers, the read stack, the
 subscribers and their triggers — is explained once, in
-[015 configuration](../10_server/015_configuration/). Every other entry
+[015 configuration](../10_server/015_configuration/README.md). Every other entry
 declares only **what it adds** to that tree, and does it by ending its
-`README.md` with a **complete recipe that includes its own feature**: not a
+`design.md` with a **complete recipe that includes its own feature**: not a
 fragment of the section it owns, but a whole installation someone could run,
 with its feature in place.
 
@@ -108,7 +152,7 @@ rule that caught two broken examples in the published guides.
 
 So the format is fixed even though the check is not written yet:
 
-- one recipe per entry, the LAST section of its `README.md`, under the heading
+- one recipe per entry, the LAST section of its `design.md`, under the heading
   `## A configuration that includes it`;
 - a single fenced `python` block, self-contained — imports included, one
   `AsgiConfigBuilder` subclass, nothing referenced that the block does not
@@ -125,16 +169,17 @@ resolution can be filtered on three independent axes, one per bundled plugin of
 genro-routes — `auth` on the caller's **tags**, `env` on the installation's
 **capabilities**, `channel` on the **channel** a request arrived through — and
 the dossier described only the first. The subject now lives in
-[025 routing system](../10_server/025_routing-system/), which was `025_plugins`
+[025 routing system](../10_server/025_routing-system/README.md), which was `025_plugins`
 and was renamed for it: the routing system first, the plugins after. It comes
 *after* applications on purpose —
-[020 applications](../10_server/020_applications/) states that an application
+[020 applications](../10_server/020_applications/README.md) states that an application
 **is** a routing class, and that one sentence is enough for its own blocks to
 stand while the mechanism is explained here. *(Owner, 2026-08-24.)*
 
-### `design.md` is the fixed pole
+### `design.md` and `decisions.md` are the fixed pole
 
-Once ratified, **the design does not move.** `status.md` changes with every
+Once `decisions.md` is ratified 🟢, **the design does not move** — neither the
+register nor the `design.md` it accounts for. `status.md` changes with every
 delivery, step folders accumulate, the code turns over — and the design stays
 exactly where it was. That is what makes it usable as a target: a destination
 that drifts is not a destination.
@@ -160,8 +205,8 @@ design is coupled to none.
 
 ### The steps live in their own folders
 
-Three documents stay at the top of an entry, always — `README.md`,
-`design.md`, `status.md`. They are what you open to understand the subject,
+Four documents stay at the top of an entry, always — `README.md`, `design.md`,
+`decisions.md`, `status.md`. They are what you open to understand the subject,
 and their number never grows.
 
 Everything a step needs lives under `steps/`, one folder per step, numbered
@@ -169,8 +214,9 @@ and incrementing:
 
 ```
 010_server/
-    README.md        the subject explained
-    design.md        the arrival, with its open frictions at the foot
+    README.md        half a page: the subject, and its parts
+    design.md        the arrival, explained in full
+    decisions.md     the decision register, with the open frictions at the foot
     status.md        what exists today
     steps/
         step_01/
@@ -198,12 +244,13 @@ its own folder; the number alone never carries that link.
 
 ### The order of the cycle, and what gates what
 
-1. **Audit.** Writes role 1 (🔴, with its friction tail) and role 2, and the
-   interview file in `temp/interview_<entry>.md`. Nothing is ratified here.
+1. **Audit.** Writes `README.md`, role 1, the register (🔴, with its friction
+   tail) and role 2, and the interview file in `temp/interview_<entry>.md`.
+   Nothing is ratified here.
 2. **Interview.** Settles the frictions, corrects the upstream sources, and
-   takes `design.md` to 🟢.
+   takes `decisions.md` to 🟢.
 3. **The next step.** `steps/step_0n/design.md` is a diff toward a target, so
-   it cannot be written before the entry's `design.md` is ratified.
+   it cannot be written before the entry's `decisions.md` is ratified.
 4. **The plan.** `steps/step_0n/plan.md` follows the step it implements.
 
 Then it repeats: delivering `step_0n` makes `status.md` move, and `step_0n+1`
@@ -248,7 +295,7 @@ from inside a single one. The assembly point today is `.phased/roadmap.md`.
   not be made dynamic. Immobility is a limit we have not yet removed, never a
   property to celebrate. *(Owner, 2026-08-23. Where this principle finally
   gets written — here, in the specification, or in the coding rules — is
-  itself an open friction in `10_server/010_server/design.md`, S4.)*
+  itself an open friction in `10_server/010_server/decisions.md`, S4.)*
 - **A feature lives where it is born.** Restart is born in the server world;
   what the SPA, the subcommanders or Kubernetes add to it are sections of
   its own documents — never twin folders.
@@ -289,41 +336,41 @@ flowchart TB
 
 | Entry | In one line |
 |---|---|
-| [010 server](../10_server/010_server/) | the ground: the server object, the applications it hosts, how a request finds one, ordered start and stop |
-| [015 configuration](../10_server/015_configuration/) | the tree every entry reads its own words from: layers, read stack, subscribers |
-| [020 applications](../10_server/020_applications/) | RoutedApplication and the route tree · [openapi](../10_server/020_applications/openapi/) · [mcp](../10_server/020_applications/mcp/) |
-| [025 routing system](../10_server/025_routing-system/) | what a routing class is: the tree, the filtered walk, and the plugins armed on it |
-| [030 middleware](../10_server/030_middleware/) | the uniform ring every request passes |
-| [040 sessions](../10_server/040_sessions/) | per-user server-side state between requests |
-| [050 authentication](../10_server/050_authentication/) | 401 vs 403 · [avatar](../10_server/050_authentication/avatar/) · [tags](../10_server/050_authentication/tags/) |
-| [060 storage](../10_server/060_storage/) | the only door to the filesystem |
-| [065 db](../10_server/065_db/) | databases mounted through the recipe, no backend in the core |
-| [070 tasks](../10_server/070_tasks/) | work that is no HTTP request |
-| [080 task-thermometers](../10_server/080_task-thermometers/) | see a batch move, stop it politely |
-| [090 server-application](../10_server/090_server-application/) | the `_server` app and its sections · [monitor](../10_server/090_server-application/monitor/) · [inspector](../10_server/090_server-application/inspector/) |
-| [110 cli](../10_server/110_cli/) | drive installations from the shell |
-| [120 restart](../10_server/120_restart/) | born here; enriched by spa → subcommanders → kube |
+| [010 server](../10_server/010_server/README.md) | the ground: the server object, the applications it hosts, how a request finds one, ordered start and stop |
+| [015 configuration](../10_server/015_configuration/README.md) | the tree every entry reads its own words from: layers, read stack, subscribers |
+| [020 applications](../10_server/020_applications/README.md) | RoutedApplication and the route tree · [openapi](../10_server/020_applications/openapi/README.md) · [mcp](../10_server/020_applications/mcp/README.md) |
+| [025 routing system](../10_server/025_routing-system/README.md) | what a routing class is: the tree, the filtered walk, and the plugins armed on it |
+| [030 middleware](../10_server/030_middleware/README.md) | the uniform ring every request passes |
+| [040 sessions](../10_server/040_sessions/README.md) | per-user server-side state between requests |
+| [050 authentication](../10_server/050_authentication/README.md) | 401 vs 403 · [avatar](../10_server/050_authentication/avatar/README.md) · [tags](../10_server/050_authentication/tags/README.md) |
+| [060 storage](../10_server/060_storage/README.md) | the only door to the filesystem |
+| [065 db](../10_server/065_db/README.md) | databases mounted through the recipe, no backend in the core |
+| [070 tasks](../10_server/070_tasks/README.md) | work that is no HTTP request |
+| [080 task-thermometers](../10_server/080_task-thermometers/README.md) | see a batch move, stop it politely |
+| [090 server-application](../10_server/090_server-application/README.md) | the `_server` app and its sections · [monitor](../10_server/090_server-application/monitor/README.md) · [inspector](../10_server/090_server-application/inspector/README.md) |
+| [110 cli](../10_server/110_cli/README.md) | drive installations from the shell |
+| [120 restart](../10_server/120_restart/README.md) | born here; enriched by spa → subcommanders → kube |
 
 ## 20_spa — the SPA world
 
 | Entry | In one line |
 |---|---|
-| [010 spa-application](../20_spa/010_spa-application/) | one stable door to the hosted site, no state in the door |
-| [020 orchestration](../20_spa/020_orchestration/) | many users with live state, scaled across processes, never split |
-| [030 channel](../20_spa/030_channel/) | the wire: frames, hub, the lane (shelf) |
-| [040 global-store](../20_spa/040_global-store/) | one shared state, safe read-modify-write |
-| [050 datachanges](../20_spa/050_datachanges/) | what one page changes, the others must see |
-| [060 dbevents](../20_spa/060_dbevents/) | the database changed a table; the page must learn it |
-| [070 console](../20_spa/070_console/) | ask a live pool the questions nobody predicted |
-| [080 bridge-contract](../20_spa/080_bridge-contract/) | what genropy-asgi implements and consumes — generalized core, legacy logic in the bridge |
+| [010 spa-application](../20_spa/010_spa-application/README.md) | one stable door to the hosted site, no state in the door |
+| [020 orchestration](../20_spa/020_orchestration/README.md) | many users with live state, scaled across processes, never split |
+| [030 channel](../20_spa/030_channel/README.md) | the wire: frames, hub, the lane (shelf) |
+| [040 global-store](../20_spa/040_global-store/README.md) | one shared state, safe read-modify-write |
+| [050 datachanges](../20_spa/050_datachanges/README.md) | what one page changes, the others must see |
+| [060 dbevents](../20_spa/060_dbevents/README.md) | the database changed a table; the page must learn it |
+| [070 console](../20_spa/070_console/README.md) | ask a live pool the questions nobody predicted |
+| [080 bridge-contract](../20_spa/080_bridge-contract/README.md) | what genropy-asgi implements and consumes — generalized core, legacy logic in the bridge |
 
 ## 30_deploy — shipping, updating, scaling (🔴 proposals)
 
 | Entry | In one line |
 |---|---|
-| [010 deployment-bundles](../30_deploy/010_deployment-bundles/) | immutable bundles on S3, channels, cohorts, promotion without rebuild |
-| [020 kubernetes-deploy](../30_deploy/020_kubernetes-deploy/) | the cluster runs, the commander decides |
-| [030 subcommanders](../30_deploy/030_subcommanders/) | delegated authority: root → subcommander → group → worker |
+| [010 deployment-bundles](../30_deploy/010_deployment-bundles/README.md) | immutable bundles on S3, channels, cohorts, promotion without rebuild |
+| [020 kubernetes-deploy](../30_deploy/020_kubernetes-deploy/README.md) | the cluster runs, the commander decides |
+| [030 subcommanders](../30_deploy/030_subcommanders/README.md) | delegated authority: root → subcommander → group → worker |
 
 ## How the verticals stand on each other
 

@@ -1,479 +1,587 @@
-# Applications — design
+# Applications
 
-**Version**: 0.4 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.3 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
 
-**The application layer, with the work finished.** Read this as a report from
-the day everything described here is running: it says what an application
-*is*, and never what it lacks. What the code holds is [status.md](status.md)'s
-subject, and the road between the two is written one step at a time under
-`steps/`.
+What an application is, what it owes the server that hosts it, and everything
+that happens between a request arriving at its door and an answer going back
+on the wire.
 
-Every voice carries its source. A voice sourced to the owner and a date was
-decided in conversation before it reached any register.
+## What an application is
 
-The **open frictions** are the closing section, and they are the one place
-here that compares this arrival with the present. When that section is empty,
-this design stands on its own.
+The server holds a list of programs and hands each request to one of them. It
+never looks inside. An **application** is what sits on the other side of that
+handover: the thing that receives a request the server has already decided is
+its own, and produces the answer.
 
----
+Written from the inside, an application is a **class you subclass**. Its
+handlers are its methods. Its address is a class attribute. Its configuration
+words are its own. Nothing about it is registered in a central table, and
+nothing about it is known to the server beyond the small contract below.
 
-## 1. The contract is small, and it was born before any application
+There are two classes to subclass, and almost everybody wants the second.
+`BaseApplication` is the contract and nothing else: it satisfies the server
+and answers requests however it likes, which suits something that is not a
+site at all — a raw proxy, a single endpoint. `RoutedApplication` adds the
+route tree, and everything from block 2 onwards describes it.
 
-**Source: D7, SPECIFICATION.md:93.** What the server requires of an
-application — an ASGI callable, an identity, a `server` property assigned by
-the owner at attach time, and lifecycle hooks that may be written sync or
-async — was delivered **before the first real application class existed**, and
-was exercised by a throwaway application with one sync route, one async route
-and one that raises. **The tests ARE the definition of the contract.**
+That is what makes an application portable. The same class can be installed
+twice on one server under two names, or moved to another server entirely, and
+neither the class nor the server needs editing. It can also be written by
+someone who has never read the server's code — which is the actual test, and
+the reason the contract is kept as small as it is.
 
-The order is the point. A contract written after its first implementation
-records that implementation; one written before it records the requirement. It
-is also what makes an application writable by somebody who has never read the
-server: what they must satisfy is those four items, every one of them about
-the handover and none about the server's insides.
+Two applications exist in every installation without anyone writing them: the
+administrative one the server mounts by itself, and — where a site is hosted —
+the front that serves it. Both are ordinary applications by these rules, and
+both are described elsewhere.
 
-**Source: owner, 2026-08-23.** The contract stays that small because
-everything else is on the other side of a line: what an application
-**declares about itself**. A declaration is not a requirement — it has a
-default that says *nothing special* — and what makes the set a contract is
-that the rest of the system reads it without ever knowing which application it
-is reading. Four declarations exist, each with its own source:
+## The anatomy
 
-- **its configuration vocabulary** — §4 below;
-- **who draws it** — the `app_snapshot` / `app_panel` / `panel_source`
-  contract (**source: commit `c83f3e6`, 2026-08-14**, "the monitor — one page
-  over every mounted app"), which is the general rule that a server-level
-  surface grows by CALLING each application rather than by knowing one by name;
-- **whether it can be moved while the server runs** — and declaring it means
-  guaranteeing the mechanism, reversal included (**source: owner, 2026-08-23**;
-  stated in [010 server](../010_server/design.md) §4 and
-  [015 configuration](../015_configuration/design.md) §6);
-- **whether its own failure is survivable** at boot, so the server starts
-  without it instead of refusing to start (**same source**).
+An application meets the server on a **contract of two halves** and, inside,
+holds **one route tree** through which every request travels. The tree turns a
+path into a method call; the request and the answer are the two objects that
+travel with it.
 
-The line matters more than the count. Giving applications a new capability
-means adding a declaration, never widening what the server requires of every
-application — which is what would break the ones already written.
+```mermaid
+flowchart TB
+    SRV["the server"] -->|"a request, path already relative"| APP["<b>the application</b>"]
+    APP --> TREE["the route tree<br/>path → handler"]
+    TREE --> H["a handler<br/>an ordinary method"]
+    H --> ANS["the answer<br/>buffered · streamed"]
+    APP -.->|"declares"| OBL["its vocabulary · its panel<br/>whether it moves · what it survives"]
+```
 
-## 2. Extension is subclassing, and the chain is cooperative
+| The part | In one line |
+|---|---|
+| the contract | four things the server requires, four an application declares |
+| a routing class | an application's marked methods are its addressable behaviour |
+| the dispatch | the seven steps between the handover and the answer |
+| the request | what a handler is given |
+| the answer | what a handler returns, and how it becomes bytes |
+| the long answer | when the body does not fit in memory |
+| the failures | the four ways a request does not reach its handler |
+| the faces | one tree, several protocols reading it |
 
-**Source: D16, SPECIFICATION.md:217.** A consumer extends the framework the
-same way the framework extends itself: by subclassing. Every class in the
-family peels **its own** construction arguments and forwards the rest down the
-chain; mixins sit before the base in the resolution order; the end of the
-chain refuses an argument nobody claimed, naming it.
-
-The consequence for an application is that adding a construction argument is a
-local act. A subclass declares its own, forwards what is not its own, and no
-class above or below is edited.
-
-## 3. Identity is declared on the class, overridden per installation
-
-**Source: commit `a1a8f7e`, 2026-07-25.** The identity — the `code` that names
-an application and the `mount` that places it — is written as class attributes
-a subclass sets declaratively, and either can be overridden per instance at
-construction. So one class installed twice is two installations with two
-identities, and neither is a copy of the other.
-
-The identity's meaning for routing belongs to
-[010 server](../010_server/). What belongs here is the reason the application
-side holds it at all: an application that knows its own code can read its own
-configuration and name itself in a monitor without being told either.
-
-**Ownership runs one way.** The server assigns itself as the owner and the
-application records it; the application never reaches for a server. An
-instance that is already owned refuses a second owner rather than changing
-hands quietly, because an instance serving two servers would have one identity
-and two contexts.
-
-## 4. An application brings its own vocabulary
-
-**Source: Ratified 2026-07-29, SPECIFICATION.md:772.** An application declares
-the configuration words it consumes, as a grammar carried on the class. The
-site recipe mounts that grammar at the line that installs the application, and
-from that node down the site's own dialect steps aside: the words are the
-application's, and the site never learned them.
-
-The application reads them back **by address relative to itself**, through the
-server's read door. It holds an address, never a copy of a subtree. Two
-installations of one class therefore read two different sets of values, and
-the class contains nothing that distinguishes them.
-
-This is what makes an application configurable without anything central being
-edited when a new one arrives.
-
-## 5. Handlers are pure
-
-**Source: D23 wave ruling, SPECIFICATION.md:413.** A handler is an ordinary
-method with ordinary parameters, called with ordinary arguments. There is no
-ambient current request a handler reads from the outside — the old
-`server.request` / `server.response` pair **never returns**. A handler that
-needs the live request **declares it as a parameter**, and it is passed in as
-an argument like any other.
-
-Two things follow, and both are worth more than they cost.
-
-A handler is callable from a test with three values and no server. And the
-same handler serves every protocol that reads the tree, because nothing in it
-knows which one called: what differs between a form submission, a JSON
-document and a call from a model is entirely in the fitting of arguments,
-never in the handler.
-
-## 6. Authorization is part of finding the handler
-
-**Source: Invariant 3, SPECIFICATION.md:671.** A node that exists but is
-denied **answers with its own 401 or 403** and never falls through to
-something else. This is recorded as an invariant, from an old implementation
-where the fall-through existed.
-
-**Source: commit `5b567a3`, 2026-08-14.** The two answers are different and
-the difference is not cosmetic. To a caller the server does not know: *401 —
-identify yourself*, which a browser turns into a login. To a caller the server
-does know, whose grants are not enough: *403 — not you*, where offering a
-login form would be a lie.
-
-The mechanism is that the caller's grants are a **filter on the resolution**,
-not a check after it. A handler is therefore never reached by somebody who may
-not have it, and a handler contains no authorization code for the framework to
-have to trust.
-
-**Source: Invariant 10, SPECIFICATION.md:688, enforced by D25,
-SPECIFICATION.md:436.** The route tree is a routing structure and never a
-registry of things: something with no routes is not attached to it. An
-implementation once attached a route-less login method to the tree, and the
-rule exists because of it.
-
-## 7. A sub-tree is described, never wired
-
-**Source: D25, SPECIFICATION.md:436, reaffirming the 2026-07-17 ruling as
-non-negotiable.** An application is assembled from independently written
-routing classes, and what it states is a **description of a branch**: a name,
-the class that serves it, and whatever that class needs to be built — the
-parent included, travelling as data rather than as a reference wired in
-afterwards.
-
-The distinction is not *when* the statement is made. An application describes
-its branches in its own constructor, which is the natural place, and doing so
-is not the retired gesture. The distinction is *what* is stated: a description
-can be read, listed and published before anything is built, and a class named
-in one can be described without being instantiated. An object constructed by
-the caller and handed over cannot.
-
-So the destination is the **factory form** — name, class, parameters — and the
-retired call is the one that took an already-constructed instance and wired it
-in. D25 counted the migration in call sites for exactly that reason.
-
-**And a tree belongs to one application.** Nothing outside adds a route to
-somebody else's tree. **Source: D4, SPECIFICATION.md:67** — service endpoints
-are never again injected into a hosted application's router, recorded against
-an implementation where exactly that happened.
-
-## 8. Capabilities are plugged onto the tree by name
-
-**Source: D26, SPECIFICATION.md:456.** Two capabilities are **fixed
-structure**, armed on every application's tree rather than chosen: the one
-that reads handler signatures and the one that publishes them. Because they
-are always present, a per-route control over them always applies — a control
-that only works when a capability happens to be enabled is a control nobody
-can rely on.
-
-The rest are named by the site's configuration and armed by the server on
-every application it hosts. An application composed on a server that offers no
-plugin machinery keeps the ones it arms for itself, and works.
-
-> What a plugin is, and how one is written, is
-> [025 routing system](../025_routing-system/).
-
-## 9. The vehicle follows the handler's nature
-
-**Source: D2, SPECIFICATION.md:47.** Blocking work goes to the server's one
-thread pool; code written for the loop stays on the loop and never comes near
-it.
-
-The application does not choose per call. The tree records what each handler
-is, and the dispatch reads that record: an asynchronous handler is awaited, an
-ordinary one is handed to the pool. A consumer writes whichever suits their
-code and the vehicle follows.
-
-**Source: Invariant 2, SPECIFICATION.md:668; commit `0dff4ed`, 2026-08-12.** A
-thread-local resource is released **on the thread that opened it**. So a
-synchronous handler is followed, on that same pool thread, by a hook that runs
-whether the handler returned or raised — the place to release what only that
-thread may release. A database connection belonging to a thread is the case
-the invariant was written from. Asynchronous handlers have no such hook and
-need none: an asynchronous handler owns its own awaits.
-
-## 10. One answer type, and a sibling for the answers that do not fit
-
-**Source: commit `53b4e38`, 2026-07-21 (core 1c).** The buffered answer is a
-**single flat class** — no JSON response, no HTML response, no file response
-to choose between. What the handler returned decides the body and the declared
-type, and a route may declare a type of its own next to the method.
-
-A single class is a decision about the consumer's day: the alternative is a
-family whose members differ in one line, and a choice to be made at every
-handler.
-
-**Source: commit `c360f60`, 2026-07-24 (core 1e).** A stream is a **different
-shape, not a variant**, so it is a sibling class and not a subclass: it frames
-an asynchronous source of chunks onto the wire and deliberately does not carry
-the buffered class's turning-a-value-into-bytes. A handler answers with one by
-returning it.
-
-**Server-sent events sit on top of streaming and are self-contained.** They
-frame any asynchronous source of event records into the text format a browser
-already understands. Two properties are the whole reason it survives a real
-network: a silent source is kept alive by a periodic comment the receiving
-side ignores, and a receiving side that goes away **cancels the source and
-waits for it**, so a source holding a subscription releases it instead of
-leaking one per closed browser tab.
-
-*(The single-class shape and the sibling shape are recorded from the modules'
-own contracts and their delivery commits; no ratified decision states either.
-See the friction on where the response shape is ratified.)*
-
-## 11. High-cardinality objects are slotted; the classes are not
-
-**Source: D18, SPECIFICATION.md:249.** There is one request and one answer per
-request, and requests are many, so those objects declare their layout. The
-application classes themselves are singletons of their installation and do
-not.
-
-## 12. One tree, several protocols, one contract test
-
-**Source: D22 scope ruling, SPECIFICATION.md:363.** The complete
-machine-readable interfaces — the documented REST face and the tool face for
-models — are part of the core, not of something built on it. They are
-subclasses reading the same tree through different lenses, and a handler is
-written once.
-
-**Source: Invariant 9, SPECIFICATION.md:684.** Every interface with more than
-one implementation carries **one contract-test suite run against all of them**.
-The lesson is recorded from an implementation where two dispatch engines
-diverged because nothing forced them to stay equal. The tree read by two
-protocols is exactly that situation.
-
-> [openapi](openapi/) · [mcp](mcp/)
+Each is described on its own below, in that order. A block ends with a pointer
+where a neighbouring subject is owned by another page; following the pointer is
+never needed to finish the block.
 
 ---
 
-# Open frictions
+## 1. The contract — what the server requires, what an application declares
 
-Scaffolding for the interview, not a register. Each voice below is a question
-to settle; settling it edits this document — and, where the contradiction
-lives upstream, edits the source too. This section shrinks to nothing, and
-when it is empty this design can be ratified.
+The contract has two halves, and keeping them apart is what keeps it small.
 
-Interview file: `temp/interview_020_applications.md`.
+**Four things the server requires.** These are about the handover, and the
+server relies on all four for every application it hosts.
 
-## Upstream — settling these edits SPECIFICATION.md
+**Be callable the ASGI way.** The server hands over the three ASGI arguments
+and expects the answer to go out through them. This is the only obligation
+with no default, and the only one whose absence shows late: a class that does
+not implement it installs and mounts like any other, and fails when its first
+request arrives, with an error naming the class.
 
-**S1 — the app-side contract in §4 names a member that does not exist.**
-SPECIFICATION.md:643-644 states the contract as "an ASGI callable with
-`mount_name`, a `server` property …". There is no `mount_name`: the identity
-has been `code` + `mount` since commit `a1a8f7e`. This is the same unlogged
-ruling as S1/S2 of [010 server](../010_server/design.md), seen on the
-application side, and settling it means amending §4 of the specification along
-with D2 and D3.
+**Carry an identity and a placement.** A `code` that names it and a `mount`
+that places it, both class attributes a subclass sets declaratively and a
+constructor argument overrides per installation. They are the server's
+subject, not this page's.
 
-**S2 — the live request reaches only the administrative application.** D23,
-SPECIFICATION.md:413, ratifies that a handler needing the live request
-"DECLARES a `request` parameter injected by `bind_kwargs`". In the shipped code
-the injection exists **only on the administrative application**, and under the
-name `_request`; the base reconciliation every hosted application inherits does
-not inject anything (call sites in [status.md](status.md)). So the ratified
-seam is not available to the applications a consumer writes, and the parameter
-is not called what the decision calls it. Two questions in one: where the
-injection belongs, and which name is ratified.
+**Accept an owner, once.** When the server installs an application it tells it
+so, and the application records it. The direction is one way: the server
+writes, the application reads. An application already owned refuses a second
+owner rather than quietly changing hands, because an instance serving two
+servers would have one identity and two contexts.
 
-## Where the response shape is ratified
+**Answer the two lifecycle calls.** One at start-up, one at shutdown, either
+of them ordinary or asynchronous code — the server works out which when it
+calls. Both do nothing by default, so an application with nothing to build
+says nothing.
 
-**S3 — §10 has delivery commits and no decision.** One flat buffered class
-with type dispatch, a streaming sibling rather than a subclass, and the SSE
-framing: none of it appears in SPECIFICATION.md, in §3's unopposed list, or in
-the `temp/` registers. The record is the modules' own contracts and the two
-commits that delivered them. These shapes constrain every application ever
-written against this core, so either they are ratified or the fact that they
-are conventions is recorded.
+**Four things an application declares about itself.** These are not
+requirements: each has a default that says *nothing special*, and an
+application speaks only where it has something to say. What makes them a
+contract rather than a set of options is that the rest of the system reads
+them without ever knowing which application it is reading.
 
-## Silent wrong answers
+**Its own vocabulary.** A grammar class carried as the class attribute
+`grammar`, which the site recipe mounts at the line that installs the
+application. From that point down the words are the application's own. It
+reads them back by address relative to itself, so two installations of one
+class read two different sets and neither knows the other exists.
 
-These end in a wrong result with no error anywhere, which is the family the
-probability rule refuses outright: an infimum case may be accepted **provided
-it ends noisily**, and none of these does.
+The vocabulary every application inherits has one word, `parameters`, for free
+options — enough that an application needs to declare nothing. One with words
+of its own subclasses it and adds them:
 
-**S4 — a body sent without a `content-type` header is discarded, and the
-request answers 200.** The body is read only when the header is present, so a
-caller that omits it has its document dropped and receives an answer computed
-from the defaults. Proven live in [status.md](status.md): the same POST
-answers `{"sum": 5}` with the header and `{"sum": 0}` without it. The gate is
-in `genro_tytx.asgi_data`, so settling it may mean fixing a dependency rather
-than this package.
+```python
+from genro_builders.builder import element
+from genro_asgi.application import ApplicationGrammar
 
-**S5 — a `TypeError` inside a synchronous handler is reported to the caller as
-a bad request.** A bug in a handler's own body — an addition between an int and
-a string — surfaces as **400 "Invalid request arguments"**, with the internal
-exception message in the body. The same bug in an asynchronous handler surfaces
-as 500. Proven live in [status.md](status.md). The module's own contract
-records the indistinguishability as known; nothing records it as accepted.
-There are two halves: a server-side defect blamed on the caller, and an
-internal message disclosed to them.
 
-## Gaps in what exists
+class ShopGrammar(ApplicationGrammar):
 
-**S6 — an application cannot answer a WebSocket.** The only WebSocket door is
-the server's, and at the base it accepts the connection and closes it politely;
-no composition hands a socket to an application, so no application can hold a
-long-lived conversation. Meanwhile the ratified delivery design for the SPA
-world puts pushed traffic on WebSockets. **Q1**, SPECIFICATION.md:695, foresees
-one dispatch engine with two transports, designed so that context, resolution
-hooks and cleanups exist on both. The question that belongs here is what the
-application contract's WebSocket door looks like, since it is the contract that
-would grow the sixth obligation. Recorded in the same wording in
-[20_spa/030 channel](../../20_spa/030_channel/), and to be settled once for
-both.
+    @element(node_label="branding")
+    def branding(self, title: str = "", currency: str = "EUR") -> None:
+        """Written in the recipe as .branding(title=…), read as branding.title."""
 
-**S7 — the request body is never streamed.** It is read whole into memory
-before the handler runs, so the size of an upload is bounded by the memory of
-the process serving it. The answer side streams; the request side does not.
-Nothing records this as a decision. Whether the arrival wants a streaming
-request body — and if not, why not — is unanswered, and §1 of
-[00 overview](../../00_overview/) requires the reason to be written where the
-limit is accepted.
 
-**S8 — the path from a handler to a stream is untested.** The dispatch branch
-that recognises a streamed answer and steps aside is the single uncovered
-statement of its module, and it is the only route by which a handler's stream
-reaches the wire. Its one production consumer is the inspector section. The
-streaming and SSE classes are themselves covered; what has no test is the
-handover. Line numbers in [status.md](status.md).
+class Shop(RoutedApplication):
+    grammar = ShopGrammar
+```
 
-**S9 — the same 400 body carries two different things.** The bad-request answer
-interpolates the underlying exception's message, which is what makes a genuine
-validation failure useful to the caller and is also how S5 leaks an internal
-one. Whether the detail is part of the contract or a convenience is not
-recorded, and the two halves cannot be settled separately.
+A parameter's own default is part of the declaration, so a recipe that writes
+only the title still reads `EUR` back from `branding.currency`.
 
-## Surface with no consumer
+**Who draws it.** The administrative monitor renders every installed
+application without knowing any of them by name: it asks each one for a
+snapshot of itself and for the name of the panel that draws it. An application
+that says nothing gets identity facts and a generic panel, which is why a new
+application appears in the monitor the day it is installed without the monitor
+being touched.
 
-**S10 — three public members of the request nobody reads, and one guard nobody
-can reach.** `created_at`, `age` and `scope` on the request have no consumer in
-`src/`, in `tests/`, or in the genropy-asgi bridge, and the timestamp behind the
-first two is stamped on every request that is served. Separately, the
-`effective is None` guard in the response's content-type helper is excluded by
-both of its call sites, and exists for a class attribute nothing ever sets.
-Line numbers in [status.md](status.md). The rule is that what is left without
-readers goes with the mechanism it belonged to; the question is whether these
-are owed consumers — an age is what a monitor would show — or leftovers.
+**Whether it can be moved while it runs.** Which applications are installed is
+a fact of the configuration, and the configuration changes while the server
+runs. An application holding live state — people using it, pages open — says
+whether it can be taken away and put back, and **saying so means guaranteeing
+the mechanism that makes it possible**. One that cannot does not claim it can,
+and its change waits for a restart.
 
-## Recorded in more than one entry
+**Whether its own failure is survivable.** An application whose mount fails at
+boot normally stops the boot, because an installation described wrongly should
+say so before the first request. An application may declare its own absence
+tolerable instead, and then the server starts without it. The application
+decides what may be survived, never the server.
 
-These four were found by a reader who had only the documents. Each lives
-between two or three entries, is written in the same words in each, and is
-settled once for all of them.
+> The tree the vocabulary lives in is
+> [015 configuration](../015_configuration/README.md); the monitor and its panels are
+> [090 server-application](../090_server-application/README.md); when a change is taken
+> on and what follows is
+> [015 configuration](../015_configuration/README.md) again.
 
-**S11 — two documents answer "how does a handler know which request it is
-serving" differently.** [010 server](../010_server/) §4 says the registry
-answers *which request am I serving right now?*, "asked by code buried deep
-inside a handler, which needs the request but was never handed it". §5 above
-says there is no ambient current request and that the old pair never returns.
-Both describe something real — the registry holds a thin in-flight record, not
-the request object — but no document draws that line, so the two pages read as
-opposites. Settling it means writing the distinction in both. Recorded in the
-same wording in [010 server](../010_server/design.md).
+---
 
-**S12 — the application contract has three different lengths across the
-dossier.** §1 above splits it four and four. [010 server](../010_server/) §2
-states a list of its own and adds that an application declares what may be
-done to it. [015 configuration](../015_configuration/) §5 adds the
-survivable-failure declaration. A reader who reads the three in order is told
-three times that the contract is small and gets three different contracts. The
-split above is this entry's proposal, not a ratified shape: settling it means
-one list, written here and referred to from the other two. Recorded in the same
-wording in [010 server](../010_server/design.md) and
-[015 configuration](../015_configuration/design.md).
+## 2. An application is a routing class
 
-**S13 — `BaseConfiguration`'s hooks are used and nowhere documented.** A site
-recipe deviates from the package defaults by overriding one hook —
-`server_section`, `storage_section`, or the `storage_mounts` that the second
-calls. [015 configuration](../015_configuration/) names none of the three, and
-describes the class only as the dialect "with the package's own defaults
-already written into it".
+The class you subclass is two things at once. Toward the server it is an
+application — the contract of block 1. Toward its own insides it is a
+**routing class**: a class whose marked methods *are* its addressable
+behaviour.
 
-The cost shows in this entry's recipe, the only one of the three that leans on
-the inheritance: its `main` calls two methods it does not define and it defines
-a third nothing appears to call. The recipes of 010 and 015 avoid the question
-by defining every method they call, which is a coincidence of how they were
-written rather than a rule. A reader cannot tell whether the recipe works or is
-broken, and the recipes are the one executable thing in each entry. The hooks
-belong in 015, and the paragraph added above this entry's recipe is a patch
-until they are there. Recorded in the same wording in
-[015 configuration](../015_configuration/design.md).
+```python
+class Shop(RoutedApplication):
 
-**S14 — two exception-to-status mappings, and nothing relates them.** The
-resolution maps router failures to the HTTP exceptions the ring answers. The
-response class carries a second table of its own, which maps `ValueError` and
-`TypeError` to 400, `FileNotFoundError` to 404, `PermissionError` to 403 and
-everything else to 500. Both exist; no document says which applies when, or
-whether the second is the mechanical cause of S5. The division of labour has to
-be stated, and it belongs partly to [030 middleware](../030_middleware/), which
-owns the ring. Recorded in the same wording there.
+    @route()
+    def home(self): ...                    # answers /home
 
-## Half a migration
+    @route()
+    async def whoami(self): ...            # answers /whoami — asynchronous, same rule
 
-**S15 — the factory form of §7 is used nowhere.** `attach_instance` is gone
-from the package, and every branch in it — four call sites, listed in
-[status.md](status.md) — is still declared in the **instance** form, handing
-over an already-built object. D25 named exactly those four sites and put their
-conversion to `cls` + `params` recipes in a later macro, which has not
-happened. So §7's destination is stated and unreached, and the entry's own
-recipe shows the interim form because it is the only one in use.
+    @route(auth_rule="admin")
+    def takings(self): ...                 # answers /takings, to admins only
+```
 
-Two things ride on settling it. The library now derives the timing from the
-form — a factory branch is built on first traversal, an instance branch is
-linked immediately — so converting the four sites also changes *when* those
-sub-trees exist, and D25's note that "branches are EAGER BY DEFAULT", verified
-against genro-routes 0.28.0, no longer describes the library. And the entry's
-recipe teaches whichever form we keep.
+There is no table of paths, no registration call, and no separate file to keep
+in step with the code. A method marked as a route becomes a node named after
+the method, and the class's routes together form its **route tree**.
 
-## Declared here, absent in the code
+That inheritance is the reason this page can be short about routing. Everything
+an application does with paths — how a tree is built and walked, how a
+separately written class is attached below a name, what filters a caller's
+identity applies to the walk, and what a plugin is — belongs to the routing
+system, and an application gets all of it by being a routing class rather than
+by implementing any of it.
 
-**S16 — two of the four declarations of §1 have no member to be made with.**
-`BaseApplication` carries nothing by which an application says whether it can be
-moved while the server runs, and nothing by which it says its own failure is
-survivable — proven in [status.md](status.md), where the search comes back
-empty. Both are consequences of the live configuration, which is itself
-unbuilt, so the absence is expected rather than surprising.
+Two facts from there are used by the blocks that follow, and are stated here so
+those blocks read on their own. **A route may carry options beside it**, like
+the `auth_rule` above, which nothing in the handler body reads. And **every
+tree can describe itself** — its routes, their declared parameters, the options
+beside them — which is what the machine-readable faces of block 8 are built
+from.
 
-It is recorded because of the shape §1 gives it: the two are stated with a
-source and a date beside them, exactly like the two that do exist, and a source
-is a record of a decision rather than of a delivery. A reader cannot tell the
-decided from the delivered by looking, and this friction is what tells them.
-It closes when the members exist, not by editing §1.
+> The routing system is [025 routing system](../025_routing-system/README.md).
 
-**S17 [cross · unratified] — the fixed pair is stated in two entries and armed
-in three moments.** §8 above names two capabilities as fixed structure, on D26's
-authority. A booted application's tree carries **three**: the third is the
-authorization plugin, which the application arms for itself in its own
-constructor rather than receiving it from the server. Nothing states the
-division as a rule, so a reader who counts the always-present plugins gets two
-from the specification and three from the code. Recorded in the same wording in
-[025 routing system](../025_routing-system/design.md).
+**A tree belongs to one application.** Nothing outside reaches in to add a
+route to somebody else's tree — a rule with a history: a system endpoint
+injected into a hosted application's router is how two programs end up sharing
+one namespace and colliding over it.
 
-**S18 [cross] — the request id never reaches the log line.** §4 of
-[README.md](README.md) says every request carries an id "so one line in a log
-can be followed across the whole machine". The only layer that writes a log
-line writes the method, the path, the status and the elapsed time, and not the
-id. So the identifier's stated purpose is served by nothing. Either the access
-line carries it, or the reason given here is rewritten. Recorded in the same
-wording in [030 middleware](../030_middleware/design.md).
+---
 
-## Settled on 2026-08-24 — no longer open
+## 3. The dispatch — from the handover to the answer
 
-Recorded here only so the next reader is not surprised by its absence.
+The handover gives the application three things: the ASGI description of the
+request, the channel to read the body from, and the channel to write the
+answer to. The path in that description is **already relative** — the server
+stripped the prefix the application is mounted under, so an application never
+sees where it was mounted and can be mounted anywhere.
 
-- **where the essentials of routing live.** Not here. §2 of
-  [README.md](README.md) states that an application *is* a routing class and
-  sends the tree, the walk, its three filters and the plugins to
-  [025 routing system](../025_routing-system/), which was `025_plugins` and was
-  renamed for it. Owner, 2026-08-24.
+Seven steps follow, in order.
+
+```mermaid
+flowchart TB
+    A["1. build the request"] --> B["2. read and parse it, once"]
+    B --> C["3. resolve the path to a node<br/>filtered by the caller's identity"]
+    C --> D["4. fit the arguments to the handler"]
+    D --> E{"5. is the handler<br/>asynchronous?"}
+    E -->|yes| F["run it on the loop"]
+    E -->|no| G["run it on the server's thread pool"]
+    F --> H["6. turn the returned value into a body"]
+    G --> H
+    H --> I["7. send it"]
+```
+
+**Steps 1 and 2** produce the request object described in the next block. The
+reading happens once, at the start, and everything downstream reads the result
+rather than the wire.
+
+**Step 3** is where authorization happens, and it happens as part of finding
+the handler rather than after finding it. The caller's identity arrives as a
+set of tags — put on the request by the layer that resolved who is calling —
+and the tree matches the path only against nodes those tags open. A node the
+caller may not have is therefore never called: the refusal comes from the
+resolution, not from a check the handler was trusted to write.
+
+A caller who presents no identity supplies **no tags**, which is the strictest
+case and not the loosest. Every route carrying a rule is closed to them,
+because no tag they hold can match one. What they reach is exactly the routes
+that carry no rule at all — which is the definition of public.
+
+Tags are one of three filters the resolution accepts, and the only one an
+ordinary application uses. The other two — what this installation is able to
+do, and which channel the request came in through — belong to the routing
+system with the rest of the walk.
+
+> Who resolves the identity and puts it there is
+> [050 authentication](../050_authentication/README.md); the three filters are
+> [025 routing system](../025_routing-system/README.md).
+
+**Step 4** fits the values that arrived to the parameters the handler
+declares. A handler is an ordinary method with ordinary parameters, and it is
+called with ordinary arguments — a query value, a field of a submitted
+document — so writing one requires knowing nothing about HTTP. The
+reconciliation is described with the request, below.
+
+**Step 5** is the one rule an event loop has. A handler written as
+asynchronous code runs on the loop. A handler written as ordinary code would
+block the loop, so it runs on the server's thread pool instead, and the
+application never chooses: the vehicle follows the handler's own nature, read
+from the tree. A synchronous handler gets one thing more — a hook that runs on
+the same pool thread immediately after it, whether it returned or raised, for
+releasing whatever the handler opened that must be released on the thread that
+opened it. Asynchronous handlers have no such hook and need none.
+
+**Steps 6 and 7** are the answer, described two blocks below.
+
+The dispatch owns none of the request's end of life. Whatever was opened
+during it is closed by the server, after the answer has gone out.
+
+---
+
+## 4. The request — what a handler is given
+
+Handlers are **pure**: nothing ambient tells one which request is being
+served. What a handler needs, it declares as a parameter and receives as an
+argument. This is the difference between a handler you can call from a test
+with three values and a handler that only runs inside a server.
+
+Behind that, one object holds the request. It is built once and parsed once:
+headers, cookies, the query string and the body are read at the start, and
+everything after that reads the result. The body is **hydrated by
+content-type** — a submitted JSON, XML or msgpack document arrives as values,
+not as bytes, and a form arrives as typed fields.
+
+Two identifiers ride along, and they are kept apart on purpose. The **request
+id** is this machine's own handle on the request: it is taken from the
+`x-request-id` header when the caller sends one and generated otherwise, so one
+line in a log can be followed across the whole machine. The **external id** is
+the caller's own reference, sent as `x-external-id` and carried untouched, so a
+client can find its own request in an answer without either side overwriting
+the other's identifier.
+
+The request also carries what the layers above it resolved: who is acting
+(an identity, or nobody), the session if there is one, and the database handle
+for the application, prepared on first use and closed at the end of the
+request without the handler doing anything about it.
+
+**Fitting arguments to parameters.** The values that arrive are a query string
+and possibly a body, and the shapes differ: a query is already a set of named
+values, while a submitted JSON document is one value that happens to be a
+mapping. A handler declaring `x` and `y` is written for the first shape. So
+when the handler declares plain parameters and a document arrives, the
+document's fields are spread over them, and fields the handler does not
+declare are dropped.
+
+A handler that wants the document whole asks for it by name: a parameter
+called **`body_data`** receives the hydrated document unspread, and so does a
+handler that accepts `**kwargs`. Bytes nobody could hydrate arrive the same
+way, under **`body_raw`**.
+
+The decision reads the parameters the handler actually declares, never the
+wire format, which is why the same handler serves a form, a JSON document and
+a call from a machine-readable interface unchanged.
+
+**One transport, honoured both ways.** A caller may ask for a typed transport
+by header — the same serialization the framework uses between its own
+processes. The request records it, and the answer goes back in it. A caller
+that asks nothing gets JSON.
+
+---
+
+## 5. The answer — from a returned value to bytes
+
+A handler returns an ordinary Python value and the value becomes the body.
+There is **one response class**, not a family: no JSON response, no HTML
+response, no file response to choose between. The type of what was returned
+decides.
+
+| The handler returns | The body is | The declared type |
+|---|---|---|
+| a mapping or a list | JSON, or the caller's typed transport | `application/json`, or that transport's |
+| a filesystem path | the file's bytes | `application/octet-stream` |
+| bytes | those bytes | `application/octet-stream` |
+| a string | the text | `text/plain` |
+| nothing | empty | `text/plain` |
+| anything else | its `str` | `text/plain` |
+
+The last row is the fallback and it never fails: a handler returning a number
+or a date answers with its text rather than with an error.
+
+A handler that needs a different declared type says so **at the route**, as
+`@route(media_type="text/html")`, so the declaration travels with the node
+instead of being written into the handler body. A handler that decides at run
+time returns `self.result_wrapper(value, media_type=…)` instead, which carries
+the same information alongside the value.
+
+The answer is **buffered**: it is assembled in memory and goes out as one
+message with its length known. That is what makes it simple to work with, and
+it is the right shape for the overwhelming majority of answers. It is the
+wrong shape for exactly two: an answer too large to hold, and an answer whose
+end is not known when it begins. Those are the next block.
+
+Headers and cookies are set on the answer before it goes. Setting a cookie is
+one call with the attributes named, so the policy — how long, which paths,
+whether script may read it — is stated rather than assembled by hand into a
+string.
+
+---
+
+## 6. The long answer — streaming, and events
+
+A **stream** is a different shape from a buffered answer, so it is a different
+object rather than an option on the same one. What it is given is an
+asynchronous source of byte chunks; what it does is frame that source onto the
+wire, one message per chunk, and close the stream at the end — including when
+the source produced nothing at all. It has no notion of turning a returned
+value into bytes, and needs none: whoever writes a stream is already producing
+bytes.
+
+A handler answers with a stream simply by returning one, and the dispatch
+recognises it and steps aside: nothing is buffered, and the handler speaks the
+wire itself.
+
+On top of streaming sits **server-sent events**, the plain way for a server to
+push to a browser over one ordinary HTTP connection. An event is a **dict with
+three keys, two of them optional**: `data` — the payload, JSON-encoded when it
+is not already a string — and `event` and `id`. It is framed into the text
+format browsers already understand, so the page reading it is a few lines of
+standard code with no library.
+
+A handler writes its source as an ordinary async generator, wraps it in an
+`SseStream`, and returns that stream's `response()` — the streaming answer
+above with the event-stream headers already on it:
+
+```python
+from genro_asgi.sse import SseStream
+
+
+class Dashboard(RoutedApplication):
+
+    async def takings_events(self):
+        while True:
+            yield {"event": "takings", "data": {"today": await self.total()}}
+
+    @route()
+    async def stream(self):
+        return SseStream(self.takings_events(), retry_ms=2000).response()
+```
+
+Two details make it survive real networks. A silent source gets a **comment
+sent periodically** to keep the connection from being closed by whatever sits
+in between; the browser ignores it, and its only job is to prove the
+connection is alive. And when the **browser goes away**, the source is told:
+the pending read is cancelled and awaited, so a source that holds a
+subscription gets to release it instead of leaking one per closed tab.
+
+The framing takes any asynchronous source of events and knows nothing about
+where they come from. Resuming an interrupted stream from the last event
+received belongs to whoever owns the source, because only that owner can say
+what "the events since" means.
+
+---
+
+## 7. The failures — four ways a request does not reach its handler
+
+A request that does not reach a handler produces one of four answers. All four
+are settled **before the handler's own body runs** — the first three while the
+path is being resolved, the fourth a step later, while the arguments are being
+fitted.
+
+| What happened | Settled at | The answer |
+|---|---|---|
+| no node at that path, or the node is unavailable | resolution | **404** |
+| the node is protected and nobody was presented | resolution | **401** |
+| the node is protected and the caller's tags do not match | resolution | **403** |
+| the handler exists but the arguments do not fit it | argument fitting | **400** |
+
+The distinction between the middle two is the whole point of having both. To
+somebody the server does not know, the answer is *identify yourself*, and a
+browser that gets it lands on a login page. To somebody the server does know,
+the answer is *not you*, and offering a login form would be a lie.
+
+The last row is worth stating because the alternative is common and wrong: a
+caller sending a value the handler cannot accept has made a bad request, and
+that is a 400 rather than a crash. It arrives as one kind of failure whether
+the value was of the wrong type or under a name the handler does not declare,
+because the tree funnels both into a single outcome instead of asking the
+dispatch to recognise which validation library raised what.
+
+None of these four is turned into an answer here. They are **raised**, and the
+uniform ring around the dispatch turns them into responses — which is what
+lets a handler raise one deliberately, from anywhere in its own code, and get
+exactly the same answer.
+
+A failure that is none of these four is not a wrong request but a broken
+program: whatever escapes the handler reaches the same ring, which answers 500
+and logs it.
+
+The line between the two matters in both directions, and the four answers
+above exist to hold it. A caller's mistake must never be reported as a 500 —
+they would retry an identical request forever. And a defect of ours must never
+be reported as a 400 — the caller would go looking for a mistake they did not
+make, while the message that would have named ours goes only to them.
+
+> The ring is [030 middleware](../030_middleware/README.md).
+
+---
+
+## 8. The faces — one tree, several protocols
+
+Everything above describes one route tree serving HTTP. The same tree serves
+other protocols, and that is the reason the parts above are arranged as they
+are: resolution, argument fitting and execution know nothing about HTTP, so a
+second protocol reuses them rather than reimplementing them.
+
+Two are built. One publishes the tree as a documented REST interface, with a
+machine-readable description generated from the handlers' own declared
+parameters and a browsable page over it. The other publishes the same tree as
+a set of tools a model can call. Neither is a different kind of application:
+each is a subclass reading the same tree through a different lens, and a
+handler is written once.
+
+> [openapi](openapi/README.md) · [mcp](mcp/README.md)
+
+---
+
+## A configuration that includes it
+
+One class installed twice, each installation reading its own words, with an
+externally written routing class attached as a sub-tree.
+
+The recipe subclasses `BaseConfiguration`, which is the package's own defaults
+written as a recipe. Three of its methods are the hooks a site overrides:
+`server_section` and `storage_section` write those two sections, and
+`storage_section` calls `storage_mounts` for the layout. Calling a hook keeps
+the default; overriding one replaces it. That is why `main` below calls two
+methods it does not define, and defines a third nothing here appears to call.
+
+```python
+import tempfile
+
+from genro_routes import RoutingClass, route
+
+from genro_asgi import AsgiServer, RoutedApplication
+from genro_asgi.config import BaseConfiguration
+
+
+class Catalogue(RoutingClass):
+    """Written on its own, attached below — it knows no application."""
+
+    @route()
+    def search(self, q: str = "") -> dict[str, str]:
+        return {"found": q}
+
+
+class Shop(RoutedApplication):
+    """Handlers are methods; the app reads the words written under its own code."""
+
+    mount = ""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.route.add_branches({"name": "catalogue", "instance": Catalogue()})
+
+    @route()
+    def home(self) -> dict[str, str]:
+        return {"title": self.config("parameters.title")}
+
+    @route()
+    async def whoami(self) -> dict[str, str]:
+        return {"code": self.code, "mount": self.mount}
+
+
+# The local storage backend refuses a directory that is not there; a real
+# deployment names its own.
+SITE_DIR = tempfile.mkdtemp(prefix="shop-")
+
+
+class ServerConfiguration(BaseConfiguration):
+    """The same class twice: the site root, and an outlet under /outlet."""
+
+    def main(self, root):
+        cfg = root.configuration()
+        self.server_section(cfg)
+        self.storage_section(cfg)
+        apps = cfg.applications()
+        apps.application(code="shop", app_class=Shop).parameters(title="Main Store")
+        apps.application(code="outlet", app_class=Shop, mount="outlet").parameters(
+            title="Outlet"
+        )
+
+    def storage_mounts(self, section):
+        section.local(name="site", base_path=SITE_DIR)
+
+
+server = AsgiServer(config=ServerConfiguration)
+```
+
+Asked for each of these paths, that installation answers:
+
+| Path asked | Status | Body |
+|---|---|---|
+| `/` | 404 | — |
+| `/home` | 200 | `{"title": "Main Store"}` |
+| `/whoami` | 200 | `{"code": "shop", "mount": ""}` |
+| `/catalogue/search?q=lamp` | 200 | `{"found": "lamp"}` |
+| `/outlet/home` | 200 | `{"title": "Outlet"}` |
+| `/outlet/whoami` | 200 | `{"code": "outlet", "mount": "outlet"}` |
+| `/nope` | 404 | — |
+
+Four rows are worth reading twice. `/home` and `/outlet/home` are the same
+method on the same class, answering differently because each installation reads
+the words written under its own code. `/outlet/whoami` proves the handler sees
+`/whoami`: the prefix never reaches the application. And `/catalogue/search`
+is served by a class written knowing nothing about `Shop`, attached below a
+name — the routing system's business, shown here only because an application
+assembled from parts is the ordinary case.
+
+The first row is the one that surprises. `Shop` is the site root, so every
+unclaimed path reaches it — including `/`, which arrives as `/` and finds no
+route of that name. Being the catch-all makes an application reachable; it does
+not give it a home page. One is written like any other route.
+
+## What stands on this
+
+Every program a server hosts is one of these. The administrative surface, the
+machine-readable interfaces and the front that serves a hosted site are all
+applications by exactly the contract above, and each of them adds only what is
+its own.

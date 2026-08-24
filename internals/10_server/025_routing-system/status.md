@@ -54,7 +54,7 @@ otherwise.
 `plugins/openapi/translator.py` (307 lines, 86%) sits in this package and is
 **not this entry's subject**: it turns the neutral description into an OpenAPI
 document and belongs to
-[020 applications / openapi](../020_applications/openapi/). Same for
+[020 applications / openapi](../020_applications/openapi/README.md). Same for
 `router_openapi` (`plugins/openapi/__init__.py:39`), whose single caller is
 [openapi.py:141](../../../src/genro_asgi/applications/openapi.py).
 
@@ -109,7 +109,7 @@ the application on its own tree in its constructor
 application.
 
 **Nothing is armed until the tree is first read.** Driven live on the recipe at
-the foot of [README.md](README.md): with the server fully constructed and
+the foot of [README.md](design.md): with the server fully constructed and
 `_armed` still `False`, the tree answers `['auth']`; after the first access to
 `route` it answers `['auth', 'logging', 'openapi', 'pydantic']`. Reading the
 tree without triggering the arming takes `RoutingClass.route.fget(app)`, which
@@ -132,7 +132,7 @@ the `plugins` kwarg (asgi_server.py:160-166). Proven by `test_plugins.py:197`,
 `AsgiServer`'s own docstring (asgi_server.py:41) and peeled by the mixin, and
 `_configured_kwargs` never produces it — searched across `src/`, the only
 occurrences are those two. So a plugin class a site brings can reach a server
-only through Python construction. See [design.md](design.md), friction S3.
+only through Python construction. See [design.md](decisions.md), friction S3.
 
 ## `OpenAPIPlugin` — [plugin.py:49](../../../src/genro_asgi/plugins/openapi/plugin.py)
 
@@ -157,18 +157,18 @@ no consumer. Only the method override (plugin.py:79) is exercised, by
 `test_plugins.py:329` (`test_method_override_from_handler_config`). Uncovered:
 `tags` (`:81`), `summary` (`:83`), `description` (`:85`), `deprecated` (`:87`),
 `security_scheme` (`:89`) and the explicit `security` override (`:91`). See
-[design.md](design.md), friction S4.
+[design.md](decisions.md), friction S4.
 
 **Per-route configuration is written `<code>_<key>` at the route.** The
 fixture at `test_plugins.py:80` uses `@route(openapi_method="delete")`. Driven
-live on the recipe at the foot of [README.md](README.md):
+live on the recipe at the foot of [README.md](design.md):
 `@route(openapi_method="delete", openapi_tags="admin")` publishes `/drop` as a
 `DELETE` carrying `tags: ['admin']`, while the route beside it keeps the
 guessed `GET`.
 
 **`plugins/openapi/__init__.py:72-73` is uncovered**: the `basepath` branch of
 `router_openapi`, which rewrites paths as absolute. It belongs to
-[020 applications / openapi](../020_applications/openapi/).
+[020 applications / openapi](../020_applications/openapi/README.md).
 
 ## The registration is process-wide, and the first class wins
 
@@ -182,7 +182,7 @@ Driven live: two servers built in one process, each with its own
 `plugin_registry` mapping the code `mine` to a different class, and each arming
 its own application. The first server's class is registered; **the second
 server's tree carries the first server's class**, and nothing is raised or
-logged. See [design.md](design.md), friction S2.
+logged. See [design.md](decisions.md), friction S2.
 
 At import the routing library makes five codes available — `auth`, `channel`,
 `env`, `logging`, `pydantic` — and `openapi` joins them the first time any
@@ -197,7 +197,7 @@ Every test is a **contract test**; `tests/x/` holds only `__init__.py`.
 | `tests/test_plugins.py` | 32 | the registry, arming, the config-driven path, no import side effect, lazy arming — and the OpenAPI translator |
 
 Of the 32, eleven belong to
-[020 applications / openapi](../020_applications/openapi/): the classes
+[020 applications / openapi](../020_applications/openapi/README.md): the classes
 `TestTranslator` (`test_plugins.py:255`) and `TestRouterOpenapi` (`:311`)
 exercise the dialect, not the plug mechanism. This entry's own are the
 twenty-one in `TestDefaultRegistry`, `TestArmRouter`, `TestConfigDriven`,
@@ -225,8 +225,8 @@ twenty-one in `TestDefaultRegistry`, `TestArmRouter`, `TestConfigDriven`,
 **A published verb does not gate the dispatch.** `RoutedApplication.__call__`
 never reads `scope["method"]`, so the verb an entry declares is carried into
 the schema and nowhere else. Driven live on the recipe at the foot of
-[README.md](README.md): `POST /search` answers **200** although the route is
-published as a `GET`. See [design.md](design.md), friction S7.
+[README.md](design.md): `POST /search` answers **200** although the route is
+published as a `GET`. See [design.md](decisions.md), friction S7.
 
 **A plugin of one's own does work, end to end.** Driven live: a `BasePlugin`
 subclass with `plugin_code = "owner"`, a `configure` declaring `team`/`oncall`

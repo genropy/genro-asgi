@@ -1,20 +1,24 @@
-# Datachanges distribution — desired design
+# Datachanges distribution
 
 **Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
 
-Everything this feature SHOULD be when finished — the target, not the code.
-To be filled by the documentation audit and ratified by the owner.
+**The need.** What one page changes, the other pages that care must see — without every page polling the world.
 
-Final design (owner, 2026-08-20): datachanges reach the browser PUSHED over websocket; the pull via collect is an interim vehicle.
+How a change produced on one page reaches the pages that must see it:
+page collectors drain on the worker, delivery is ADDRESSED through the
+`DeliveryDesk` — never broadcast, never per-worker snapshots.
 
----
+Interactions: dbevents (same desk) · global-store · orchestration (the lane carries them).
 
-# Open frictions
+## The delivery
 
-Scaffolding for the interview, not a register: each voice is a question to
-settle, settling it edits this document, and this section shrinks to nothing
-before the design can be ratified.
+```mermaid
+flowchart LR
+    P["producing page (its SpaWorker drains the collectors)"] -->|up the lane| C[SpaCommander]
+    C --> D["DeliveryDesk
+    subscriptions · pending mailboxes · age-bounded events"]
+    D -->|ADDRESSED, never broadcast| T["the subscribed pages' workers"]
+    T -->|interim: ping/collect pull| B[browser]
+```
 
-*(Carried over from the entry's former `frictions.md` on 2026-08-23, verbatim.)*
-
-- Delivery to the browser currently rides the ping/collect pull; declared provisional and possibly imperfect.
+The last hop is the provisional one: the final design pushes over websocket.

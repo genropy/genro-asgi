@@ -1,11 +1,7 @@
 # Sessions
 
-**Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.1 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
 
-**The shelf.** Per-user server-side state between requests, and its persistence.
-
-The server-side session: `MemoryStore`, delta-check persistence, pickle
-snapshot per named instance (`serve --name`), cookie `Max-Age = ttl × 24`,
-the avatar.
-
-Interactions: middleware (session) · authentication.
+Per-user server-side state between requests, and its persistence: `MemoryStore`,
+delta-check persistence, a pickle snapshot per named instance, the session cookie
+and its lifetime, and the avatar the session holds.

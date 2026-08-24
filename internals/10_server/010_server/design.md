@@ -1,419 +1,432 @@
-# Server — design
+# Server
 
 **Version**: 0.5 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
 
-**The ground floor, with the work finished.** Read this document as a report
-from the day everything described here is running: it says what the server
-*is*, in the present tense, and never what it lacks. What the code holds at
-any given moment is [status.md](status.md)'s subject, and the road between the
-two is written one step at a time under `steps/`.
+What a server is, what it is made of, and how a request gets from the
+network to the program that answers it.
 
-Every voice carries its source. A voice sourced to the owner and a date was
-decided in conversation before it reached any register.
+## What a server is
 
-The **open frictions** are the closing section, and they are the one place
-here that compares this arrival with the present — because settling them is
-what lets this document be ratified. When that section is empty, the design
-stands on its own.
+One machine, one process, one port — and behind that port several unrelated
+things: a shop, an administrative surface, a machine-readable API. They were
+written by different people at different times, and each of them was written
+as if it owned the whole site.
 
----
+A **server** is the object that makes that arrangement work. It holds the list
+of what is installed, and for every request that arrives it decides which one
+of them answers, hands the request over, and stays out of the way. Around that
+one decision it also owns the few things the installed programs must share:
+when they start and stop, where their blocking code is allowed to run, and the
+live picture of what the machine is doing right now.
 
-## 1. The principle: static only where dynamic cannot be had
+What it does **not** do is understand any of them. It never looks inside an
+application, never knows what a shop is, never learns that one of them is
+administrative. That ignorance is the whole design: it is why an application
+can be written, replaced or removed without the server changing at all.
 
-**Source: owner, 2026-08-23.** Staticity is **never a presupposition and
-never a goal**. It is accepted where we have not managed to make something
-dynamic — and where it is accepted, the reason is written down. A design voice
-may not celebrate a fixed set, a boot-time-only decision or a restart-to-change
-behaviour as if immobility were a virtue.
+The programs it hosts are called **applications**. The word means one precise
+thing: something the server can install, address, and hand a request to.
 
-This principle governs the rest of this document and, being a principle,
-governs the other entries too — see the friction on where it gets written.
+## The anatomy
 
-## 2. The base owns a small, closed list
+A server is one object with **four members of its own** and a **list of the
+applications it hosts**. Uvicorn — the process that owns the network socket —
+drives it through three kinds of traffic.
 
-**Source: D2, SPECIFICATION.md:42.** The common substrate of *every* server:
-one uvicorn loop, one monitored thread pool for blocking work (async handlers
-never touch it), the applications, the ordered lifespan, the request registry,
-and `authenticate()`/`session()` answering "nobody / none".
+```mermaid
+flowchart TB
+    UV["uvicorn"] -->|"http · websocket · lifespan"| SRV["<b>the server</b><br/>an ASGI callable"]
+    SRV --> IDX["the application index<br/>by code, and by mount"]
+    SRV --> LS["the lifespan"]
+    SRV --> RR["the request<br/>registry"]
+    SRV --> WP["the work pool"]
+    IDX --> A["the applications<br/>it hosts"]
+```
 
-Closed means *this list and no more*: a capability that is not on it is a
-mixin, not a member of the base. It does not mean immobile — what the base
-owns is fixed, what it holds is not (§4).
+| The part | In one line |
+|---|---|
+| the composition | the server is a chain: a lean base, capability layers above it |
+| the applications | what it hosts, and the two things it knows about each |
+| the demux | how one request finds its one application |
+| the registry | which request am I serving, and what else is in flight |
+| the lifespan | who starts first, who stops last |
+| the work pool | where blocking code runs so the loop stays free |
+| the three doors | how uvicorn's three kinds of traffic enter |
+| the configuration | where the whole shape comes from |
 
-**Source: D17, SPECIFICATION.md:229.** The channel clause of D2 is amended:
-the base is born WITHOUT channels, and communication is the first capability
-*mixin*. This is what makes the list closed in practice rather than in
-principle.
-
-**Source: D2, SPECIFICATION.md:45.** Serving is implemented **once** —
-recorded against the old repository, where it existed twice, written
-differently.
-
-## 3. An application is a triplet, and its identity is stable
-
-**Source: commit `a1a8f7e`, 2026-07-25.** An application is
-**code + instance + mount**. `code` names it and is the key everything else
-refers to — the configuration path `applications.<code>.`, the monitor entry,
-the `default` name. `mount` is the URL prefix, and `mount=""` IS the site
-root: a deliberate value, so every default check is `is None` and never
-truthiness, which would silently move a root application to `/<code>`.
-
-Both are class attributes a subclass sets declaratively and a constructor
-kwarg overrides per instance, so one class can be served twice under two
-codes.
-
-**Source: owner, 2026-08-23.** The identity is stable *for the life of the
-instance*, which is not the life of the process: an instance may be mounted
-and unmounted (§4) without its code ever meaning something else.
-
-## 4. The installed set changes while the server runs
-
-**Source: owner, 2026-08-23; direction parked by D23,
-SPECIFICATION.md:418-419** ("the two-stage live-config architecture — config
-as live object, `apply_configuration`, hot/cold changes — stays parked as a
-future macro").
-
-Which applications are installed is a fact of the **site configuration**, and
-the site configuration is a live document. Mounting an application,
-unmounting one, moving one to a different prefix: each is an operation an
-administrator performs on a running server, never a reason to restart it.
-
-The mechanism is the configuration itself:
-
-1. The site configuration is a **Bag** — a tree that is read, written, and
-   that notifies whoever watches it.
-2. The **`_server` application carries the commands** that write into it: add
-   an application entry, remove one, change one. The command surface is a
-   section of that application and belongs to
-   [090 server-application](../090_server-application/).
-3. The write **fires the Bag's own trigger**, and the server — subscribed to
-   the branch that lists the applications — brings the installed set in line
-   with what the tree now says.
-
-The command edits a document; the running system follows. Nothing is
-materialized from outside, in keeping with §12: the class that needs the
-values reads them, and here it also watches them.
-
-**A change that cannot be honoured is refused loudly.** Two applications
-claiming one `code`, two claiming one `mount`, a `default` naming an
-application that is not installed: each is answered with an error the
-administrator reads. A collision is never absorbed into a silent misroute
-that surfaces later as a request arriving in the wrong place.
-
-**An application declares what may be done to it.** Being installed or removed
-while the server runs is not something the server may assume: an application
-that holds live state — users, pages, open connections — says whether it can be
-taken away and put back, and by saying so it **guarantees the mechanism that
-makes that possible**. One that cannot does not claim it can, and then the
-change waits for a restart. Equally, an application may declare that a failure
-of its own mount is survivable, so the server starts without it rather than
-refusing to start.
-
-**Accepting a change and completing it are two different moments.** The change
-is taken on atomically — it lands or it does not. What follows may take time: an
-application with people using it warns them, waits for them to finish, and
-lets go only then. So a change reports itself as accepted and in progress, and
-an administrator is never told "refused" while something was in fact removed.
-The mechanism is [015 configuration](../015_configuration/)'s; what each
-application does when its own entry changes is its own.
-
-**The same shape at every level.** A command changes the configuration, the
-trigger fires, the thing adapts — for the SPA groups and their worker
-processes exactly as for the applications here. The groups' own design is
-[020 orchestration](../../20_spa/020_orchestration/)'s.
-
-**Site configuration is not plugins.** Two different mechanisms at two
-levels, never to be folded together: the site configuration declares *which*
-applications, databases and groups exist (the `applications`, `databases`,
-`commander` sections of the tree); a **plugin** is a genro-routes router
-plugin armed onto the router of one routed application, and is
-[025 routing system](../025_routing-system/)'s subject. Installing an application is a
-configuration change; enabling a plugin is a router change.
-
-## 5. One demux rule
-
-**Source: D3, SPECIFICATION.md:61.** *First path segment → secondary mount if
-it exists, otherwise primary app.* One rule for every server. **Mono-app is a
-usage, not a mechanism**: the internal server is a base server used with only
-one application. This explicitly kills the old dual `get_app` semantics
-(finding C5), and it "must never be reintroduced by package layering".
-
-**Source: commit `a1a8f7e`, 2026-07-25.** The rule stays single and grows
-fallbacks: first segment → that mount with the segment stripped; else the
-application on the site root; else, for `/` with a `default` declared, a
-**307** to that application's mount preserving the query string; else 404.
-307 and not 301/302 so that method and body survive the hop. A server with
-nothing on the root is a legitimate shape, and `default=<code>` **elects
-nothing** — it is a redirect target and no more.
-
-## 6. Two servers, one base, distinguished by composition
-
-**Source: D1, SPECIFICATION.md:36.** The official pair is **public server**
-and **internal server**. The public server is the exposed face and owns auth,
-sessions and origin gates. The internal server is never exposed: auth and
-sessions are `None` *by design*, because whoever fronts it owns them.
-
-**Source: D6, SPECIFICATION.md:89.** The internal server has no auth **by
-construction** — a class property, never a configuration. A wrong
-configuration must not be able to arm auth on a process that must never be
-exposed.
-
-**Source: D17, SPECIFICATION.md:229.** Public server = base + communication +
-auth + …; internal server = base + communication. And **the sub-commander is
-the public server class with `parent=` armed** — no new class.
-
-**Source: D19, SPECIFICATION.md:263.** Four usage levels, each usable on its
-own: bare base server (embed an application, no channels) → public server
-(config, auth, `_server`) → orchestration (groups, SPA, batch) →
-multi-machine hierarchy. A consumer enters at the level they need and extends
-with the same gesture the framework itself is built with.
-
-## 7. The registry: one mechanism, two duties, different consumers
-
-**Source: D5, SPECIFICATION.md:73.** Two duties, identical on every server:
-(1) create the right request from the scope and make it reachable by the
-running handler — the "current request"; (2) keep the picture of in-flight
-requests. What differs between servers is the **consumer** of the picture: the
-monitor on the public server, the occupancy sensor on the internal one.
-
-**Source: D5, SPECIFICATION.md:80.** One mechanism only for "current
-request", owned by the registry **instance**. The old repository tracked it
-twice in parallel — the registry's ContextVar and a module-level global — and
-the module-level global goes away.
-
-**Source: D5, SPECIFICATION.md:86.** The ledger of **forwarded** requests (the
-commander's QUIESCE bookkeeping) is a different thing with a different name:
-it tracks work the server did NOT execute locally, and belongs to the
-commander application, **never** to the base. See
-[020 orchestration](../../20_spa/020_orchestration/).
-
-**Source: D18, SPECIFICATION.md:249.** `__slots__` only on high-cardinality
-objects — requests, register items, events/frames, config nodes — and NEVER on
-servers, managers, commanders or applications. The old repository had it
-backwards (a 21-slot singleton server).
-
-## 8. Requests carry their own end of life
-
-**Source: docstring of `RequestRegistry`, and its one consumer at
-request.py:257.** Whatever a request opened, the request closes: code holding
-the current item queues a zero-argument callback, and the server drains them
-at the end of the dispatch, whether the handler returned or raised. The
-server never learns what the resource was: a database connection closing
-itself is the plain case.
-
-*(Recorded as a docstring source, not a decision: it describes a mechanism
-whose ratification was not found. See the friction on the `error` argument.)*
-
-## 9. The application contract is the deliverable
-
-**Source: D7, SPECIFICATION.md:93.** What the server requires of an
-application — ASGI callable, its identity, its `server` property, lifecycle
-hooks — is born before any real application class and is exercised by a
-throwaway test application with one sync route, one async route and one that
-raises. **The tests ARE the definition of the contract.** For WebSocket, only
-the socket in `__call__` is present, and it is empty.
-
-**Source: D16, SPECIFICATION.md:217.** Extension is subclassing, made real by
-contract: every class peels its own kwargs and forwards the rest, mixins go
-BEFORE the base in the MRO, and the end of the chain raises `TypeError`
-naming any leftover.
-
-**Ownership, one direction.** The server assigns `app.server = self` at
-registration and the application-side setter accepts it once; the server
-writes, the application reads. What "once" should mean when an application can
-be unmounted and remounted (§4) is an open friction.
-
-## 10. Lifespan: in order, in reverse, isolated
-
-**Source: D2, SPECIFICATION.md:42, and the `Lifespan` docstring.**
-`on_startup` in registration order, `on_shutdown` in reverse, so a thing
-built on top of another is torn down first. Hooks may be sync or async. A
-hook that raises is **logged and the sequence continues**: one application's
-broken startup never prevents the others, and the ASGI acknowledgement is
-always sent. Application errors are isolated; they never abort the protocol.
-
-## 11. One thread pool, provisioned only if needed
-
-**Source: D2, SPECIFICATION.md:47.** One monitored thread pool per server for
-blocking work; async handlers stay on the loop and never touch it; lazily
-provisioned, gauges exposed.
-
-The gauges answer a question about pressure, so `busy` counts **demand, not
-slots held**: every call entered and not yet returned, which past saturation
-exceeds the slot count. Consumers clamp; the gauge does not flatter.
-
-## 12. The installed composition, and self-configuration
-
-**Source: D22, SPECIFICATION.md:351.** The core is the **complete
-mono-process async server** — that is the cut.
-
-**Source: D4, SPECIFICATION.md:67.** The `_server` application is
-**automatic, not configured**. Service endpoints are never again injected
-into the hosted application's router — recorded against old finding F3.
-
-**Source: Ratified 2026-07-29, SPECIFICATION.md:772.** Nothing materializes a
-server from the outside: the class that needs the values reads them.
-Explicitly passed kwargs win over configured ones, **wholesale per kwarg**.
-Detail in [015 configuration](../015_configuration/).
-
-## 13. Restart is a target, not an afterthought
-
-**Source: D21, SPECIFICATION.md:280.** Parity with the old daemon achieved
-WITHOUT a daemon: **live pages survive ANY restart** — state survives process
-*generations*, not inside an eternal process.
-
-**Source: D20, SPECIFICATION.md:273.** Dev runs the shape of prod with
-minimal numbers; the internal server runs STANDALONE from the same
-configuration — no special inline mode, ever.
-
-Both are owned by [120 restart](../120_restart/). They appear here because
-they constrain what the base may hold that is not serializable — and because
-§4 reduces how often a restart is the answer at all.
-
-## 14. Deliberately outside the base
-
-**Source: D7, SPECIFICATION.md:100.** By decision, not by omission: the
-config builder, middleware, real auth and sessions, `_server`, WSX. Each
-arrives as its own capability, in its own entry of this world.
+Each of the eight is described on its own below. They are meant to be read in
+that order, and each one is closed: nothing in it depends on a page elsewhere.
 
 ---
 
-# Open frictions
+## 1. The composition — a lean base, capabilities above it
 
-Scaffolding for the interview, not a register. Each voice below is a question
-to settle; settling it edits this document — and, where the contradiction
-lives upstream, edits the source too. This section shrinks to nothing, and
-when it is empty this design can be ratified.
+A server is not one class. It is a **chain of classes**, assembled from the
+bottom.
 
-Interview file: `temp/interview_010_server.md`.
+At the bottom sits the **base server**. It is deliberately small: it hosts
+applications, routes each request to one of them, and owns the four members
+of the anatomy. Everything else a real installation needs — knowing who the
+user is, keeping state between requests, the uniform ring every request
+passes through, plugged capabilities, filesystem access, background work, a
+channel to a parent process — is **not** in it.
 
-## Upstream — settling these edits SPECIFICATION.md
+Above the base come the **capability layers**. Each is a self-contained piece
+adding exactly one concern. Each takes its own construction arguments, keeps
+what belongs to it and passes the rest down the chain, so a layer is added
+without any other layer knowing. The base is always the end of the chain: an
+argument nobody claimed is an error naming it, not a value silently dropped.
 
-**S1 — D2 says the primary application is always present.** D2,
-SPECIFICATION.md:54: "**the primary app, always present** — answers `/` and
-everything no mount claims". §5 above says a server with nothing on the root
-is legitimate, and the code agrees (status.md). The overturn's only record is
-commit `a1a8f7e`, never appended to the log, although **D23**
-(SPECIFICATION.md:398) exists precisely to reinstate "every ratified decision
-is APPENDED here". Settling it means amending D2.
+This is what makes a server come in **usage levels**, each one usable on its
+own:
 
-**S2 — D3 states the rule in two branches.** D3, SPECIFICATION.md:62, has
-mount-or-primary; §5 has four branches, and neither the 307 nor the `default`
-application appears anywhere in SPECIFICATION.md. Arguably still *one* rule
-with fallbacks, which is why it is a question and not a defect. Same missing
-log entry as S1. Settling it means amending or annotating D3.
+- the **bare base**, when you want to embed a single application and nothing
+  else;
+- the **public server** — the composition an installation actually runs, with
+  authentication, sessions, the middleware ring, plugins, storage and
+  background work stacked on. This is the one the recipes at the foot of these
+  pages build, and the class is `AsgiServer`;
+- the **internal server**, which is never exposed: it is composed *without*
+  the authentication layer, so a process that must not be reachable cannot be
+  made reachable by a configuration mistake. It is not a flag, it is a
+  different composition;
+- the **sub-commander**, which is the public server with its link to a parent
+  armed — the same class, one argument different.
 
-**S3 — D5 gives the registry a duty nobody executes.** D5,
-SPECIFICATION.md:74, duty (1) is "create the right request from the scope".
-The registry creates a thin in-flight record; the `Request` handlers receive
-is built by the owning application (status.md has the call sites). No source
-for the reassignment was found in SPECIFICATION §2/§8, the `temp/` registers
-or the `codex/` documents. Settling it means amending D5.
+The order of the layers is not decorative: a layer that reads another's work
+must sit above it, and a layer that must wrap the server's own start-up must
+sit below the ones that don't. The chain is where those relations are stated
+once.
 
-**S4 — where the principle of §1 gets written.** "Static only where dynamic
-cannot be had" governs all 31 entries, not this one. If it lives only here,
-the next entry does not inherit it. Candidate homes: the rules list in
-`internals/00_overview/README.md`, a new D-entry in SPECIFICATION.md, or the
-coding rules of the meta CLAUDE.md.
+> Each capability has its own entry in `10_server`. This block only says that
+> they exist, that they stack, and that the base does not know them.
 
-## Consequences of §4 to be decided
+---
 
-**S5 — what hot mount/unmount does to three properties.** Today's immobility
-is load-bearing in three places, and §4 touches each:
+## 2. The applications it hosts
 
-- the demux reads the mount index with no lock, no snapshot and no
-  invalidation, because nothing can change under it between two requests;
-- `default` is validated completely at construction, because no later
-  registration can make a name valid that is invalid now;
-- the ownership channel is exactly-once, which is the natural meaning only
-  while an application is never detached.
+The server knows exactly **two things** about each application, and both are
+declared by the application itself:
 
-Are these properties to **keep** — so the hot command is built around them —
-or consequences of immobility that fall with it?
+- its **code** — the identity. This is the name everything else uses to refer
+  to it: the key of the list, the address of its slice of the configuration,
+  the label in the monitor.
+- its **mount** — the URL prefix it answers under. A mount of `""` is the
+  site root: a deliberate value, not a missing one, and the difference
+  matters because an application with no mount declared answers under its own
+  code.
 
-*Partly answered on 2026-08-23: the second one survives, because accepting a
-change is atomic and validated by the attempt, so `default` is never valid
-against a tree nobody accepted. The first and the third are still open, and the
-third has grown a second half — what "exactly once" means for an application
-that is legitimately removed and put back.*
+The two are separate on purpose. The same application class can be installed
+twice, under two codes and two mounts, and each installation is its own thing
+with its own configuration.
 
-**S6 — who watches, and at what granularity.** *The "refused when" half was
-settled on 2026-08-23: accepting is atomic and encloses the notification, so a
-failure changes nothing, and feasibility is not pre-computed — the attempt is
-the check. See [015 configuration](../015_configuration/design.md) §6.*
+The server keeps them in **two indexes** — one by code, to answer "who is
+`admin`?", and one by mount, to answer "who answers under `/admin`?". Both are
+written together, always, so they cannot disagree.
 
-What remains: whether the server watches on behalf of the applications or each
-application watches its own entry, and what becomes of one watching an entry
-that is deleted wholesale.
+Installing an application also establishes **ownership**, and it runs one way:
+the application learns which server it belongs to, and belongs to that one
+alone. The same instance cannot be served by two servers at once. The server
+writes, the application reads.
 
-## Defects and gaps in what exists
+Everything else an application is — its routes, its handlers, its pages — is
+its own business, and the server never inspects it. The only contract it must
+satisfy is small: be callable the way ASGI expects, carry a code and a mount,
+accept the ownership assignment, and answer the two lifecycle calls of the
+lifespan.
 
-These are settled by fixing the code, not by amending a document; they are
-listed here so the interview can order them against the rest.
+The installed set is **not sealed**: which applications are installed is a
+fact of the configuration, and it changes while the server runs — the last
+block of this page describes how.
 
-**S7 — a multi-segment `mount` registers and is unreachable, silently.** No
-validation that a mount is a single path segment; the demux only ever matches
-the first. Proven live in status.md: the application is installed, listed,
-visible to the monitor, and dead — no error at boot, no error at request
-time. `mount="/api"` fails the same way. The coding rules want an explicit
-error for an impossible case; the probability rule accepts an infimum case
-**provided it ends noisily**. This one is silent.
+Which does not mean the server may do as it likes with them. **An application
+declares what may be done to it**: one holding live state — people using it,
+pages open, connections held — says whether it can be removed while running and
+put back, and saying so means guaranteeing the mechanism that makes it
+possible. One that cannot does not claim it can, and its change waits for a
+restart. And accepting a change is not finishing it: the change lands
+atomically or not at all, while what follows can take time, because an
+application with people using it warns them and waits before letting go.
 
-**S8 — `default=` alongside a root application is accepted and inert.**
-Validated as a name, never consulted, because the root application always
-wins first. Proven live in status.md. A configuration that says something and
-gets nothing, without a word. Milder than S7, same family.
+> What an application looks like inside is [020 applications](../020_applications/README.md).
 
-**S9 — `run_cleanups(error=...)` has no caller and no reader.** The parameter
-is declared and documented as carrying the terminating exception for
-error-aware cleanups; the body never reads it, the only production caller
-passes nothing, no test passes it. Either the argument goes, or §8's mechanism
-grows the error-aware half it promises.
+---
 
-**S10 — two untested paths.** `AsgiServer.serve()`'s host/port precedence
-(the only uncovered statements of its module, and the path every deployment
-takes) and the `ValueError` on an unsupported ASGI scope type. Details and
-line numbers in status.md. The first is shared with
-[110 cli](../110_cli/) and [015 configuration](../015_configuration/).
+## 3. The demux — how a request finds its application
 
-**S11 — accepted risk: the pool teardown blocks the loop.** The lifespan
-branch joins the worker threads synchronously on the event loop, after the
-shutdown acknowledgement has been sent — so the loop has nothing left to
-serve. Recorded as accepted pending confirmation; draining off the loop buys
-nothing at that point.
+**Demux** is the name of the decision "who answers this request". There is
+exactly **one** rule in the entire system, and it reads only the **first
+segment of the path**.
 
-**S12 — repo-wide: `tests/x/` is empty.** The coding rules mandate contract
-tests and implementation/edge tests split by folder; the edge folder holds
-only `__init__.py`, so every test is classified contract and every failure is
-a STOP. Either correct as it stands, or a reclassification is owed — its own
-task, never smuggled into another change. Not the server's to resolve;
-recorded here because the server is the first subject to meet it.
+1. **The first segment names a mount.** That application answers, and the
+   segment is *stripped* from the path it receives. An application mounted at
+   `admin` sees `/users` when the browser asked for `/admin/users` — so it can
+   be written as if it owned the site, which is what lets the same application
+   be installed under two different prefixes.
+2. **Otherwise, an application sits on the site root.** It answers, with the
+   path unchanged. It is the catch-all: every path no mount claimed reaches
+   it.
+3. **Otherwise, the request is for `/` and a default was declared.** The
+   answer is a **307** redirect to that application. It is 307 and not 301 or
+   302 because the method and the body must survive the hop: a `POST /` has to
+   arrive still a POST.
+4. **Otherwise, 404.**
 
-## Recorded in more than one entry
+```mermaid
+flowchart TB
+    REQ["a request arrives"] --> SEG["read the first path segment"]
+    SEG --> M{"does a mount<br/>claim that segment?"}
+    M -->|yes| STRIP["that application answers<br/>segment stripped from the path"]
+    M -->|no| R{"is an application<br/>on the site root?"}
+    R -->|yes| FULL["it answers<br/>path unchanged"]
+    R -->|no| D{"is the request for /<br/>with a default declared?"}
+    D -->|yes| RED["307 to the default<br/>query string preserved"]
+    D -->|no| NF["404"]
+```
 
-Found by a reader who had only the documents. Each lives between two or three
-entries, is written in the same words in each, and is settled once for all of
-them.
+Two things this rule implies are worth stating plainly.
 
-**S13 — two documents answer "how does a handler know which request it is
-serving" differently.** §4 of [README.md](README.md) says the registry answers
-*which request am I serving right now?*, "asked by code buried deep inside a
-handler, which needs the request but was never handed it".
-[020 applications](../020_applications/design.md) §5 says there is no ambient
-current request and that the old pair never returns. Both describe something
-real — the registry holds a thin in-flight record, not the request object — but
-no document draws that line, so the two pages read as opposites. Settling it
-means writing the distinction in both. Recorded in the same wording in
-[020 applications](../020_applications/design.md).
+**A site root is optional.** A server can be made of mounts only, with nothing
+answering `/`. Then branch 2 never fires, and `/` either redirects to the
+declared default or is a 404.
 
-**S14 — the application contract has three different lengths across the
-dossier.** [020 applications](../020_applications/design.md) §1 splits it four
-and four. §2 of [README.md](README.md) states a list of its own and adds that
-an application declares what may be done to it.
-[015 configuration](../015_configuration/) §5 adds the survivable-failure
-declaration. A reader who reads the three in order is told three times that the
-contract is small and gets three different contracts. The split in 020 is that
-entry's proposal, not a ratified shape: settling it means one list, written
-there and referred to from the other two. Recorded in the same wording in
-[020 applications](../020_applications/design.md) and
-[015 configuration](../015_configuration/design.md).
+**The default elects nothing.** Naming a default does not make that
+application the catch-all. It is a redirect target for `/` and no more: an
+unclaimed path is still a 404, and a server that *does* have a site root never
+consults the default at all.
+
+Rule 1 also covers `/` on a server that has a root application, with no
+special case: `/` has an empty first segment, the root application's mount is
+the empty string, so the first branch matches and forwards the same `/`.
+
+---
+
+## 4. The registry — the current request, and the picture
+
+Two questions get asked constantly and have nothing to do with routing:
+
+- *which request am I serving right now?* — asked by code buried deep inside a
+  handler, which needs the request but was never handed it;
+- *what is in flight across the whole server?* — asked from outside, by
+  whoever is watching the machine.
+
+The **registry** answers both, and it is the **single writer** of that
+picture: the server enters a request when the dispatch begins and removes it
+when the dispatch ends, and nobody else writes.
+
+Each entry is one **item** — a deliberately thin record, because there is one
+per request and requests are many: an id, the kind of traffic, the path, and
+the moment it started. Not the request object itself, not its body, not its
+headers.
+
+The "current request" is per **task**, not per server: two requests being
+served at the same time each see their own, with no locking and no
+bookkeeping, because each runs in its own context. The mechanism lives on the
+registry instance and not in a module-level global, so it belongs to one
+server and disappears with it — two servers in one process do not see each
+other's traffic.
+
+The item is also where a request's **end of life** is recorded. Code holding
+the current item can leave a callback to be run when the dispatch ends,
+whether the handler returned or raised; the server runs them in reverse order
+of registration, and one that fails does not stop the others. This is how
+something opened in the middle of a request gets closed without the server
+ever learning what it was — a database connection closing itself is the plain
+case.
+
+---
+
+## 5. The lifespan — who starts first, who stops last
+
+Applications have things to build at start-up and things to release at
+shutdown: a connection, a scheduler, a background loop.
+
+The server runs the start hook of each application **in installation order**,
+and the stop hook **in reverse**. The reversal is the point: something built
+on top of something else is torn down first, so the layer it depends on is
+still alive while it does. A hook may be written as ordinary code or as
+asynchronous code, and the server works out which at the moment it calls it.
+
+One rule matters more than the order: **a hook that fails is recorded, and the
+sequence continues**. One application's broken start-up never prevents the
+others from starting, and the protocol always completes. An application's
+error is that application's problem; it never takes the machine down with it.
+
+This is about the hooks, and only about them — the moment when the applications
+are already built and mounted and are being told to start. Whether the
+installation may boot at all is settled earlier and far more strictly: an
+application whose class will not import, or two claiming one prefix, stop the
+boot outright. That earlier gate belongs to
+[015 configuration](../015_configuration/README.md).
+
+---
+
+## 6. The work pool — where blocking code runs
+
+A server runs on an event loop, and an event loop has exactly one rule: never
+block it. But plenty of useful code blocks — a database driver, a file read, a
+library that was never written for asynchronous use.
+
+So the server owns **one** thread pool, and only blocking work goes to it.
+Code written for the loop stays on the loop and never comes near the pool.
+Blocking code is handed to the pool through a single door, and the caller's
+context travels with it — so code running on a pool thread still sees the
+current request, exactly as if it had stayed on the loop.
+
+The pool is built **when it is first needed**, not at start-up: a server that
+never runs blocking code never creates a thread. It is torn down at shutdown,
+and the teardown leaves it ready to be built again, so a server that is
+started and stopped repeatedly keeps working.
+
+Two gauges are published, `total` and `busy`, and the second name is a trap.
+`total` is how many slots exist. **`busy` is not how many slots are occupied**:
+it counts every call handed to the pool and not yet come back, which past
+saturation includes the ones still waiting in a queue — so `busy` can exceed
+`total`. That is deliberate, and it is why the name misleads: what the gauge
+reports is demand, and a gauge that stopped at the ceiling would hide exactly
+the situation you consult it for.
+
+---
+
+## 7. The three doors — how traffic enters
+
+Uvicorn drives the server with three kinds of traffic, and the server accepts
+those three and nothing else.
+
+**HTTP.** The ordinary case. The request is entered in the registry, the demux
+picks the application, the application answers. On the way out — always, even
+when the handler failed — the request's end-of-life callbacks run and the
+entry is removed. A handler that raises is not an exception to this: it is the
+reason the guarantee is written that way.
+
+**WebSocket.** A door that is present and, at the base, empty: it accepts the
+connection request and closes it politely. The base server has no long-lived
+conversations. A composition that needs them supplies its own behaviour here.
+
+**Lifespan.** The ordered start-and-stop conversation described above, plus
+the teardown of anything the server built for itself while running.
+
+Anything else is a protocol violation and is refused as such. It is not a case
+to absorb quietly: nothing else can legitimately arrive.
+
+---
+
+## 8. Where the shape comes from
+
+Everything above describes a server that exists. This block says who decided
+it exists, and how it changes.
+
+An installation is described **once**, in a site configuration: which
+applications are installed, under which codes and mounts, which one `/`
+redirects to, which databases exist, what each capability is set to. The
+server **reads itself** from that description — nothing builds a server from
+the outside and hands it its parts. A value given explicitly at construction
+wins over the configured one, one value at a time, so a configured
+installation can be started on a different port without editing anything.
+
+The configuration is not a file read once at boot. It is a **live document**:
+a tree that can be read, written, and that notifies whoever is watching it.
+That is what makes the installed set changeable while the server runs.
+Commands on the administrative surface write into the tree; the write notifies
+the server; the server brings the installed set in line with what the tree now
+says. Installing an application, removing one, moving one to a different
+prefix: each is an operation someone performs on a running machine, not a
+reason to restart it.
+
+A change that cannot be honoured is **refused, and refused loudly** — two
+applications claiming one code, two claiming one mount, a default naming
+something that is not installed. A collision is answered with an error the
+administrator reads, never absorbed into a silent misroute that shows up later
+as a request arriving in the wrong place. And refusal is atomic: the change
+lands, or the description is untouched.
+
+*How* a change is taken on and how the system then comes into line with it is
+[015 configuration](../015_configuration/README.md)'s subject, not this page's.
+
+One application is always present without anyone configuring it: the
+**administrative application**, which carries the monitor, the login surface,
+the system endpoints and the commands described just above. It is there
+whether the server was built from a configuration or by hand, so the
+administrative surface is never something an installation can forget.
+
+> The tree, its layers and its vocabulary are
+> [015 configuration](../015_configuration/README.md); the administrative application
+> and its sections are
+> [090 server-application](../090_server-application/README.md).
+
+---
+
+## A configuration that includes it
+
+A whole installation showing what this page describes: two applications, one of
+them the catch-all on the site root, and a sized thread pool.
+
+The language it is written in — a recipe class, the sections, `app_class` — is
+the subject of [015 configuration](../015_configuration/README.md) and is explained
+there. Read it here for the shape of the result, not for the grammar.
+
+```python
+import tempfile
+
+from genro_storage import StorageManager
+
+from genro_asgi import AsgiServer, RoutedApplication
+from genro_asgi.config import BaseConfiguration
+
+
+class Shop(RoutedApplication):
+    """The catch-all: it answers / and every path no mount claims."""
+
+    mount = ""
+
+
+class Admin(RoutedApplication):
+    """Mounted under /admin, and written as if it owned the site."""
+
+
+# The local backend refuses a directory that is not there; a real deployment
+# names its own.
+SITE_DIR = tempfile.mkdtemp(prefix="shop-")
+
+
+class ServerConfiguration(BaseConfiguration):
+    """Two applications, one of them on the site root, and a sized pool."""
+
+    def main(self, root):
+        cfg = root.configuration()
+        cfg.server(host="127.0.0.1", port=8000, max_threads=8)
+        self.storage_section(cfg)
+        apps = cfg.applications()
+        apps.application(code="shop", app_class=Shop, mount="")
+        apps.application(code="admin", app_class=Admin)
+
+    def storage_section(self, cfg):
+        cfg.storage(app=StorageManager).local(name="site", base_path=SITE_DIR)
+
+
+server = AsgiServer(config=ServerConfiguration)
+```
+
+Asked who answers what, that installation gives the four branches of the demux:
+
+| Path asked | Application | Path it receives |
+|---|---|---|
+| `/` | `shop` | `/` |
+| `/catalogue` | `shop` — the catch-all | `/catalogue` |
+| `/admin/users` | `admin` | `/users` — the segment stripped |
+| `/admin` | `admin` | `/` |
+
+The third row is the one to notice: `admin` never sees the prefix it is mounted
+under, which is why the same class can be installed twice somewhere else.
+
+And `server.pool.metrics` answers `{'total': 0, 'busy': 0}` — the pool has not
+been built, because no blocking handler has run yet.
+
+## What stands on this
+
+Everything else in genro-asgi is one of two things: a **capability layer**
+stacked on the server, or an **application** it hosts. Authentication,
+sessions, the middleware ring, storage and background work are the first kind.
+The administrative surface, the SPA front and the machine-readable interfaces
+are the second. Both rest on exactly what is described above, and neither
+changes any of it.

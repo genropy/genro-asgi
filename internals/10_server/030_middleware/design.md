@@ -1,260 +1,405 @@
-# Middleware — design
+# Middleware
 
-**Version**: 0.4 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.3 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
 
-**The ring, with the work finished.** Read this as a report from the day
-everything described here is running: it says what the chain *is*, and never
-what it lacks. What the code holds is [status.md](status.md)'s subject.
+The ring every request passes through on its way in and on its way out, and
+the six things this core puts in it.
 
-Every voice carries its source. A voice sourced to the owner and a date was
-decided in conversation before it reached any register.
+## What a middleware is
 
-The **open frictions** are the closing section. Each carries a **family tag**
-in brackets: the frictions of the server skeleton are settled in one grouped
-pass by family rather than one entry at a time (owner, 2026-08-23).
+An application answers requests. It should not also be deciding whether the
+caller is who they say they are, whether a browser from another origin may
+read the answer, what to do when something raises, or whether this request
+deserves a line in a log. Those questions have the same answer for every
+application on the machine, and an application that answered them itself would
+answer them differently from the one beside it.
 
----
+A **middleware** is a layer wrapped around the dispatch. It sees the request
+before the server decides who will serve it, and it sees the answer on the way
+out. It can look, it can add, it can answer instead, and it can refuse — and
+it does any of that for every request, whichever application the request was
+going to.
 
-## 1. The chain is a capability, and the base has none
+There are exactly two extension points in this framework and they are easy to
+confuse. A **plugin** is armed on one application's route tree and sees the
+tree, never the traffic. A **middleware** wraps the dispatch and sees the
+traffic, never the tree. The test that separates them: a middleware can answer
+a request that matched no route at all, and a plugin cannot.
 
-**Source: D17, SPECIFICATION.md:229; D7, SPECIFICATION.md:100.** Middleware is
-explicitly outside the base server, by decision rather than by omission, and
-arrives as a **mixin composed before the server class** — the same shape every
-capability takes.
+> Plugins are [025 routing system](../025_routing-system/README.md).
 
-**Source: Q2, SPECIFICATION.md:698** — *"Middleware chain: in the base or only
-on the public server?"* — is answered by D17 in the general: it is a
-capability, so it is wherever a composition puts it. A server built without
-the mixin does not have a disabled chain; it has no chain, and no attribute
-where one would be. That is the difference between a composition and a flag,
-and it is why the question stopped being open.
+## The anatomy
 
-## 2. Order is declared, never arranged
+The chain is assembled once, when the server is built, and every HTTP request
+walks it in and back out. Requests that are not HTTP do not enter it.
 
-**Source: owner, 2026-08-23.** Each layer states **one number**, and the chain
-sorts itself: lowest outermost. There is no ordered list to maintain, no
-dependency declaration, and no significance to the order in which layers were
-registered.
+```mermaid
+flowchart LR
+    REQ["an http request"] --> E["errors<br/>100"]
+    E --> W["wellknown<br/>150"]
+    W --> L["logging<br/>200"]
+    L --> C["cors<br/>300"]
+    C --> S["session<br/>400"]
+    S --> A["auth<br/>450"]
+    A --> D["the demux,<br/>then an application"]
+```
 
-The alternative — an explicit list somewhere — puts the knowledge of where a
-layer belongs in a different file from the layer, and every new layer becomes
-an edit to a shared thing. A number on the class travels with the class.
-
-Three positions carry an argument rather than a convention, and the arguments
-are the design:
-
-- **errors outermost**, because it must be able to answer what anybody inside
-  raised, another layer included;
-- **session outside identity**, because the identity may be read from the
-  session; reversed, the fallback would silently never fire;
-- **cross-origin outside session**, because a preflight is a question about
-  permission to send, and answering it must not mint a session for a request
-  that carries no user.
-
-## 3. Raising is how a layer answers
-
-**Source: owner, 2026-08-23.** No layer inside the ring builds an error
-response.
-It **raises**, and the outermost layer turns the exception into an answer.
-
-This is what makes the whole ring composable. A probe filter that wanted to
-answer a 404 itself would need to know the body format, the negotiation, and
-the headers; raising, it needs to know none of them, and the answer it
-produces is identical to the one the route resolution produces for an unknown
-path. One exception type, one answer, wherever it came from.
-
-It is also what lets a handler raise a 404 from three frames deep and get the
-right answer without touching a response object.
-
-## 4. The error body follows the caller
-
-**Source: the module's own contract; no ratified decision states it.** An
-error's body is negotiated on the caller's `Accept`: a caller
-asking for JSON gets the JSON document, a browser and a caller that asked for
-nothing get plain text.
-
-The default is text **because it was text before the negotiation existed**.
-Widening a default silently is how a client that parsed one shape starts
-receiving another, and the cost of an inelegant default is smaller than the
-cost of that.
-
-## 5. A 401 is a question, and the form of the question depends on who is asked
-
-**Source: D24, SPECIFICATION.md:421; commit `5b567a3`, 2026-08-14.** Where the
-installation has a login surface, a 401 is the server asking the caller to
-identify themselves. Asking a browser and asking a program are different acts.
-
-A **browser navigation** — a GET whose `Accept` asks for HTML — is redirected
-to the login page, carrying where it was going so the login can put it back
-there. Anything else keeps the bare 401 with its challenge header and gains a
-body naming the login URL, so a program can drive the login itself rather than
-parsing a page.
-
-With no login surface the 401 is answered like any other error: the
-negotiation exists to serve a login that exists, and it does not invent one.
-
-**The destination carried back is validated, never echoed.** A `next` that
-came in from outside is the classic open redirect, and it is checked before it
-is used.
-
-## 6. An answer that has begun cannot be replaced
-
-**Source: the module's own contract.** The outermost layer watches the
-outgoing side and knows whether the response has started. An exception raised
-after the first byte of the answer has gone cannot be answered: a second start
-would corrupt a stream the client is already reading. It is logged and
-re-raised, and the transport tears the connection down.
-
-This is a boundary of what the ring can promise, and it is stated so that
-nobody reads "errors is outermost" as "nothing can escape". What escapes is
-exactly the class of failure that happens too late to be answered.
-
-## 7. The ring carries HTTP, and says so
-
-**Source: D7, SPECIFICATION.md:100; the mixin's own contract.** The chain is
-walked only by HTTP scopes. The lifespan conversation and WebSocket
-connections go straight to the server.
-
-For the lifespan this is right and needs no defence: start-up and shutdown are
-not requests and have no caller.
-
-For WebSocket it is a **limit that is inherited rather than chosen**: two of
-the layers in this ring are exactly what a handshake needs — the origin check
-before accepting, the identity resolved before the conversation starts — and
-**Invariant 4, SPECIFICATION.md:674** requires an origin gate on WebSocket
-handshakes. Where those live when this core grows long-lived conversations is
-[20_spa/030 channel](../../20_spa/030_channel/)'s to decide, and until it does,
-this page records that the ring does not reach them.
-
-## 8. The ring is the machine's, not an application's
-
-**Source: owner, 2026-08-23.** The chain runs before the demux, so no layer can
-be armed for one application and not another. That is deliberate: the questions
-the ring answers — who is calling, may this origin read the answer, what does a
-raised exception become — must have one answer per machine, or two applications
-on one server would disagree about them, and a caller would learn which by
-trying.
-
-What an application wants for itself goes in its own tree, where a plugin is
-the instrument. The two extension points differ in scope and that is the whole
-distinction.
-
-> [025 routing system](../025_routing-system/).
+| The part | In one line |
+|---|---|
+| the ring and its order | one number per layer, and why the order is the design |
+| assembly | built once, from an explicit list, with no global registry |
+| the six | what each one does, and what it puts on the request |
+| the outermost layer | the one that turns a raised exception into an answer |
+| what the ring does not see | and why that is a decision, not an omission |
+| what a site writes | the switches, and what the capabilities arm by themselves |
+| writing one | the base class, the two attributes, and how it is installed |
 
 ---
 
-# Open frictions
+## 1. The ring, and why the order is the design
 
-Scaffolding for the interview, not a register. Each voice carries a **family
-tag**; the skeleton's frictions — 010, 015, 020, 025, 030 — are settled in one
-grouped pass by family (owner, 2026-08-23).
+Each layer declares **one number**, and the chain is sorted by it: the lowest
+number ends up outermost, closest to the network. That is the whole ordering
+mechanism — no list to maintain, no dependency graph, no registration order to
+get right. A layer states where it belongs and the chain forms itself.
 
-Interview file: `temp/interview_030_middleware.md`.
+| Layer | `middleware_order` | Outside it | On in a shipped server? |
+|---|---|---|---|
+| errors | 100 | nothing | **yes**, unless switched off |
+| wellknown | 150 | errors | only if named |
+| logging | 200 | errors, wellknown | only if named |
+| cors | 300 | errors, wellknown, logging | only if named |
+| session | 400 | and cors | **yes** — its own capability arms it |
+| auth | 450 | and session | **yes** — its own capability arms it |
 
-**S1 [unread · cross] — the second exception-to-status table has no production
-reader.** The response class carries a mapping of `ValueError` and `TypeError`
-to 400, `FileNotFoundError` to 404 and `PermissionError` to 403. Its only
-production caller is this ring, and it calls it **inside a branch that already
-knows the exception is an HTTP one** — which carries its own status, so the
-mapping is never consulted. Every other exception takes the explicit 500 path
-beside it. Proven in [status.md](status.md); the table is exercised by tests
-alone.
+The last column is worth reading carefully, because two different things
+decide it. Every layer declares a `middleware_default`, and only errors sets it
+true. But **a capability arms its own layer**: composing a server with sessions
+puts the session layer in the ring, and composing one with identity puts the
+identity layer in, without anybody naming either in the description. A site
+that wants them out says so explicitly — an explicit `False` always wins.
 
-So this is not two competing mechanisms, as it first reads: it is one live path
-and one table nothing reaches. Either the non-HTTP branch starts consulting it —
-which would turn a handler's `ValueError` into a 400, and that is the same
-decision as
-[020 applications](../020_applications/design.md) S5 — or the table goes.
-Recorded in the same wording in
-[020 applications](../020_applications/design.md), friction S14.
+Three of those positions carry an argument, and each is the kind of thing that
+is obvious once stated and expensive to discover.
 
-**S2 [placement · cross] — the WebSocket origin gate has nowhere to live.**
-Invariant 4 (SPECIFICATION.md:674) requires an origin gate on WebSocket
-handshakes, recorded from an implementation that had one. The ring is the
-natural home for it and the ring does not see WebSocket scopes. §7 states the
-boundary; nothing states where the gate goes. Recorded in the same wording in
-[20_spa/030 channel](../../20_spa/030_channel/), and it is the same subject as
-[020 applications](../020_applications/design.md) S6 seen from the ring.
+**Errors is outermost** because it must be able to answer anything anybody
+inside raised — including another middleware. A layer that raises is not a
+crash; it is a layer delegating the answer outwards.
 
-**S3 [undocumented · cross] — a middleware of one's own cannot be named in a
-description, and here the grammar refuses the word.** The class travels as a
-construction argument. Unlike the plugins section, which accepts any code, the
-middleware element declares **six keyword parameters and no more**, so a
-seventh name is rejected by the grammar itself. The element's own docstring
-records this ("one registered through `middleware_registry=` is not
-configurable here"), which makes it a statement rather than an oversight — but
-no ratified decision says it, and
-[015 configuration](../015_configuration/) §2 promises the opposite shape for
-capabilities generally. Recorded in the same wording in
-[015 configuration](../015_configuration/design.md) S6 and
-[025 routing system](../025_routing-system/design.md) S3.
+**Session is outside auth** because the identity may come from the session.
+Reversed, the layer that resolves who is calling would run before the session
+it is supposed to read, and the fallback would silently never fire.
 
-**S4 [silent] — a misspelled log level becomes INFO without a word.** The
-access-log layer resolves its `level` option by looking the name up on the
-logging module and falling back to INFO when it is not found, so `"verbose"`
-and `"nonsens"` both silently produce INFO. Proven in
-[status.md](status.md). A configuration value nobody validates is the shape the
-probability rule refuses: rare, cheap to check, and silent.
+**Cors is outside session** because a preflight — the browser's question *may I
+even send this?* — should be answered without minting a session for a request
+that carries no user and may never be followed by one.
 
-**S5 [unratified] — `level` names the severity, not a threshold.** The option
-sets the level the access lines are *emitted at*, so `level="WARNING"` does not
-quieten the log — it makes every request a warning. A reader configuring
-`level` almost certainly means the other thing. Nothing records which was
-intended, and the two readings differ in what an operator's log looks like.
+The order is stated once, on the classes, and read once, when the chain is
+built. Nothing at request time consults it.
 
-**S6 [unratified] — nothing states that the ring is uniform per machine.** §8
-is written from the shape of the code, not from a decision: no source says a
-middleware may not be per-application, and the same question is open one entry
-away for plugins ([025 routing system](../025_routing-system/design.md) S5). The two should
-be answered together, because the answer decides whether the switches stay in
-the server's vocabulary or move into each application's.
+---
 
-**S7 [untested] — the cross-origin layer's list-valued options and its
-credentialed path.** Three statements of that module are uncovered: the branch
-that accepts an option already given as a list rather than a comma-separated
-string, and two of the header-building branches. Line numbers in
-[status.md](status.md). The layer is the one whose misconfiguration is a
-security finding rather than a bug, which is why its untested branches are
-worth naming.
+## 2. Assembly — once, from an explicit list
 
-**S8 [unratified] — the error negotiation cites a decision that does not
-contain it.** The module attributes the `Accept`-driven error body to "D4
-error-body reconciliation". D4 (SPECIFICATION.md:67) is about the
-administrative application being automatic rather than configured, and says
-nothing about error bodies; the negotiation appears in no D-entry, in no
-unopposed voice of §3, and in no register. §4 above therefore carries no source
-but the code. Either the negotiation is ratified, or the citation is corrected
-to say it is a convention — leaving a wrong citation in place is worse than
-either, because it makes an unratified choice look settled.
+The chain is built when the server is constructed and never rebuilt. It is
+assembled from three explicit inputs: the **registry** of what may be in the
+ring (a mapping from name to class), the **switches** that say which of them
+are on, and the **innermost target**, which is the server's own dispatch.
 
-**S9 [silent] — an error response loses everything the inner layers add on the
-way out.** The outermost layer answers on the `send` it was handed, which is
-the one outside every other layer — so no inner layer's outgoing half runs for
-an error. Proven live in [status.md](status.md) with one request each way: the
-same route, same origin, same new session, answers 200 **with** the
-cross-origin header and the session cookie and 404 **with neither**.
+Nothing about that is ambient. There is **no module-level registry** and
+nothing registers itself when a module is imported: the mapping is produced by
+a call, so each server has its own and two servers in one process cannot write
+into each other's. A name in the switches that the registry does not know
+stops the construction with an error naming it.
 
-The cross-origin half is the one that costs. A browser cannot read a response
-that carries no allow-origin header, so an application that asked for its
-errors as JSON — which §4 exists to give it — receives a network failure
-instead of the 404 the ring carefully negotiated. The negotiation is honoured
-and then made unreadable.
+Each layer receives **both ends at construction**: the next layer inwards, and
+the server that owns it. Neither is discovered by walking wrappers at request
+time, which is what keeps a layer readable on its own — it has what it needs
+as attributes, not as a search.
 
-**S10 [silent] — `errors=False` is accepted, and then nothing answers.** The
-switch is a plain member of the six, so a description may turn the outermost
-layer off. With it off, an `HTTPNotFound` raised by the route resolution
-**escapes the server uncaught** — proven live in [status.md](status.md).
+A layer that is switched on with a **dict** rather than `True` gets that dict
+as its constructor options, and an option nobody declared is refused by name.
 
-Compare [025 routing system](../025_routing-system/design.md) §4, where disabling one of the
-fixed pair is an error rather than an opt-out, on the argument that a control
-nobody can rely on is not a control. The same argument applies here with more
-force: every other layer in the ring, and every raise in the codebase, is
-written on the assumption that this one is present.
+---
 
-**S11 [cross] — the request id never reaches the log line.**
-[020 applications](../020_applications/) §4 says every request carries an id
-"so one line in a log can be followed across the whole machine". The only layer
-that writes a log line writes the method, the path, the status and the elapsed
-time, and not the id. So the identifier's stated purpose is served by nothing.
-Either the access line carries it, or 020's reason is rewritten. Recorded in the
-same wording in [020 applications](../020_applications/design.md).
+## 3. The six, and what each leaves on the request
+
+**errors** — turns anything raised into an answer. Block 4.
+
+**wellknown** — answers the paths every browser and bot probes on every site
+(`/.well-known/…`, `/robots.txt`, `/sitemap.xml`) with a clean 404, so a probe
+never reaches a mounted application. It does not send that 404 itself: it
+raises, and errors answers.
+
+**logging** — one line when a request arrives, one when it leaves, with the
+method, the path, the status and the elapsed milliseconds. Its logger is its
+own instance's, never a module-level one, so a deployment can turn one
+server's access log up without touching another's.
+
+**cors** — answers the browser's preflight `OPTIONS` and adds the
+cross-origin headers to ordinary answers. What it allows is configured;
+nothing is allowed by default.
+
+**session** — reads the session cookie, reconnects the session it names or
+creates a new anonymous one, and leaves it on the request. It issues a
+`Set-Cookie` **only when it created one**: a login attaches an identity to the
+session already in hand rather than making a new one, so the cookie the client
+holds stays valid and no other answer carries a cookie. It writes the session
+back at the end of the request **only if something changed it**, so a
+read-only request costs no storage.
+
+**auth** — asks the server who is calling and leaves the answer on the
+request: an identity, or nobody. It decides nothing else. A credential that is
+present and wrong raises, and errors answers 401.
+
+> Sessions are [040 sessions](../040_sessions/README.md) and identity is
+> [050 authentication](../050_authentication/README.md); this page only says where in
+> the ring they sit and what they leave behind.
+
+The two that leave something behind — the session and the identity — are why
+the ring exists at all: everything downstream, the route resolution included,
+reads what these two put there.
+
+---
+
+## 4. The outermost layer — from a raised exception to an answer
+
+Anything raised anywhere inside the ring arrives here, and this is the only
+place an exception becomes a response. That is what lets a handler, or a
+layer, or the route resolution itself simply **raise** the answer it wants:
+`404`, `401`, `403`, a redirect. Nobody builds an error response by hand.
+
+What comes out depends on who is asking, and on two questions.
+
+**What kind of body?** An error's body follows the caller's `Accept`. A caller
+asking for JSON gets `{"error": "<the detail>"}`; a browser, and a caller that
+asked for nothing, get the detail as plain text. The default is text because that is what the wire
+carried before the negotiation existed, and changing an old default silently
+is worse than an inelegant one.
+
+**Is a 401 an answer, or an invitation?** When the installation has a login
+surface, a 401 is where the server asks the caller to identify themselves —
+and the right way to ask depends on who they are. A **browser navigation** gets
+a `302` to the login page, carrying where it was going so the login can send
+it back. **Anything else** keeps the bare 401, its authentication challenge
+header, and gains a body naming the login URL so an application can drive the
+login itself. With no login surface, a 401 is just a 401.
+
+**One thing cannot be answered.** If the exception is raised after the answer
+has already started going out, there is no response left to build: a second
+start would corrupt what the client is already reading. It is logged and
+re-raised, and the connection dies. This is the reason the layer wraps the
+outgoing side at all — it has to know whether it still may speak.
+
+---
+
+## 5. What the ring does not see
+
+**Only HTTP enters it.** A WebSocket connection and the server's own
+start-and-stop conversation go straight past, to the server. So no layer here
+sees a socket, and none of them can act on one.
+
+That is a boundary worth naming rather than passing over, because two of these
+layers are exactly what a socket would want: the origin check before a
+handshake is accepted, and the identity resolved before the conversation
+begins. Neither reaches one. Where they go when this core grows long-lived
+conversations is the channel's subject, not this page's.
+
+> [20_spa/030 channel](../../20_spa/030_channel/README.md).
+
+**And the ring does not know applications.** It runs before the server has
+decided who will serve the request, so a layer cannot be armed for one
+application and not another. The ring is the machine's, uniformly. An
+application that wants something of its own puts it in its own tree, where a
+plugin is the tool.
+
+---
+
+## 6. What a site writes
+
+One section, one switch per layer:
+
+```python
+cfg.middleware(
+    wellknown=True,
+    logging=True,
+    cors={"allow_origins": "https://shop.example.com"},
+)
+```
+
+`True` turns a layer on with its own defaults; a dict turns it on and becomes
+its options; `False` turns off one that would otherwise be on.
+
+**Three of the six are not in that list and are on anyway.** Errors is on by
+its own default, so a server with no middleware section still answers its
+exceptions. The session and identity layers are armed by the capabilities they
+belong to, so a server composed with sessions has the session layer whether or
+not the description mentions it. Naming them changes nothing; naming one
+`False` is how a site removes it.
+
+> The section's place in the description is
+> [015 configuration](../015_configuration/README.md).
+
+---
+
+## 7. Writing one
+
+A layer is a subclass of `BaseMiddleware`. It declares **where it goes** and
+**whether it is on when nobody says**, and it implements the ASGI call:
+
+```python
+from genro_asgi.middleware import BaseMiddleware
+
+
+class StampMiddleware(BaseMiddleware):
+    """Adds a header naming which machine served the request."""
+
+    middleware_order = 250          # between logging (200) and cors (300)
+    middleware_default = False      # off unless a site asks for it
+
+    def __init__(self, app, server, machine="unknown", **options):
+        super().__init__(app, server, **options)
+        self._machine = machine
+
+    async def __call__(self, scope, receive, send):
+        async def stamped(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                headers.append((b"x-served-by", self._machine.encode()))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, stamped)
+```
+
+Three things in that shape are the contract.
+
+**The constructor takes both ends and forwards the rest.** `app` is the next
+layer inwards, `server` is the owner; a layer peels its own options and hands
+what is left to `super().__init__`, which refuses anything nobody claimed by
+naming it. `self.app`, `self.server` and `self.logger` are the properties it
+then works with.
+
+**Touching the answer means wrapping `send`.** A layer that only reads the
+request calls `self.app(scope, receive, send)` and is done. A layer that adds
+to the answer passes its own callable, as above.
+
+**Refusing means raising.** A layer that wants to answer 404 raises
+`HTTPNotFound` from `genro_asgi.exceptions` and lets the outermost layer build
+the response, exactly as the probe filter does.
+
+**Installing it takes two arguments, both at construction:**
+
+```python
+server = AsgiServer(
+    config=ServerConfiguration,
+    middleware={"stamp": {"machine": "web-01"}},
+    middleware_registry={"stamp": StampMiddleware},
+)
+```
+
+That server's ring is `ErrorMiddleware · StampMiddleware · SessionMiddleware ·
+AuthMiddleware`, and every answer carries `x-served-by: web-01`.
+
+The asymmetry with the six is deliberate and worth stating: **a middleware of
+your own cannot be named in the description.** The section's words are the six
+core names and no others, so `middleware=` at construction is the only door —
+and because the description is mapped onto that same argument, a site that has
+both a description and a hand-passed switch has two writers for one value.
+
+---
+
+## A configuration that includes it
+
+A whole installation with the ring armed: the probe filter, the access log,
+and cross-origin access for one site. Sessions and identity are not named —
+their own capabilities arm them.
+
+```python
+import tempfile
+
+from genro_routes import route
+
+from genro_asgi import AsgiServer, RoutedApplication
+from genro_asgi.config import BaseConfiguration
+
+
+class Shop(RoutedApplication):
+    """One public route and one that refuses whoever is not an admin."""
+
+    mount = ""
+
+    @route()
+    def home(self) -> dict[str, str]:
+        return {"shop": "open"}
+
+    @route(auth_rule="admin")
+    def takings(self) -> dict[str, int]:
+        return {"today": 42}
+
+
+# The local storage backend refuses a directory that is not there; a real
+# deployment names its own.
+SITE_DIR = tempfile.mkdtemp(prefix="shop-")
+
+
+class ServerConfiguration(BaseConfiguration):
+    """The ring: errors is on by default, the rest is named here."""
+
+    def main(self, root):
+        cfg = root.configuration()
+        self.server_section(cfg)
+        self.storage_section(cfg)
+        cfg.middleware(
+            wellknown=True,
+            logging=True,
+            cors={"allow_origins": "https://shop.example.com"},
+        )
+        cfg.applications().application(code="shop", app_class=Shop)
+
+    def storage_mounts(self, section):
+        section.local(name="site", base_path=SITE_DIR)
+
+
+server = AsgiServer(config=ServerConfiguration)
+```
+
+`BaseConfiguration` is the package's own defaults written as a recipe, and
+`server_section` / `storage_section` are two of its hooks — which is why `main`
+calls two methods it does not define, and defines a third (`storage_mounts`)
+that the inherited `storage_section` calls. That mechanism belongs to
+[015 configuration](../015_configuration/README.md).
+
+Walking the chain outwards from `server.middleware_chain` gives the six in
+order:
+
+```
+ErrorMiddleware · WellKnownMiddleware · LoggingMiddleware · CORSMiddleware · SessionMiddleware · AuthMiddleware
+```
+
+And the installation answers:
+
+| Request | Answer |
+|---|---|
+| `GET /home` | 200 `{"shop": "open"}`, plus `set-cookie: session_id=…` for the new session |
+| `GET /takings`, `Accept: application/json` | **401** with `{"login_url": "/_server/login_page"}` |
+| `GET /takings`, `Accept: text/html` | **302** to `/_server/login_page?next=%2Ftakings` |
+| `GET /robots.txt` | **404** `Not found: /robots.txt` |
+| `OPTIONS /home` with `Origin` and `Access-Control-Request-Method` | 200, `access-control-allow-origin: https://shop.example.com` |
+
+The two `/takings` rows are the same route, the same refusal and the same
+caller-less request, answered two ways because one caller is a browser and the
+other is not. Neither the handler nor the route resolution knows the
+difference: the resolution raised one 401 and the outermost layer negotiated
+it.
+
+And `/robots.txt` never reached the shop. The probe filter raised, and errors
+turned the raise into the 404 — two layers cooperating without either building
+a response.
+
+## What stands on this
+
+Every request served by an installation of this core passes through the ring,
+so the identity the route resolution filters on and the session a handler reads
+are both put there by it. The administrative surface's login flow is the
+outermost layer's challenge negotiation seen from the other side.

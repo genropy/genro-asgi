@@ -12,7 +12,7 @@ what the next person needs to know before touching it.
 login, an access log, or cross-origin access, and the ring is where those live.
 
 Fifth and last of the server skeleton. It assumes
-[020 applications](../020_applications/) — the exceptions it answers are the
+[020 applications](../020_applications/README.md) — the exceptions it answers are the
 ones the route resolution raises — and it is where two later entries put their
 own layer: sessions and authentication own a layer each and are described
 elsewhere.
@@ -21,11 +21,11 @@ elsewhere.
 
 | They lean on it as | Entries |
 |---|---|
-| the layer that puts their thing on the request | [040 sessions](../040_sessions/), [050 authentication](../050_authentication/) |
-| the ring that answers what they raise | [020 applications](../020_applications/) |
-| the other side of its login challenge | [090 server-application](../090_server-application/) |
-| the thing it is confused with | [025 routing system](../025_routing-system/) |
-| the boundary its scope filter draws | [20_spa/030 channel](../../20_spa/030_channel/) |
+| the layer that puts their thing on the request | [040 sessions](../040_sessions/README.md), [050 authentication](../050_authentication/README.md) |
+| the ring that answers what they raise | [020 applications](../020_applications/README.md) |
+| the other side of its login challenge | [090 server-application](../090_server-application/README.md) |
+| the thing it is confused with | [025 routing system](../025_routing-system/README.md) |
+| the boundary its scope filter draws | [20_spa/030 channel](../../20_spa/030_channel/README.md) |
 
 A change to the ordering numbers reaches every request on the machine. A change
 inside one layer reaches only what that layer does.
@@ -33,9 +33,9 @@ inside one layer reaches only what that layer does.
 ## The boundary with 040 and 050
 
 Two of the six layers are the visible half of entries that come later:
-`SessionMiddleware` is where [040 sessions](../040_sessions/) touches a
+`SessionMiddleware` is where [040 sessions](../040_sessions/README.md) touches a
 request, and `AuthMiddleware` is where
-[050 authentication](../050_authentication/) does. This entry owns **where they
+[050 authentication](../050_authentication/README.md) does. This entry owns **where they
 sit in the ring and what they leave on the request**; what a session *is* and
 how an identity is resolved are theirs.
 
@@ -57,7 +57,7 @@ session id never changes, so no login-time cookie exists.
 
 **`5b567a3`** (2026-08-14) restored the challenge negotiation — 401 for the
 anonymous, 403 for the known — and it is the same commit
-[020 applications](../020_applications/) cites for the other half of the pair.
+[020 applications](../020_applications/README.md) cites for the other half of the pair.
 
 ## Traps
 
@@ -116,22 +116,22 @@ Five probes, all driving composed servers at the ASGI level:
   raised `HTTPNotFound` escapes the server uncaught (friction S10);
 - **a middleware of my own**: `middleware_order = 250`, installed with
   `middleware=` plus `middleware_registry=`, lands between logging and cors and
-  stamps every answer. That probe is what the README's block 7 is written from.
+  stamps every answer. That probe is what `design.md`'s block 7 is written from.
 
 Each is a dozen lines to reproduce.
 
 ## Before the next step is written
 
-`design.md` is 🔴 with eleven frictions, all tagged by family. None is settled
+`decisions.md` is 🔴 with eleven frictions, all tagged by family. None is settled
 here: they join the grouped pass over the skeleton (010, 015, 020, 025, 030)
 that the owner chose on 2026-08-23. **With this entry the skeleton is complete,
 so that pass can begin.**
 
 **Four of the eleven are cross-entry** and are written in the same words on
-both sides: S1 with [020 applications](../020_applications/) S14, S2 with
-[20_spa/030 channel](../../20_spa/030_channel/) and 020's S6, S3 with
-[015 configuration](../015_configuration/) S6 and
-[025 routing system](../025_routing-system/) S3, S11 with 020's S18.
+both sides: S1 with [020 applications](../020_applications/README.md) S14, S2 with
+[20_spa/030 channel](../../20_spa/030_channel/README.md) and 020's S6, S3 with
+[015 configuration](../015_configuration/README.md) S6 and
+[025 routing system](../025_routing-system/README.md) S3, S11 with 020's S18.
 
 **S1 turned out smaller than it looked.** Written from 020 it read as two
 competing mappings; read from here it is one live path and one table with no

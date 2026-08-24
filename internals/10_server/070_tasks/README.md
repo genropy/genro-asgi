@@ -1,11 +1,9 @@
 # Tasks
 
-**Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.1 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
 
-**The need.** An installation runs work that is no HTTP request: schedules, batches, spooled runs that must survive and be accounted for.
-
-The task subsystem: scheduler (cron-like plans), spool (the on-disk
-truth of every run), executor and manager. Mounts like any other app;
-administered through the `_server/tasks` section.
-
-Interactions: task-thermometers · server-application · storage (spool files).
+Work that is no HTTP request: schedules, batches and spooled runs that survive
+and are accounted for. The scheduler holds the cron-like plans, the spool is the
+on-disk truth of every run, and the executor and manager drive them; the
+subsystem mounts like any other app and is administered through the
+`_server/tasks` section.

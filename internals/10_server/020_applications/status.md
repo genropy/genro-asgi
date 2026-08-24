@@ -106,7 +106,7 @@ nothing later. A composition whose server has no `PluginMixin` exposes no
 one in the `plugins` section is a configuration error, not an opt-out
 (plugin_mixin.py:106-110).
 
-Driven live on the recipe at the foot of [README.md](README.md): `_armed` is
+Driven live on the recipe at the foot of [README.md](design.md): `_armed` is
 `False` after the server has booted the application, `True` after the first
 access that follows, and the router then carries
 `['auth', 'openapi', 'pydantic']`.
@@ -124,7 +124,7 @@ Proven by `test_routed_application.py:321`
 in `src/` and `tests/`, so the retired call is gone. The form D25 named as its
 replacement — `{"name", "cls", "params"}` — is used **nowhere**: `"cls"` has
 zero occurrences in `src/` and `tests/` too. Those are the same four call sites
-D25 listed for conversion in a later macro. See [design.md](design.md), open
+D25 listed for conversion in a later macro. See [design.md](decisions.md), open
 friction S15.
 
 `add_branches` accepts three mutually exclusive forms and **derives the timing
@@ -352,7 +352,7 @@ still contains only `__init__.py`.
 | `tests/test_sse.py` | 13 | framing, iteration, the heartbeat, consumer departure, the response wrapper |
 
 The app-side contract itself is proven in `tests/test_contract.py` (21 items,
-shared with [010 server](../010_server/)), and `tests/throwaway_app.py` is the
+shared with [010 server](../010_server/README.md)), and `tests/throwaway_app.py` is the
 D7 phase-0 fixture kept out of `src/`.
 
 Every request in `test_routed_application.py` drives a real `AsgiServer`
@@ -366,10 +366,10 @@ subject; they are listed so the class chain is visible in one place.
 
 | Class | Base | Entry |
 |---|---|---|
-| `OpenApiApplication` ([openapi.py:64](../../../src/genro_asgi/applications/openapi.py)) | `RoutedApplication` | [openapi](openapi/) |
-| `McpApplication` ([mcp.py:274](../../../src/genro_asgi/applications/mcp.py)) · `McpOpenApiApplication` (`:328`) | `RoutedApplication` · `OpenApiApplication` | [mcp](mcp/) |
-| `ServerApplication` ([server_app.py:115](../../../src/genro_asgi/applications/server_app.py)) | `OpenApiApplication` | [090 server-application](../090_server-application/) |
-| `SpaApplication` ([spa_app.py:219](../../../src/genro_asgi/applications/spa_app.py)) | `RoutedApplication` | [20_spa/010 spa-application](../../20_spa/010_spa-application/) |
+| `OpenApiApplication` ([openapi.py:64](../../../src/genro_asgi/applications/openapi.py)) | `RoutedApplication` | [openapi](openapi/README.md) |
+| `McpApplication` ([mcp.py:274](../../../src/genro_asgi/applications/mcp.py)) · `McpOpenApiApplication` (`:328`) | `RoutedApplication` · `OpenApiApplication` | [mcp](mcp/README.md) |
+| `ServerApplication` ([server_app.py:115](../../../src/genro_asgi/applications/server_app.py)) | `OpenApiApplication` | [090 server-application](../090_server-application/README.md) |
+| `SpaApplication` ([spa_app.py:219](../../../src/genro_asgi/applications/spa_app.py)) | `RoutedApplication` | [20_spa/010 spa-application](../../20_spa/010_spa-application/README.md) |
 
 `SpaApplication` is the only one that declares a grammar of its own
 (`SpaApplicationGrammar`, spa_app.py:103); the other three inherit
@@ -379,7 +379,7 @@ subject; they are listed so the class chain is visible in one place.
 
 - **D7** (SPECIFICATION.md:93) — the app-side contract born in phase 0 and
   defined by its tests. Holds; the member it names is `mount_name`, which the
-  code does not have — see [design.md](design.md), open friction S1.
+  code does not have — see [design.md](decisions.md), open friction S1.
 - **D16** (SPECIFICATION.md:217) — cooperative init. Held by
   `BaseApplication.__init__` and `RoutedApplication.__init__`.
 - **D18** (SPECIFICATION.md:249) — slots on high-cardinality objects.
@@ -388,11 +388,11 @@ subject; they are listed so the class chain is visible in one place.
 - **D23 wave ruling** (SPECIFICATION.md:413) — handlers are pure, and one
   declaring the live request gets it from `bind_kwargs`. The purity holds; the
   injection exists only on `ServerApplication` and under a different name — see
-  [design.md](design.md), open friction S2.
+  [design.md](decisions.md), open friction S2.
 - **D25** (SPECIFICATION.md:436) — declarative branches, `attach_instance`
   retired. **Half held**: the retired call has zero occurrences left, and the
   `cls` + `params` form that was to replace it has zero occurrences too — see
-  [design.md](design.md), open friction S15.
+  [design.md](decisions.md), open friction S15.
 - **D26** (SPECIFICATION.md:456) — `pydantic` and `openapi` are fixed server
   structure. Implemented as `FIXED_PLUGINS` (plugin_mixin.py:61).
 - **Invariant 2** (SPECIFICATION.md:668) — thread-correct teardown. Implemented

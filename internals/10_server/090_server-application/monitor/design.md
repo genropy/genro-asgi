@@ -1,18 +1,11 @@
-# Monitor — desired design
+# Monitor
 
 **Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
 
-Everything this feature SHOULD be when finished — the target, not the code.
-To be filled by the documentation audit and ratified by the owner.
+**The need.** An admin asks "what is my server doing right now?" and must get ONE page that answers for every mounted app at once.
 
----
+One page over every mounted app, rendered by the `_server/monitor`
+section through the `app_snapshot` / `app_panel` / `panel_source` contract
+that every `BaseApplication` can implement.
 
-# Open frictions
-
-Scaffolding for the interview, not a register: each voice is a question to
-settle, settling it edits this document, and this section shrinks to nothing
-before the design can be ratified.
-
-*(Carried over from the entry's former `frictions.md` on 2026-08-23, verbatim.)*
-
-- Pool monitor parity with the pre_refactoring panels is NOT built yet (second pass), Prometheus metrics missing.
+Interactions: server-application (hosts it) · every app implementing the contract · orchestration (pool projection).

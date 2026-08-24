@@ -19,11 +19,11 @@ is defined in its own page. Everything else in the dossier assumes it.
 
 | They lean on it as | Entries |
 |---|---|
-| a capability layer stacked on the server | [025 routing system](../025_routing-system/), [030 middleware](../030_middleware/), [040 sessions](../040_sessions/), [050 authentication](../050_authentication/), [060 storage](../060_storage/), [070 tasks](../070_tasks/) |
-| an application it hosts | [020 applications](../020_applications/), [090 server-application](../090_server-application/), [20_spa/010 spa-application](../../20_spa/010_spa-application/) |
-| the thing that supplies its shape | [015 configuration](../015_configuration/) |
-| the thing that boots it | [110 cli](../110_cli/) |
-| the thing that tears it down and rebuilds it | [120 restart](../120_restart/) |
+| a capability layer stacked on the server | [025 routing system](../025_routing-system/README.md), [030 middleware](../030_middleware/README.md), [040 sessions](../040_sessions/README.md), [050 authentication](../050_authentication/README.md), [060 storage](../060_storage/README.md), [070 tasks](../070_tasks/README.md) |
+| an application it hosts | [020 applications](../020_applications/README.md), [090 server-application](../090_server-application/README.md), [20_spa/010 spa-application](../../20_spa/010_spa-application/README.md) |
+| the thing that supplies its shape | [015 configuration](../015_configuration/README.md) |
+| the thing that boots it | [110 cli](../110_cli/README.md) |
+| the thing that tears it down and rebuilds it | [120 restart](../120_restart/README.md) |
 
 A change to the demux, to the application contract or to the four members
 reaches all of these. A change inside a capability layer reaches none.
@@ -47,7 +47,7 @@ commit message. D23 (SPECIFICATION.md:398) exists precisely to reinstate the
 rule that every ratified decision is appended, and the same session's other
 rulings did get logged (the CLI entry at SPECIFICATION.md:817 cites "W2c,
 decided 2026-07-25"). This is open friction S1/S2 in
-[design.md](design.md).
+[design.md](decisions.md).
 
 **Later ratifications that touch this entry** — 2026-07-29 (config layer,
 SPECIFICATION.md:772): the server reads itself from its configuration and an
@@ -55,10 +55,10 @@ explicit kwarg wins per kwarg. 2026-07-30 (SPECIFICATION.md:817): the CLI, and
 with it the `serve` path whose host/port precedence is still untested (friction
 S10).
 
-**The parked direction that block 8 of the README depends on** — D23,
+**The parked direction that block 8 of `design.md` depends on** — D23,
 SPECIFICATION.md:418-419: the two-stage live-config architecture (config as a
 live object, `apply_configuration`, hot/cold changes) "stays parked as a future
-macro". The design's §4 builds on it; nothing of it exists in code.
+macro". `decisions.md` §4 builds on it; nothing of it exists in code.
 
 ## Traps
 
@@ -74,7 +74,7 @@ macro". The design's §4 builds on it; nothing of it exists in code.
 
 ## Before the next step is written
 
-`design.md` is 🔴. The interview is `temp/interview_010_server.md`, twelve
+`decisions.md` is 🔴. The interview is `temp/interview_010_server.md`, twelve
 turns; three of them (T1, T2, T3) decide things that bind all 31 entries and
 should be settled before any other entry is audited.
 

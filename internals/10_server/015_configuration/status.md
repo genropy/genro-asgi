@@ -58,7 +58,7 @@ root with the closed section list, every section a singleton `[0:1]`
 | `plugins` / `plugin` | elements.py:350, :356 | the `plugins=` switches |
 | `openapi` | elements.py:362 | nothing — declared, validated, no consumer |
 
-**Grammar mounting works, and is the mechanism §2 of the README describes.** Two elements carry `_meta={"subbuilder": ...}`: `storage` mounts
+**Grammar mounting works, and is the mechanism §2 of `design.md` describes.** Two elements carry `_meta={"subbuilder": ...}`: `storage` mounts
 `app:grammar` (elements.py:270) and `application` mounts `app_class:grammar`
 (elements.py:311). From that node down the foreign grammar governs, while the
 envelope's own attributes stay with this dialect. Proven by
@@ -134,7 +134,7 @@ a database password given as a resolver still resolves —
 ## What does NOT exist
 
 **The tree is a read door only.** There is no writing and no notification, so
-nothing in §5 of the README is implemented:
+nothing in §5 of `design.md` is implemented:
 
 - `apply_configuration` has **zero occurrences** in `src/` and `tests/`;
 - `config/handler.py` declares **no mutator** — searched for
