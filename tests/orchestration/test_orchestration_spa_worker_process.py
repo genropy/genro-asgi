@@ -70,6 +70,7 @@ WORKER_NAME = "standard_0001"
 GROUP = "standard"
 ENTRY_MODULE = "genro_asgi.spa.orchestration.worker_entry"
 ECHO_WORKER = f"{__name__}:EchoWorker"
+ENGINE_WORKER = f"{__name__}:EngineWorker"
 LONG_TTL = 30.0
 BROKEN_PATH = "/falls_over"
 
@@ -103,6 +104,18 @@ class EchoWorker(SpaWorker):
         start_response("200 OK", [("Content-Type", "text/plain"), ("X-Worker", self.name)])
         return [f"{environ['REQUEST_METHOD']} {environ['PATH_INFO']} "
                 f"for {identity}".encode()]
+
+
+class EngineWorker(SpaWorker):
+    """A worker that declares a ``group_engine``: the seam the bridge's own fills.
+
+    The real one receives a built GenroPy site. This one only keeps what it was
+    given, which is all a test needs to know the object crossed the constructor.
+    """
+
+    def __init__(self, name: str, *, group_engine: Any, **kwargs: Any) -> None:
+        super().__init__(name, **kwargs)
+        self.group_engine = group_engine
 
 
 class HandlerStub:
@@ -761,6 +774,40 @@ def test_the_payload_naming_no_class_builds_the_worker_of_the_house(short_root):
     assert type(worker) is SpaWorker
     assert worker.group == GROUP
     assert worker.freeze_handler.root_path == short_root / "frozen_users"
+
+
+def test_the_group_engine_handed_to_the_entry_reaches_the_worker(short_root):
+    engine = object()
+    entry = WorkerEntry(
+        config={
+            "name": WORKER_NAME,
+            "uds_url": "uds:/nowhere.sock",
+            "frozen_users_path": str(short_root / "frozen_users"),
+            "worker_class": ENGINE_WORKER,
+            "kwargs": {"group": GROUP},
+        },
+        group_engine=engine,
+    )
+
+    worker = entry.build_worker()
+
+    assert worker.group_engine is engine
+
+
+def test_no_group_engine_is_passed_to_a_worker_that_was_handed_none(short_root):
+    entry = WorkerEntry(
+        config={
+            "name": WORKER_NAME,
+            "uds_url": "uds:/nowhere.sock",
+            "frozen_users_path": str(short_root / "frozen_users"),
+            "worker_class": ENGINE_WORKER,
+            "kwargs": {"group": GROUP},
+        }
+    )
+
+    # EngineWorker demands the keyword: its absence is what the failure says.
+    with pytest.raises(TypeError, match="group_engine"):
+        entry.build_worker()
 
 
 # ----------------------------------------------------------------------

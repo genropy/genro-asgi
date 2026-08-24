@@ -35,6 +35,13 @@ contract violation: the process says so and exits, never guesses a default.
 grammar that class was configured with; the real deployment names a subclass,
 because the base worker hosts no site.
 
+One thing never travels in that payload: the ``group_engine``. It is an object,
+the payload is JSON, and it is built once per group by the template process this
+child may have been forked from — so it arrives as a constructor argument
+instead, and ``build_worker`` puts it in the worker's own call only when there is
+one. A child spawned the ordinary way gets none, and the base worker does not
+declare it: it hosts no engine.
+
 **Storage is declared synchronous first thing.** The genro-storage nodes are
 ``smartasync``: under a running loop they hand back a coroutine instead of a
 value. The server pins the sync dispatch when it is built, and so does this
@@ -85,9 +92,14 @@ class WorkerEntry:
 
     Args:
         config: the spawn payload; read from the environment when omitted.
+        group_engine: the object the template built once for the whole group and
+            this child inherited by fork; None when this child was spawned, and
+            then nothing of the sort reaches the worker.
     """
 
-    def __init__(self, config: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self, config: dict[str, Any] | None = None, *, group_engine: Any = None
+    ) -> None:
         # Before the loop exists, so every task of this process inherits it
         # (D22): a storage node reached under a loop that is not pinned hands
         # back a coroutine instead of a value.
@@ -100,6 +112,7 @@ class WorkerEntry:
         self.aux_threadpool_size: int | None = self.config.get("aux_threadpool_size")
         self.worker_class: str = self.config.get("worker_class") or DEFAULT_WORKER_CLASS
         self.kwargs: dict[str, Any] = self.config.get("kwargs") or {}
+        self.group_engine = group_engine
         self.worker: SpaWorker | None = None
         self.logger = logging.getLogger(__name__)
 
@@ -155,14 +168,20 @@ class WorkerEntry:
         The deposit is built HERE, on this side: nothing is handed a
         FreezeHandler over the channel, because the road to safety must not
         depend on the wire.
+
+        ``group_engine`` joins the call only when this child has one, so a base
+        worker — which does not declare it — is built by the same line.
         """
         worker_class = self.load_class(self.worker_class)
+        kwargs = dict(self.kwargs)
+        if self.group_engine is not None:
+            kwargs["group_engine"] = self.group_engine
         return worker_class(
             self.name,
             freeze_handler=FreezeHandler(self.frozen_users_path),
             main_threadpool_size=self.main_threadpool_size,
             aux_threadpool_size=self.aux_threadpool_size,
-            **self.kwargs,
+            **kwargs,
         )
 
     async def connect(self) -> FrameStream:
