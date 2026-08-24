@@ -23,6 +23,8 @@ disk and the only place in the project that talks to the filesystem directly;
 ``WorkerConnector``, the wire of one worker; ``WorkerHandler``, which owns one
 process and its death; ``SpaWorker``, the registers that process serves from;
 ``WorkerEntry``, the shell that runs one of those workers in a child process;
+``TemplateEntry``, the process that builds a group's engine once and forks those
+children off it;
 the three ``EnvelopeHandler`` layers, the chain everything a process announces
 climbs; ``SpaCommander``, the vertex that owns the indexes of the whole machine
 and the master of the store every worker replicates; ``GroupHandler``, the
@@ -48,6 +50,7 @@ from .freeze_handler import FreezeHandler
 from .group_handler import GroupHandler
 from .spa_commander import SpaCommander
 from .spa_worker import SpaWorker
+from .template_entry import TemplateEntry
 from .worker_connector import WorkerConnector
 from .worker_entry import WorkerEntry
 from .worker_handler import WorkerHandler
@@ -63,6 +66,7 @@ __all__ = [
     "SiteFailedRequest",
     "SpaCommander",
     "SpaWorker",
+    "TemplateEntry",
     "UserOnHold",
     "WorkerConnector",
     "WorkerEntry",
