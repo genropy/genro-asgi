@@ -34,7 +34,7 @@ words live in this tree:
 | `storage` | [060 storage](../060_storage/) — a mount point, no vocabulary here |
 | `applications` | [020 applications](../020_applications/); each entry's children are the app's own |
 | `databases` | [065 db](../065_db/) |
-| `plugins` | [025 plugins](../025_plugins/) |
+| `plugins` | [025 routing system](../025_routing-system/) |
 | `applications.<code>.commander` | [20_spa/020 orchestration](../../20_spa/020_orchestration/) — NOT a top-level section |
 
 A change to the read stack or to the layering reaches all of them. A change to

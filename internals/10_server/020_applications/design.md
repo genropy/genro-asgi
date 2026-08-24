@@ -182,7 +182,7 @@ every application it hosts. An application composed on a server that offers no
 plugin machinery keeps the ones it arms for itself, and works.
 
 > What a plugin is, and how one is written, is
-> [025 plugins](../025_plugins/).
+> [025 routing system](../025_routing-system/).
 
 ## 9. The vehicle follows the handler's nature
 
@@ -458,7 +458,7 @@ authorization plugin, which the application arms for itself in its own
 constructor rather than receiving it from the server. Nothing states the
 division as a rule, so a reader who counts the always-present plugins gets two
 from the specification and three from the code. Recorded in the same wording in
-[025 plugins](../025_plugins/design.md).
+[025 routing system](../025_routing-system/design.md).
 
 **S18 [cross] — the request id never reaches the log line.** §4 of
 [README.md](README.md) says every request carries an id "so one line in a log
@@ -468,28 +468,12 @@ id. So the identifier's stated purpose is served by nothing. Either the access
 line carries it, or the reason given here is rewritten. Recorded in the same
 wording in [030 middleware](../030_middleware/design.md).
 
-**S19 [placement · cross] — the routing library has three filter dimensions and
-the dossier explains one.** A path's resolution can be filtered on three
-independent axes, one per bundled plugin of the routing library:
+## Settled on 2026-08-24 — no longer open
 
-| Axis | Plugin | Written at a route as | The question it answers |
-|---|---|---|---|
-| **tags** | `auth` | `auth_rule` | *who* is calling |
-| **capabilities** | `env` | `env_requires` | *what this installation has* — accumulated down the tree, so a child inherits its parents' |
-| **channel** | `channel` | `channel_channels` | *through what* the request arrived (`rest`, `mcp`, `web`, `bot_*`) |
+Recorded here only so the next reader is not surprised by its absence.
 
-The dossier describes the first and never names the other two.
-
-Two things depend on the ones it does not describe. **§8 above** says one tree
-serves several protocols, and **channel is the mechanism that makes a route
-visible on one and not another** — so the claim is made here and its instrument
-is unmentioned. And
-`env_requires` is how a route disappears where its dependency is absent, which
-is a deployment concern nothing in the dossier currently has a home for.
-
-Owner, 2026-08-24: the essentials of routing through the library — the tree,
-the resolution, and these three axes — need a place. Whether that is a block in
-this entry, a block in [025 plugins](../025_plugins/), or an entry of its own
-is the question; a subject two entries lean on and neither owns is the shape
-that usually wants its own. Recorded in the same wording in
-[025 plugins](../025_plugins/design.md).
+- **where the essentials of routing live.** Not here. §2 of
+  [README.md](README.md) states that an application *is* a routing class and
+  sends the tree, the walk, its three filters and the plugins to
+  [025 routing system](../025_routing-system/), which was `025_plugins` and was
+  renamed for it. Owner, 2026-08-24.

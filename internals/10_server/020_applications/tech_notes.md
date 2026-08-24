@@ -22,7 +22,7 @@ which four later entries assume.
 
 | They lean on it as | Entries |
 |---|---|
-| the tree they arm a capability onto | [025 plugins](../025_plugins/) |
+| the tree they arm a capability onto | [025 routing system](../025_routing-system/) |
 | the dispatch their ring wraps, and the exceptions they answer | [030 middleware](../030_middleware/) |
 | the request their identity rides on | [050 authentication](../050_authentication/), [040 sessions](../040_sessions/) |
 | a lens on the same tree | [openapi](openapi/), [mcp](mcp/) |

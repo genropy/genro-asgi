@@ -127,7 +127,7 @@ levels, never to be folded together: the site configuration declares *which*
 applications, databases and groups exist (the `applications`, `databases`,
 `commander` sections of the tree); a **plugin** is a genro-routes router
 plugin armed onto the router of one routed application, and is
-[025 plugins](../025_plugins/)'s subject. Installing an application is a
+[025 routing system](../025_routing-system/)'s subject. Installing an application is a
 configuration change; enabling a plugin is a router change.
 
 ## 5. One demux rule

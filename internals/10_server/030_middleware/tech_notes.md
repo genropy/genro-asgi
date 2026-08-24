@@ -24,7 +24,7 @@ elsewhere.
 | the layer that puts their thing on the request | [040 sessions](../040_sessions/), [050 authentication](../050_authentication/) |
 | the ring that answers what they raise | [020 applications](../020_applications/) |
 | the other side of its login challenge | [090 server-application](../090_server-application/) |
-| the thing it is confused with | [025 plugins](../025_plugins/) |
+| the thing it is confused with | [025 routing system](../025_routing-system/) |
 | the boundary its scope filter draws | [20_spa/030 channel](../../20_spa/030_channel/) |
 
 A change to the ordering numbers reaches every request on the machine. A change
@@ -131,7 +131,7 @@ so that pass can begin.**
 both sides: S1 with [020 applications](../020_applications/) S14, S2 with
 [20_spa/030 channel](../../20_spa/030_channel/) and 020's S6, S3 with
 [015 configuration](../015_configuration/) S6 and
-[025 plugins](../025_plugins/) S3, S11 with 020's S18.
+[025 routing system](../025_routing-system/) S3, S11 with 020's S18.
 
 **S1 turned out smaller than it looked.** Written from 020 it read as two
 competing mappings; read from here it is one live path and one table with no

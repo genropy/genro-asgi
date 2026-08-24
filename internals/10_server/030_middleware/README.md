@@ -26,7 +26,7 @@ tree, never the traffic. A **middleware** wraps the dispatch and sees the
 traffic, never the tree. The test that separates them: a middleware can answer
 a request that matched no route at all, and a plugin cannot.
 
-> Plugins are [025 plugins](../025_plugins/).
+> Plugins are [025 routing system](../025_routing-system/).
 
 ## The anatomy
 

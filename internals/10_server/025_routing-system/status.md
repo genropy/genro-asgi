@@ -1,10 +1,46 @@
-# Plugins — current state
+# Routing system — current state
 
-**Version**: 0.3 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.4 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
 
 What exists TODAY on `develop`. Every claim below carries its `file:line` or
 the test that proves it. Coverage figures are from the full suite
 (`pytest tests/`, 1463 passed) run on 2026-08-23 at `9660561`.
+
+## Where the routing system lives
+
+**Almost none of it is in this package.** The tree, the walk, the three filter
+plugins and the plugin base class are genro-routes'
+(`genro-routes/src/genro_routes/`): `core/routing.py` carries `RoutingClass` and
+the `route` marker, `core/base_router.py` the tree and `add_branches`,
+`core/router.py` the process-wide plugin registry, and `plugins/` the five
+bundled plugins — `auth`, `env`, `channel`, `pydantic`, `logging`.
+
+What this package owns is the arming (`plugin_mixin.py`), the one dialect plugin
+it ships, and the configuration section. So the modules below are the seam, not
+the subject; the pin is `genro-routes>=0.28` in `pyproject.toml`.
+
+**The three filters, in the library:** `plugins/auth.py` (tags),
+`plugins/env.py` (capabilities, with `CapabilitiesSet` and the accumulation
+down the tree), `plugins/channel.py` (channels, matched as patterns so
+`bot_.*` works).
+
+**All three have a live consumer in this core, and only one of them is the HTTP
+dispatch's.** Tags are passed by
+[routed_application.py:197-208](../../../src/genro_asgi/routed_application.py),
+which is the path every HTTP request takes. The other two are read by the two
+faces:
+
+| Filter | Read by | Where |
+|---|---|---|
+| tags | the HTTP dispatch, and the MCP engine on both its calls | `routed_application.py:178`, [mcp/engine.py:291](../../../src/genro_asgi/mcp/engine.py) |
+| channel | **the MCP engine**, on the tool list and on every tool call | `mcp/engine.py:205`, `:292` |
+| capabilities | the OpenAPI translator, published as `x-requires` | [translator.py:245-247](../../../src/genro_asgi/plugins/openapi/translator.py) |
+
+The middle row is the design's claim made concrete: the MCP face walks the same
+tree with `channel_channel` set to its own channel, so a route marked for one
+surface does not appear on the other. The HTTP dispatch passes no channel at
+all, which is why every route is reachable over HTTP unless its tags say
+otherwise.
 
 ## The modules
 

@@ -54,7 +54,7 @@ flowchart TB
 | The part | In one line |
 |---|---|
 | the contract | four things the server requires, four an application declares |
-| the route tree | handlers are methods; a path is a walk down the tree |
+| a routing class | an application's marked methods are its addressable behaviour |
 | the dispatch | the seven steps between the handover and the answer |
 | the request | what a handler is given |
 | the answer | what a handler returns, and how it becomes bytes |
@@ -160,12 +160,12 @@ decides what may be survived, never the server.
 
 ---
 
-## 2. The route tree — handlers are methods
+## 2. An application is a routing class
 
-Inside, an application is a **tree of routes**, and the tree is built from the
-class itself: a method marked as a route becomes a node named after the
-method. There is no table of paths, no registration call, and no separate
-file that has to be kept in step with the code.
+The class you subclass is two things at once. Toward the server it is an
+application — the contract of block 1. Toward its own insides it is a
+**routing class**: a class whose marked methods *are* its addressable
+behaviour.
 
 ```python
 class Shop(RoutedApplication):
@@ -180,47 +180,30 @@ class Shop(RoutedApplication):
     def takings(self): ...                 # answers /takings, to admins only
 ```
 
-The third is how a route is protected: the rule names what the caller must
-hold, and block 3 describes what the tree does with it. A route with no
-`auth_rule` is public.
+There is no table of paths, no registration call, and no separate file to keep
+in step with the code. A method marked as a route becomes a node named after
+the method, and the class's routes together form its **route tree**.
 
-The tree grows in two more ways.
+That inheritance is the reason this page can be short about routing. Everything
+an application does with paths — how a tree is built and walked, how a
+separately written class is attached below a name, what filters a caller's
+identity applies to the walk, and what a plugin is — belongs to the routing
+system, and an application gets all of it by being a routing class rather than
+by implementing any of it.
 
-**Sub-trees.** A separate routing class is attached under a name, and its
-routes hang below that name. This is how an application is assembled out of
-parts written independently — a catalogue, an ordering API — each of them a
-plain class with routes, none of them knowing about the application it will
-be attached to.
+Two facts from there are used by the blocks that follow, and are stated here so
+those blocks read on their own. **A route may carry options beside it**, like
+the `auth_rule` above, which nothing in the handler body reads. And **every
+tree can describe itself** — its routes, their declared parameters, the options
+beside them — which is what the machine-readable faces of block 8 are built
+from.
 
-**Plugged capabilities.** A **plugin** is a capability armed onto the tree by
-name, and it applies to every node in it, attached sub-trees included.
+> The routing system is [025 routing system](../025_routing-system/).
 
-Three are there without anyone asking, and they arrive by two different routes.
-
-The application arms one **for itself**, in its own constructor: `auth`, which
-filters entries by the caller's authorization. It is there in every
-application, on every kind of server, because the application does not depend
-on anyone to put it there.
-
-The server arms two more on every application it hosts: `pydantic`, which
-reads handler signatures so declared parameters can be checked, and `openapi`,
-which carries the per-route controls over how a handler is published. Those
-two are **fixed structure, not a choice** — a site's configuration may add
-further plugins over them and may not switch either of them off, because a
-per-route control that only works when a capability happens to be enabled is a
-control nobody can rely on.
-
-The second route needs a server that has the plugin machinery, which the bare
-base server does not. An application embedded in one keeps `auth` and runs
-with nothing else armed.
-
-> What a plugin is and how one is written is
-> [025 plugins](../025_plugins/).
-
-The tree is per application, and it is the application's own. Nothing outside
-reaches in to add a route to somebody else's tree — a rule with a history: a
-system endpoint injected into a hosted application's router is how two
-programs end up sharing one namespace and colliding over it.
+**A tree belongs to one application.** Nothing outside reaches in to add a
+route to somebody else's tree — a rule with a history: a system endpoint
+injected into a hosted application's router is how two programs end up sharing
+one namespace and colliding over it.
 
 ---
 
@@ -263,8 +246,14 @@ case and not the loosest. Every route carrying a rule is closed to them,
 because no tag they hold can match one. What they reach is exactly the routes
 that carry no rule at all — which is the definition of public.
 
+Tags are one of three filters the resolution accepts, and the only one an
+ordinary application uses. The other two — what this installation is able to
+do, and which channel the request came in through — belong to the routing
+system with the rest of the walk.
+
 > Who resolves the identity and puts it there is
-> [050 authentication](../050_authentication/).
+> [050 authentication](../050_authentication/); the three filters are
+> [025 routing system](../025_routing-system/).
 
 **Step 4** fits the values that arrived to the parameters the handler
 declares. A handler is an ordinary method with ordinary parameters, and it is
@@ -581,7 +570,9 @@ Four rows are worth reading twice. `/home` and `/outlet/home` are the same
 method on the same class, answering differently because each installation reads
 the words written under its own code. `/outlet/whoami` proves the handler sees
 `/whoami`: the prefix never reaches the application. And `/catalogue/search`
-is served by a class that was written knowing nothing about `Shop`.
+is served by a class written knowing nothing about `Shop`, attached below a
+name — the routing system's business, shown here only because an application
+assembled from parts is the ordinary case.
 
 The first row is the one that surprises. `Shop` is the site root, so every
 unclaimed path reaches it — including `/`, which arrives as `/` and finds no

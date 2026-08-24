@@ -139,7 +139,7 @@ What an application wants for itself goes in its own tree, where a plugin is
 the instrument. The two extension points differ in scope and that is the whole
 distinction.
 
-> [025 plugins](../025_plugins/).
+> [025 routing system](../025_routing-system/).
 
 ---
 
@@ -187,7 +187,7 @@ no ratified decision says it, and
 [015 configuration](../015_configuration/) §2 promises the opposite shape for
 capabilities generally. Recorded in the same wording in
 [015 configuration](../015_configuration/design.md) S6 and
-[025 plugins](../025_plugins/design.md) S3.
+[025 routing system](../025_routing-system/design.md) S3.
 
 **S4 [silent] — a misspelled log level becomes INFO without a word.** The
 access-log layer resolves its `level` option by looking the name up on the
@@ -205,7 +205,7 @@ intended, and the two readings differ in what an operator's log looks like.
 **S6 [unratified] — nothing states that the ring is uniform per machine.** §8
 is written from the shape of the code, not from a decision: no source says a
 middleware may not be per-application, and the same question is open one entry
-away for plugins ([025 plugins](../025_plugins/design.md) S5). The two should
+away for plugins ([025 routing system](../025_routing-system/design.md) S5). The two should
 be answered together, because the answer decides whether the switches stay in
 the server's vocabulary or move into each application's.
 
@@ -245,7 +245,7 @@ switch is a plain member of the six, so a description may turn the outermost
 layer off. With it off, an `HTTPNotFound` raised by the route resolution
 **escapes the server uncaught** — proven live in [status.md](status.md).
 
-Compare [025 plugins](../025_plugins/design.md) §4, where disabling one of the
+Compare [025 routing system](../025_routing-system/design.md) §4, where disabling one of the
 fixed pair is an error rather than an opt-out, on the argument that a control
 nobody can rely on is not a control. The same argument applies here with more
 force: every other layer in the ring, and every raise in the codebase, is

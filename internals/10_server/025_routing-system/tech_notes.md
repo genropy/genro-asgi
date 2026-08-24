@@ -1,6 +1,6 @@
-# Plugins — tech notes
+# Routing system — tech notes
 
-**Version**: 0.1 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.2 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
 
 For whoever works ON this entry, not for whoever reads about plugins. The
 working trail: what decided what, what is easy to look for and not find, and
@@ -8,14 +8,20 @@ what the next person needs to know before touching it.
 
 ## Classification and position
 
-**A shelf** — a technical stratum. Nobody asks for "plugins"; they ask for
-authorization, or for a schema, and a plugin is how those arrive.
+**A shelf** — a technical stratum. Nobody asks for "a routing system"; they ask
+for a URL that calls a method, for authorization, for a schema.
 
-Fourth in reading order, and the smallest entry of the skeleton by some
-distance: 148 lines of mechanism plus one shipped plugin. It assumes
-[020 applications](../020_applications/) entirely — a plugin is armed on a
-route tree, so the tree has to exist first — and it is assumed in turn by the
-two dialect faces and by authorization.
+It was `025_plugins` until 2026-08-24, when the owner made the routing system
+its subject and put the plugins after it. Two reasons, both worth keeping: the
+plugins were unreadable without the tree they arm, and
+[020 applications](../020_applications/) was carrying two subjects — what an
+application is, and what a route tree is — which is why its friction tail grew
+to twice any other entry's.
+
+Fourth in reading order **and it comes after what it explains**, deliberately:
+020 says an application *is* a routing class, and this entry then explains a
+routing class in full. That inversion is the owner's, recorded as §1 of
+[design.md](design.md).
 
 ## Who stands on this
 
@@ -28,6 +34,23 @@ two dialect faces and by authorization.
 
 A change to arming reaches every routed application. A change to the shipped
 dialect plugin reaches only what publishes a schema.
+
+## Most of the subject is in another repository
+
+The tree, the walk, the three filters and the plugin base class are
+genro-routes'. This package owns the arming, one dialect plugin and the
+configuration section. When a claim here needs checking, the file is usually
+under `genro-routes/src/genro_routes/`, not under `src/genro_asgi/` — and
+`status.md` names which.
+
+**All three filters have a live consumer, and they are not where you would
+look.** Only tags are passed by the HTTP dispatch. **Channel is the MCP
+engine's** (`mcp/engine.py:205` and `:292`) — that face walks the same tree with
+its own channel, which is the whole mechanism behind "one tree, several
+surfaces". Capabilities are the OpenAPI translator's, published as `x-requires`
+(`translator.py:245-247`). Searching `routed_application.py` for the other two
+finds nothing, and concluding they are unused is the mistake this note exists
+to prevent — it is the mistake this entry's first draft made.
 
 ## The boundary with 020/openapi — read this before editing anything
 

@@ -120,17 +120,17 @@ server from each, so a recipe that stops working breaks the suite instead of
 rotting unnoticed. Until it exists, the recipes are kept honest by hand — and
 the longer that lasts, the less they are worth.
 
-**Owed, and bigger:** a place for the **essentials of routing through
-genro-routes**. A path's resolution can be filtered on three independent axes,
-one per bundled plugin of the library — `auth` on the caller's **tags**, `env`
-on the installation's **capabilities**, `channel` on the **channel** a request
-arrived through. The dossier describes the first and never names the other two,
-and one of the unnamed ones is load-bearing:
-[020 applications](../10_server/020_applications/) claims that one tree serves
-several protocols, and *channel* is the mechanism that makes a route visible on
-one and not another. Whether the subject becomes a block in 020, a block in
-[025 plugins](../10_server/025_plugins/), or an entry of its own is open.
-*(Owner, 2026-08-24.)*
+**Settled, 2026-08-24:** the **essentials of routing** have a home. A path's
+resolution can be filtered on three independent axes, one per bundled plugin of
+genro-routes — `auth` on the caller's **tags**, `env` on the installation's
+**capabilities**, `channel` on the **channel** a request arrived through — and
+the dossier described only the first. The subject now lives in
+[025 routing system](../10_server/025_routing-system/), which was `025_plugins`
+and was renamed for it: the routing system first, the plugins after. It comes
+*after* applications on purpose —
+[020 applications](../10_server/020_applications/) states that an application
+**is** a routing class, and that one sentence is enough for its own blocks to
+stand while the mechanism is explained here. *(Owner, 2026-08-24.)*
 
 ### `design.md` is the fixed pole
 
@@ -292,7 +292,7 @@ flowchart TB
 | [010 server](../10_server/010_server/) | the ground: the server object, the applications it hosts, how a request finds one, ordered start and stop |
 | [015 configuration](../10_server/015_configuration/) | the tree every entry reads its own words from: layers, read stack, subscribers |
 | [020 applications](../10_server/020_applications/) | RoutedApplication and the route tree · [openapi](../10_server/020_applications/openapi/) · [mcp](../10_server/020_applications/mcp/) |
-| [025 plugins](../10_server/025_plugins/) | capabilities plugged by name, genro-routes entry points |
+| [025 routing system](../10_server/025_routing-system/) | what a routing class is: the tree, the filtered walk, and the plugins armed on it |
 | [030 middleware](../10_server/030_middleware/) | the uniform ring every request passes |
 | [040 sessions](../10_server/040_sessions/) | per-user server-side state between requests |
 | [050 authentication](../10_server/050_authentication/) | 401 vs 403 · [avatar](../10_server/050_authentication/avatar/) · [tags](../10_server/050_authentication/tags/) |
