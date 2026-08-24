@@ -289,7 +289,7 @@ Interview file: `temp/interview_010_server.md`.
 
 ## Upstream — settling these edits SPECIFICATION.md
 
-**S1 — D2 says the primary application is always present.** D2,
+**S1 [spec] — D2 says the primary application is always present.** D2,
 SPECIFICATION.md:54: "**the primary app, always present** — answers `/` and
 everything no mount claims". §5 above says a server with nothing on the root
 is legitimate, and the code agrees (status.md). The overturn's only record is
@@ -297,20 +297,20 @@ commit `a1a8f7e`, never appended to the log, although **D23**
 (SPECIFICATION.md:398) exists precisely to reinstate "every ratified decision
 is APPENDED here". Settling it means amending D2.
 
-**S2 — D3 states the rule in two branches.** D3, SPECIFICATION.md:62, has
+**S2 [spec] — D3 states the rule in two branches.** D3, SPECIFICATION.md:62, has
 mount-or-primary; §5 has four branches, and neither the 307 nor the `default`
 application appears anywhere in SPECIFICATION.md. Arguably still *one* rule
 with fallbacks, which is why it is a question and not a defect. Same missing
 log entry as S1. Settling it means amending or annotating D3.
 
-**S3 — D5 gives the registry a duty nobody executes.** D5,
+**S3 [spec] — D5 gives the registry a duty nobody executes.** D5,
 SPECIFICATION.md:74, duty (1) is "create the right request from the scope".
 The registry creates a thin in-flight record; the `Request` handlers receive
 is built by the owning application (status.md has the call sites). No source
 for the reassignment was found in SPECIFICATION §2/§8, the `temp/` registers
 or the `codex/` documents. Settling it means amending D5.
 
-**S4 — where the principle of §1 gets written.** "Static only where dynamic
+**S4 [placement] — where the principle of §1 gets written.** "Static only where dynamic
 cannot be had" governs all 31 entries, not this one. If it lives only here,
 the next entry does not inherit it. Candidate homes: the rules list in
 `internals/00_overview/README.md`, a new D-entry in SPECIFICATION.md, or the
@@ -318,7 +318,7 @@ coding rules of the meta CLAUDE.md.
 
 ## Consequences of §4 to be decided
 
-**S5 — what hot mount/unmount does to three properties.** Today's immobility
+**S5 [live-config] — what hot mount/unmount does to three properties.** Today's immobility
 is load-bearing in three places, and §4 touches each:
 
 - the demux reads the mount index with no lock, no snapshot and no
@@ -337,7 +337,7 @@ against a tree nobody accepted. The first and the third are still open, and the
 third has grown a second half — what "exactly once" means for an application
 that is legitimately removed and put back.*
 
-**S6 — who watches, and at what granularity.** *The "refused when" half was
+**S6 [live-config] — who watches, and at what granularity.** *The "refused when" half was
 settled on 2026-08-23: accepting is atomic and encloses the notification, so a
 failure changes nothing, and feasibility is not pre-computed — the attempt is
 the check. See [015 configuration](../015_configuration/decisions.md) §6.*
@@ -351,7 +351,7 @@ that is deleted wholesale.
 These are settled by fixing the code, not by amending a document; they are
 listed here so the interview can order them against the rest.
 
-**S7 — a multi-segment `mount` registers and is unreachable, silently.** No
+**S7 [silent] — a multi-segment `mount` registers and is unreachable, silently.** No
 validation that a mount is a single path segment; the demux only ever matches
 the first. Proven live in status.md: the application is installed, listed,
 visible to the monitor, and dead — no error at boot, no error at request
@@ -359,30 +359,30 @@ time. `mount="/api"` fails the same way. The coding rules want an explicit
 error for an impossible case; the probability rule accepts an infimum case
 **provided it ends noisily**. This one is silent.
 
-**S8 — `default=` alongside a root application is accepted and inert.**
+**S8 [silent] — `default=` alongside a root application is accepted and inert.**
 Validated as a name, never consulted, because the root application always
 wins first. Proven live in status.md. A configuration that says something and
 gets nothing, without a word. Milder than S7, same family.
 
-**S9 — `run_cleanups(error=...)` has no caller and no reader.** The parameter
+**S9 [unread] — `run_cleanups(error=...)` has no caller and no reader.** The parameter
 is declared and documented as carrying the terminating exception for
 error-aware cleanups; the body never reads it, the only production caller
 passes nothing, no test passes it. Either the argument goes, or §8's mechanism
 grows the error-aware half it promises.
 
-**S10 — two untested paths.** `AsgiServer.serve()`'s host/port precedence
+**S10 [untested] — two untested paths.** `AsgiServer.serve()`'s host/port precedence
 (the only uncovered statements of its module, and the path every deployment
 takes) and the `ValueError` on an unsupported ASGI scope type. Details and
 line numbers in status.md. The first is shared with
 [110 cli](../110_cli/README.md) and [015 configuration](../015_configuration/README.md).
 
-**S11 — accepted risk: the pool teardown blocks the loop.** The lifespan
+**S11 [unratified] — accepted risk: the pool teardown blocks the loop.** The lifespan
 branch joins the worker threads synchronously on the event loop, after the
 shutdown acknowledgement has been sent — so the loop has nothing left to
 serve. Recorded as accepted pending confirmation; draining off the loop buys
 nothing at that point.
 
-**S12 — repo-wide: `tests/x/` is empty.** The coding rules mandate contract
+**S12 [untested] — repo-wide: `tests/x/` is empty.** The coding rules mandate contract
 tests and implementation/edge tests split by folder; the edge folder holds
 only `__init__.py`, so every test is classified contract and every failure is
 a STOP. Either correct as it stands, or a reclassification is owed — its own
@@ -395,7 +395,7 @@ Found by a reader who had only the documents. Each lives between two or three
 entries, is written in the same words in each, and is settled once for all of
 them.
 
-**S13 — two documents answer "how does a handler know which request it is
+**S13 [placement] — two documents answer "how does a handler know which request it is
 serving" differently.** §4 of [README.md](design.md) says the registry answers
 *which request am I serving right now?*, "asked by code buried deep inside a
 handler, which needs the request but was never handed it".
@@ -406,7 +406,7 @@ no document draws that line, so the two pages read as opposites. Settling it
 means writing the distinction in both. Recorded in the same wording in
 [020 applications](../020_applications/decisions.md).
 
-**S14 — the application contract has three different lengths across the
+**S14 [placement] — the application contract has three different lengths across the
 dossier.** [020 applications](../020_applications/decisions.md) §1 splits it four
 and four. §2 of [README.md](design.md) states a list of its own and adds that
 an application declares what may be done to it.

@@ -270,7 +270,7 @@ answers are in §6.
 
 ## Still open
 
-**S1 — the whole of §6 is unbuilt.** The code has a read door and no more:
+**S1 [live-config] — the whole of §6 is unbuilt.** The code has a read door and no more:
 `apply_configuration` has zero occurrences in `src/` and `tests/`, the handler
 declares no mutator, and nothing subscribes to anything (searches in
 [status.md](status.md)). The machinery it would stand on exists and is unused —
@@ -281,19 +281,19 @@ same subject as S5/S6 of [010 server](../010_server/decisions.md) seen from the
 other side: there the question is what falls away when immobility goes, here it
 is what has to be built.
 
-**S2 — where the capability is declared.** §6 names one candidate — an
+**S2 [live-config] — where the capability is declared.** §6 names one candidate — an
 attribute of the element declaration, next to the word's type and default — and
 deliberately leaves it unsettled. It needs deciding before any word claims to
 be hot-changeable, because it decides where a reader looks to find out.
 
-**S3 — a convergence that does not finish.** A part waiting for the people
+**S3 [live-config] — a convergence that does not finish.** A part waiting for the people
 using it may wait for people who never leave. Wait indefinitely, force after a
 declared grace period, or give up and revert: not decided, and deferred with
 the mechanism. It belongs with the restart liturgy
 (`temp/liturgia_riavvio_orientamenti_2026-08-20.md`), which has the same
 question about the same kind of waiting.
 
-**S4 — a visible convergence state.** §6 distinguishes *accepted and in
+**S4 [live-config] — a visible convergence state.** §6 distinguishes *accepted and in
 progress* from *done*, and nothing in the system can currently express that
 difference. Whatever shows it belongs to the monitor
 ([090 server-application](../090_server-application/README.md)), but the state itself
@@ -301,20 +301,20 @@ has to exist first, and nobody owns it yet.
 
 ## Vocabulary and ownership
 
-**S5 — `openapi` is grammar with no reader.** The section is declared and
+**S5 [unread] — `openapi` is grammar with no reader.** The section is declared and
 validated by the grammar (elements.py:362) and **no code consumes it**: the
 only other mention in the package is the handler's own docstring saying so
 (handler.py:49). A word nobody reads is either an obligation not yet met or a
 word that should go; §3 above quietly assumes the first.
 
-**S6 — the middleware switches name a closed registry.** Only the core's own
+**S6 [unread] — the middleware switches name a closed registry.** Only the core's own
 middleware can be configured; one registered from outside cannot be. Whether
 that is the design or a limit is not recorded anywhere — and §3 says every part
 declares its own words, which reads as promising the opposite.
 
 ## Owed, not a defect
 
-**S7 — the recipe in this page must stay executable.** The rule is that every
+**S7 [untested] — the recipe in this page must stay executable.** The rule is that every
 entry closes with a complete configuration and that those are run, never
 proof-read. Writing this one found **two real defects in it** that reading had
 not: a non-existent module in the imports, and a storage path the backend
@@ -328,7 +328,7 @@ Found by a reader who had only the documents. Each lives between two or three
 entries, is written in the same words in each, and is settled once for all of
 them.
 
-**S8 — the application contract has three different lengths across the
+**S8 [placement] — the application contract has three different lengths across the
 dossier.** [020 applications](../020_applications/decisions.md) §1 splits it four
 and four. [010 server](../010_server/README.md) §2 states a list of its own and adds
 that an application declares what may be done to it. §5 of
@@ -340,7 +340,7 @@ from the other two. Recorded in the same wording in
 [010 server](../010_server/decisions.md) and
 [020 applications](../020_applications/decisions.md).
 
-**S9 — this entry never documents `BaseConfiguration`'s hooks.** A site recipe
+**S9 [undocumented] — this entry never documents `BaseConfiguration`'s hooks.** A site recipe
 deviates from the package defaults by overriding one hook — `server_section`,
 `storage_section`, or the `storage_mounts` that the second calls. §3 above names
 none of the three, and the class is described only as the dialect with the
@@ -356,7 +356,7 @@ are the one executable thing in each entry. The hooks belong here, and the
 paragraph 020 added above its own recipe is a patch until they are. Recorded in
 the same wording in [020 applications](../020_applications/decisions.md).
 
-**S10 — the recipe reads as if the storage key were required.** The recipe at
+**S10 [undocumented] — the recipe reads as if the storage key were required.** The recipe at
 the foot of [README.md](design.md) passes `storage_key` as a resolver and warns
 that resolving to empty is a boot error. The recipe of
 [010 server](../010_server/README.md) omits the key entirely and boots, because the

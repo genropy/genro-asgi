@@ -268,7 +268,7 @@ Interview file: `temp/interview_020_applications.md`.
 
 ## Upstream — settling these edits SPECIFICATION.md
 
-**S1 — the app-side contract in §4 names a member that does not exist.**
+**S1 [spec] — the app-side contract in §4 names a member that does not exist.**
 SPECIFICATION.md:643-644 states the contract as "an ASGI callable with
 `mount_name`, a `server` property …". There is no `mount_name`: the identity
 has been `code` + `mount` since commit `a1a8f7e`. This is the same unlogged
@@ -276,7 +276,7 @@ ruling as S1/S2 of [010 server](../010_server/decisions.md), seen on the
 application side, and settling it means amending §4 of the specification along
 with D2 and D3.
 
-**S2 — the live request reaches only the administrative application.** D23,
+**S2 [spec] — the live request reaches only the administrative application.** D23,
 SPECIFICATION.md:413, ratifies that a handler needing the live request
 "DECLARES a `request` parameter injected by `bind_kwargs`". In the shipped code
 the injection exists **only on the administrative application**, and under the
@@ -288,7 +288,7 @@ injection belongs, and which name is ratified.
 
 ## Where the response shape is ratified
 
-**S3 — §10 has delivery commits and no decision.** One flat buffered class
+**S3 [unratified] — §10 has delivery commits and no decision.** One flat buffered class
 with type dispatch, a streaming sibling rather than a subclass, and the SSE
 framing: none of it appears in SPECIFICATION.md, in §3's unopposed list, or in
 the `temp/` registers. The record is the modules' own contracts and the two
@@ -302,7 +302,7 @@ These end in a wrong result with no error anywhere, which is the family the
 probability rule refuses outright: an infimum case may be accepted **provided
 it ends noisily**, and none of these does.
 
-**S4 — a body sent without a `content-type` header is discarded, and the
+**S4 [silent] — a body sent without a `content-type` header is discarded, and the
 request answers 200.** The body is read only when the header is present, so a
 caller that omits it has its document dropped and receives an answer computed
 from the defaults. Proven live in [status.md](status.md): the same POST
@@ -310,7 +310,7 @@ answers `{"sum": 5}` with the header and `{"sum": 0}` without it. The gate is
 in `genro_tytx.asgi_data`, so settling it may mean fixing a dependency rather
 than this package.
 
-**S5 — a `TypeError` inside a synchronous handler is reported to the caller as
+**S5 [silent] — a `TypeError` inside a synchronous handler is reported to the caller as
 a bad request.** A bug in a handler's own body — an addition between an int and
 a string — surfaces as **400 "Invalid request arguments"**, with the internal
 exception message in the body. The same bug in an asynchronous handler surfaces
@@ -321,7 +321,7 @@ internal message disclosed to them.
 
 ## Gaps in what exists
 
-**S6 — an application cannot answer a WebSocket.** The only WebSocket door is
+**S6 [unratified] — an application cannot answer a WebSocket.** The only WebSocket door is
 the server's, and at the base it accepts the connection and closes it politely;
 no composition hands a socket to an application, so no application can hold a
 long-lived conversation. Meanwhile the ratified delivery design for the SPA
@@ -333,7 +333,7 @@ would grow the sixth obligation. Recorded in the same wording in
 [20_spa/030 channel](../../20_spa/030_channel/README.md), and to be settled once for
 both.
 
-**S7 — the request body is never streamed.** It is read whole into memory
+**S7 [placement] — the request body is never streamed.** It is read whole into memory
 before the handler runs, so the size of an upload is bounded by the memory of
 the process serving it. The answer side streams; the request side does not.
 Nothing records this as a decision. Whether the arrival wants a streaming
@@ -341,14 +341,14 @@ request body — and if not, why not — is unanswered, and §1 of
 [00 overview](../../00_overview/README.md) requires the reason to be written where the
 limit is accepted.
 
-**S8 — the path from a handler to a stream is untested.** The dispatch branch
+**S8 [untested] — the path from a handler to a stream is untested.** The dispatch branch
 that recognises a streamed answer and steps aside is the single uncovered
 statement of its module, and it is the only route by which a handler's stream
 reaches the wire. Its one production consumer is the inspector section. The
 streaming and SSE classes are themselves covered; what has no test is the
 handover. Line numbers in [status.md](status.md).
 
-**S9 — the same 400 body carries two different things.** The bad-request answer
+**S9 [silent] — the same 400 body carries two different things.** The bad-request answer
 interpolates the underlying exception's message, which is what makes a genuine
 validation failure useful to the caller and is also how S5 leaks an internal
 one. Whether the detail is part of the contract or a convenience is not
@@ -356,7 +356,7 @@ recorded, and the two halves cannot be settled separately.
 
 ## Surface with no consumer
 
-**S10 — three public members of the request nobody reads, and one guard nobody
+**S10 [unread] — three public members of the request nobody reads, and one guard nobody
 can reach.** `created_at`, `age` and `scope` on the request have no consumer in
 `src/`, in `tests/`, or in the genropy-asgi bridge, and the timestamp behind the
 first two is stamped on every request that is served. Separately, the
@@ -372,7 +372,7 @@ These four were found by a reader who had only the documents. Each lives
 between two or three entries, is written in the same words in each, and is
 settled once for all of them.
 
-**S11 — two documents answer "how does a handler know which request it is
+**S11 [placement] — two documents answer "how does a handler know which request it is
 serving" differently.** [010 server](../010_server/README.md) §4 says the registry
 answers *which request am I serving right now?*, "asked by code buried deep
 inside a handler, which needs the request but was never handed it". §5 above
@@ -382,7 +382,7 @@ the request object — but no document draws that line, so the two pages read as
 opposites. Settling it means writing the distinction in both. Recorded in the
 same wording in [010 server](../010_server/decisions.md).
 
-**S12 — the application contract has three different lengths across the
+**S12 [placement] — the application contract has three different lengths across the
 dossier.** §1 above splits it four and four. [010 server](../010_server/README.md) §2
 states a list of its own and adds that an application declares what may be
 done to it. [015 configuration](../015_configuration/README.md) §5 adds the
@@ -393,7 +393,7 @@ one list, written here and referred to from the other two. Recorded in the same
 wording in [010 server](../010_server/decisions.md) and
 [015 configuration](../015_configuration/decisions.md).
 
-**S13 — `BaseConfiguration`'s hooks are used and nowhere documented.** A site
+**S13 [undocumented] — `BaseConfiguration`'s hooks are used and nowhere documented.** A site
 recipe deviates from the package defaults by overriding one hook —
 `server_section`, `storage_section`, or the `storage_mounts` that the second
 calls. [015 configuration](../015_configuration/README.md) names none of the three, and
@@ -410,7 +410,7 @@ belong in 015, and the paragraph added above this entry's recipe is a patch
 until they are there. Recorded in the same wording in
 [015 configuration](../015_configuration/decisions.md).
 
-**S14 — two exception-to-status mappings, and nothing relates them.** The
+**S14 [unread] — two exception-to-status mappings, and nothing relates them.** The
 resolution maps router failures to the HTTP exceptions the ring answers. The
 response class carries a second table of its own, which maps `ValueError` and
 `TypeError` to 400, `FileNotFoundError` to 404, `PermissionError` to 403 and
@@ -421,7 +421,7 @@ owns the ring. Recorded in the same wording there.
 
 ## Half a migration
 
-**S15 — the factory form of §7 is used nowhere.** `attach_instance` is gone
+**S15 [unread] — the factory form of §7 is used nowhere.** `attach_instance` is gone
 from the package, and every branch in it — four call sites, listed in
 [status.md](status.md) — is still declared in the **instance** form, handing
 over an already-built object. D25 named exactly those four sites and put their
@@ -438,7 +438,7 @@ recipe teaches whichever form we keep.
 
 ## Declared here, absent in the code
 
-**S16 — two of the four declarations of §1 have no member to be made with.**
+**S16 [unread] — two of the four declarations of §1 have no member to be made with.**
 `BaseApplication` carries nothing by which an application says whether it can be
 moved while the server runs, and nothing by which it says its own failure is
 survivable — proven in [status.md](status.md), where the search comes back
