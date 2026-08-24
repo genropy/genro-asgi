@@ -140,6 +140,8 @@ class SpaApplicationGrammar(ApplicationGrammar):
         main_threadpool_size: int | BagResolver = None,
         aux_threadpool_size: int | BagResolver = None,
         worker_kwargs: dict = None,
+        engine_factory: str = None,
+        engine_kwargs: dict = None,
     ) -> None:
         """One group of workers: its own policies, and the identity of its child.
 
@@ -174,6 +176,13 @@ class SpaApplicationGrammar(ApplicationGrammar):
         loads), the two thread pool sizes, and ``worker_kwargs``, the grammar that
         class is built with. The two paths are the installation's and are declared
         once, on ``commander``.
+
+        The BIRTH of the child: ``engine_factory`` is the ``module:Class`` of the
+        class that builds the one expensive thing all this group's workers share,
+        and ``engine_kwargs`` what that class is built with. Declared, the group
+        runs a template process that builds it once and forks every worker out of
+        it, so the cost is paid once instead of once per worker. Omitted, the group
+        spawns its workers the ordinary way and has no template at all.
         """
 
     @element(sub_tags="groups[0:1]", node_label="commander")

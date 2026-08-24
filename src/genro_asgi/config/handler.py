@@ -369,6 +369,8 @@ class ConfigurationHandler(ConfigHandler):
                 "main_threadpool_size",
                 "aux_threadpool_size",
                 "worker_kwargs",
+                "engine_factory",
+                "engine_kwargs",
             )
             worker_kwargs = dict(kwargs.pop("worker_kwargs", None) or {}, group=child.label)
             idle_minutes = self(f"{path}.user_idle_freeze_minutes", default=None)

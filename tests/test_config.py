@@ -735,6 +735,8 @@ class SpaPoolConfig(AsgiConfigBuilder):
             main_threadpool_size=8,
             aux_threadpool_size=2,
             worker_kwargs={"site_path": "/srv/shop"},
+            engine_factory="myshop.app:ShopEngineFactory",
+            engine_kwargs={"source": "/srv/shop"},
         )
         groups.group(name="canary", entry_module="genro_asgi.spa.orchestration.worker_entry")
 
@@ -797,6 +799,10 @@ class TestCommanderSection:
                 "group": "stable",
                 "user_idle_freeze_minutes": 45.0,
             },
+            # And how its workers are born: a template builds the engine once and
+            # forks every one of them out of it.
+            "engine_factory": "myshop.app:ShopEngineFactory",
+            "engine_kwargs": {"source": "/srv/shop"},
         }
 
     def test_a_group_that_declares_only_its_child_leaves_every_default_alone(self) -> None:
@@ -859,6 +865,30 @@ class TestCommanderSection:
                 "user_idle_freeze_minutes": 45.0,
             },
         }
+        # The two engine keys are NOT among those: they are the group's own, and
+        # what they reach is the template it owns.
+        assert group.template.launch_payload == {
+            "name": "template-stable",
+            "engine_factory": "myshop.app:ShopEngineFactory",
+            "kwargs": {"source": "/srv/shop"},
+        }
+
+    def test_a_group_that_declares_no_engine_factory_owns_no_template(self, tmp_path) -> None:
+        groups = ConfigurationHandler(SpaPoolConfig).group_kwargs("shop")
+        commander = SpaCommander(tmp_path / "frozen_users")
+
+        group = GroupHandler(
+            commander,
+            "canary",
+            memory_concession_bytes=commander.memory_concession_bytes,
+            **dict(
+                groups["canary"],
+                instance_dir=tmp_path / "instance",
+                frozen_users_path=tmp_path / "frozen_users",
+            ),
+        )
+
+        assert group.template is None
 
     def test_a_site_with_no_pool_declares_no_group(self) -> None:
         handler = ConfigurationHandler(TwoAppConfig)
