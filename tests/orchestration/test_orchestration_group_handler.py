@@ -44,7 +44,7 @@ from genro_asgi.spa.orchestration import AssignmentRefused, GroupHandler, SpaCom
 from genro_asgi.spa.orchestration.worker_connector import ENVELOPE_SLOT_WORKER_SNAPSHOT
 from genro_asgi.spa.orchestration.worker_handler import QUIT_OP_PATH, WORKER_ENV_VAR
 
-from .conftest import wait_for
+from .conftest import kill_process, wait_for
 
 CHILD_SCRIPT = '''
 """A scripted worker of a group: one photo, one answer, one departure."""
@@ -179,9 +179,9 @@ async def make_group(commander, group_settings):
     yield build
     for group in groups:
         for worker_handler in list(group.worker_handler_map.values()):
-            if worker_handler.process is not None and worker_handler.process.poll() is None:
-                worker_handler.process.kill()
-                worker_handler.process.wait()
+            if worker_handler.process is not None:
+                kill_process(worker_handler.process)
+                await wait_for(lambda: not worker_handler.process.alive)
             await worker_handler.connector.stop()
 
 
@@ -280,7 +280,7 @@ async def test_a_worker_past_the_restart_setpoint_is_replaced_by_a_fresh_one(
     await group.check_occupancy(now=True)
 
     assert list(group.worker_handler_map) == ["standard_0002"]
-    await wait_for(lambda: doomed.process.poll() is not None)
+    await wait_for(lambda: not doomed.process.alive)
     assert doomed.state == "quitted"
     # His state went to the freezer with the process that held it, and his
     # placement is to be assigned: his next request decides where he wakes.
@@ -324,7 +324,7 @@ async def test_a_death_that_outruns_the_close_order_leaves_no_zombie(make_group,
     doomed.hosted_users.add("mario")
     group.user_worker_map["mario"] = doomed.name
     await wait_for(lambda: doomed.worker_snapshot is not None)
-    doomed.process.kill()
+    kill_process(doomed.process)
     await wait_for(lambda: doomed.state == "aborted")
 
     fresh = await group.restart_worker(doomed)
@@ -341,7 +341,7 @@ async def test_a_death_that_outruns_the_close_order_leaves_no_zombie(make_group,
 async def test_a_dead_worker_never_photographed_is_ordered_nothing(make_group):
     group = make_group()
     doomed = await group.start_worker()
-    doomed.process.kill()
+    kill_process(doomed.process)
     await wait_for(lambda: doomed.state == "aborted")
     doomed.worker_snapshot = None
 
@@ -381,7 +381,7 @@ async def test_the_closure_of_a_spare_worker_goes_through_its_six_steps(make_gro
     # the freezer; then it drained and ENDED BY ITSELF, and that end was awaited.
     assert spare.worker_snapshot["users"]["mario"]["transfer_flag"] == "T"
     assert spare.state == "quitted"
-    await wait_for(lambda: spare.process.poll() is not None)
+    await wait_for(lambda: not spare.process.alive)
     assert reception.state == "running"
 
     # 5. at the round that reads the ended state, the group takes it out: out of
@@ -420,7 +420,7 @@ async def test_a_placement_pointing_at_a_worker_that_died_goes_with_it(make_grou
 
     # The process dies before it ever said the user had arrived in it: nobody
     # names him at the death, so his placement goes with the worker holding it.
-    worker_handler.process.kill()
+    kill_process(worker_handler.process)
     await wait_for(lambda: worker_handler.state == "aborted")
     worker_handler.envelope_handler.report_death()
 
@@ -520,11 +520,11 @@ async def test_start_brings_the_reception_up_and_stop_leaves_no_child_alive(
         assert reception is not None
         assert reception.state == "running"
         process = reception.process
-        assert process.poll() is None
+        assert process.alive
     finally:
         await vertex.stop()
 
-    assert process.poll() is not None
+    assert not process.alive
     assert not reception.connector.connected
     # The death of a shutdown is ORDERED: no alarm is owed for it, and the log
     # of a clean stop must not read like N processes died on their own.

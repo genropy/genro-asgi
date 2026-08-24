@@ -41,7 +41,7 @@ from genro_asgi.spa.orchestration.beats import every
 from genro_asgi.spa.orchestration.spa_commander import GUEST_PREFIX
 
 from .child_stub import GO_MUTE_OP
-from .conftest import wait_for
+from .conftest import kill_process, wait_for
 
 CHILD_MODULE = "tests.orchestration.child_stub"
 WORKER_NAME = "standard_0001"
@@ -85,9 +85,9 @@ async def make_group(short_root, commander, repo_on_pythonpath):
     yield build
     for group in groups:
         for worker_handler in list(group.worker_handler_map.values()):
-            if worker_handler.process is not None and worker_handler.process.poll() is None:
-                worker_handler.process.kill()
-                worker_handler.process.wait()
+            if worker_handler.process is not None:
+                kill_process(worker_handler.process)
+                await wait_for(lambda: not worker_handler.process.alive)
             await worker_handler.connector.stop()
 
 

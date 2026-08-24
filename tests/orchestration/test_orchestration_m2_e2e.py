@@ -64,7 +64,7 @@ from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker, UserOnHold, W
 from genro_asgi.spa.orchestration.worker_connector import ENVELOPE_SLOT_WORKER_SNAPSHOT
 
 from .group_stub import GroupStub
-from .conftest import wait_for
+from .conftest import kill_process, wait_for
 
 WORKER_NAME = "standard_0001"
 GROUP = "standard"
@@ -237,9 +237,9 @@ async def handler(short_root, group, repo_on_pythonpath):
     )
     group.worker_handler = worker_handler
     yield worker_handler
-    if worker_handler.process is not None and worker_handler.process.poll() is None:
-        worker_handler.process.kill()
-        worker_handler.process.wait()
+    if worker_handler.process is not None:
+        kill_process(worker_handler.process)
+        await wait_for(lambda: not worker_handler.process.alive)
     await worker_handler.connector.stop()
 
 
@@ -396,9 +396,9 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     # the exit code is its own clean 0, and nothing in this test killed it. What
     # the freezes would have announced — the placement of each, nobody's — dies
     # with the wire the worker closes behind itself.
-    await wait_for(lambda: born.poll() is not None, timeout=DEATH_TIMEOUT)
+    await wait_for(lambda: not born.alive, timeout=DEATH_TIMEOUT)
 
-    assert born.poll() == 0
+    assert born.exit_code == 0
     assert deposit.user_folders == {
         deposit.user_to_userkey("mario"),
         deposit.user_to_userkey("anna"),

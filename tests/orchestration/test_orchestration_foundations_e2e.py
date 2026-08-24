@@ -56,7 +56,7 @@ from .child_stub import (
     WRITE_CONNECTION_REGISTER_ITEM_OP,
 )
 from .group_stub import GroupStub
-from .conftest import wait_for
+from .conftest import kill_process, wait_for
 
 CHILD_MODULE = "tests.orchestration.child_stub"
 PARKED_CONNECTION = {"cid": "c-1", "pages": ["main", "invoices"]}
@@ -88,8 +88,8 @@ async def handler(short_root, group, repo_on_pythonpath):
     group.worker_handler = worker_handler
     yield worker_handler
     if worker_handler.process is not None:
-        worker_handler.process.kill()
-        worker_handler.process.wait()
+        kill_process(worker_handler.process)
+        await wait_for(lambda: not worker_handler.process.alive)
     await worker_handler.connector.stop()
 
 
@@ -159,7 +159,7 @@ async def test_a_worker_is_born_works_dies_wild_and_leaves_its_traces_behind(
     elapsed = time.monotonic() - started
 
     assert elapsed < 4 * handler.process_ping_timeout
-    assert condemned.poll() is not None
+    assert not condemned.alive
     assert handler.process is None
 
     # The death was nobody's order: the handler writes `aborted`, rings its

@@ -25,6 +25,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import signal
 import threading
 import time
 from typing import Any
@@ -32,6 +33,19 @@ from typing import Any
 import pytest
 
 from genro_asgi.spa.orchestration import TemplateEntry
+
+@pytest.fixture(autouse=True)
+def sigchld_put_back():
+    """Give ``SIGCHLD`` back to whoever had it.
+
+    ``serve`` installs the reaper on the PROCESS, and here that process is the
+    test runner: left in place it would collect every later test's children, and
+    a Popen whose child somebody else buried does not behave.
+    """
+    had = signal.getsignal(signal.SIGCHLD)
+    yield
+    signal.signal(signal.SIGCHLD, had)
+
 
 TEMPLATE_NAME = "template-standard"
 WORKER_NAME = "standard_0001"

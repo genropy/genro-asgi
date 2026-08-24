@@ -57,7 +57,7 @@ from genro_asgi.spa.orchestration.worker_connector import (
 from genro_asgi.spa.orchestration.worker_entry import DEFAULT_WORKER_CLASS
 
 from .group_stub import GroupStub
-from .conftest import wait_for
+from .conftest import kill_process, wait_for
 from genro_asgi.spa.orchestration.worker_handler import (
     DROP_CONNECTION_OP_PATH,
     DROP_USER_OP_PATH,
@@ -831,9 +831,9 @@ async def handler(short_root, repo_on_pythonpath):
         process_ping_timeout=10.0,
     )
     yield worker_handler
-    if worker_handler.process is not None and worker_handler.process.poll() is None:
-        worker_handler.process.kill()
-        worker_handler.process.wait()
+    if worker_handler.process is not None:
+        kill_process(worker_handler.process)
+        await wait_for(lambda: not worker_handler.process.alive)
     await worker_handler.connector.stop()
 
 
@@ -860,8 +860,8 @@ async def test_a_real_child_serves_its_site_and_saves_its_users_when_the_wire_go
     # channel — and ends its process by itself.
     await handler.connector.stop()
 
-    await wait_for(lambda: handler.process.poll() is not None, timeout=15.0)
-    assert handler.process.poll() == 0
+    await wait_for(lambda: not handler.process.alive, timeout=15.0)
+    assert handler.process.exit_code == 0
     assert deposit.read_user_register_item("mario") is not None
     assert deposit.read_connection_register_item("mario", "cid-a") is not None
     assert deposit.lock_holder("mario") is None

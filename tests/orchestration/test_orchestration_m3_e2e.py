@@ -83,7 +83,7 @@ from genro_asgi.spa.orchestration import (
     UserOnHold,
 )
 
-from .conftest import wait_for
+from .conftest import kill_process, wait_for
 from .x_spa_worker import EXECUTE_ORDER, PLAN_ORDER, X_SpaWorker
 
 #: The front that owns the pool of this story: a pool hangs under its own app.
@@ -284,9 +284,9 @@ async def group(pool_config):
     )
     yield group_handler
     for worker_handler in list(group_handler.worker_handler_map.values()):
-        if worker_handler.process is not None and worker_handler.process.poll() is None:
-            worker_handler.process.kill()
-            worker_handler.process.wait()
+        if worker_handler.process is not None:
+            kill_process(worker_handler.process)
+            await wait_for(lambda: not worker_handler.process.alive)
         await worker_handler.connector.stop()
 
 
@@ -391,8 +391,8 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     await group.check_occupancy(now=True)
 
     assert spare.state == "quitted"
-    await wait_for(lambda: spare.process.poll() is not None, timeout=DEATH_TIMEOUT)
-    assert spare.process.poll() == 0
+    await wait_for(lambda: not spare.process.alive, timeout=DEATH_TIMEOUT)
+    assert spare.process.exit_code == 0
     assert freezer.read_user_register_item(carla) is not None
 
     # And the round that reads that ended state takes it out of the group, with
@@ -407,7 +407,7 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     # 7. A PROCESS DIES WILD, with two people on board, and the real clock is
     # running: nobody drives what follows.
     clock = asyncio.get_running_loop().create_task(vertex.heartbeat_loop())
-    reception.process.kill()
+    kill_process(reception.process)
 
     await wait_for(lambda: reception.state == "aborted", timeout=DEATH_TIMEOUT)
     # The end of the wire rang the wake, the round read the state, and the two on

@@ -85,7 +85,7 @@ from genro_asgi.spa.orchestration import FreezeHandler, GroupHandler
 from genro_asgi.spa.orchestration.spa_commander import GUEST_PREFIX
 
 from ..conftest import LifespanRunner, ask_app, get_answer_header
-from .conftest import wait_for
+from .conftest import kill_process, wait_for
 from .x_spa_worker import EXECUTE_ORDER, PLAN_ORDER, X_SpaWorker
 
 #: The front that owns the pool of this story, and its two groups: the one the
@@ -500,7 +500,7 @@ async def test_a_death_where_nothing_of_his_is_left_does_not_take_him(server, st
     assert freezer.read_connection_register_item("mario", second_cid) is not None
 
     # That process dies wild, and the round settles the death.
-    reception.process.kill()
+    kill_process(reception.process)
     await wait_for(lambda: reception.state == "aborted", timeout=DEATH_TIMEOUT)
     await group.ping()
 

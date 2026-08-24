@@ -42,6 +42,7 @@ from genro_asgi.spa.orchestration.worker_connector import (
 )
 
 from .child_stub import ANNOUNCE_OP
+from .conftest import kill_process, wait_for
 from .group_stub import GroupStub
 
 CHILD_MODULE = "tests.orchestration.child_stub"
@@ -109,9 +110,9 @@ async def handler(short_root, group):
     )
     group.worker_handler = worker_handler
     yield worker_handler
-    if worker_handler.process is not None and worker_handler.process.poll() is None:
-        worker_handler.process.kill()
-        worker_handler.process.wait()
+    if worker_handler.process is not None:
+        kill_process(worker_handler.process)
+        await wait_for(lambda: not worker_handler.process.alive)
     await worker_handler.connector.stop()
 
 

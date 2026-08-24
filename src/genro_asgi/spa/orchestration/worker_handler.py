@@ -113,6 +113,7 @@ from .exceptions import (
     WorkerQuittingError,
 )
 from .worker_connector import WorkerConnector
+from .worker_process import SpawnedProcess, WorkerProcess
 
 #: The environment variable the spawn payload travels in, as today.
 WORKER_ENV_VAR = "GENRO_ASGI_WORKER"
@@ -230,7 +231,7 @@ class WorkerHandler:
         self.executable = executable or sys.executable
         self.process_ping_interval = process_ping_interval
         self.process_ping_timeout = process_ping_timeout
-        self.process: subprocess.Popen[bytes] | None = None
+        self.process: WorkerProcess | None = None
         #: Where the process under this handler is in its life: ``starting``,
         #: ``running``, ``quitting``, ``quitted``, ``aborted``.
         #: Written only here; the group reads it at its round.
@@ -356,7 +357,7 @@ class WorkerHandler:
         way, ``running`` once it has presented itself — and binds the socket on
         the first launch.
         """
-        if self.process is not None and self.process.poll() is None:
+        if self.process is not None and self.process.alive:
             raise RuntimeError(
                 f"WorkerHandler {self.name}: its process (pid {self.process.pid}) is still alive"
             )
@@ -366,8 +367,10 @@ class WorkerHandler:
         self.state = "starting"
         env = dict(os.environ)
         env[WORKER_ENV_VAR] = json.dumps(self.spawn_payload)
-        self.process = subprocess.Popen(
-            [self.executable, "-m", self.entry_module], env=env, start_new_session=True
+        self.process = SpawnedProcess(
+            subprocess.Popen(
+                [self.executable, "-m", self.entry_module], env=env, start_new_session=True
+            )
         )
         self._logger.info(
             "Worker %s: launched its process (pid %s) on %s",
@@ -392,7 +395,7 @@ class WorkerHandler:
         process = self.process
         self._logger.info("Worker %s: killing its process (pid %s)", self.name, process.pid)
         self._kill_process_group()
-        while process.poll() is None:
+        while process.alive:
             await asyncio.sleep(WAIT_POLL_INTERVAL)
         self.process = None
 
@@ -467,7 +470,7 @@ class WorkerHandler:
     def _kill_process_group(self) -> None:
         """SIGKILL the child's whole process group; one already gone is the same outcome."""
         process = self.process
-        if process.poll() is not None:
+        if not process.alive:
             return
         try:
             os.killpg(os.getpgid(process.pid), signal.SIGKILL)

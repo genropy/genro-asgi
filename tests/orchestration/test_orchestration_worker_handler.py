@@ -50,7 +50,7 @@ from genro_asgi.spa.orchestration.worker_connector import (
 from genro_asgi.spa.orchestration import WorkerHandler
 from genro_asgi.spa.orchestration import worker_handler as worker_handler_module
 from .group_stub import GroupStub
-from .conftest import wait_for
+from .conftest import kill_process, wait_for
 from genro_asgi.spa.orchestration.worker_handler import (
     PING_OP_PATH,
     QUIT_OP_PATH,
@@ -157,8 +157,8 @@ async def make_handler(instance_root, group):
     yield build
     for handler in handlers:
         if handler.process is not None:
-            handler.process.kill()
-            handler.process.wait()
+            kill_process(handler.process)
+            await wait_for(lambda: not handler.process.alive)
         await handler.connector.stop()
 
 
@@ -193,7 +193,7 @@ async def test_a_launched_process_presents_itself_on_the_handlers_socket(make_ha
 
     await handler.launch_process()
 
-    assert handler.process.poll() is None
+    assert handler.process.alive
     assert handler.connector.connected is True
     assert handler.connector.socket_path.exists()
     assert handler.state == "running"
@@ -240,7 +240,7 @@ async def test_a_mute_process_is_killed_after_one_repeated_beat(make_handler, gr
     assert answered is None
     assert "beat 1 of 2 unanswered" in caplog.text
     assert "beat 2 of 2 unanswered" in caplog.text
-    assert process.poll() is not None
+    assert not process.alive
     assert handler.process is None
     assert handler.worker_snapshot["pid"] == process.pid
     await wait_for(lambda: group.wakes == ["aborted"])
@@ -251,7 +251,7 @@ async def test_a_wild_death_wakes_the_group_with_the_state_that_says_so(make_han
     await handler.launch_process()
     handler.hosted_users.update({"mario", "anna"})
 
-    handler.process.kill()
+    kill_process(handler.process)
     await wait_for(lambda: len(group.wakes) == 1)
 
     assert group.wakes == ["aborted"]
@@ -282,7 +282,7 @@ async def test_the_process_asked_to_leave_leaves_and_the_state_says_it_was_order
     # The end of the WIRE is what the order waits for — the process itself is
     # already on its way out, and the OS catches up an instant later.
     assert handler.state == "quitted"
-    await wait_for(lambda: leaving.poll() is not None)
+    await wait_for(lambda: not leaving.alive)
     assert group.wakes == ["quitted"]
     assert handler.connector.connected is False
 
@@ -296,7 +296,7 @@ async def test_the_state_says_quitting_from_the_order_on_not_from_the_death(make
 
     # Still there, still draining as far as anybody knows: the state is what a
     # group asked to place somebody reads, and it says do not send him here.
-    assert handler.process.poll() is None
+    assert handler.process.alive
     leaving.cancel()
 
 
@@ -312,7 +312,7 @@ async def test_a_process_that_answers_the_order_and_stays_is_killed_and_the_abor
         await handler.quit_process()
 
     assert "still here 0.3s after being asked to leave" in caplog.text
-    assert condemned.poll() is not None
+    assert not condemned.alive
     assert handler.process is None
     await wait_for(lambda: group.wakes == ["aborted"])
     assert handler.state == "aborted"
@@ -329,7 +329,7 @@ async def test_a_process_mute_to_the_order_to_leave_is_killed_too(
     with caplog.at_level("WARNING"):
         await handler.quit_process()
 
-    assert condemned.poll() is not None
+    assert not condemned.alive
     await wait_for(lambda: group.wakes == ["aborted"])
 
 
@@ -342,7 +342,7 @@ async def test_a_second_launch_over_a_living_process_is_refused(make_handler):
         await handler.launch_process()
 
     assert handler.process is resident
-    assert resident.poll() is None
+    assert resident.alive
 
 
 async def test_a_process_that_never_presents_itself_is_killed_and_the_wait_raises(

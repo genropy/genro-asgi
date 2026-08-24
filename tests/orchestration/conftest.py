@@ -30,6 +30,7 @@ import asyncio
 import functools
 import os
 import shutil
+import signal
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -50,6 +51,22 @@ def short_root():
     root = Path(tempfile.mkdtemp(prefix="gnrorch_"))
     yield root
     shutil.rmtree(root, ignore_errors=True)
+
+
+def kill_process(worker_process) -> None:
+    """SIGKILL one worker's process by its pid, the way the handler itself does.
+
+    The tests reach a process through the two questions its handler asks — ``alive``
+    and ``pid`` — and never through the Popen underneath, because a forked worker
+    has none. Waiting for the death is the caller's next line: ``await wait_for(
+    lambda: not handler.process.alive)``.
+
+    One already gone is the same outcome, as it is for the handler's own kill.
+    """
+    try:
+        os.kill(worker_process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
 
 
 async def wait_for(condition, timeout: float = 10.0) -> None:

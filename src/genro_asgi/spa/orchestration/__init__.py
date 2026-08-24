@@ -54,11 +54,13 @@ from .template_entry import TemplateEntry
 from .worker_connector import WorkerConnector
 from .worker_entry import WorkerEntry
 from .worker_handler import WorkerHandler
+from .worker_process import ForkedProcess, SpawnedProcess, WorkerProcess
 
 __all__ = [
     "AssignmentRefused",
     "CommanderEnvelopeHandler",
     "EnvelopeHandler",
+    "ForkedProcess",
     "FreezeHandler",
     "GroupEnvelopeHandler",
     "GroupHandler",
@@ -66,12 +68,14 @@ __all__ = [
     "SiteFailedRequest",
     "SpaCommander",
     "SpaWorker",
+    "SpawnedProcess",
     "TemplateEntry",
     "UserOnHold",
     "WorkerConnector",
     "WorkerEntry",
     "WorkerEnvelopeHandler",
     "WorkerHandler",
+    "WorkerProcess",
     "WorkerQuittingError",
     "every",
 ]
