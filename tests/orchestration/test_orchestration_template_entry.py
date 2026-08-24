@@ -22,6 +22,7 @@ process must not be run twice.
 
 from __future__ import annotations
 
+import gc
 import io
 import json
 import os
@@ -36,7 +37,7 @@ from genro_asgi.spa.orchestration import TemplateEntry
 
 @pytest.fixture(autouse=True)
 def sigchld_put_back():
-    """Give ``SIGCHLD`` back to whoever had it.
+    """Give ``SIGCHLD`` back to whoever had it, and thaw what was frozen.
 
     ``serve`` installs the reaper on the PROCESS, and here that process is the
     test runner: left in place it would collect every later test's children, and
@@ -45,6 +46,9 @@ def sigchld_put_back():
     had = signal.getsignal(signal.SIGCHLD)
     yield
     signal.signal(signal.SIGCHLD, had)
+    # And ``serve`` freezes the heap of the PROCESS too, which here is the runner's:
+    # left frozen, no later test's garbage would ever be collected.
+    gc.unfreeze()
 
 
 TEMPLATE_NAME = "template-standard"
@@ -102,6 +106,19 @@ def test_the_launch_line_builds_the_engine_of_the_group():
 
     assert template.name == TEMPLATE_NAME
     assert template.group_engine == "engine-standard"
+
+
+def test_what_the_template_built_is_frozen_before_any_fork():
+    template, _ = template_on(launch_line())
+
+    template.run()
+
+    assert gc.get_freeze_count() > 0
+    # And what comes after the freeze is the collector's again, which is what a
+    # child allocates while it serves.
+    watched = len(gc.get_objects())
+    fresh = [[i] for i in range(100)]
+    assert len(gc.get_objects()) >= watched + len(fresh)
 
 
 def test_a_launch_line_without_a_factory_ends_the_process():
