@@ -104,12 +104,17 @@ edited when a new one arrives.
 
 ## 5. Handlers are pure
 
-**Source: D23 wave ruling, SPECIFICATION.md:413.** A handler is an ordinary
-method with ordinary parameters, called with ordinary arguments. There is no
-ambient current request a handler reads from the outside — the old
-`server.request` / `server.response` pair **never returns**. A handler that
-needs the live request **declares it as a parameter**, and it is passed in as
-an argument like any other.
+**Source: D23 wave ruling, SPECIFICATION.md:413; sharpened by D31, owner,
+2026-08-24.** A handler is an ordinary method with ordinary parameters, called
+with ordinary arguments. There is no ambient current request a handler reads
+from the outside — the old `server.request` / `server.response` pair **never
+returns** — and no handler receives the request as a parameter either: D31
+withdrew that concession. A handler that must produce an effect on the
+transport (attach an avatar to the session, park OIDC flow state) **returns
+it as a value**; the caller of the node — the dispatch, which holds the live
+`Request` — recognizes the returned effect and executes it. Each surface
+executes its own effects at its own call point; a test calls the handler bare
+and sees the pure value.
 
 Two things follow, and both are worth more than they cost.
 
@@ -267,26 +272,6 @@ when it is empty this design can be ratified.
 Interview file: `temp/interview_020_applications.md`.
 
 ## Upstream — settling these edits SPECIFICATION.md
-
-**S1 [spec] — the app-side contract in §4 names a member that does not exist.**
-SPECIFICATION.md:643-644 states the contract as "an ASGI callable with
-`mount_name`, a `server` property …". There is no `mount_name`: the identity
-has been `code` + `mount` since commit `a1a8f7e`. This is the same unlogged
-ruling as S1/S2 of [010 server](../010_server/decisions.md), seen on the
-application side, and settling it means amending §4 of the specification along
-with D2 and D3.
-
-**S2 [spec] — the live request reaches only the administrative application.** D23,
-SPECIFICATION.md:413, ratifies that a handler needing the live request
-"DECLARES a `request` parameter injected by `bind_kwargs`". In the shipped code
-the injection exists **only on the administrative application**, and under the
-name `_request`; the base reconciliation every hosted application inherits does
-not inject anything (call sites in [status.md](status.md)). So the ratified
-seam is not available to the applications a consumer writes, and the parameter
-is not called what the decision calls it. Two questions in one: where the
-injection belongs, and which name is ratified.
-
-## Where the response shape is ratified
 
 **S3 [unratified] — §10 has delivery commits and no decision.** One flat buffered class
 with type dispatch, a streaming sibling rather than a subclass, and the SSE

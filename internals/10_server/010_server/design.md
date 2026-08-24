@@ -170,7 +170,12 @@ segment of the path**.
    answer is a **307** redirect to that application. It is 307 and not 301 or
    302 because the method and the body must survive the hop: a `POST /` has to
    arrive still a POST.
-4. **Otherwise, 404.**
+4. **Otherwise, the request is for `/`: the site index answers.** The server
+   itself serves an HTML page with the genro-asgi logo and links to the
+   mounted applications; codes starting with `_` are excluded from the list.
+   A configuration switch disables the index; disabled, `/` is a 404.
+5. **Otherwise, 404.** A deep path nothing claimed is always a 404 — the
+   index answers `/` and nothing else.
 
 ```mermaid
 flowchart TB
@@ -181,14 +186,17 @@ flowchart TB
     R -->|yes| FULL["it answers<br/>path unchanged"]
     R -->|no| D{"is the request for /<br/>with a default declared?"}
     D -->|yes| RED["307 to the default<br/>query string preserved"]
-    D -->|no| NF["404"]
+    D -->|no| P{"is the request for /?"}
+    P -->|yes| IDX["the site index<br/>404 if disabled"]
+    P -->|no| NF["404"]
 ```
 
 Two things this rule implies are worth stating plainly.
 
 **A site root is optional.** A server can be made of mounts only, with nothing
-answering `/`. Then branch 2 never fires, and `/` either redirects to the
-declared default or is a 404.
+answering `/`. Then branch 2 never fires, and `/` redirects to the declared
+default, or — with no default — serves the site index; with the index disabled
+by configuration, it is a 404.
 
 **The default elects nothing.** Naming a default does not make that
 application the catch-all. It is a redirect target for `/` and no more: an

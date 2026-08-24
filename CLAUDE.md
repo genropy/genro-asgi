@@ -42,9 +42,10 @@ describes: a stale overview misleads more than no overview.)*
 ### The server layer
 
 `BaseServer` is composed with its **applications** (fixed at construction,
-keyed by `code`, mounted by first path segment — D3 demux: segment match →
+keyed by `code`, mounted by first path segment — D29 demux: segment match →
 that app with the segment stripped; else the root app; else 307 to the
-declared default; else 404). It owns one thread pool (`run_sync`), a
+declared default; else the site index on `/` (ratified 2026-08-24, not yet
+built — today 404); else 404). It owns one thread pool (`run_sync`), a
 `RequestRegistry` holding the in-flight picture, ordered lifespan, and boots
 uvicorn programmatically (`serve()`, CLI `genroasgi serve/apps/stop/remove`).
 Middleware wraps the dispatch (errors, authentication, session, cors,
@@ -120,4 +121,4 @@ registers: `temp/interview_handler_2026-08-15.md` (F1-F49); design:
 
 **All general policies are inherited from the parent document: [meta-genro-modules CLAUDE.md](https://github.com/softwellsrl/meta-genro-modules/blob/main/CLAUDE.md)**
 
-**Last Updated**: 2026-08-22
+**Last Updated**: 2026-08-24

@@ -52,7 +52,7 @@ Common substrate of every server, always present:
   address string; the actual client is wired from outside by the child
   runner.)
 - **the primary app, always present** — answers `/` and everything no mount
-  claims;
+  claims; *(superseded by D29: no application is required on the root)*
 - **secondary mounts** (dict of apps by URL prefix; may be empty);
 - **lifespan** (ordered startup/shutdown of the apps, reverse on shutdown);
 - **the request registry** (see D5);
@@ -60,6 +60,7 @@ Common substrate of every server, always present:
 
 ### D3 — One demux rule for every server
 *First path segment → secondary mount if it exists, otherwise primary app.*
+*(demux superseded by D29: four branches, site index on the uncovered root.)*
 Mono-app is a **usage**, not a mechanism: the internal server is a base server
 used with only the primary. This kills the old dual `get_app` semantics
 (finding C5) and must never be reintroduced by package layering.
@@ -72,7 +73,9 @@ router (old finding F3: `worker.py:113-115` mutating `application.route`).
 
 ### D5 — One request registry, in the base
 Two duties, identical everywhere: (1) create the right request from the scope
-and make it reachable by the running handler ("current request"); (2) keep the
+and make it reachable by the running handler ("current request"); *(duty (1)
+superseded by D30: the application builds the request, the registry keeps the
+"current request" ContextVar)* (2) keep the
 picture of in-flight requests. What differs between servers is the **consumer**
 of the picture: the monitor on the public server, the occupancy sensor on the
 internal one.
@@ -412,7 +415,9 @@ remain the detailed record). The 1d-wave-1 rulings, compressed:
   never in-handler `Accept` sniffing; the user-record key is `identity`.
 - Handlers are PURE (the old ambient `server.request`/`server.response`
   never returns); a handler needing the live request DECLARES a `request`
-  parameter injected by `bind_kwargs`.
+  parameter injected by `bind_kwargs`. *(The parameter concession is
+  withdrawn by D31: handlers never receive the request; effects are
+  returned, the dispatch executes them.)*
 - The login-cookie policy was first ratified as "option A" (middleware
   emits on session change) and superseded the same day by D24.
 - The two-stage live-config architecture (config as live object,
@@ -641,7 +646,8 @@ GET /_server/metrics     → the worker's minimal _server
 ```
 
 **App-side contract (born in phase 0, tested with a throwaway app):**
-an app is an ASGI callable with `mount_name`, a `server` property assigned by
+an app is an ASGI callable with `code` and `mount` (its identity — D29;
+the contract predates `a1a8f7e` and said `mount_name`), a `server` property assigned by
 the server at mount (ownership channel, one direction), lifecycle hooks
 (`on_startup`/`on_shutdown`, sync or async), and the dispatch protocol toward
 the server (thread pool for sync handlers, registry for the current request).
@@ -856,3 +862,53 @@ decided 2026-07-25.)
   only an import string and starts a fresh process per restart — nothing of the
   parent survives except the environment. Neither leaves this module, and the
   core (`server.py`, `asgi_server.py`) is untouched by the whole feature.
+
+---
+
+### Ratified 2026-08-24 (demux settled; the site index)
+
+**D29 — No application is required on the site root; the demux has four
+branches and the uncovered root serves the site index.**
+Commit `a1a8f7e` (2026-07-25) overturned D2's "primary app, always present"
+and D3's two-branch demux without a log entry; this entry records the overturn
+(per D23) and completes the design. An application is identified by its `code`
+and answers under its `mount`; the site root (`mount=""`) is a mount like any
+other and may be absent. The demux: first path segment matching a mount → that
+application, segment stripped; else the root application, path unchanged;
+else, for `/` with a `default` declared → 307 to it, method and body
+preserved; else, for a bare `/` → the **site index**, an HTML page the server
+itself serves, carrying the genro-asgi logo and links to the mounted
+applications (codes starting with `_` excluded); else 404. The index is
+disabled by a configuration switch; disabled, `/` answers 404. Deep unmatched
+paths are always 404. The index page and its switch are not yet implemented;
+their names follow the `_TBD` rule.
+
+**D30 — Request construction belongs to the application; the registry
+records, never builds.**
+Amends D5, whose duty (1) — "create the right request from the scope" —
+described the old repository's `RequestRegistry.create` factory. Ratified:
+the server dispatches the raw ASGI scope; the owning application builds the
+`Request` its handlers receive (each surface builds the request it needs);
+the registry keeps duty (2) unchanged — the thin in-flight picture — plus the
+"current request" ContextVar on the registry instance. The reopened websocket
+branch follows the same rule: whoever owns the socket builds its object (the
+channel), and the registry may register it as an in-flight item — register,
+never construct. Long-lived sockets and millisecond requests do not share a
+factory.
+
+**D31 — Handlers never receive the request: the valve of D23 is closed.**
+D23's main rule (handlers are PURE, the ambient `server.request` never
+returns) stands. Its concession — "a handler needing the live request
+DECLARES a `request` parameter injected by `bind_kwargs`" — is withdrawn: it
+was never implemented for hosted applications (the injection existed only on
+`ServerApplication`, under the name `_request`), its only real consumers were
+the three authentication handlers, and a `request` parameter in the signature
+breaks surface-agnosticism (the same handler is served by HTTP and MCP).
+The seam is replaced by declared effects: an authentication handler RETURNS
+its result (the minted `Avatar`, the OIDC flow state); the caller of the
+node — genro-asgi's dispatch, which holds the live `Request` — recognizes the
+returned effect and executes it (`session.attach_avatar`, the OIDC parking).
+Each surface executes its own effects at its own call point; a test calls the
+handler bare and sees the pure value. genro-routes is untouched — the call is
+genro-asgi's. The `_request` injection and the `ServerApplication.bind_kwargs`
+override are dismantled accordingly (implementation pending).

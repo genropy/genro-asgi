@@ -146,6 +146,12 @@ application on the site root; else, for `/` with a `default` declared, a
 nothing on the root is a legitimate shape, and `default=<code>` **elects
 nothing** — it is a redirect target and no more.
 
+**Source: D29, owner, 2026-08-24.** A bare `/` on a server with no root
+application and no `default` serves the **site index**: an HTML page the
+server itself builds, with the genro-asgi logo and links to the mounted
+applications, excluding codes starting with `_`. A configuration switch
+disables it; disabled, `/` answers 404. Deep unmatched paths are always 404.
+
 ## 6. Two servers, one base, distinguished by composition
 
 **Source: D1, SPECIFICATION.md:36.** The official pair is **public server**
@@ -170,11 +176,16 @@ with the same gesture the framework itself is built with.
 
 ## 7. The registry: one mechanism, two duties, different consumers
 
-**Source: D5, SPECIFICATION.md:73.** Two duties, identical on every server:
-(1) create the right request from the scope and make it reachable by the
-running handler — the "current request"; (2) keep the picture of in-flight
-requests. What differs between servers is the **consumer** of the picture: the
-monitor on the public server, the occupancy sensor on the internal one.
+**Source: D5 as amended by D30, owner, 2026-08-24.** Two duties, identical on
+every server: (1) make the request being served reachable by the running
+handler — the "current request"; (2) keep the picture of in-flight requests.
+**Construction is not among them**: the server dispatches the raw ASGI scope
+and the owning application builds the `Request` its handlers receive — each
+surface builds the request it needs. The websocket branch, when it reopens,
+follows the same rule: the socket's owner (the channel) builds its object, and
+the registry may register it as an in-flight item — register, never construct.
+What differs between servers is the **consumer** of the picture: the monitor
+on the public server, the occupancy sensor on the internal one.
 
 **Source: D5, SPECIFICATION.md:80.** One mechanism only for "current
 request", owned by the registry **instance**. The old repository tracked it
@@ -288,27 +299,6 @@ when it is empty this design can be ratified.
 Interview file: `temp/interview_010_server.md`.
 
 ## Upstream — settling these edits SPECIFICATION.md
-
-**S1 [spec] — D2 says the primary application is always present.** D2,
-SPECIFICATION.md:54: "**the primary app, always present** — answers `/` and
-everything no mount claims". §5 above says a server with nothing on the root
-is legitimate, and the code agrees (status.md). The overturn's only record is
-commit `a1a8f7e`, never appended to the log, although **D23**
-(SPECIFICATION.md:398) exists precisely to reinstate "every ratified decision
-is APPENDED here". Settling it means amending D2.
-
-**S2 [spec] — D3 states the rule in two branches.** D3, SPECIFICATION.md:62, has
-mount-or-primary; §5 has four branches, and neither the 307 nor the `default`
-application appears anywhere in SPECIFICATION.md. Arguably still *one* rule
-with fallbacks, which is why it is a question and not a defect. Same missing
-log entry as S1. Settling it means amending or annotating D3.
-
-**S3 [spec] — D5 gives the registry a duty nobody executes.** D5,
-SPECIFICATION.md:74, duty (1) is "create the right request from the scope".
-The registry creates a thin in-flight record; the `Request` handlers receive
-is built by the owning application (status.md has the call sites). No source
-for the reassignment was found in SPECIFICATION §2/§8, the `temp/` registers
-or the `codex/` documents. Settling it means amending D5.
 
 **S4 [placement] — where the principle of §1 gets written.** "Static only where dynamic
 cannot be had" governs all 31 entries, not this one. If it lives only here,
