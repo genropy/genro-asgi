@@ -60,6 +60,9 @@ class GroupStub:
         self.spa_commander = spa_commander or SpaCommander(frozen_users_path)
         self.envelope_handler = GroupEnvelopeHandler(self, self.spa_commander.envelope_handler)
         self.user_worker_map: dict[str, str | None] = {}
+        #: No template: a handler under this stub spawns its process, as the
+        #: handlers of a group with no engine factory declared do.
+        self.template = None
         #: What the handler was in when it rang, in the order the wakes came.
         self.wakes: list[str] = []
         #: Who was on board at each of those wakes.

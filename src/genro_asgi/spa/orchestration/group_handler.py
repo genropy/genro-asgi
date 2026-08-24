@@ -112,6 +112,7 @@ from typing import Any
 from .envelope_handler import GroupEnvelopeHandler
 from .exceptions import AssignmentRefused
 from .beats import every
+from .template_connector import TemplateConnector
 from .worker_handler import WorkerHandler
 
 #: The states of a worker whose process has ended: it is in the list only until
@@ -179,6 +180,8 @@ class GroupHandler:
         memory_max_percent: float = 100.0,
         worker_max_number: int = WORKER_MAX_NUMBER,
         worker_memory_max_percent: float | None = None,
+        engine_factory: str | None = None,
+        engine_kwargs: dict[str, Any] | None = None,
         **worker_settings: Any,
     ) -> None:
         self.spa_commander = spa_commander
@@ -197,6 +200,18 @@ class GroupHandler:
             else worker_memory_max_percent
         )
         self.worker_settings = worker_settings
+        #: This group's template, when a factory was declared for it: the process
+        #: its workers are forked from. None means its workers are spawned instead.
+        self.template = (
+            None
+            if engine_factory is None
+            else TemplateConnector(
+                self,
+                engine_factory=engine_factory,
+                engine_kwargs=engine_kwargs,
+                executable=worker_settings.get("executable"),
+            )
+        )
         self.envelope_handler = GroupEnvelopeHandler(self, spa_commander.envelope_handler)
         #: Where each user of this group lives, by worker name; None says his
         #: state is somewhere else and he is to be assigned on his next request.
@@ -408,13 +423,17 @@ class GroupHandler:
         the wait an order parks is what tells an ordered death from a wild one,
         and a shutdown is an order — then the process is killed and buried and
         the socket is closed. One that has already died is left alone: there is
-        nothing to kill and its wire went with it.
+        nothing to kill and its wire went with it. The template goes last, when
+        there is one: it is nobody's watcher, so nothing depends on the order, but
+        the workers it forked are collected by it and it should outlive them.
         """
         for worker_handler in list(self.worker_handler_map.values()):
             if worker_handler.process is not None:
                 worker_handler.expect_death()
                 await worker_handler.terminate_process()
             await worker_handler.connector.stop()
+        if self.template is not None:
+            await self.template.stop()
 
     async def restart_worker(self, worker_handler: WorkerHandler) -> WorkerHandler | None:
         """Ask a worker to leave for good and put a fresh one in its place.

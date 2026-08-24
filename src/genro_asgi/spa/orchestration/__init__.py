@@ -50,6 +50,7 @@ from .freeze_handler import FreezeHandler
 from .group_handler import GroupHandler
 from .spa_commander import SpaCommander
 from .spa_worker import SpaWorker
+from .template_connector import TemplateConnector, TemplateRefused
 from .template_entry import TemplateEntry
 from .worker_connector import WorkerConnector
 from .worker_entry import WorkerEntry
@@ -69,7 +70,9 @@ __all__ = [
     "SpaCommander",
     "SpaWorker",
     "SpawnedProcess",
+    "TemplateConnector",
     "TemplateEntry",
+    "TemplateRefused",
     "UserOnHold",
     "WorkerConnector",
     "WorkerEntry",

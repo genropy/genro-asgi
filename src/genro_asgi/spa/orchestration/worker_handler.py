@@ -113,7 +113,7 @@ from .exceptions import (
     WorkerQuittingError,
 )
 from .worker_connector import WorkerConnector
-from .worker_process import SpawnedProcess, WorkerProcess
+from .worker_process import ForkedProcess, SpawnedProcess, WorkerProcess
 
 #: The environment variable the spawn payload travels in, as today.
 WORKER_ENV_VAR = "GENRO_ASGI_WORKER"
@@ -365,13 +365,7 @@ class WorkerHandler:
             await self.connector.start()
             self._listening = True
         self.state = "starting"
-        env = dict(os.environ)
-        env[WORKER_ENV_VAR] = json.dumps(self.spawn_payload)
-        self.process = SpawnedProcess(
-            subprocess.Popen(
-                [self.executable, "-m", self.entry_module], env=env, start_new_session=True
-            )
-        )
+        self.process = await self.start_process()
         self._logger.info(
             "Worker %s: launched its process (pid %s) on %s",
             self.name,
@@ -390,14 +384,67 @@ class WorkerHandler:
             raise
         self.state = "running"
 
+    async def start_process(self) -> WorkerProcess:
+        """Bring the process into the world, by fork when the group has a template.
+
+        Returns:
+            The process, however it was born.
+
+        Raises:
+            TemplateRefused: the group has a template and it did not fork.
+        """
+        template = self.group_handler.template
+        if template is None:
+            return self.spawn_process()
+        return ForkedProcess(await template.fork_worker(self.spawn_payload))
+
+    def spawn_process(self) -> SpawnedProcess:
+        """Start a brand new interpreter with the payload in its environment.
+
+        Returns:
+            The spawned process.
+
+        A program that starts fresh carries nothing of this one, so the payload
+        has to travel in something the exec preserves — which is why this birth
+        uses an environment variable and the forked one does not.
+        """
+        env = dict(os.environ)
+        env[WORKER_ENV_VAR] = json.dumps(self.spawn_payload)
+        return SpawnedProcess(
+            subprocess.Popen(
+                [self.executable, "-m", self.entry_module], env=env, start_new_session=True
+            )
+        )
+
     async def terminate_process(self) -> None:
-        """Kill the process group and wait until the OS has buried it; clears ``process``."""
+        """Kill the process group and wait until the OS has buried it; clears ``process``.
+
+        The wait is bounded by ``QUIT_TIMEOUT_SECONDS``, the same bound an ordered
+        death already has. A spawned process always ends it, because this handler
+        is the parent and reading ``alive`` buries it. A forked one may not: it
+        stays a zombie — alive, to a pid — until its template collects it, and a
+        template that has stopped collecting would hold this wait forever. Past
+        the bound the handler says so and lets go.
+        """
         process = self.process
         self._logger.info("Worker %s: killing its process (pid %s)", self.name, process.pid)
         self._kill_process_group()
+        try:
+            await asyncio.wait_for(self._wait_for_death(process), QUIT_TIMEOUT_SECONDS)
+        except TimeoutError:
+            self._logger.warning(
+                "Worker %s: its process (pid %s) was killed but is still not buried "
+                "after %.0fs — letting go of it",
+                self.name,
+                process.pid,
+                QUIT_TIMEOUT_SECONDS,
+            )
+        self.process = None
+
+    async def _wait_for_death(self, process: WorkerProcess) -> None:
+        """Poll until that process is gone."""
         while process.alive:
             await asyncio.sleep(WAIT_POLL_INTERVAL)
-        self.process = None
 
     async def quit_process(self) -> None:
         """Ask the process to leave, and wait until it is gone.
