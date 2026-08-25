@@ -24,7 +24,7 @@ hooks so ordering and error isolation can be asserted.
 from __future__ import annotations
 
 from genro_asgi import BaseApplication, BaseServer
-from genro_asgi.lifespan import Lifespan
+from genro_asgi.lifespan import QUITTING, STOPPING, Lifespan
 
 
 class SyncRecordingApp(BaseApplication):
@@ -160,3 +160,62 @@ class TestErrorIsolation:
         assert shutdown_events == ["admin.on_shutdown", "root.on_shutdown"]
         assert {"type": "lifespan.startup.complete"} in sent
         assert {"type": "lifespan.shutdown.complete"} in sent
+
+
+class TestShutdownState:
+    async def test_the_shutdown_stops_accepting_before_any_hook_runs(self) -> None:
+        seen: list[str] = []
+
+        class Watcher(BaseApplication):
+            def on_shutdown(self) -> None:
+                seen.append(self.server.state)
+
+        server = BaseServer(applications=[Watcher(mount="")])
+        await Lifespan(server).shutdown()
+
+        assert seen == [STOPPING]
+
+    async def test_the_reload_trigger_makes_the_shutdown_a_quit(self) -> None:
+        server = BaseServer(applications=[BaseApplication(mount="")])
+        server.shutdown_state_TBD = QUITTING
+        await Lifespan(server).shutdown()
+        assert server.state == QUITTING
+
+    async def test_a_state_somebody_already_chose_is_respected(self) -> None:
+        server = BaseServer(applications=[BaseApplication(mount="")])
+        server.state = QUITTING
+        await Lifespan(server).shutdown()
+        assert server.state == QUITTING
+
+    async def test_the_shutdown_drains_what_is_in_flight_before_the_hooks(self) -> None:
+        import asyncio
+
+        gate = asyncio.Event()
+        in_flight_at_hook: list[int] = []
+
+        class Held(BaseApplication):
+            async def __call__(self, scope, receive, send) -> None:
+                await gate.wait()
+                await send({"type": "http.response.start", "status": 200, "headers": []})
+                await send({"type": "http.response.body", "body": b"ok"})
+
+            def on_shutdown(self) -> None:
+                in_flight_at_hook.append(self.server.requests.in_flight)
+
+        server = BaseServer(applications=[Held(mount="")])
+
+        async def receive():
+            return {"type": "http.request"}
+
+        async def send(message):
+            pass
+
+        request = asyncio.ensure_future(server({"type": "http", "path": "/"}, receive, send))
+        await asyncio.sleep(0)
+        closing = asyncio.ensure_future(Lifespan(server).shutdown())
+        await asyncio.sleep(0)
+        gate.set()
+        await closing
+        await request
+
+        assert in_flight_at_hook == [0]

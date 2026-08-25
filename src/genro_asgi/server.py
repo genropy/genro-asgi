@@ -51,22 +51,13 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable
 import uvicorn
 
 from .application import BaseApplication
-from .lifespan import Lifespan
+from .lifespan import QUITTING, RUNNING, STOPPING, Lifespan
 from .pool import WorkPool
 from .request_registry import RequestRegistry
 from .response import Response
 
 if TYPE_CHECKING:
     from .types import ASGIApp, Receive, Scope, Send
-
-RUNNING = "running"
-"""The server takes new requests in charge. Any other state refuses them."""
-
-QUITTING = "quitting"
-"""The server is leaving and saving what it holds."""
-
-STOPPING = "stopping"
-"""The server is leaving without saving."""
 
 REFUSED_RETRY_AFTER_SECONDS = 5
 """The seconds a refused request is told to come back in."""
@@ -88,6 +79,7 @@ class BaseServer:
         applications: Iterable[BaseApplication] = kwargs.pop("applications", ())
         default: str | None = kwargs.pop("default", None)
         max_threads: int | None = kwargs.pop("max_threads", None)
+        debug: bool | str = kwargs.pop("debug", False)
         if kwargs:
             unexpected = ", ".join(sorted(kwargs))
             raise TypeError(
@@ -103,6 +95,20 @@ class BaseServer:
         self._registry = RequestRegistry(self)
         self.state = RUNNING
         """``RUNNING``, ``QUITTING`` or ``STOPPING`` — read by the entry point."""
+        self.shutdown_state_TBD = STOPPING
+        """What ``state`` becomes at the lifespan shutdown when nobody chose first.
+
+        ``STOPPING`` — down dry — unless the trigger declares its exit saves:
+        the ``--reload`` launcher sets ``QUITTING`` here, the deliberate command
+        will set ``state`` itself before the shutdown arrives.
+        """
+        self.debug = debug
+        """The declared usage mode: False, True, or the parameters it was given.
+
+        A flag and nothing else (owner, 2026-08-25): the core branches on it
+        nowhere. It exists so future readers — extra middleware, extra checks —
+        can behave differently knowing the server runs in debug.
+        """
         for app in applications:
             self.register_application(app)
         self._default = default

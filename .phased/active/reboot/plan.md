@@ -411,7 +411,36 @@ works from day one — no re-login — at the cost of a bigger restart than need
     boots hard with the working folder empty; a start with no `reboot_data`
     wipes and boots clean; a leftover `reboot_temp` is never read and is wiped.
 
-- [ ] **Phase 6**: The dev trigger, and `--debug`
+- [x] **Phase 6**: The dev trigger, and `--debug`
+  > Done: the lifecycle states moved to `lifespan.py` — the lifespan IS the lifecycle —
+  > and `server.py` re-exports them, so every existing import holds. `Lifespan.shutdown`
+  > now turns the state FIRST (to `shutdown_state_TBD` when still RUNNING; a state
+  > somebody already chose is respected), drains the in-flight requests bounded by
+  > `SHUTDOWN_DRAIN_TIMEOUT_SECONDS = 10.0` (the leftover count goes in the log), and
+  > only then runs the hooks in reverse: each application saves after nothing new can
+  > arrive and nothing old is being served. `BaseServer` carries
+  > `shutdown_state_TBD = STOPPING` (dry by default) and `debug` (False | True | the
+  > parameters given — a declared usage mode, the core branches on it nowhere).
+  > The CLI grew `--debug [params]`; it travels through the registry entry, the
+  > constructor kwargs and `GENRO_ASGI_LAUNCHER`. `factory()` — the reloaded child —
+  > sets `shutdown_state_TBD = QUITTING`: under the supervisor every exit is a
+  > deliberate save (dev-reload auto-soft, orientations §4). The supervisor stays blind.
+  > Declared: `test_serve_options_become_the_registry_entry` extended — the stored
+  > entry deliberately gained the `debug` key; not a regression.
+  > Verified: `pytest tests/` 1516 passed (was 1509 — the 7 tests this phase adds);
+  > `ruff check src/ tests/` clean.
+  > **Verified LIVE, decisively** (2026-08-25, this machine): `genro-asgi serve
+  > temp/probe/config.py --reload --debug` with a real `SpaApplication`, a real spawned
+  > worker process and a tiny hosted site whose body testifies `environ["genro.identity"]`.
+  > First request: identity=None, site baptises mario, cookie `probe-7cbdc909` written.
+  > Second: identity=mario, pid 57809. `touch config.py` → ordered quit ("Worker
+  > standard_0001: exited cleanly") → new child. Third request, SAME cookie, NEW process
+  > (pid 58413): **identity=mario, same cid, no Set-Cookie rewrite** — and the baptism
+  > had happened only inside the dead process, so the only road from that cid to mario
+  > was `reboot_data`. The `--reload` manual Verify that was left pending is closed.
+  > Files: src/genro_asgi/lifespan.py, src/genro_asgi/server.py,
+  > src/genro_asgi/__main__.py, tests/test_lifespan.py, tests/test_cli.py,
+  > tests/test_request_registry.py (imports only)
   - Run: opus / medium
   - Cap: 50 executable lines in `src/`.
   - Files: src/genro_asgi/__main__.py, src/genro_asgi/asgi_server.py,
