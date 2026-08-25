@@ -67,6 +67,7 @@ from types import ModuleType
 import uvicorn
 
 from .asgi_server import AsgiServer
+from .lifespan import QUITTING
 from .config.default_config import DefaultConfig
 
 __all__ = [
@@ -227,6 +228,7 @@ class ServerLauncher:
         self.host = options.host
         self.port = options.port
         self.reload = options.reload
+        self.debug = options.debug
         if not (self.is_quickstart or self.is_config_path):
             self.adopt_registered(self.source)
 
@@ -246,6 +248,7 @@ class ServerLauncher:
             "host": self.host,
             "port": self.port,
             "reload": bool(self.reload),
+            "debug": self.debug,
         }
 
     @property
@@ -275,6 +278,8 @@ class ServerLauncher:
         kwargs = dict(self.server_kwargs)
         if self.save_session_path is not None:
             kwargs["save_session"] = self.save_session_path
+        if self.debug is not False:
+            kwargs["debug"] = self.debug
         return kwargs
 
     @property
@@ -328,6 +333,8 @@ class ServerLauncher:
             self.port = stored.get("port")
         if not self.reload:
             self.reload = bool(stored.get("reload"))
+        if self.debug is False:
+            self.debug = stored.get("debug", False)
 
     def ensure_importable(self, directory: Path) -> None:
         """Put *directory* on ``sys.path`` so a config.py can import its siblings.
@@ -418,6 +425,13 @@ class Cli:
         serve.add_argument("--host", help="bind host (overrides the configured one)")
         serve.add_argument("--port", type=int, help="bind port (overrides the configured one)")
         serve.add_argument("--reload", action="store_true", help="restart on source changes")
+        serve.add_argument(
+            "--debug",
+            nargs="?",
+            const=True,
+            default=False,
+            help="declare the server runs in debug mode (optional comma-separated parameters)",
+        )
         serve.add_argument("--name", help="register the server under this name")
         serve.set_defaults(handler=self.serve)
 
@@ -496,17 +510,27 @@ def factory() -> AsgiServer:
         described = json.loads(payload)
     except json.JSONDecodeError as error:
         raise CliError(f"{LAUNCHER_ENV} is not valid JSON: {error}") from error
-    kwargs = {key: described[key] for key in ("host", "port", "save_session") if key in described}
+    kwargs = {
+        key: described[key] for key in ("host", "port", "save_session", "debug") if key in described
+    }
     if "application" in described:
-        return AsgiServer(applications=[TargetResolver(described["application"]).resolve()()], **kwargs)
-    if "config" in described:
+        server = AsgiServer(
+            applications=[TargetResolver(described["application"]).resolve()()], **kwargs
+        )
+    elif "config" in described:
         # The reloaded process starts fresh: the sibling-import path the parent
         # inserted (ServerLauncher.ensure_importable) must be re-inserted here.
         parent = str(Path(described["config"]).parent)
         if parent not in sys.path:
             sys.path.insert(0, parent)
-        return AsgiServer(config=described["config"], **kwargs)
-    raise CliError(f"{LAUNCHER_ENV} carries neither an 'application' nor a 'config' key")
+        server = AsgiServer(config=described["config"], **kwargs)
+    else:
+        raise CliError(f"{LAUNCHER_ENV} carries neither an 'application' nor a 'config' key")
+    # Under the reload supervisor every exit is a deliberate save: the child is
+    # killed at each source change, and the next one adopts what this one froze
+    # (dev-reload auto-soft, the orientations' §4).
+    server.shutdown_mode = QUITTING
+    return server
 
 
 def main(argv: list[str] | None = None) -> int:

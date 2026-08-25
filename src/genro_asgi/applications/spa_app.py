@@ -72,6 +72,7 @@ from ..application import ApplicationGrammar
 from ..middleware.base import cookie_value
 from ..response import Response
 from ..routed_application import RoutedApplication
+from ..server import QUITTING, REFUSED_RETRY_AFTER_SECONDS, RUNNING
 from ..spa.orchestration import AssignmentRefused, SiteFailedRequest, SpaCommander
 
 if TYPE_CHECKING:
@@ -295,8 +296,18 @@ class SpaApplication(RoutedApplication):
         await self.commander.start()
 
     async def on_shutdown(self) -> None:
-        """Take the pool down with the server."""
-        if self._commander is not None:
+        """Take the pool down with the server: with a photo, or dry.
+
+        A server that is QUITTING gets the soft quit — every user parked in the
+        reboot directory and the vertex's own item beside them. Any other way
+        out is dry, which is what every start that is not the deliberate liturgy
+        expects to find (F2).
+        """
+        if self._commander is None:
+            return
+        if self.server.state == QUITTING:
+            await self.commander.quit()
+        else:
             await self.commander.stop()
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -326,7 +337,10 @@ class SpaApplication(RoutedApplication):
         except AssignmentRefused as refusal:
             self._logger.warning("Front %s: %s", self.code, refusal)
             response = self.busy_response(refusal)
-        except (SiteFailedRequest, ConnectionError) as failure:
+        except ConnectionError as gone:
+            self._logger.warning("Front %s: %s", self.code, gone)
+            response = self.wire_lost_response(gone)
+        except SiteFailedRequest as failure:
             self._logger.error("Front %s: %s", self.code, failure)
             response = self.gateway_response()
         else:
@@ -344,6 +358,25 @@ class SpaApplication(RoutedApplication):
         if refusal.retry_after is not None:
             headers.append(("retry-after", str(int(refusal.retry_after))))
         return Response(content=ERR_503_TEXT, status_code=503, headers=headers)
+
+    def wire_lost_response(self, gone: ConnectionError) -> Response:
+        """What a dead wire means depends on why the process on the other end left.
+
+        A server that is quitting killed that wire on purpose, so the answer is
+        the polite 503 a refusal gets — the browser is told to come back, not
+        that something upstream broke. A wire that died while the server was
+        running IS a breakage, and reads 502.
+        """
+        if self.server.state == RUNNING:
+            return self.gateway_response()
+        return Response(
+            content=ERR_503_TEXT,
+            status_code=503,
+            headers=[
+                ("content-type", "text/plain; charset=utf-8"),
+                ("retry-after", str(REFUSED_RETRY_AFTER_SECONDS)),
+            ],
+        )
 
     def gateway_response(self) -> Response:
         """The 502 of an upstream that broke: what broke is said in the log alone."""

@@ -231,6 +231,7 @@ class TestArgumentParsing:
             "host": "0.0.0.0",
             "port": 8080,
             "reload": True,
+            "debug": False,
         }
         assert launcher.server_kwargs == {"host": "0.0.0.0", "port": 8080}
 
@@ -505,3 +506,36 @@ class TestFactory:
         payload = {"config": str(module), "save_session": snapshot}
         monkeypatch.setenv(LAUNCHER_ENV, json.dumps(payload))
         assert factory().save_session == Path(snapshot)
+
+
+class TestDebugAndReloadTrigger:
+    def test_debug_travels_from_the_flag_to_the_server(self, tmp_path: Path) -> None:
+        module = tmp_path / "config.py"
+        module.write_text(CONFIG_RECIPE)
+        cli = Cli(registry=AppsRegistry(base_dir=tmp_path))
+        options = parse(cli, ["serve", str(module), "--debug", "sql,timing"])
+        server = ServerLauncher(options, cli.registry).build_server()
+        assert server.debug == "sql,timing"
+
+    def test_a_bare_debug_flag_reads_true_and_its_absence_false(self, tmp_path: Path) -> None:
+        module = tmp_path / "config.py"
+        module.write_text(CONFIG_RECIPE)
+        cli = Cli(registry=AppsRegistry(base_dir=tmp_path))
+        flagged = parse(cli, ["serve", str(module), "--debug"])
+        plain = parse(cli, ["serve", str(module)])
+        assert ServerLauncher(flagged, cli.registry).build_server().debug is True
+        assert ServerLauncher(plain, cli.registry).build_server().debug is False
+
+    def test_the_reloaded_child_declares_its_exits_save(self, tmp_path: Path, monkeypatch) -> None:
+        from genro_asgi.lifespan import QUITTING, STOPPING
+
+        module = tmp_path / "config.py"
+        module.write_text(CONFIG_RECIPE)
+        monkeypatch.setenv(LAUNCHER_ENV, json.dumps({"config": str(module), "debug": True}))
+        server = factory()
+        assert server.shutdown_mode == QUITTING
+        assert server.debug is True
+        # and outside the supervisor the default stays the dry exit
+        from genro_asgi import BaseServer
+        from genro_asgi.application import BaseApplication
+        assert BaseServer(applications=[BaseApplication(mount="")]).shutdown_mode == STOPPING

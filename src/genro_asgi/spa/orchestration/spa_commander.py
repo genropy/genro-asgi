@@ -228,6 +228,14 @@ STATE_KINDS = frozenset({"page_store", "user_store", "connection_store"})
 #: drain discards it instead of shipping it. One rule for all three species.
 EVENT_MAX_AGE_SECONDS = 300.0
 
+#: Where a soft quit writes its photo while it is being taken. Beside the
+#: working deposit, never inside it, so the sweep never meets it.
+REBOOT_TEMP_NAME = "reboot_temp"
+
+#: The name that same directory takes once the photo is complete — the one a
+#: boot looks for, and the only thing that tells a governed quit from a crash.
+REBOOT_DATA_NAME = "reboot_data"
+
 __all__ = [
     "DESK_PATH_PREFIX",
     "EVENT_MAX_AGE_SECONDS",
@@ -1295,6 +1303,48 @@ class SpaCommander:
             outcome,
         )
 
+    def adopt_frozen_registers(self) -> None:
+        """Become what the last soft quit froze, if it is there; boot clean if not.
+
+        Acts on the disk — only ever through a ``FreezeHandler`` — and on the
+        indexes, in this order and no other. The working deposit is wiped FIRST
+        and ALWAYS (F4): nothing a previous run left there survives a start. A
+        leftover ``reboot_temp`` — a quit that died halfway — is dropped unread.
+
+        Then ``reboot_data`` is asked for the frozen commander registers. They
+        are read BEFORE anything is moved: a read that fails must leave a clean
+        boot behind, not parcels no map knows about — those would be swept
+        within the hour as orphans. Read, their item is dropped, the directory
+        is renamed onto the working deposit — every lazy wake from here reads
+        the ordinary place, with the ordinary handler — and the three maps and
+        the global store become this vertex's, every user frozen. Anything
+        missing or unreadable means the current behaviour: boot clean, said
+        once in the log. Never a partial adoption.
+        """
+        self.freeze_handler.wipe_root()
+        FreezeHandler(self.reboot_temp_path).drop_root()
+        reboot = FreezeHandler(self.reboot_data_path)
+        try:
+            saved = reboot.read_commander_register_item()
+        except Exception:
+            self._logger.exception(
+                "Vertex: the frozen commander registers could not be read — booting clean"
+            )
+            saved = None
+        if saved is None:
+            reboot.drop_root()
+            return
+        reboot.drop_commander_register_item()
+        self.freeze_handler.drop_root()
+        reboot.rename_root(self.freeze_handler.root_path)
+        self.user_map = saved["user_map"]
+        self.connection_user_map = saved["connection_user_map"]
+        self.page_connection_map = saved["page_connection_map"]
+        self.global_register = saved["global_register"]
+        self.log_order(
+            "vertex", "adopt_frozen_registers", "-", numbers={"users": len(self.user_map)}
+        )
+
     async def start(self) -> None:
         """Bring the machine up: the reception of the base group, then the beat.
 
@@ -1304,8 +1354,73 @@ class SpaCommander:
         its group ``broken``: the beat is running by then, and the group tries
         again at its own round.
         """
+        await asyncio.to_thread(self.adopt_frozen_registers)
+        await self.drop_expired_users(now=True)
         await self.group_map[self.default_group].start_worker()
         self._heartbeat_task = asyncio.ensure_future(self.heartbeat_loop())
+
+    @property
+    def reboot_temp_path(self) -> Path:
+        """Where a soft quit writes, beside the working deposit and never inside it."""
+        return self.freeze_handler.root_path.parent / REBOOT_TEMP_NAME
+
+    @property
+    def reboot_data_path(self) -> Path:
+        """The same directory once the photo is complete — the name a boot looks for."""
+        return self.freeze_handler.root_path.parent / REBOOT_DATA_NAME
+
+    async def quit(self) -> None:
+        """The soft quit: everybody parked in the photo, and the photo committed.
+
+        Acts on this vertex — the clock stops first, so no round can write while
+        the photo is taken — on every group, each ordered to park its users in
+        ``reboot_temp``, and on the disk, where the vertex adds its own item and
+        then renames the directory to ``reboot_data``.
+
+        The rename is the commit (F5): a directory under the final name is a
+        COMPLETE photo by construction, and a quit that dies halfway leaves the
+        provisional name, which no boot looks at. The vertex writes LAST because
+        it is the only one that knows the groups are done.
+        """
+        if self._heartbeat_task is not None:
+            self._heartbeat_task.cancel()
+            self._heartbeat_task = None
+        photo = FreezeHandler(self.reboot_temp_path)
+        for group_handler in list(self.group_map.values()):
+            await group_handler.quit_all(str(photo.root_path))
+        await asyncio.to_thread(
+            photo.write_commander_register_item,
+            self.frozen_commander_registers,
+            writer="vertex",
+            cause="quit",
+        )
+        photo.rename_root(self.reboot_data_path)
+        self.log_order("vertex", "quit", "-", numbers={"users": len(self.user_map)})
+
+    @property
+    def frozen_commander_registers(self) -> dict[str, Any]:
+        """What the vertex freezes of itself: its indexes and the global store.
+
+        Returns:
+            The three maps and the store. The rows go in NORMALISED — everybody
+            frozen, nobody on hold, no pending event — because a boot adopts
+            nobody eagerly and the events that were waiting are stale by then.
+
+        The indexes are saved and not rederived (D-h, owner 2026-08-25): the
+        cookie carries a cid, and only ``connection_user_map`` says whose it is.
+        The alternative was reading identities back off the filenames, which
+        ``user_to_userkey`` forbids and the sweep relies on it forbidding.
+        """
+        return {
+            "user_map": {
+                user: dict(row, frozen=True, on_hold=None, pending_dbevents=[], pending_datachanges=[])
+                for user, row in self.user_map.items()
+            },
+            "connection_user_map": dict(self.connection_user_map),
+            "page_connection_map": dict(self.page_connection_map),
+            "global_register": self.global_register,
+            "quit_ts": time.time(),
+        }
 
     async def stop(self) -> None:
         """Take the machine down dry: the clock off, then every group.

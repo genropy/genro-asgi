@@ -34,6 +34,8 @@ rule) and concurrent requests — each on its own task context — see their own
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import time
 from collections.abc import Callable
@@ -135,6 +137,8 @@ class RequestRegistry:
         self._current: ContextVar[RegisteredRequest | None] = ContextVar(
             "current_request", default=None
         )
+        self._empty = asyncio.Event()
+        self._empty.set()
 
     @property
     def current(self) -> RegisteredRequest | None:
@@ -152,12 +156,29 @@ class RequestRegistry:
         item = RegisteredRequest(self._counter, scope["type"], scope["path"])
         self._in_flight[item.request_id] = item
         self._tokens[item.request_id] = self._current.set(item)
+        self._empty.clear()
         return item
 
     def unregister(self, item: RegisteredRequest) -> None:
         """Drop ``item`` from the in-flight set and reset ``current``."""
         self._in_flight.pop(item.request_id)
         self._current.reset(self._tokens.pop(item.request_id))
+        if not self._in_flight:
+            self._empty.set()
+
+    async def await_drain(self, timeout: float | None = None) -> int:
+        """Wait for the in-flight set to empty.
+
+        Args:
+            timeout: seconds to wait, or None to wait without a bound.
+
+        Returns:
+            How many requests are still in flight — zero when the drain
+            completed, the count to report when the timeout ran out first.
+        """
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self._empty.wait(), timeout)
+        return self.in_flight
 
     def snapshot(self) -> list[RegisteredRequest]:
         """A list of the currently in-flight requests (registration order)."""

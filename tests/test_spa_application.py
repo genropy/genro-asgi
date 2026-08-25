@@ -39,6 +39,7 @@ from genro_asgi.applications.spa_app import (
     ERR_502_TEXT,
     SpaApplication,
 )
+from genro_asgi.server import QUITTING, REFUSED_RETRY_AFTER_SECONDS, STOPPING
 from genro_asgi.spa.orchestration import AssignmentRefused, SiteFailedRequest, SpaCommander
 
 from .conftest import LifespanRunner, ask_app, get_answer_header
@@ -265,6 +266,18 @@ async def test_the_inside_of_the_house_never_reaches_the_browser(started):
     assert b"invoices_2024" not in answer["body"]
 
 
+async def test_a_wire_that_is_gone_while_the_server_quits_is_a_503(started, monkeypatch):
+    """The wire died because the server is leaving: a refusal, not a breakage."""
+    front = started.applications["site0"]
+    monkeypatch.setattr(front.server, "state", QUITTING)
+    front.commander.failure = ConnectionError("no child on the wire")
+
+    answer = await ask_app(front, "/invoices")
+
+    assert answer["status"] == 503
+    assert get_answer_header(answer, "retry-after") == str(REFUSED_RETRY_AFTER_SECONDS)
+
+
 async def test_a_wire_that_is_gone_is_the_same_502(started):
     front = started.applications["site0"]
     front.commander.failure = ConnectionError("no child on the wire")
@@ -283,3 +296,25 @@ async def test_a_refusal_names_no_connection_and_writes_no_cookie(started):
     answer = await ask_app(front, "/invoices", cookies={SPA_CONNECTION_ID_COOKIE: "site-1"})
 
     assert get_answer_header(answer, "set-cookie") is None
+
+
+async def test_the_front_takes_the_photo_only_when_the_server_is_quitting(started, monkeypatch):
+    """QUITTING gets the soft quit; any other way out is dry."""
+    front = started.applications["site0"]
+    called = []
+
+    async def note_quit(self):
+        called.append("quit")
+
+    async def note_stop(self):
+        called.append("stop")
+
+    monkeypatch.setattr(type(front.commander), "quit", note_quit)
+    monkeypatch.setattr(type(front.commander), "stop", note_stop)
+
+    monkeypatch.setattr(front.server, "state", STOPPING)
+    await front.on_shutdown()
+    monkeypatch.setattr(front.server, "state", QUITTING)
+    await front.on_shutdown()
+
+    assert called == ["stop", "quit"]

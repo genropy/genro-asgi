@@ -51,7 +51,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable
 import uvicorn
 
 from .application import BaseApplication
-from .lifespan import Lifespan
+from .lifespan import QUITTING, RUNNING, STOPPING, Lifespan
 from .pool import WorkPool
 from .request_registry import RequestRegistry
 from .response import Response
@@ -59,7 +59,10 @@ from .response import Response
 if TYPE_CHECKING:
     from .types import ASGIApp, Receive, Scope, Send
 
-__all__ = ["BaseServer"]
+REFUSED_RETRY_AFTER_SECONDS = 5
+"""The seconds a refused request is told to come back in."""
+
+__all__ = ["QUITTING", "REFUSED_RETRY_AFTER_SECONDS", "RUNNING", "STOPPING", "BaseServer"]
 
 
 class BaseServer:
@@ -76,6 +79,7 @@ class BaseServer:
         applications: Iterable[BaseApplication] = kwargs.pop("applications", ())
         default: str | None = kwargs.pop("default", None)
         max_threads: int | None = kwargs.pop("max_threads", None)
+        debug: bool | str = kwargs.pop("debug", False)
         if kwargs:
             unexpected = ", ".join(sorted(kwargs))
             raise TypeError(
@@ -89,6 +93,22 @@ class BaseServer:
         self._pool = WorkPool(self, max_threads=max_threads)
         self._lifespan = Lifespan(self)
         self._registry = RequestRegistry(self)
+        self.state = RUNNING
+        """``RUNNING``, ``QUITTING`` or ``STOPPING`` — read by the entry point."""
+        self.shutdown_mode = STOPPING
+        """What ``state`` becomes at the lifespan shutdown when nobody chose first.
+
+        ``STOPPING`` — down dry — unless the trigger declares its exit saves:
+        the ``--reload`` launcher sets ``QUITTING`` here, the deliberate command
+        will set ``state`` itself before the shutdown arrives.
+        """
+        self.debug = debug
+        """The declared usage mode: False, True, or the parameters it was given.
+
+        A flag and nothing else (owner, 2026-08-25): the core branches on it
+        nowhere. It exists so future readers — extra middleware, extra checks —
+        can behave differently knowing the server runs in debug.
+        """
         for app in applications:
             self.register_application(app)
         self._default = default
@@ -190,9 +210,23 @@ class BaseServer:
         the span of the dispatch); ``websocket`` runs ``on_websocket`` (the
         empty socket by default); ``lifespan`` runs the ``Lifespan`` handler.
         Any other type is an ASGI protocol error.
+
+        ``state`` is read FIRST: anything but ``RUNNING`` takes nothing new in
+        charge, and this branch renders the refusal the way HTTP says it — 503
+        and ``Retry-After``. Another transport reads the same state and renders
+        its own. Whatever the middleware chain answers by itself never reaches
+        here, so it is neither registered nor refused.
         """
         scope_type = scope["type"]
         if scope_type == "http":
+            if self.state != RUNNING:
+                await Response(
+                    content="Server restarting",
+                    status_code=503,
+                    media_type="text/plain",
+                    headers={"retry-after": str(REFUSED_RETRY_AFTER_SECONDS)},
+                )(scope, receive, send)
+                return
             item = self.requests.register(scope)
             try:
                 app, target = self.demux(scope)

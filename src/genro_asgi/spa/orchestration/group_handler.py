@@ -547,7 +547,25 @@ class GroupHandler:
             outcome="saturated",
         )
 
-    async def _order_quit(self, worker_handler: WorkerHandler, order: str) -> None:
+    async def quit_all(self, freezer_path: str) -> None:
+        """Tell every process of this group to leave, parking its users in *freezer_path*.
+
+        Args:
+            freezer_path: the directory this group's parcels are written to —
+                the reboot directory, never the working deposit.
+
+        Acts on each of its workers, one order per worker, and on the template
+        when there is one: it is nobody's watcher, but it outlives the workers
+        it forked, so it goes last. A worker already dead is ordered nothing.
+        """
+        for worker_handler in list(self.worker_handler_map.values()):
+            await self._order_quit(worker_handler, "quit_all", freezer_path=freezer_path)
+        if self.template is not None:
+            await self.template.stop()
+
+    async def _order_quit(
+        self, worker_handler: WorkerHandler, order: str, freezer_path: str | None = None
+    ) -> None:
         """Ask a worker's process to leave, having made sure a photo of it exists.
 
         The departure of everybody on board is settled on the LAST photo — who
@@ -572,4 +590,4 @@ class GroupHandler:
                 "workers": len(self.living_workers),
             },
         )
-        await worker_handler.quit_process()
+        await worker_handler.quit_process(freezer_path)
