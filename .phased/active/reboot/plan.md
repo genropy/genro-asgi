@@ -175,7 +175,21 @@ works from day one — no re-login — at the cost of a bigger restart than need
 
 ## Work Plan
 
-- [ ] **Phase 1**: Measure the shutdown window under `--reload`
+- [x] **Phase 1**: Measure the shutdown window under `--reload`
+  > Done: the reloader is a parent (pid 27242) holding one child (27244); in the
+  > child SIGTERM and SIGINT are bound to `uvicorn.server.Server.handle_exit` and
+  > SIGHUP is SIG_IGN. The lifespan shutdown RUNS and nothing bounds it: the probe's
+  > `on_shutdown` ran 60.09 s uninterrupted, no harder kill, and the new child's
+  > `on_startup` fired 0.28 s after it returned. Two consequences: the soft quit has
+  > all the time it needs, so Phase 6 needs no special shape; and the two processes
+  > NEVER overlap, so `reboot_data` written by the dying child is guaranteed visible
+  > to the one that boots — a whole class of race does not exist here. Declared
+  > caveat: the budget is ours alone, so a quit that hangs hangs the reload forever
+  > — the cut of D-e is not optional. Confirmed on the side: the reloader watches
+  > the CLI source file's directory, not `src/` of genro-asgi.
+  > Verified: no production code touched; `ruff check` clean (pre-commit); mypy
+  > advisory unchanged (132 pre-existing errors, none from this phase).
+  > Files: .phased/active/reboot/notes.md
   - Run: opus / medium
   - Deliverable: a measured note in notes.md, committed. NO production code.
   - Why first: under `--reload` the soft quit is not deliberate — the
