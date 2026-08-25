@@ -529,7 +529,7 @@ def factory() -> AsgiServer:
     # Under the reload supervisor every exit is a deliberate save: the child is
     # killed at each source change, and the next one adopts what this one froze
     # (dev-reload auto-soft, the orientations' §4).
-    server.shutdown_state_TBD = QUITTING
+    server.shutdown_mode = QUITTING
     return server
 
 

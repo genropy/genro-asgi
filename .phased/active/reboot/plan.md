@@ -414,16 +414,16 @@ works from day one — no re-login — at the cost of a bigger restart than need
 - [x] **Phase 6**: The dev trigger, and `--debug`
   > Done: the lifecycle states moved to `lifespan.py` — the lifespan IS the lifecycle —
   > and `server.py` re-exports them, so every existing import holds. `Lifespan.shutdown`
-  > now turns the state FIRST (to `shutdown_state_TBD` when still RUNNING; a state
+  > now turns the state FIRST (to `shutdown_mode` when still RUNNING; a state
   > somebody already chose is respected), drains the in-flight requests bounded by
   > `SHUTDOWN_DRAIN_TIMEOUT_SECONDS = 10.0` (the leftover count goes in the log), and
   > only then runs the hooks in reverse: each application saves after nothing new can
   > arrive and nothing old is being served. `BaseServer` carries
-  > `shutdown_state_TBD = STOPPING` (dry by default) and `debug` (False | True | the
+  > `shutdown_mode = STOPPING` (dry by default) and `debug` (False | True | the
   > parameters given — a declared usage mode, the core branches on it nowhere).
   > The CLI grew `--debug [params]`; it travels through the registry entry, the
   > constructor kwargs and `GENRO_ASGI_LAUNCHER`. `factory()` — the reloaded child —
-  > sets `shutdown_state_TBD = QUITTING`: under the supervisor every exit is a
+  > sets `shutdown_mode = QUITTING`: under the supervisor every exit is a
   > deliberate save (dev-reload auto-soft, orientations §4). The supervisor stays blind.
   > Declared: `test_serve_options_become_the_registry_entry` extended — the stored
   > entry deliberately gained the `debug` key; not a regression.

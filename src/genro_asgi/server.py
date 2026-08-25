@@ -95,7 +95,7 @@ class BaseServer:
         self._registry = RequestRegistry(self)
         self.state = RUNNING
         """``RUNNING``, ``QUITTING`` or ``STOPPING`` — read by the entry point."""
-        self.shutdown_state_TBD = STOPPING
+        self.shutdown_mode = STOPPING
         """What ``state`` becomes at the lifespan shutdown when nobody chose first.
 
         ``STOPPING`` — down dry — unless the trigger declares its exit saves:

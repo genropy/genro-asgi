@@ -533,9 +533,9 @@ class TestDebugAndReloadTrigger:
         module.write_text(CONFIG_RECIPE)
         monkeypatch.setenv(LAUNCHER_ENV, json.dumps({"config": str(module), "debug": True}))
         server = factory()
-        assert server.shutdown_state_TBD == QUITTING
+        assert server.shutdown_mode == QUITTING
         assert server.debug is True
         # and outside the supervisor the default stays the dry exit
         from genro_asgi import BaseServer
         from genro_asgi.application import BaseApplication
-        assert BaseServer(applications=[BaseApplication(mount="")]).shutdown_state_TBD == STOPPING
+        assert BaseServer(applications=[BaseApplication(mount="")]).shutdown_mode == STOPPING

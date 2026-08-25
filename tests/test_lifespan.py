@@ -177,7 +177,7 @@ class TestShutdownState:
 
     async def test_the_reload_trigger_makes_the_shutdown_a_quit(self) -> None:
         server = BaseServer(applications=[BaseApplication(mount="")])
-        server.shutdown_state_TBD = QUITTING
+        server.shutdown_mode = QUITTING
         await Lifespan(server).shutdown()
         assert server.state == QUITTING
 
