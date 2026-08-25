@@ -30,8 +30,9 @@ from typing import Any
 
 import pytest
 
-from genro_asgi import BaseApplication, BaseServer
+from genro_asgi import BaseApplication, BaseServer, MiddlewareMixin
 from genro_asgi.request_registry import RegisteredRequest
+from genro_asgi.server import QUITTING, REFUSED_RETRY_AFTER_SECONDS, RUNNING
 from genro_asgi.types import Receive, Scope, Send
 
 
@@ -221,3 +222,99 @@ class TestCleanups:
     def test_run_cleanups_is_noop_without_any(self) -> None:
         item = RegisteredRequest(1, "http", "/")
         item.run_cleanups()  # no cleanups queued → nothing happens, no error
+
+
+class OkApp(BaseApplication):
+    """Test app: a plain 200 for every path."""
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+
+class HeldApp(BaseApplication):
+    """Test app blocked on an Event until the test lets it answer.
+
+    Constructor kwargs peeled here (cooperative chain): ``gate`` — the Event the
+    test sets to let the request finish.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.gate: asyncio.Event = kwargs.pop("gate")
+        super().__init__(**kwargs)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await self.gate.wait()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+
+class MwServer(MiddlewareMixin, BaseServer):
+    """The middleware capability over the base server, for the chain test."""
+
+
+class TestServerState:
+    async def test_a_server_that_is_not_running_refuses_a_new_request(
+        self, http_request, response_status, response_headers
+    ) -> None:
+        server = BaseServer(applications=[OkApp(mount="")])
+        server.state = QUITTING
+        sent = await http_request(server, "/")
+        assert response_status(sent) == 503
+        retry_after = response_headers(sent)[b"retry-after"]
+        assert retry_after == str(REFUSED_RETRY_AFTER_SECONDS).encode()
+
+    async def test_a_server_back_to_running_serves_again(
+        self, http_request, response_status
+    ) -> None:
+        server = BaseServer(applications=[OkApp(mount="")])
+        server.state = QUITTING
+        server.state = RUNNING
+        assert response_status(await http_request(server, "/")) == 200
+
+    async def test_a_refused_request_is_never_registered(self, http_request) -> None:
+        server = BaseServer(applications=[OkApp(mount="")])
+        server.state = QUITTING
+        await http_request(server, "/")
+        assert server.requests.in_flight == 0
+        assert server.requests.snapshot() == []
+
+    async def test_an_empty_registry_drains_at_once(self) -> None:
+        server = BaseServer(applications=[OkApp(mount="")])
+        assert await server.requests.await_drain(timeout=0.1) == 0
+
+    async def test_the_drain_returns_as_the_last_request_ends(
+        self, http_request, response_status
+    ) -> None:
+        gate = asyncio.Event()
+        server = BaseServer(applications=[HeldApp(mount="", gate=gate)])
+        in_flight = asyncio.ensure_future(http_request(server, "/"))
+        await asyncio.sleep(0)
+        server.state = QUITTING
+        assert server.requests.in_flight == 1
+        draining = asyncio.ensure_future(server.requests.await_drain())
+        gate.set()
+        assert await draining == 0
+        assert response_status(await in_flight) == 200
+
+    async def test_the_drain_reports_what_is_still_in_flight_past_its_timeout(
+        self, http_request
+    ) -> None:
+        gate = asyncio.Event()
+        server = BaseServer(applications=[HeldApp(mount="", gate=gate)])
+        in_flight = asyncio.ensure_future(http_request(server, "/"))
+        await asyncio.sleep(0)
+        server.state = QUITTING
+        assert await server.requests.await_drain(timeout=0.05) == 1
+        gate.set()
+        await in_flight
+
+    async def test_what_the_chain_answers_itself_passes_a_server_not_running(
+        self, http_request, response_status
+    ) -> None:
+        server = MwServer(applications=[OkApp(mount="")], middleware={"wellknown": True})
+        server.state = QUITTING
+        # The wellknown middleware answers /.well-known/* itself, before the
+        # dispatch the state guards: 404 from the chain, never the 503.
+        assert response_status(await http_request(server, "/.well-known/probe")) == 404
+        assert response_status(await http_request(server, "/")) == 503

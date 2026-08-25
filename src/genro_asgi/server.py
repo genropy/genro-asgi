@@ -59,7 +59,19 @@ from .response import Response
 if TYPE_CHECKING:
     from .types import ASGIApp, Receive, Scope, Send
 
-__all__ = ["BaseServer"]
+RUNNING = "running"
+"""The server takes new requests in charge. Any other state refuses them."""
+
+QUITTING = "quitting"
+"""The server is leaving and saving what it holds."""
+
+STOPPING = "stopping"
+"""The server is leaving without saving."""
+
+REFUSED_RETRY_AFTER_SECONDS = 5
+"""The seconds a refused request is told to come back in."""
+
+__all__ = ["QUITTING", "REFUSED_RETRY_AFTER_SECONDS", "RUNNING", "STOPPING", "BaseServer"]
 
 
 class BaseServer:
@@ -89,6 +101,8 @@ class BaseServer:
         self._pool = WorkPool(self, max_threads=max_threads)
         self._lifespan = Lifespan(self)
         self._registry = RequestRegistry(self)
+        self.state = RUNNING
+        """``RUNNING``, ``QUITTING`` or ``STOPPING`` — read by the entry point."""
         for app in applications:
             self.register_application(app)
         self._default = default
@@ -190,9 +204,23 @@ class BaseServer:
         the span of the dispatch); ``websocket`` runs ``on_websocket`` (the
         empty socket by default); ``lifespan`` runs the ``Lifespan`` handler.
         Any other type is an ASGI protocol error.
+
+        ``state`` is read FIRST: anything but ``RUNNING`` takes nothing new in
+        charge, and this branch renders the refusal the way HTTP says it — 503
+        and ``Retry-After``. Another transport reads the same state and renders
+        its own. Whatever the middleware chain answers by itself never reaches
+        here, so it is neither registered nor refused.
         """
         scope_type = scope["type"]
         if scope_type == "http":
+            if self.state != RUNNING:
+                await Response(
+                    content="Server restarting",
+                    status_code=503,
+                    media_type="text/plain",
+                    headers={"retry-after": str(REFUSED_RETRY_AFTER_SECONDS)},
+                )(scope, receive, send)
+                return
             item = self.requests.register(scope)
             try:
                 app, target = self.demux(scope)

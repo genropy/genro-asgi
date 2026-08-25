@@ -204,7 +204,34 @@ works from day one — no re-login — at the cost of a bigger restart than need
   - Done: notes.md states the signal, whether the shutdown hook runs, and the
     measured budget, each with the command that produced it.
 
-- [ ] **Phase 2**: The gate on the server
+- [x] **Phase 2**: The server state, and the drain
+  > Done: the server carries `state` — `RUNNING`, `QUITTING`, `STOPPING`, constants
+  > in `server.py`. The http branch reads it FIRST: anything but `RUNNING` answers
+  > 503 with `Retry-After` (`REFUSED_RETRY_AFTER_SECONDS = 5`) and registers nothing.
+  > `RequestRegistry.await_drain(timeout)` waits for the in-flight set to empty and
+  > returns how many are still there — zero when it drained, the count to log when
+  > the timeout ran out. The registry keeps an Event that `register` clears and
+  > `unregister` sets, so there is no arming call and no error state.
+  > Naming, ruled by the owner: no open/close pair and no `accepting_requests`
+  > boolean — one state whose accepting value is `RUNNING`, because a reader of
+  > "is accepting requests" has to imagine the reasons, while "refuse unless
+  > running" is obvious. Five names became three.
+  > Amends D-c and the plan's Phase 4/6: the state is set at the TOP of
+  > `Lifespan.shutdown`, before it walks the applications' `on_shutdown` in reverse
+  > (`lifespan.py:66`) — an application cannot close the server's door on behalf of
+  > all, and by the time its hook runs the teardown has begun. `SpaApplication`'s
+  > hook still owns the FREEZE, which is right: state set and drained first, each
+  > app saves after.
+  > Verified: `pytest tests/` 1494 passed (was 1487 — the 7 tests this phase adds);
+  > `ruff check src/ tests/` clean; 30 executable lines added to `src/` against the
+  > phase cap of 60.
+  > Behaviours covered: a server not RUNNING refuses with 503 and the right
+  > `Retry-After`; back to RUNNING it serves again; a refused request never enters
+  > the registry; an empty registry drains at once; the drain returns zero as the
+  > last request ends; the drain returns the count past its timeout; and what the
+  > middleware chain answers itself (`/.well-known/probe`) passes while `/` gets 503.
+  > Files: src/genro_asgi/server.py, src/genro_asgi/request_registry.py,
+  > tests/test_request_registry.py
   - Run: opus / medium
   - Cap: 60 executable lines in `src/`.
   - Files: src/genro_asgi/server.py, src/genro_asgi/request_registry.py,
