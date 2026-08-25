@@ -305,7 +305,36 @@ works from day one — no re-login — at the cost of a bigger restart than need
     once; a user with a stuck call is cut past the grace, gets 503, and is
     frozen; the worker closes when it holds nobody.
 
-- [ ] **Phase 4**: The commander's part and the first rename
+- [x] **Phase 4**: The commander's part and the first rename
+  > Done: `SpaCommander.quit()` stops the clock first — no round may write while the
+  > photo is taken — orders every group into `reboot_temp` through `quit_all`, writes
+  > its own item there LAST because only it knows the groups are done, and renames the
+  > directory to `reboot_data`. `reboot_temp_path`/`reboot_data_path` sit BESIDE the
+  > working deposit (`REBOOT_TEMP_NAME`, `REBOOT_DATA_NAME`), never inside it, so the
+  > sweep never meets them and the later rename onto the working root is one move on
+  > one filesystem. `stop()` is untouched and stays the dry way out.
+  > `saved_state` is what goes in: the three maps and the global store, with the rows
+  > NORMALISED — everybody frozen, nobody on hold, no pending event — because a boot
+  > adopts nobody and those events are stale by then.
+  > `FreezeHandler` grew the four calls this needs, and stays the only thing that talks
+  > to the filesystem: `write_commander_register_item` (a FILE at the root, invisible to
+  > a sweep that only looks at directories), `read_`/`drop_commander_register_item`, and
+  > `rename_root`, which is the commit — a directory under its final name is a complete
+  > photo by construction (F5).
+  > `SpaApplication.on_shutdown` dispatches on the state: QUITTING takes the photo,
+  > anything else goes down dry (F2).
+  > Verified: `pytest tests/` 1503 passed (was 1499 — the 4 tests this phase adds);
+  > `ruff check src/ tests/` clean; 60 executable lines added to `src/` against the phase
+  > cap of 80.
+  > Behaviours covered: the quit orders every group into `reboot_temp` and leaves only
+  > `reboot_data` behind, holding the commander item with the real maps; the saved rows
+  > come out normalised; a quit that dies before the rename leaves `reboot_temp` and NO
+  > `reboot_data`; the front takes the photo only when the server is QUITTING.
+  > Files: src/genro_asgi/spa/orchestration/spa_commander.py,
+  > src/genro_asgi/spa/orchestration/freeze_handler.py,
+  > src/genro_asgi/applications/spa_app.py,
+  > tests/orchestration/test_orchestration_spa_commander.py,
+  > tests/test_spa_application.py
   - Run: opus / medium
   - Cap: 80 executable lines in `src/`.
   - Files: src/genro_asgi/spa/orchestration/spa_commander.py,

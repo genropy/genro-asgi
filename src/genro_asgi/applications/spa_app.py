@@ -72,7 +72,7 @@ from ..application import ApplicationGrammar
 from ..middleware.base import cookie_value
 from ..response import Response
 from ..routed_application import RoutedApplication
-from ..server import REFUSED_RETRY_AFTER_SECONDS, RUNNING
+from ..server import QUITTING, REFUSED_RETRY_AFTER_SECONDS, RUNNING
 from ..spa.orchestration import AssignmentRefused, SiteFailedRequest, SpaCommander
 
 if TYPE_CHECKING:
@@ -296,8 +296,18 @@ class SpaApplication(RoutedApplication):
         await self.commander.start()
 
     async def on_shutdown(self) -> None:
-        """Take the pool down with the server."""
-        if self._commander is not None:
+        """Take the pool down with the server: with a photo, or dry.
+
+        A server that is QUITTING gets the soft quit — every user parked in the
+        reboot directory and the vertex's own item beside them. Any other way
+        out is dry, which is what every start that is not the deliberate liturgy
+        expects to find (F2).
+        """
+        if self._commander is None:
+            return
+        if self.server.state == QUITTING:
+            await self.commander.quit()
+        else:
             await self.commander.stop()
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:

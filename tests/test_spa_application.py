@@ -39,7 +39,7 @@ from genro_asgi.applications.spa_app import (
     ERR_502_TEXT,
     SpaApplication,
 )
-from genro_asgi.server import QUITTING, REFUSED_RETRY_AFTER_SECONDS
+from genro_asgi.server import QUITTING, REFUSED_RETRY_AFTER_SECONDS, STOPPING
 from genro_asgi.spa.orchestration import AssignmentRefused, SiteFailedRequest, SpaCommander
 
 from .conftest import LifespanRunner, ask_app, get_answer_header
@@ -296,3 +296,25 @@ async def test_a_refusal_names_no_connection_and_writes_no_cookie(started):
     answer = await ask_app(front, "/invoices", cookies={SPA_CONNECTION_ID_COOKIE: "site-1"})
 
     assert get_answer_header(answer, "set-cookie") is None
+
+
+async def test_the_front_takes_the_photo_only_when_the_server_is_quitting(started, monkeypatch):
+    """QUITTING gets the soft quit; any other way out is dry."""
+    front = started.applications["site0"]
+    called = []
+
+    async def note_quit(self):
+        called.append("quit")
+
+    async def note_stop(self):
+        called.append("stop")
+
+    monkeypatch.setattr(type(front.commander), "quit", note_quit)
+    monkeypatch.setattr(type(front.commander), "stop", note_stop)
+
+    monkeypatch.setattr(front.server, "state", STOPPING)
+    await front.on_shutdown()
+    monkeypatch.setattr(front.server, "state", QUITTING)
+    await front.on_shutdown()
+
+    assert called == ["stop", "quit"]

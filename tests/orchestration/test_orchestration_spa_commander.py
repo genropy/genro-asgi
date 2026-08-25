@@ -32,6 +32,7 @@ import pytest
 from genro_bag import Bag
 
 from genro_asgi.spa.orchestration import SpaCommander, UserOnHold
+from genro_asgi.spa.orchestration import FreezeHandler
 from genro_asgi.spa.orchestration.spa_commander import GUEST_PREFIX
 
 WORKER_NAME = "standard_0001"
@@ -362,3 +363,57 @@ def test_a_hold_already_up_keeps_its_first_cause_and_its_own_door(commander):
 
     assert commander.user_map[user]["on_hold"] == "transfer_flag T"
     assert commander.user_hold_event_map[user] is door
+
+
+class QuietGroup:
+    """A group that records the order it was given and parks nobody."""
+
+    def __init__(self) -> None:
+        self.ordered_into: list[str] = []
+
+    async def quit_all(self, freezer_path: str) -> None:
+        self.ordered_into.append(freezer_path)
+
+
+async def test_the_quit_orders_every_group_and_commits_the_photo_by_renaming(commander):
+    group = QuietGroup()
+    commander.group_map["standard"] = group
+    commander.record_connection_user("cid-a", "mario")
+
+    await commander.quit()
+
+    assert group.ordered_into == [str(commander.reboot_temp_path)]
+    assert not commander.reboot_temp_path.exists()
+    assert commander.reboot_data_path.exists()
+    saved = FreezeHandler(commander.reboot_data_path).read_commander_register_item()
+    assert saved["connection_user_map"] == {"cid-a": "mario"}
+
+
+async def test_the_saved_rows_are_normalised_for_a_boot_that_adopts_nobody(commander):
+    commander.group_map["standard"] = QuietGroup()
+    commander.record_connection_user("cid-a", "mario")
+    commander.hold_user("mario", "moving")
+    commander.user_map["mario"]["pending_datachanges"] = [{"stale": True}]
+
+    await commander.quit()
+
+    saved = FreezeHandler(commander.reboot_data_path).read_commander_register_item()
+    row = saved["user_map"]["mario"]
+    assert row["frozen"] is True
+    assert row["on_hold"] is None
+    assert row["pending_datachanges"] == []
+
+
+async def test_a_quit_that_dies_before_the_rename_leaves_no_photo(commander, monkeypatch):
+    commander.group_map["standard"] = QuietGroup()
+
+    def refuse(*args, **kwargs):
+        raise OSError("the disk said no")
+
+    monkeypatch.setattr(FreezeHandler, "write_commander_register_item", refuse)
+
+    with pytest.raises(OSError):
+        await commander.quit()
+
+    assert commander.reboot_temp_path.exists()
+    assert not commander.reboot_data_path.exists()

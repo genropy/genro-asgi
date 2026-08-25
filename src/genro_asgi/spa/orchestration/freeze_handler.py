@@ -74,8 +74,15 @@ from typing import Any
 LOCK_NAME = ".lock"
 USER_REGISTER_ITEM_NAME = "user_register_item.pickle"
 CONNECTION_REGISTER_ITEM_PREFIX = "connection_register_item_"
+COMMANDER_REGISTER_ITEM_NAME = "commander_register_item.pickle"
 
-__all__ = ["CONNECTION_REGISTER_ITEM_PREFIX", "LOCK_NAME", "USER_REGISTER_ITEM_NAME", "FreezeHandler"]
+__all__ = [
+    "COMMANDER_REGISTER_ITEM_NAME",
+    "CONNECTION_REGISTER_ITEM_PREFIX",
+    "LOCK_NAME",
+    "USER_REGISTER_ITEM_NAME",
+    "FreezeHandler",
+]
 
 
 class FreezeHandler:
@@ -215,6 +222,43 @@ class FreezeHandler:
         self._write_item(
             self._connection_path(user, cid), payload, writer, cause, group
         )
+
+    def write_commander_register_item(self, payload: Any, *, writer: str, cause: str) -> None:
+        """Write the vertex's own item at the ROOT — a file, never a folder.
+
+        Args:
+            payload: what the vertex saves of itself, pickled as it comes.
+            writer: the name answering for the write.
+            cause: why it is being written.
+
+        Writes the file. It sits beside the user folders and outside them, so
+        the sweep — which only ever looks at directories — cannot see it.
+        """
+        self._write_item(self.root_path / COMMANDER_REGISTER_ITEM_NAME, payload, writer, cause, "")
+
+    def read_commander_register_item(self) -> Any:
+        """The vertex's own item, or None when there is no such file."""
+        envelope = self._read_envelope(self.root_path / COMMANDER_REGISTER_ITEM_NAME)
+        return None if envelope is None else envelope["payload"]
+
+    def drop_commander_register_item(self) -> None:
+        """Remove the vertex's own item; a thing already gone is that same outcome."""
+        (self.root_path / COMMANDER_REGISTER_ITEM_NAME).unlink(missing_ok=True)
+
+    def rename_root(self, destination: str | Path) -> None:
+        """Move this whole root to *destination*, and follow it.
+
+        Args:
+            destination: where the root goes — the same filesystem, so the move
+                is one atomic rename and never a copy.
+
+        Acts on the disk and on this handler, which points at the new name
+        afterwards. The rename is the only commit this class has: a directory
+        that appears under its final name is complete by construction.
+        """
+        destination = Path(destination)
+        os.rename(self.root_path, destination)
+        self.root_path = destination
 
     def read_user_register_item(self, user: str) -> Any:
         """Read back the user's own store.

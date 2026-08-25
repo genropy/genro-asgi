@@ -228,6 +228,14 @@ STATE_KINDS = frozenset({"page_store", "user_store", "connection_store"})
 #: drain discards it instead of shipping it. One rule for all three species.
 EVENT_MAX_AGE_SECONDS = 300.0
 
+#: Where a soft quit writes its photo while it is being taken. Beside the
+#: working deposit, never inside it, so the sweep never meets it.
+REBOOT_TEMP_NAME = "reboot_temp"
+
+#: The name that same directory takes once the photo is complete — the one a
+#: boot looks for, and the only thing that tells a governed quit from a crash.
+REBOOT_DATA_NAME = "reboot_data"
+
 __all__ = [
     "DESK_PATH_PREFIX",
     "EVENT_MAX_AGE_SECONDS",
@@ -1306,6 +1314,69 @@ class SpaCommander:
         """
         await self.group_map[self.default_group].start_worker()
         self._heartbeat_task = asyncio.ensure_future(self.heartbeat_loop())
+
+    @property
+    def reboot_temp_path(self) -> Path:
+        """Where a soft quit writes, beside the working deposit and never inside it."""
+        return self.freeze_handler.root_path.parent / REBOOT_TEMP_NAME
+
+    @property
+    def reboot_data_path(self) -> Path:
+        """The same directory once the photo is complete — the name a boot looks for."""
+        return self.freeze_handler.root_path.parent / REBOOT_DATA_NAME
+
+    async def quit(self) -> None:
+        """The soft quit: everybody parked in the photo, and the photo committed.
+
+        Acts on this vertex — the clock stops first, so no round can write while
+        the photo is taken — on every group, each ordered to park its users in
+        ``reboot_temp``, and on the disk, where the vertex adds its own item and
+        then renames the directory to ``reboot_data``.
+
+        The rename is the commit (F5): a directory under the final name is a
+        COMPLETE photo by construction, and a quit that dies halfway leaves the
+        provisional name, which no boot looks at. The vertex writes LAST because
+        it is the only one that knows the groups are done.
+        """
+        if self._heartbeat_task is not None:
+            self._heartbeat_task.cancel()
+            self._heartbeat_task = None
+        photo = FreezeHandler(self.reboot_temp_path)
+        for group_handler in list(self.group_map.values()):
+            await group_handler.quit_all(str(photo.root_path))
+        await asyncio.to_thread(
+            photo.write_commander_register_item,
+            self.saved_state,
+            writer="vertex",
+            cause="quit",
+        )
+        photo.rename_root(self.reboot_data_path)
+        self.log_order("vertex", "quit", "-", numbers={"users": len(self.user_map)})
+
+    @property
+    def saved_state(self) -> dict[str, Any]:
+        """What the vertex puts in the photo: its indexes and the global store.
+
+        Returns:
+            The three maps and the store. The rows go in NORMALISED — everybody
+            frozen, nobody on hold, no pending event — because a boot adopts
+            nobody eagerly and the events that were waiting are stale by then.
+
+        The indexes are saved and not rederived (D-h, owner 2026-08-25): the
+        cookie carries a cid, and only ``connection_user_map`` says whose it is.
+        The alternative was reading identities back off the filenames, which
+        ``user_to_userkey`` forbids and the sweep relies on it forbidding.
+        """
+        return {
+            "user_map": {
+                user: dict(row, frozen=True, on_hold=None, pending_dbevents=[], pending_datachanges=[])
+                for user, row in self.user_map.items()
+            },
+            "connection_user_map": dict(self.connection_user_map),
+            "page_connection_map": dict(self.page_connection_map),
+            "global_register": self.global_register,
+            "quit_ts": time.time(),
+        }
 
     async def stop(self) -> None:
         """Take the machine down dry: the clock off, then every group.
