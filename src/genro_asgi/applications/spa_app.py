@@ -134,6 +134,7 @@ class SpaApplicationGrammar(ApplicationGrammar):
         reception_reserved_percent: float | BagResolver = None,
         new_user_occupancy_percent: float | BagResolver = None,
         newcomer_reserve_count: int | BagResolver = None,
+        worker_max_users: int | BagResolver = None,
         user_idle_freeze_minutes: float | BagResolver = None,
         entry_module: str = None,
         executable: str | BagResolver = None,

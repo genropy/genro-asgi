@@ -107,6 +107,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from typing import Any
 
 from .envelope_handler import GroupEnvelopeHandler
@@ -176,6 +177,7 @@ class GroupHandler:
         reception_reserved_percent: float = 50.0,
         new_user_occupancy_percent: float = 5.0,
         newcomer_reserve_count: int = 1,
+        worker_max_users: float = math.inf,
         memory_concession_bytes: int,
         memory_max_percent: float = 100.0,
         worker_max_number: int = WORKER_MAX_NUMBER,
@@ -191,6 +193,7 @@ class GroupHandler:
         self.reception_reserved_percent = reception_reserved_percent
         self.new_user_occupancy_percent = new_user_occupancy_percent
         self.newcomer_reserve_count = newcomer_reserve_count
+        self.worker_max_users = worker_max_users
         self.memory_concession_bytes = memory_concession_bytes
         self.memory_max_percent = memory_max_percent
         self.worker_max_number = worker_max_number

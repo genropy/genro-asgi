@@ -288,14 +288,24 @@ class WorkerHandler:
         Raises:
             WorkerQuittingError: its process is leaving or is gone.
             AssignmentRefused: it has not presented itself yet.
-            NoRoomError: the projected count is over this worker's setpoint.
+            NoRoomError: the projected occupancy is over this worker's setpoint,
+                or it already hosts ``worker_max_users`` placed users — the
+                placement policy the bench sets to 1 for one worker per user.
 
-        Nothing is written.
+        Nothing is written. The user count is read off ``user_worker_map``, the
+        map the placement writes in the same breath — never ``hosted_users``,
+        which the fold writes only when the worker has announced, and would let
+        two rapid arrivals land on one worker before the first is on board.
         """
         if self.state in ("quitting", "quitted", "aborted"):
             raise WorkerQuittingError(user, f"{self.name} is {self.state}")
         if self.state != "running":
             raise AssignmentRefused(user, f"{self.name} is {self.state}")
+        placed = sum(
+            1 for worker in self.group_handler.user_worker_map.values() if worker == self.name
+        )
+        if placed >= self.group_handler.worker_max_users:
+            raise NoRoomError(user, f"{self.name} already hosts {placed} placed user(s)")
         projected = (
             self.group_handler.get_occupancy_percent(self.worker_snapshot) + occupancy_percent
         )

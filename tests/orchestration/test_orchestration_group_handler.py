@@ -575,3 +575,41 @@ async def test_the_group_orders_every_worker_into_the_reboot_directory(make_grou
         ("standard_0001", "/tmp/reboot_temp"),
         ("standard_0002", "/tmp/reboot_temp"),
     ]
+
+
+async def test_a_worker_at_its_user_ceiling_refuses_and_the_wake_is_rung(make_group, commander):
+    """worker_max_users: the placement policy the bench sets to 1."""
+    group = make_group(worker_max_users=1)
+    await group.start_worker()
+    commander.record_connection_user("cid-a", "guest_first1")
+    commander.record_connection_user("cid-b", "guest_second1")
+    assert group.assign_user("guest_first1") == "standard_0001"
+    group.ping_now_event.clear()
+
+    with pytest.raises(AssignmentRefused):
+        group.assign_user("guest_second1")
+
+    # The refusal rings the wake that leads to the growth round, as ever.
+    assert group.ping_now_event.is_set()
+    assert group.user_worker_map == {"guest_first1": "standard_0001"}
+
+
+async def test_the_second_user_lands_on_the_worker_the_refusal_grew(make_group, commander):
+    group = make_group(worker_max_users=1)
+    await group.start_worker()
+    commander.record_connection_user("cid-a", "guest_first1")
+    commander.record_connection_user("cid-b", "guest_second1")
+    group.assign_user("guest_first1")
+    await group.start_worker()
+
+    assert group.assign_user("guest_second1") == "standard_0002"
+    assert sorted(group.user_worker_map.values()) == ["standard_0001", "standard_0002"]
+
+
+async def test_without_the_ceiling_nothing_changes(make_group, commander):
+    group = make_group()
+    await group.start_worker()
+    commander.record_connection_user("cid-a", "guest_first1")
+    commander.record_connection_user("cid-b", "guest_second1")
+    assert group.assign_user("guest_first1") == "standard_0001"
+    assert group.assign_user("guest_second1") == "standard_0001"

@@ -363,6 +363,7 @@ class ConfigurationHandler(ConfigHandler):
                 "reception_reserved_percent",
                 "new_user_occupancy_percent",
                 "newcomer_reserve_count",
+                "worker_max_users",
                 "entry_module",
                 "executable",
                 "worker_class",
