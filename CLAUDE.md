@@ -47,7 +47,14 @@ that app with the segment stripped; else the root app; else 307 to the
 declared default; else the site index on `/` (ratified 2026-08-24, not yet
 built — today 404); else 404). It owns one thread pool (`run_sync`), a
 `RequestRegistry` holding the in-flight picture, ordered lifespan, and boots
-uvicorn programmatically (`serve()`, CLI `genroasgi serve/apps/stop/remove`).
+uvicorn programmatically (`serve()`, CLI `genroasgi serve/apps/stop/remove`,
+`--debug` = a declared usage mode the core never branches on). The server
+carries a lifecycle `state` (`lifespan.py`: `RUNNING`/`QUITTING`/`STOPPING`):
+anything but RUNNING answers 503 + `Retry-After` and registers nothing, while
+what the middleware chain serves itself passes. `Lifespan.shutdown` turns the
+state first (to `shutdown_mode` — STOPPING by default, QUITTING set by the
+reload child in `factory()`), drains the in-flight requests (bounded), THEN
+runs the hooks in reverse.
 Middleware wraps the dispatch (errors, authentication, session, cors,
 logging, wellknown). Auth answers **401 to the anonymous, 403 to the known**;
 admin surfaces live under the `_server` app as sections (auth, monitor,
@@ -115,16 +122,39 @@ parks on the per-user barrier up to `REQUEST_HOLD_MAX_SECONDS`. A sudden
 worker death restarts the small set of users involved: an accepted,
 observable risk, not a gap.
 
-**Not yet built (second pass).** `dump`/`restore` across a full server
-restart and the restart liturgy (hard/soft, `temp/liturgia_riavvio_orientamenti_2026-08-20.md`);
-pool monitor parity and Prometheus metrics; the in-process local worker;
-the parent-side escalation after a partially applied fold (F48/F49 — cited
-by code and commits, still to be entered in the register). Decision
-registers: `temp/interview_handler_2026-08-15.md` (F1-F49); design:
+**The reboot (landed 2026-08-25, wf/33).** A server that leaves QUITTING
+takes the soft quit: `SpaCommander.quit` stops the clock, orders every group
+(`GroupHandler.quit_all`) to park its users in `reboot_temp` — each worker
+swaps its `FreezeHandler` onto that root, freezes each user as his last call
+ends, and CUTS the stuck ones past `PENDING_CALL_GRACE_SECONDS` (the user is
+parked anyway; the lost answer reads 503 via the front, which tells a wire
+lost while quitting from a real 502) — then writes its own
+`commander_register_item.pickle` (the three maps normalised + the global
+store: the indexes are SAVED, not rederived — D-h supersedes F4 here, the
+cookie's cid→user lives only in `connection_user_map`) and commits by
+renaming to `reboot_data` (F5: the final name IS the completeness proof).
+On boot `SpaCommander.start` runs `adopt_frozen_registers`: wipe the working
+deposit ALWAYS (F4), drop a leftover `reboot_temp` unread, read the commander
+item BEFORE moving anything (unreadable → clean boot, said once), rename
+`reboot_data` onto the working deposit, load the maps (everybody frozen,
+nobody pre-warmed — the lazy wake is the only road back), then
+`drop_expired_users(now=True)`. Under `serve --reload` every exit saves
+(dev-reload auto-soft): verified live — same cookie, new process, same
+identity, no re-login. Decision record:
+`temp/decisioni_registri_cancello_2026-08-25.md`.
+
+**Not yet built (second pass).** The deliberate reboot command on `_server`
+(`reboot now`/`reboot wait N`, notify_user, the consumer service-message
+lane); the single-group reboot (needs no photo — the commander survives) and
+the runtime/bundle path classifier for the reload watcher; pool monitor
+parity and Prometheus metrics; the in-process local worker; the parent-side
+escalation after a partially applied fold (F48/F49 — cited by code and
+commits, still to be entered in the register). Decision registers:
+`temp/interview_handler_2026-08-15.md` (F1-F49); design:
 `temp/design_orchestrazione_v4_2026-08-17.md`.
 
 ---
 
 **All general policies are inherited from the parent document: [meta-genro-modules CLAUDE.md](https://github.com/softwellsrl/meta-genro-modules/blob/main/CLAUDE.md)**
 
-**Last Updated**: 2026-08-24
+**Last Updated**: 2026-08-25
