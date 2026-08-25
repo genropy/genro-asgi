@@ -227,6 +227,7 @@ class GroupHandler:
         #: The wake: idempotent, without content, and the only push in the
         #: system. What it says is which group rang it.
         self.ping_now_event = asyncio.Event()
+        self._placement_lock = asyncio.Lock()
         self._logger = logging.getLogger(__name__)
         self._worker_counter = 0
         #: One row per periodic method of this group — turns seen, runs, errors
@@ -330,8 +331,8 @@ class GroupHandler:
             return self.occupancy_max_percent - self.reception_reserved_percent
         return self.occupancy_max_percent
 
-    def assign_user(self, user: str) -> str:
-        """Place a user on this group's fullest worker that still takes him.
+    async def assign_user(self, user: str) -> str:
+        """Place a user: the fullest worker that admits him, or one born for him.
 
         Args:
             user: the identity to place; his row at the vertex says what he is
@@ -342,14 +343,51 @@ class GroupHandler:
             The name of the worker that took him.
 
         Raises:
-            AssignmentRefused: every worker refused; the wake is rung on the way out.
+            AssignmentRefused: the group gave up — nobody admits him, the group
+                may not grow (the quota, or ``worker_max_number``), or the
+                launch failed. The surrender and nothing before it is what the
+                front turns into a 503.
+
+        The birth lives INSIDE the placement (owner, 2026-08-25): when no
+        living worker admits him and the group may grow, this very call brings
+        the worker into being — ``start_worker`` returns at its presentation,
+        a moment under a template — and places him on it. The request is never
+        parked and never sent away to come back: it waits right here.
+
+        One placement at a time per group, under ``_placement_lock``: sixteen
+        simultaneous arrivals must not father sixteen workers when one is
+        enough. Whoever waited recomputes and finds the newborn.
 
         Acts on ``user_worker_map`` and, in the same breath, on the row at the
         vertex that says which group he is on.
         """
-        occupancy_percent = self.spa_commander.user_map[user]["occupancy_percent"]
-        if occupancy_percent is None:
-            occupancy_percent = self.new_user_occupancy_percent
+        async with self._placement_lock:
+            worker_handler = self._placement_candidate(user)
+            if worker_handler is None and self._may_grow:
+                worker_handler = await self.start_worker()
+                if worker_handler is not None:
+                    try:
+                        worker_handler.assign_user(user, self._expected_occupancy(user))
+                    except AssignmentRefused:
+                        worker_handler = None
+            if worker_handler is None:
+                # The surrender still rings the wake: the next round is what
+                # writes ``saturated`` where the front can read it.
+                self.ping_now()
+                raise AssignmentRefused(user, f"{self.name} cannot allocate him")
+            self.user_worker_map[user] = worker_handler.name
+            self.spa_commander.record_user_group(user, self.name)
+            return worker_handler.name
+
+    def _placement_candidate(self, user: str) -> WorkerHandler | None:
+        """The fullest living worker that admits *user* right now, or None.
+
+        The choice is a CALCULATION of the group (owner, 2026-08-25) — the
+        numbers are all here: the photos, the caps, the counts. Each worker's
+        own judgment (``WorkerHandler.assign_user``) stays the single gate a
+        placement passes, so choosing and admitting cannot drift apart.
+        """
+        occupancy_percent = self._expected_occupancy(user)
         candidates = sorted(
             self.living_workers,
             key=lambda worker_handler: -self.get_occupancy_percent(worker_handler.worker_snapshot),
@@ -360,11 +398,23 @@ class GroupHandler:
             except AssignmentRefused as refusal:
                 self._logger.debug("Group %s: %s", self.name, refusal)
                 continue
-            self.user_worker_map[user] = worker_handler.name
-            self.spa_commander.record_user_group(user, self.name)
-            return worker_handler.name
-        self.ping_now()
-        raise AssignmentRefused(user, f"no worker of {self.name} admits him")
+            return worker_handler
+        return None
+
+    def _expected_occupancy(self, user: str) -> float:
+        """What placing *user* is expected to cost, on the photo's own scale."""
+        occupancy_percent = self.spa_commander.user_map[user]["occupancy_percent"]
+        return (
+            self.new_user_occupancy_percent if occupancy_percent is None else occupancy_percent
+        )
+
+    @property
+    def _may_grow(self) -> bool:
+        """Whether one more worker is allowed right now — the judge `_grow` obeys too."""
+        return (
+            self.spa_commander.state == "running"
+            and self.memory_occupied_percent <= self.memory_max_percent
+        )
 
     @every(CHECK_OCCUPANCY_BEATS)
     async def check_occupancy(self) -> None:

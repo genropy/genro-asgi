@@ -76,7 +76,6 @@ import pytest
 from genro_asgi.applications.spa_app import SPA_CONNECTION_ID_COOKIE
 from genro_asgi.config import ConfigurationHandler
 from genro_asgi.spa.orchestration import (
-    AssignmentRefused,
     FreezeHandler,
     GroupHandler,
     SpaCommander,
@@ -229,7 +228,7 @@ async def serve(group: GroupHandler, user: str, cid: str, path: str, **payload: 
     decides — the placement is the group's, the identity is the vertex's — it only
     carries the request to the process the pool named.
     """
-    worker_name = group.user_worker_map.get(user) or group.assign_user(user)
+    worker_name = group.user_worker_map.get(user) or await group.assign_user(user)
     handler = group.worker_handler_map[worker_name]
     return await handler.connector.call(
         f"/site{path}", http_call(cid, user, path=path, **payload), timeout=CALL_TIMEOUT
@@ -358,25 +357,22 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
 
     # 5. THE POOL GROWS ON DEMAND. The machine's concession is measured at last,
     # and against it the reception reads 70% full — over what it may take with the
-    # reserve it keeps for receiving whoever arrives unplaced. So a newcomer
-    # nobody admits is refused, and the refusal rings the wake.
+    # reserve it keeps for receiving whoever arrives unplaced. Nobody admits the
+    # newcomer, so her own placement fathers the worker that takes her: the birth
+    # lives INSIDE the placement (owner, 2026-08-25) — she is never sent away.
     group.memory_concession_bytes = TIGHT_CONCESSION_BYTES
     # The newcomer is a person the site has already baptised: reception-first
     # keeps a guest at the reception, so the one who takes the capacity walk is
     # an identity (doctrine of 2026-08-21).
     carla = known_at_the_vertex(vertex, "cid-c", "carla")
     assert group.get_occupancy_percent(reception.worker_snapshot) == 70.0
-    with pytest.raises(AssignmentRefused, match="no worker of std admits him"):
-        group.assign_user(carla)
-    assert group.ping_now_event.is_set() is True
 
-    await group.ping()
+    assert await group.assign_user(carla) == f"{GROUP}_0002"
 
     assert sorted(group.worker_handler_map) == [f"{GROUP}_0001", f"{GROUP}_0002"]
-    # His retry lands on the new one: same reading, different setpoint — the
+    # She landed on the new one: same reading, different setpoint — the
     # reception has a reserve and the other has not.
     spare = group.worker_handler_map[f"{GROUP}_0002"]
-    assert group.assign_user(carla) == spare.name
     served = await serve(group, carla, "cid-c", "/catalog")
     assert body_of(served) == f"GET /catalog for {carla}"
     assert spare.hosted_users == {carla}

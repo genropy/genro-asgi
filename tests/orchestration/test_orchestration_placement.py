@@ -125,7 +125,7 @@ async def test_the_fullest_worker_that_still_takes_him_is_the_one_that_gets_him(
     worker_at(group, "standard_0003", 60.0)
     user = newcomer(commander)
 
-    assert group.assign_user(user) == "standard_0003"
+    assert await group.assign_user(user) == "standard_0003"
     assert group.user_worker_map == {user: "standard_0003"}
 
 
@@ -137,7 +137,7 @@ async def test_the_walk_goes_past_the_one_with_no_room_and_stops_at_the_next(gro
     worker_at(group, "standard_0003", 78.0)
     user = newcomer(commander)
 
-    assert group.assign_user(user) == "standard_0002"
+    assert await group.assign_user(user) == "standard_0002"
 
 
 async def test_what_he_cost_where_he_was_is_what_he_is_expected_to_cost_here(group, commander):
@@ -148,7 +148,7 @@ async def test_what_he_cost_where_he_was_is_what_he_is_expected_to_cost_here(gro
     commander.user_map[user]["occupancy_percent"] = 25.0
 
     # 70 + 25 is over the setpoint, 50 + 25 is exactly at it.
-    assert group.assign_user(user) == "standard_0002"
+    assert await group.assign_user(user) == "standard_0002"
 
 
 async def test_the_reception_keeps_its_reserve_and_takes_less_than_the_others(group, commander):
@@ -159,7 +159,7 @@ async def test_the_reception_keeps_its_reserve_and_takes_less_than_the_others(gr
     # Both stand at 28, but the reception's own setpoint is the difference
     # between the group's and its reserve: 80 - 50 = 30, and 28 + 5 is over it.
     assert group.get_worker_cap(reception) == 30.0
-    assert group.assign_user(user) == "standard_0002"
+    assert await group.assign_user(user) == "standard_0002"
 
 
 async def test_two_placements_in_a_row_are_judged_on_the_same_photo(group, commander):
@@ -170,8 +170,8 @@ async def test_two_placements_in_a_row_are_judged_on_the_same_photo(group, comma
 
     # 70 + 5 fits, and it still reads 70 when the second one is judged: the
     # overshoot of one newcomer is the declared price of not locking a photo.
-    assert group.assign_user(first) == "standard_0002"
-    assert group.assign_user(second) == "standard_0002"
+    assert await group.assign_user(first) == "standard_0002"
+    assert await group.assign_user(second) == "standard_0002"
 
 
 async def test_a_worker_with_no_room_refuses_with_the_class_that_says_so(group):
@@ -204,7 +204,7 @@ async def test_a_worker_whose_process_has_ended_is_nobodys_candidate(group, comm
     user = newcomer(commander)
 
     with pytest.raises(AssignmentRefused):
-        group.assign_user(user)
+        await group.assign_user(user)
 
     assert group.living_workers == []
     assert group.reception is None
@@ -217,7 +217,7 @@ async def test_when_nobody_admits_the_wake_rings_and_the_base_rises(group, comma
     assert group.ping_now_event.is_set() is False
 
     with pytest.raises(AssignmentRefused) as refusal:
-        group.assign_user(user)
+        await group.assign_user(user)
 
     assert type(refusal.value) is AssignmentRefused
     assert refusal.value.user == user

@@ -420,7 +420,7 @@ async def test_a_placement_pointing_at_a_worker_that_died_goes_with_it(make_grou
     worker_handler = await group.start_worker()
     user = "guest_legacy1"
     commander.record_connection_user("cid-a", user)
-    assert group.assign_user(user) == worker_handler.name
+    assert await group.assign_user(user) == worker_handler.name
 
     # The process dies before it ever said the user had arrived in it: nobody
     # names him at the death, so his placement goes with the worker holding it.
@@ -540,18 +540,20 @@ async def test_the_group_of_a_user_is_written_where_he_is_placed(make_group, com
     await group.start_worker()
     known_at_the_vertex(commander, "cid-a", "mario")
 
-    group.assign_user("mario")
+    await group.assign_user("mario")
 
     assert group.user_worker_map["mario"] == "standard_0001"
     assert commander.user_map["mario"]["group"] == "standard"
 
 
 async def test_a_placement_nobody_took_writes_no_group(make_group, commander):
+    # The vertex is saturated, so the group may not grow: the surrender path.
     group = make_group()
+    commander.state = "saturated"
     known_at_the_vertex(commander, "cid-a", "mario")
 
     with pytest.raises(AssignmentRefused):
-        group.assign_user("mario")
+        await group.assign_user("mario")
 
     assert "mario" not in group.user_worker_map
     assert commander.user_map["mario"]["group"] is None
@@ -577,33 +579,40 @@ async def test_the_group_orders_every_worker_into_the_reboot_directory(make_grou
     ]
 
 
-async def test_a_worker_at_its_user_ceiling_refuses_and_the_wake_is_rung(make_group, commander):
-    """worker_max_users: the placement policy the bench sets to 1."""
+async def test_a_worker_at_its_user_ceiling_makes_the_placement_father_a_new_one(
+    make_group, commander
+):
+    """worker_max_users: the policy the bench sets to 1 — and the birth lives
+    INSIDE the placement (owner, 2026-08-25): the second user is never sent
+    away with a 503, his own placement brings his worker into being."""
     group = make_group(worker_max_users=1)
     await group.start_worker()
     commander.record_connection_user("cid-a", "guest_first1")
     commander.record_connection_user("cid-b", "guest_second1")
-    assert group.assign_user("guest_first1") == "standard_0001"
+    assert await group.assign_user("guest_first1") == "standard_0001"
+
+    assert await group.assign_user("guest_second1") == "standard_0002"
+
+    assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
+    assert sorted(group.user_worker_map.values()) == ["standard_0001", "standard_0002"]
+
+
+async def test_at_the_ceiling_with_no_way_to_grow_the_placement_surrenders(
+    make_group, commander
+):
+    group = make_group(worker_max_users=1)
+    await group.start_worker()
+    commander.record_connection_user("cid-a", "guest_first1")
+    commander.record_connection_user("cid-b", "guest_second1")
+    assert await group.assign_user("guest_first1") == "standard_0001"
+    commander.state = "saturated"
     group.ping_now_event.clear()
 
     with pytest.raises(AssignmentRefused):
-        group.assign_user("guest_second1")
+        await group.assign_user("guest_second1")
 
-    # The refusal rings the wake that leads to the growth round, as ever.
     assert group.ping_now_event.is_set()
     assert group.user_worker_map == {"guest_first1": "standard_0001"}
-
-
-async def test_the_second_user_lands_on_the_worker_the_refusal_grew(make_group, commander):
-    group = make_group(worker_max_users=1)
-    await group.start_worker()
-    commander.record_connection_user("cid-a", "guest_first1")
-    commander.record_connection_user("cid-b", "guest_second1")
-    group.assign_user("guest_first1")
-    await group.start_worker()
-
-    assert group.assign_user("guest_second1") == "standard_0002"
-    assert sorted(group.user_worker_map.values()) == ["standard_0001", "standard_0002"]
 
 
 async def test_without_the_ceiling_nothing_changes(make_group, commander):
@@ -611,5 +620,5 @@ async def test_without_the_ceiling_nothing_changes(make_group, commander):
     await group.start_worker()
     commander.record_connection_user("cid-a", "guest_first1")
     commander.record_connection_user("cid-b", "guest_second1")
-    assert group.assign_user("guest_first1") == "standard_0001"
-    assert group.assign_user("guest_second1") == "standard_0001"
+    assert await group.assign_user("guest_first1") == "standard_0001"
+    assert await group.assign_user("guest_second1") == "standard_0001"

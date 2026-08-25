@@ -813,9 +813,9 @@ class SpaCommander:
         else:
             group_handler = self.group_map[self.user_map[user]["group"] or self.default_group]
             try:
-                worker_name = group_handler.user_worker_map.get(user) or group_handler.assign_user(
+                worker_name = group_handler.user_worker_map.get(
                     user
-                )
+                ) or await group_handler.assign_user(user)
             except AssignmentRefused as refusal:
                 raise self._refused(refusal) from None
             worker_handler = group_handler.worker_handler_map[worker_name]
