@@ -37,6 +37,7 @@ import time
 import pytest
 
 from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker
+from genro_asgi.spa.orchestration import spa_worker as spa_worker_module
 from genro_asgi.spa.orchestration.worker_connector import ENVELOPE_SLOT_WORKER_SNAPSHOT
 
 WORKER_NAME = "standard_0001"
@@ -1016,3 +1017,40 @@ async def test_a_call_closing_inside_the_give_back_drops_no_flag(tmp_path):
     await worker.execute_transfers()
     assert "mario" not in worker.user_register
     assert deposit.read_user_register_item("mario") is not None
+
+
+async def test_the_quit_writes_its_parcels_where_it_is_told(worker, deposit, tmp_path):
+    """The soft quit parks in the reboot directory, and the working deposit stays empty."""
+    worker.add_page("page-1", "cid-a", "mario")
+    reboot_temp = tmp_path / "reboot_temp"
+
+    await worker.quit(freezer_path=str(reboot_temp))
+
+    assert worker.exited
+    assert FreezeHandler(reboot_temp).read_user_register_item("mario") is not None
+    assert deposit.user_folders == set()
+
+
+async def test_a_straggler_is_cut_past_the_grace_and_parked_without_his_call(
+    worker, deposit, monkeypatch
+):
+    """A call that never ends does not hold the quit: past the grace he is parked."""
+    monkeypatch.setattr(spa_worker_module, "PENDING_CALL_GRACE_SECONDS", 0.3)
+    worker.add_page("page-1", "cid-a", "mario")
+    worker.open_request("mario")
+
+    await asyncio.wait_for(worker.quit(), timeout=5.0)
+
+    assert worker.exited
+    assert deposit.read_user_register_item("mario") is not None
+    assert worker.user_register.keys() == []
+
+
+async def test_a_call_that_ends_after_its_user_was_cut_closes_quietly(worker, monkeypatch):
+    """The stuck call finishes into a process that already left: nothing to close."""
+    monkeypatch.setattr(spa_worker_module, "PENDING_CALL_GRACE_SECONDS", 0.3)
+    worker.add_page("page-1", "cid-a", "mario")
+    worker.open_request("mario")
+    await asyncio.wait_for(worker.quit(), timeout=5.0)
+
+    await worker.close_request("mario")

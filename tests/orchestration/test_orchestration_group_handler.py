@@ -42,7 +42,11 @@ import pytest
 
 from genro_asgi.spa.orchestration import AssignmentRefused, GroupHandler, SpaCommander
 from genro_asgi.spa.orchestration.worker_connector import ENVELOPE_SLOT_WORKER_SNAPSHOT
-from genro_asgi.spa.orchestration.worker_handler import QUIT_OP_PATH, WORKER_ENV_VAR
+from genro_asgi.spa.orchestration.worker_handler import (
+    QUIT_OP_PATH,
+    WORKER_ENV_VAR,
+    WorkerHandler,
+)
 
 from .conftest import kill_process, wait_for
 
@@ -551,3 +555,23 @@ async def test_a_placement_nobody_took_writes_no_group(make_group, commander):
 
     assert "mario" not in group.user_worker_map
     assert commander.user_map["mario"]["group"] is None
+
+
+async def test_the_group_orders_every_worker_into_the_reboot_directory(make_group, monkeypatch):
+    """One order per worker, each carrying where its parcels go."""
+    group = make_group()
+    await group.start_worker()
+    await group.start_worker()
+    ordered = []
+
+    async def record(self, freezer_path=None):
+        ordered.append((self.name, freezer_path))
+
+    monkeypatch.setattr(WorkerHandler, "quit_process", record)
+
+    await group.quit_all("/tmp/reboot_temp")
+
+    assert ordered == [
+        ("standard_0001", "/tmp/reboot_temp"),
+        ("standard_0002", "/tmp/reboot_temp"),
+    ]

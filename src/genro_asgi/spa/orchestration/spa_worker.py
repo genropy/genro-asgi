@@ -285,6 +285,10 @@ TRANSFER_START_DELAY = 2.0
 #: next envelope out carries a new one.
 WORKER_SNAPSHOT_TTL = 0.5
 
+#: How long a quit waits for a user whose call is still in flight, in seconds.
+#: Past it the wait is dropped and he is parked without that call.
+PENDING_CALL_GRACE_SECONDS = 5.0
+
 #: The conversion the valve makes: its silence is a policy and comes in minutes,
 #: the clocks it reads are seconds.
 SECONDS_PER_MINUTE = 60.0
@@ -2001,14 +2005,15 @@ class SpaWorker:
         Args:
             user: the user the call belonged to.
 
-        Raises:
-            KeyError: no call of his is open.
-
         Takes the call out of his pendings and, when it was his last and a
         departure of his is past the gate, lets him go now — the closure of a
         whole worker and the cession of a single user hang on this same hook.
+        A user with nothing open was CUT by a quit that would not wait for this
+        call any longer: he is already parked, and there is nothing to close.
         """
         with self.dispatch_lock:
+            if user not in self._pendings:
+                return
             self._pendings[user] -= 1
             if self._pendings[user]:
                 return
@@ -2294,12 +2299,18 @@ class SpaWorker:
                 return
             await self._transfers_changed.wait()
 
-    async def quit(self, *, expiry_delay: float = math.inf) -> None:
+    async def quit(
+        self, *, expiry_delay: float = math.inf, freezer_path: str | None = None
+    ) -> None:
         """Leave: everybody departs, the last call is waited for, the process ends.
 
         Args:
             expiry_delay: the silence past which a user is expired and dropped
                 instead of parked.
+            freezer_path: where the parcels of THIS departure go, when they must
+                not go to the working deposit — the reboot directory of a soft
+                quit. The handler is replaced for good: nothing else will use
+                this process's deposit.
 
         Flags every user for cession, waits the gate, parks them as their calls
         end, and only then leaves the process. From here the plan is this
@@ -2313,10 +2324,45 @@ class SpaWorker:
         the disk says. Rebirth is not the worker's: whoever wants a successor
         launches one.
         """
+        if freezer_path is not None:
+            self.freeze_handler = FreezeHandler(freezer_path)
         self._flag_everybody_for_departure(expiry_delay)
-        await self.execute_transfers()
-        await self._transfers_done.wait()
+        departures = asyncio.ensure_future(self.execute_transfers())
+        done, _ = await asyncio.wait({departures}, timeout=PENDING_CALL_GRACE_SECONDS)
+        if not done:
+            self._cut_stragglers()
+            await departures
         self.exit_process()
+
+    def _cut_stragglers(self) -> None:
+        """Give up on the calls still in flight so their users can be parked.
+
+        A call is not interrupted — the site runs it on a thread of the traffic
+        pool and a thread cannot be killed. What is dropped is the WAIT: the
+        users are taken out of the pendings, which is the one thing keeping
+        ``freeze_user`` from parking them, and the cycle is woken to take them.
+        The call finishes into a process that is leaving and its answer is lost;
+        the front turns that into the same 503 a refusal gets, because the wire
+        died on a server that is quitting.
+
+        Accepted, and weighed: a call stuck this long is waiting on something,
+        not writing, so the parcel it photographs is almost always quiet. The
+        rare loser is a write that lands after the photo — lost — or a pickle
+        that meets a store mid-change, which fails loudly on that user alone.
+        """
+        with self.dispatch_lock:
+            cut = list(self._pendings)
+            self._pendings.clear()
+        if cut:
+            self._logger.warning(
+                "Worker %s: %s user(s) still had a call in flight %.1fs into the quit — "
+                "parking them without it: %s",
+                self.name,
+                len(cut),
+                PENDING_CALL_GRACE_SECONDS,
+                ", ".join(sorted(cut)),
+            )
+        self._transfers_changed.set()
 
     def exit_process(self) -> None:
         """Leave the process — the last act of ``quit`` and of ``on_wire_lost``.
@@ -2367,7 +2413,7 @@ class SpaWorker:
         expiry_delay = payload.get("expiry_delay", math.inf)
         self._flag_everybody_for_departure(expiry_delay)
         await self.send_reply(frame, result={})
-        await self.quit(expiry_delay=expiry_delay)
+        await self.quit(expiry_delay=expiry_delay, freezer_path=payload.get("freezer_path"))
 
     def _flag_everybody_for_departure(self, expiry_delay: float) -> None:
         """Cede every user and make the plan terminal: sets ``_quitting`` and the flags."""

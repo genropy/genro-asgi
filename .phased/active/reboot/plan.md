@@ -247,7 +247,42 @@ works from day one — no re-login — at the cost of a bigger restart than need
     as the last in-flight request ends; a request served by the middleware chain
     passes with the gate closed.
 
-- [ ] **Phase 3**: The closing order, the second freezer, the grace and the cut
+- [x] **Phase 3**: The closing order, the second freezer, the grace and the cut
+  > Done: the quit order carries where the parcels go. `GroupHandler.quit_all(freezer_path)`
+  > orders every worker one by one and the template last; `WorkerHandler.quit_process`
+  > puts the path in the `/op/quit` payload; `SpaWorker.quit(freezer_path=...)` replaces
+  > its `FreezeHandler` with one on that root — nothing else will use this process's
+  > deposit. The departures are no longer waited for without a bound:
+  > `PENDING_CALL_GRACE_SECONDS = 5.0` past which `_cut_stragglers` takes the users out
+  > of `_pendings` — the one thing keeping `freeze_user` from parking them — and wakes
+  > the cycle, which parks them. The call itself is NOT interrupted: the site runs it on
+  > a thread of the traffic pool and a thread cannot be killed; its answer is lost into a
+  > process that is leaving. `close_request` now returns quietly for a user who was cut,
+  > instead of raising KeyError.
+  > Owner's ruling on the cut (2026-08-25): park him anyway, do not lose the session for
+  > one stuck page. Weighed and declared: a call stuck this long is waiting on something,
+  > not writing, so the parcel is almost always quiet; the rare loser is a write landing
+  > after the photo, or a pickle meeting a store mid-change, which fails loudly on that
+  > user alone.
+  > And the front tells the two apart: a `ConnectionError` while `server.state` is not
+  > `RUNNING` is a refusal — 503 with `Retry-After` — not the 502 of an upstream that
+  > broke. `test_a_wire_that_is_gone_is_the_same_502` still holds for a server that is
+  > running.
+  > Verified: `pytest tests/` 1499 passed (was 1494 — the 5 tests this phase adds);
+  > `ruff check src/ tests/` clean; 67 executable lines added to `src/` against the phase
+  > cap of 120.
+  > Behaviours covered: a quit told a path writes there and leaves the working deposit
+  > empty; a straggler is cut past the grace and parked; the call that ends afterwards
+  > closes quietly; the group orders every worker with the path; a lost wire on a
+  > quitting server is 503 with the right `Retry-After`.
+  > Baptised by the owner: `quit_all`, `PENDING_CALL_GRACE_SECONDS`.
+  > Files: src/genro_asgi/spa/orchestration/spa_worker.py,
+  > src/genro_asgi/spa/orchestration/worker_handler.py,
+  > src/genro_asgi/spa/orchestration/group_handler.py,
+  > src/genro_asgi/applications/spa_app.py,
+  > tests/orchestration/test_orchestration_spa_worker_departures.py,
+  > tests/orchestration/test_orchestration_group_handler.py,
+  > tests/test_spa_application.py
   - Run: opus / medium
   - Cap: 120 executable lines in `src/`.
   - Files: src/genro_asgi/spa/orchestration/spa_commander.py,

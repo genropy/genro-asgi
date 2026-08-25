@@ -39,6 +39,7 @@ from genro_asgi.applications.spa_app import (
     ERR_502_TEXT,
     SpaApplication,
 )
+from genro_asgi.server import QUITTING, REFUSED_RETRY_AFTER_SECONDS
 from genro_asgi.spa.orchestration import AssignmentRefused, SiteFailedRequest, SpaCommander
 
 from .conftest import LifespanRunner, ask_app, get_answer_header
@@ -263,6 +264,18 @@ async def test_the_inside_of_the_house_never_reaches_the_browser(started):
     assert answer["status"] == 502
     assert answer["body"] == ERR_502_TEXT.encode()
     assert b"invoices_2024" not in answer["body"]
+
+
+async def test_a_wire_that_is_gone_while_the_server_quits_is_a_503(started, monkeypatch):
+    """The wire died because the server is leaving: a refusal, not a breakage."""
+    front = started.applications["site0"]
+    monkeypatch.setattr(front.server, "state", QUITTING)
+    front.commander.failure = ConnectionError("no child on the wire")
+
+    answer = await ask_app(front, "/invoices")
+
+    assert answer["status"] == 503
+    assert get_answer_header(answer, "retry-after") == str(REFUSED_RETRY_AFTER_SECONDS)
 
 
 async def test_a_wire_that_is_gone_is_the_same_502(started):

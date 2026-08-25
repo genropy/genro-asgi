@@ -446,8 +446,13 @@ class WorkerHandler:
         while process.alive:
             await asyncio.sleep(WAIT_POLL_INTERVAL)
 
-    async def quit_process(self) -> None:
+    async def quit_process(self, freezer_path: str | None = None) -> None:
         """Ask the process to leave, and wait until it is gone.
+
+        Args:
+            freezer_path: where the parcels of this departure go, when they must
+                not go to the working deposit — the reboot directory of a soft
+                quit. None leaves the child on its own deposit.
 
         Sets ``quitting`` and parks the wait its death resolves. Past
         ``QUIT_TIMEOUT_SECONDS`` on either leg the wait is dropped and the process
@@ -457,7 +462,9 @@ class WorkerHandler:
         self.state = "quitting"
         death = self._park_death_wait()
         try:
-            await self.connector.call(QUIT_OP_PATH, timeout=QUIT_TIMEOUT_SECONDS)
+            await self.connector.call(
+                QUIT_OP_PATH, {"freezer_path": freezer_path}, timeout=QUIT_TIMEOUT_SECONDS
+            )
             await asyncio.wait_for(death, QUIT_TIMEOUT_SECONDS)
         except TimeoutError:
             self._death_wait = None
