@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import pickle
 
 import pytest
 
@@ -33,6 +34,7 @@ from genro_bag import Bag
 
 from genro_asgi.spa.orchestration import SpaCommander, UserOnHold
 from genro_asgi.spa.orchestration import FreezeHandler
+from genro_asgi.spa.orchestration.freeze_handler import USER_REGISTER_ITEM_NAME
 from genro_asgi.spa.orchestration.spa_commander import GUEST_PREFIX
 
 WORKER_NAME = "standard_0001"
@@ -417,3 +419,97 @@ async def test_a_quit_that_dies_before_the_rename_leaves_no_photo(commander, mon
 
     assert commander.reboot_temp_path.exists()
     assert not commander.reboot_data_path.exists()
+
+
+def photographed(commander, user="mario", cid="cid-a", ts=None):
+    """A photo on disk as a soft quit leaves it: one parcel, and the vertex's item."""
+    photo = FreezeHandler(commander.reboot_data_path)
+    photo.take_lock(user, WORKER_NAME)
+    photo.write_user_register_item(
+        user, {"store": "whatever"}, writer=WORKER_NAME, cause="quit", group="standard"
+    )
+    photo.release_lock(user, WORKER_NAME)
+    if ts is not None:
+        path = photo.root_path / photo.user_to_userkey(user) / USER_REGISTER_ITEM_NAME
+        envelope = pickle.loads(path.read_bytes())
+        envelope["header"]["ts"] = ts
+        path.write_bytes(pickle.dumps(envelope))
+    photo.write_commander_register_item(
+        {
+            "user_map": {user: dict(commander._new_row(), frozen=True, group="standard")},
+            "connection_user_map": {cid: user},
+            "page_connection_map": {},
+            "global_register": Bag(),
+            "quit_ts": 0.0,
+        },
+        writer="vertex",
+        cause="quit",
+    )
+    return photo
+
+
+def test_a_boot_with_frozen_registers_becomes_them_and_leaves_the_parcels_where_wakes_look(
+    commander,
+):
+    photographed(commander)
+
+    commander.adopt_frozen_registers()
+
+    assert commander.connection_user_map == {"cid-a": "mario"}
+    assert commander.user_is_frozen("mario") is True
+    assert not commander.reboot_data_path.exists()
+    assert commander.freeze_handler.read_user_register_item("mario") is not None
+
+
+def test_a_boot_with_no_frozen_registers_wipes_the_working_deposit_and_starts_clean(commander):
+    parked_state(commander, "mario")
+
+    commander.adopt_frozen_registers()
+
+    assert commander.user_map == {}
+    assert commander.freeze_handler.user_folders == set()
+
+
+def test_frozen_registers_that_cannot_be_read_boot_clean(commander):
+    photo = photographed(commander)
+    (photo.root_path / "commander_register_item.pickle").write_bytes(b"not a pickle")
+
+    commander.adopt_frozen_registers()
+
+    assert commander.user_map == {}
+    assert not commander.reboot_data_path.exists()
+    assert commander.freeze_handler.user_folders == set()
+
+
+def test_a_reboot_temp_left_by_a_dead_quit_is_never_read(commander):
+    FreezeHandler(commander.reboot_temp_path)
+
+    commander.adopt_frozen_registers()
+
+    assert not commander.reboot_temp_path.exists()
+    assert commander.user_map == {}
+
+
+async def test_a_user_past_his_expiry_is_dropped_at_the_boot_not_woken(commander):
+    photographed(commander, ts=0.0)
+    commander.adopt_frozen_registers()
+
+    await commander.drop_expired_users(now=True)
+
+    assert "mario" not in commander.user_map
+    assert commander.freeze_handler.user_folders == set()
+
+
+async def test_the_cookie_survives_a_quit_and_the_boot_that_follows(commander):
+    """The whole point: the same cid still names the same person on the other side."""
+    commander.group_map["standard"] = QuietGroup()
+    commander.record_connection_user("cid-a", "mario")
+    parked_state(commander, "mario")
+    commander.mark_user_frozen("mario", None)
+    await commander.quit()
+
+    reborn = SpaCommander(commander.freeze_handler.root_path)
+    reborn.adopt_frozen_registers()
+
+    assert reborn.resolve_user("cid-a") == "mario"
+    assert reborn.user_is_frozen("mario") is True

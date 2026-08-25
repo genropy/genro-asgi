@@ -245,6 +245,19 @@ class FreezeHandler:
         """Remove the vertex's own item; a thing already gone is that same outcome."""
         (self.root_path / COMMANDER_REGISTER_ITEM_NAME).unlink(missing_ok=True)
 
+    def wipe_root(self) -> None:
+        """Empty the root and stand it up again — what every start does first (F4).
+
+        Removes everything the root held and recreates it bare, with the same
+        permissions ``__init__`` gives it.
+        """
+        shutil.rmtree(self.root_path, ignore_errors=True)
+        self.root_path.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    def drop_root(self) -> None:
+        """Remove the root itself, whole; a root already gone is that same outcome."""
+        shutil.rmtree(self.root_path, ignore_errors=True)
+
     def rename_root(self, destination: str | Path) -> None:
         """Move this whole root to *destination*, and follow it.
 

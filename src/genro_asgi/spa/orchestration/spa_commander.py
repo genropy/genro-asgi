@@ -1303,6 +1303,48 @@ class SpaCommander:
             outcome,
         )
 
+    def adopt_frozen_registers(self) -> None:
+        """Become what the last soft quit froze, if it is there; boot clean if not.
+
+        Acts on the disk — only ever through a ``FreezeHandler`` — and on the
+        indexes, in this order and no other. The working deposit is wiped FIRST
+        and ALWAYS (F4): nothing a previous run left there survives a start. A
+        leftover ``reboot_temp`` — a quit that died halfway — is dropped unread.
+
+        Then ``reboot_data`` is asked for the frozen commander registers. They
+        are read BEFORE anything is moved: a read that fails must leave a clean
+        boot behind, not parcels no map knows about — those would be swept
+        within the hour as orphans. Read, their item is dropped, the directory
+        is renamed onto the working deposit — every lazy wake from here reads
+        the ordinary place, with the ordinary handler — and the three maps and
+        the global store become this vertex's, every user frozen. Anything
+        missing or unreadable means the current behaviour: boot clean, said
+        once in the log. Never a partial adoption.
+        """
+        self.freeze_handler.wipe_root()
+        FreezeHandler(self.reboot_temp_path).drop_root()
+        reboot = FreezeHandler(self.reboot_data_path)
+        try:
+            saved = reboot.read_commander_register_item()
+        except Exception:
+            self._logger.exception(
+                "Vertex: the frozen commander registers could not be read — booting clean"
+            )
+            saved = None
+        if saved is None:
+            reboot.drop_root()
+            return
+        reboot.drop_commander_register_item()
+        self.freeze_handler.drop_root()
+        reboot.rename_root(self.freeze_handler.root_path)
+        self.user_map = saved["user_map"]
+        self.connection_user_map = saved["connection_user_map"]
+        self.page_connection_map = saved["page_connection_map"]
+        self.global_register = saved["global_register"]
+        self.log_order(
+            "vertex", "adopt_frozen_registers", "-", numbers={"users": len(self.user_map)}
+        )
+
     async def start(self) -> None:
         """Bring the machine up: the reception of the base group, then the beat.
 
@@ -1312,6 +1354,8 @@ class SpaCommander:
         its group ``broken``: the beat is running by then, and the group tries
         again at its own round.
         """
+        await asyncio.to_thread(self.adopt_frozen_registers)
+        await self.drop_expired_users(now=True)
         await self.group_map[self.default_group].start_worker()
         self._heartbeat_task = asyncio.ensure_future(self.heartbeat_loop())
 
@@ -1346,7 +1390,7 @@ class SpaCommander:
             await group_handler.quit_all(str(photo.root_path))
         await asyncio.to_thread(
             photo.write_commander_register_item,
-            self.saved_state,
+            self.frozen_commander_registers,
             writer="vertex",
             cause="quit",
         )
@@ -1354,8 +1398,8 @@ class SpaCommander:
         self.log_order("vertex", "quit", "-", numbers={"users": len(self.user_map)})
 
     @property
-    def saved_state(self) -> dict[str, Any]:
-        """What the vertex puts in the photo: its indexes and the global store.
+    def frozen_commander_registers(self) -> dict[str, Any]:
+        """What the vertex freezes of itself: its indexes and the global store.
 
         Returns:
             The three maps and the store. The rows go in NORMALISED — everybody

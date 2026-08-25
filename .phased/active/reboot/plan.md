@@ -351,7 +351,36 @@ works from day one — no re-login — at the cost of a bigger restart than need
     does not exist; a quit interrupted before the rename leaves `reboot_temp`
     and no `reboot_data`; nothing is written under the working root.
 
-- [ ] **Phase 5**: The soft start — the wipe, the read, the second rename
+- [x] **Phase 5**: The soft start — the wipe, the read, the second rename
+  > Done: `SpaCommander.adopt_frozen_registers()`, called first by `start()`, no
+  > parameters, no return. In order: `wipe_root()` on the working deposit (F4, always);
+  > a leftover `reboot_temp` dropped unread; the frozen commander registers read from
+  > `reboot_data` BEFORE anything is moved — a failed read boots clean, said once in the
+  > log, never parcels no map knows about; the item dropped, the directory renamed onto
+  > the working deposit, the three maps and the global store loaded, one order-log row
+  > with the count. Then `start()` runs `drop_expired_users(now=True)` — the `@every`
+  > machinery already had `now` ("whoever wants it now says so"), so the boot expiry is
+  > the SAME method the metronome runs, not a twin.
+  > Every disk operation lives in `FreezeHandler` — `wipe_root` (empty and stand up
+  > again) and `drop_root` (remove whole) joined `rename_root` — the commander touches
+  > no path itself. A first draft had `shutil` in the commander, a duplicated expiry
+  > method and an unused boolean; the owner rejected it and it was rebuilt as above.
+  > Naming, ruled by the owner (2026-08-25): a bare noun carries no knowledge — "photo"
+  > does not say WHOSE photo. A longer name that identifies the thing reads better:
+  > `adopt_frozen_registers`, and `saved_state` became `frozen_commander_registers`.
+  > The file names already carried the word: `commander_register_item.pickle` beside
+  > `user_register_item.pickle`.
+  > Verified: `pytest tests/` 1509 passed (was 1503 — the 6 tests this phase adds);
+  > `ruff check src/ tests/` clean; 33 executable lines added to `src/` against the
+  > phase cap of 80; no `_TBD` survives.
+  > Behaviours covered: a boot with frozen registers becomes them and the parcels sit
+  > where the lazy wakes look; a boot with none wipes and starts clean; registers that
+  > cannot be read boot clean with nothing left behind; a leftover `reboot_temp` is
+  > never read; a user past his expiry is dropped at the boot, not woken; and the round
+  > trip — quit, reboot, same cid still names the same frozen user.
+  > Files: src/genro_asgi/spa/orchestration/spa_commander.py,
+  > src/genro_asgi/spa/orchestration/freeze_handler.py,
+  > tests/orchestration/test_orchestration_spa_commander.py
   - Run: opus / medium
   - Cap: 80 executable lines in `src/`.
   - Files: src/genro_asgi/spa/orchestration/spa_commander.py,
