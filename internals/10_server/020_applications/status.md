@@ -369,7 +369,7 @@ subject; they are listed so the class chain is visible in one place.
 | `OpenApiApplication` ([openapi.py:64](../../../src/genro_asgi/applications/openapi.py)) | `RoutedApplication` | [openapi](openapi/README.md) |
 | `McpApplication` ([mcp.py:274](../../../src/genro_asgi/applications/mcp.py)) · `McpOpenApiApplication` (`:328`) | `RoutedApplication` · `OpenApiApplication` | [mcp](mcp/README.md) |
 | `ServerApplication` ([server_app.py:115](../../../src/genro_asgi/applications/server_app.py)) | `OpenApiApplication` | [090 server-application](../090_server-application/README.md) |
-| `SpaApplication` ([spa_app.py:219](../../../src/genro_asgi/applications/spa_app.py)) | `RoutedApplication` | [20_spa/010 spa-application](../../20_spa/010_spa-application/README.md) |
+| `SpaApplication` ([spa_app.py:228](../../../src/genro_asgi/applications/spa_app.py)) | `RoutedApplication` | [20_spa/010 spa-application](../../20_spa/010_spa-application/README.md) |
 
 `SpaApplication` is the only one that declares a grammar of its own
 (`SpaApplicationGrammar`, spa_app.py:103); the other three inherit

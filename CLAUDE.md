@@ -83,7 +83,13 @@ via `FreezeHandler`, `DeliveryDesk`) → n `GroupHandler` (placement,
 capacity, growth and shrink) → n `WorkerHandler` (process, wire,
 surveillance) → `SpaWorker` (the live users/connections/pages state and the
 hosted WSGI site behind `WsgiSeam`). Usersticky principle unchanged: ALL
-pages of a user live in the same process as the user's store.
+pages of a user live in the same process as the user's store. A group whose
+recipe declares `engine_factory` owns a **template process**
+(`template_entry.py`, synchronous, one per group): it builds the group
+engine once, freezes its heap, and every worker of that group is a `fork`
+of it (`template_connector.py`, `worker_process.py`; `WorkerEntry` hands
+the inherited `group_engine` to the worker). Without the factory the group
+spawns workers the ordinary way and has no template.
 
 **Identity — one, the site's own.** The `spa_connection_id` cookie carries
 the hosted site's OWN connection id (owner decision 2026-08-22): the front
