@@ -122,15 +122,15 @@ often confused, and the difference is where they attach.
 
 A **middleware** wraps the dispatch: it sees every request the server serves,
 including those bound for applications that have no routes. A **plugin** is
-armed on the route tree of one application: it sees the tree's own description
-and no traffic at all. One is a ring around the door; the other is a property
+armed on the routing tree of one application: it sees the tree's own description
+and no traffic at all. One is a chain around the dispatch; the other is a property
 of the map.
 
 So a plugin can say things about routes that do not exist yet, and a middleware
 cannot; and a middleware can answer a request no route matched, and a plugin
 cannot.
 
-> The ring is [030 middleware](../030_middleware/README.md).
+> The middleware chain is [030 middleware](../030_middleware/README.md).
 
 ## 8. Nothing registers itself at import
 

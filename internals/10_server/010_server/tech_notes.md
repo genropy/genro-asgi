@@ -19,14 +19,14 @@ is defined in its own page. Everything else in the dossier assumes it.
 
 | They lean on it as | Entries |
 |---|---|
-| a capability layer stacked on the server | [025 routing system](../025_routing-system/README.md), [030 middleware](../030_middleware/README.md), [040 sessions](../040_sessions/README.md), [050 authentication](../050_authentication/README.md), [060 storage](../060_storage/README.md), [070 tasks](../070_tasks/README.md) |
+| a capability mixin stacked on the server | [025 routing system](../025_routing-system/README.md), [030 middleware](../030_middleware/README.md), [040 sessions](../040_sessions/README.md), [050 authentication](../050_authentication/README.md), [060 storage](../060_storage/README.md), [070 tasks](../070_tasks/README.md) |
 | an application it hosts | [020 applications](../020_applications/README.md), [090 server-application](../090_server-application/README.md), [20_spa/010 spa-application](../../20_spa/010_spa-application/README.md) |
 | the thing that supplies its shape | [015 configuration](../015_configuration/README.md) |
 | the thing that boots it | [110 cli](../110_cli/README.md) |
 | the thing that tears it down and rebuilds it | [120 restart](../120_restart/README.md) |
 
 A change to the demux, to the application contract or to the four members
-reaches all of these. A change inside a capability layer reaches none.
+reaches all of these. A change inside a capability mixin reaches none.
 
 ## The working trail
 

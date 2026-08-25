@@ -338,12 +338,12 @@ flowchart TB
 |---|---|
 | [010 server](../10_server/010_server/README.md) | the ground: the server object, the applications it hosts, how a request finds one, ordered start and stop |
 | [015 configuration](../10_server/015_configuration/README.md) | the tree every entry reads its own words from: layers, read stack, subscribers |
-| [020 applications](../10_server/020_applications/README.md) | RoutedApplication and the route tree · [openapi](../10_server/020_applications/openapi/README.md) · [mcp](../10_server/020_applications/mcp/README.md) |
+| [020 applications](../10_server/020_applications/README.md) | RoutedApplication and the routing tree · [openapi](../10_server/020_applications/openapi/README.md) · [mcp](../10_server/020_applications/mcp/README.md) |
 | [025 routing system](../10_server/025_routing-system/README.md) | what a routing class is: the tree, the filtered walk, and the plugins armed on it |
-| [030 middleware](../10_server/030_middleware/README.md) | the uniform ring every request passes |
+| [030 middleware](../10_server/030_middleware/README.md) | the uniform middleware chain every request passes |
 | [040 sessions](../10_server/040_sessions/README.md) | per-user server-side state between requests |
 | [050 authentication](../10_server/050_authentication/README.md) | 401 vs 403 · [avatar](../10_server/050_authentication/avatar/README.md) · [tags](../10_server/050_authentication/tags/README.md) |
-| [060 storage](../10_server/060_storage/README.md) | the only door to the filesystem |
+| [060 storage](../10_server/060_storage/README.md) | the only access to the filesystem, through storage nodes |
 | [065 db](../10_server/065_db/README.md) | databases mounted through the recipe, no backend in the core |
 | [070 tasks](../10_server/070_tasks/README.md) | work that is no HTTP request |
 | [080 task-thermometers](../10_server/080_task-thermometers/README.md) | see a batch move, stop it politely |
@@ -355,7 +355,7 @@ flowchart TB
 
 | Entry | In one line |
 |---|---|
-| [010 spa-application](../20_spa/010_spa-application/README.md) | one stable door to the hosted site, no state in the door |
+| [010 spa-application](../20_spa/010_spa-application/README.md) | a stable, stateless front to the hosted site |
 | [020 orchestration](../20_spa/020_orchestration/README.md) | many users with live state, scaled across processes, never split |
 | [030 channel](../20_spa/030_channel/README.md) | the wire: frames, hub, the lane (shelf) |
 | [040 global-store](../20_spa/040_global-store/README.md) | one shared state, safe read-modify-write |

@@ -4,7 +4,7 @@
 
 A routing class turns a class into a tree, and it does it by reading the class
 rather than by being told: a method carrying the route marker becomes a node named
-after the method, and the nodes together are the class's route tree. Nothing is
+after the method, and the nodes together are the class's routing tree. Nothing is
 registered anywhere, and there is no list of paths to keep in step with the code.
 Three properties follow. A tree is **assembled from parts** — a routing class
 written on its own is attached below a name and its routes hang there. A walk is

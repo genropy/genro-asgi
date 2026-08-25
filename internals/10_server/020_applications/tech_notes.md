@@ -15,7 +15,7 @@ the classification is editorial and lives here.
 
 Third in reading order, and it assumes the two before it: the identity triplet
 and the demux are [010 server](../010_server/README.md)'s, the recipe and the read door
-are [015 configuration](../015_configuration/README.md)'s. It defines the route tree,
+are [015 configuration](../015_configuration/README.md)'s. It defines the routing tree,
 which four later entries assume.
 
 ## Who stands on this
@@ -23,7 +23,7 @@ which four later entries assume.
 | They lean on it as | Entries |
 |---|---|
 | the tree they arm a capability onto | [025 routing system](../025_routing-system/README.md) |
-| the dispatch their ring wraps, and the exceptions they answer | [030 middleware](../030_middleware/README.md) |
+| the dispatch the middleware chain wraps, and the exceptions they answer | [030 middleware](../030_middleware/README.md) |
 | the request their identity rides on | [050 authentication](../050_authentication/README.md), [040 sessions](../040_sessions/README.md) |
 | a lens on the same tree | [openapi](openapi/README.md), [mcp](mcp/README.md) |
 | the base class they subclass | [090 server-application](../090_server-application/README.md), [20_spa/010 spa-application](../../20_spa/010_spa-application/README.md) |
@@ -153,7 +153,7 @@ shapes are ratified or conventional, and whether the arrival wants a streaming
 request body. S7 in particular cannot be closed by a "no" alone — the overview's
 first rule requires the reason to be written where the limit is accepted.
 
-**Four cannot be settled inside this entry.** S6 (the WebSocket door) is
+**Four cannot be settled inside this entry.** S6 (the WebSocket entry point) is
 recorded in the same wording in
 [20_spa/030 channel](../../20_spa/030_channel/README.md), S14 in
 [030 middleware](../030_middleware/README.md), S12 in both

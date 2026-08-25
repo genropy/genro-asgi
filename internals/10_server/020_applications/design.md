@@ -3,8 +3,8 @@
 **Version**: 0.3 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
 
 What an application is, what it owes the server that hosts it, and everything
-that happens between a request arriving at its door and an answer going back
-on the wire.
+that happens between a request arriving at the application and an answer going
+back on the wire.
 
 ## What an application is
 
@@ -22,7 +22,7 @@ There are two classes to subclass, and almost everybody wants the second.
 `BaseApplication` is the contract and nothing else: it satisfies the server
 and answers requests however it likes, which suits something that is not a
 site at all — a raw proxy, a single endpoint. `RoutedApplication` adds the
-route tree, and everything from block 2 onwards describes it.
+routing tree, and everything from block 2 onwards describes it.
 
 That is what makes an application portable. The same class can be installed
 twice on one server under two names, or moved to another server entirely, and
@@ -38,14 +38,14 @@ both are described elsewhere.
 ## The anatomy
 
 An application meets the server on a **contract of two halves** and, inside,
-holds **one route tree** through which every request travels. The tree turns a
+holds **one routing tree** through which every request travels. The tree turns a
 path into a method call; the request and the answer are the two objects that
 travel with it.
 
 ```mermaid
 flowchart TB
     SRV["the server"] -->|"a request, path already relative"| APP["<b>the application</b>"]
-    APP --> TREE["the route tree<br/>path → handler"]
+    APP --> TREE["the routing tree<br/>path → handler"]
     TREE --> H["a handler<br/>an ordinary method"]
     H --> ANS["the answer<br/>buffered · streamed"]
     APP -.->|"declares"| OBL["its vocabulary · its panel<br/>whether it moves · what it survives"]
@@ -182,7 +182,7 @@ class Shop(RoutedApplication):
 
 There is no table of paths, no registration call, and no separate file to keep
 in step with the code. A method marked as a route becomes a node named after
-the method, and the class's routes together form its **route tree**.
+the method, and the class's routes together form its **routing tree**.
 
 That inheritance is the reason this page can be short about routing. Everything
 an application does with paths — how a tree is built and walked, how a
@@ -446,13 +446,13 @@ because the tree funnels both into a single outcome instead of asking the
 dispatch to recognise which validation library raised what.
 
 None of these four is turned into an answer here. They are **raised**, and the
-uniform ring around the dispatch turns them into responses — which is what
-lets a handler raise one deliberately, from anywhere in its own code, and get
-exactly the same answer.
+uniform middleware chain around the dispatch turns them into responses — which
+is what lets a handler raise one deliberately, from anywhere in its own code,
+and get exactly the same answer.
 
 A failure that is none of these four is not a wrong request but a broken
-program: whatever escapes the handler reaches the same ring, which answers 500
-and logs it.
+program: whatever escapes the handler reaches the same middleware chain, which
+answers 500 and logs it.
 
 The line between the two matters in both directions, and the four answers
 above exist to hold it. A caller's mistake must never be reported as a 500 —
@@ -460,13 +460,13 @@ they would retry an identical request forever. And a defect of ours must never
 be reported as a 400 — the caller would go looking for a mistake they did not
 make, while the message that would have named ours goes only to them.
 
-> The ring is [030 middleware](../030_middleware/README.md).
+> The middleware chain is [030 middleware](../030_middleware/README.md).
 
 ---
 
 ## 8. The faces — one tree, several protocols
 
-Everything above describes one route tree serving HTTP. The same tree serves
+Everything above describes one routing tree serving HTTP. The same tree serves
 other protocols, and that is the reason the parts above are arranged as they
 are: resolution, argument fitting and execution know nothing about HTTP, so a
 second protocol reuses them rather than reimplementing them.

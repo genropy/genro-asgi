@@ -13,11 +13,11 @@ doing right now.
 
 Its parts:
 
-- **the composition** — the server is a chain: a lean base, capability layers above it
+- **the composition** — the server is a chain: a lean base, layers above it
 - **the applications** — what it hosts, and the two things it knows about each
 - **the demux** — how one request finds its one application
 - **the registry** — which request am I serving, and what else is in flight
 - **the lifespan** — who starts first, who stops last
 - **the work pool** — where blocking code runs so the loop stays free
-- **the three doors** — how uvicorn's three kinds of traffic enter
+- **the three scope types** — how uvicorn's three kinds of traffic enter
 - **the configuration** — where the whole shape comes from

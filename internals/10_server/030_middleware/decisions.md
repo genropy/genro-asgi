@@ -2,9 +2,9 @@
 
 **Version**: 0.4 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
 
-**The ring, with the work finished.** Read this as a report from the day
-everything described here is running: it says what the chain *is*, and never
-what it lacks. What the code holds is [status.md](status.md)'s subject.
+**The middleware chain, with the work finished.** Read this as a report from
+the day everything described here is running: it says what the chain *is*, and
+never what it lacks. What the code holds is [status.md](status.md)'s subject.
 
 Every voice carries its source. A voice sourced to the owner and a date was
 decided in conversation before it reached any register.
@@ -53,15 +53,15 @@ are the design:
 
 ## 3. Raising is how a layer answers
 
-**Source: owner, 2026-08-23.** No layer inside the ring builds an error
-response.
-It **raises**, and the outermost layer turns the exception into an answer.
+**Source: owner, 2026-08-23.** No layer inside the middleware chain builds an
+error response. It **raises**, and the outermost layer turns the exception into
+an answer.
 
-This is what makes the whole ring composable. A probe filter that wanted to
-answer a 404 itself would need to know the body format, the negotiation, and
-the headers; raising, it needs to know none of them, and the answer it
-produces is identical to the one the route resolution produces for an unknown
-path. One exception type, one answer, wherever it came from.
+This is what makes the whole middleware chain composable. A probe filter that
+wanted to answer a 404 itself would need to know the body format, the
+negotiation, and the headers; raising, it needs to know none of them, and the
+answer it produces is identical to the one the route resolution produces for an
+unknown path. One exception type, one answer, wherever it came from.
 
 It is also what lets a handler raise a 404 from three frames deep and get the
 right answer without touching a response object.
@@ -105,11 +105,11 @@ after the first byte of the answer has gone cannot be answered: a second start
 would corrupt a stream the client is already reading. It is logged and
 re-raised, and the transport tears the connection down.
 
-This is a boundary of what the ring can promise, and it is stated so that
-nobody reads "errors is outermost" as "nothing can escape". What escapes is
-exactly the class of failure that happens too late to be answered.
+This is a boundary of what the middleware chain can promise, and it is stated
+so that nobody reads "errors is outermost" as "nothing can escape". What
+escapes is exactly the class of failure that happens too late to be answered.
 
-## 7. The ring carries HTTP, and says so
+## 7. The middleware chain carries HTTP, and says so
 
 **Source: D7, SPECIFICATION.md:100; the mixin's own contract.** The chain is
 walked only by HTTP scopes. The lifespan conversation and WebSocket
@@ -119,21 +119,22 @@ For the lifespan this is right and needs no defence: start-up and shutdown are
 not requests and have no caller.
 
 For WebSocket it is a **limit that is inherited rather than chosen**: two of
-the layers in this ring are exactly what a handshake needs — the origin check
-before accepting, the identity resolved before the conversation starts — and
-**Invariant 4, SPECIFICATION.md:674** requires an origin gate on WebSocket
-handshakes. Where those live when this core grows long-lived conversations is
-[20_spa/030 channel](../../20_spa/030_channel/README.md)'s to decide, and until it does,
-this page records that the ring does not reach them.
+the layers in the middleware chain are exactly what a handshake needs — the
+origin check before accepting, the identity resolved before the conversation
+starts — and **Invariant 4, SPECIFICATION.md:674** requires an origin gate on
+WebSocket handshakes. Where those live when this core grows long-lived
+conversations is [20_spa/030 channel](../../20_spa/030_channel/README.md)'s to
+decide, and until it does, this page records that the middleware chain does not
+reach them.
 
-## 8. The ring is the machine's, not an application's
+## 8. The middleware chain is the machine's, not an application's
 
 **Source: owner, 2026-08-23.** The chain runs before the demux, so no layer can
 be armed for one application and not another. That is deliberate: the questions
-the ring answers — who is calling, may this origin read the answer, what does a
-raised exception become — must have one answer per machine, or two applications
-on one server would disagree about them, and a caller would learn which by
-trying.
+the middleware chain answers — who is calling, may this origin read the answer,
+what does a raised exception become — must have one answer per machine, or two
+applications on one server would disagree about them, and a caller would learn
+which by trying.
 
 What an application wants for itself goes in its own tree, where a plugin is
 the instrument. The two extension points differ in scope and that is the whole
@@ -154,11 +155,11 @@ Interview file: `temp/interview_030_middleware.md`.
 **S1 [unread · cross] — the second exception-to-status table has no production
 reader.** The response class carries a mapping of `ValueError` and `TypeError`
 to 400, `FileNotFoundError` to 404 and `PermissionError` to 403. Its only
-production caller is this ring, and it calls it **inside a branch that already
-knows the exception is an HTTP one** — which carries its own status, so the
-mapping is never consulted. Every other exception takes the explicit 500 path
-beside it. Proven in [status.md](status.md); the table is exercised by tests
-alone.
+production caller is the middleware chain, and it calls it **inside a branch
+that already knows the exception is an HTTP one** — which carries its own
+status, so the mapping is never consulted. Every other exception takes the
+explicit 500 path beside it. Proven in [status.md](status.md); the table is
+exercised by tests alone.
 
 So this is not two competing mechanisms, as it first reads: it is one live path
 and one table nothing reaches. Either the non-HTTP branch starts consulting it —
@@ -170,11 +171,13 @@ Recorded in the same wording in
 
 **S2 [placement · cross] — the WebSocket origin gate has nowhere to live.**
 Invariant 4 (SPECIFICATION.md:674) requires an origin gate on WebSocket
-handshakes, recorded from an implementation that had one. The ring is the
-natural home for it and the ring does not see WebSocket scopes. §7 states the
-boundary; nothing states where the gate goes. Recorded in the same wording in
-[20_spa/030 channel](../../20_spa/030_channel/README.md), and it is the same subject as
-[020 applications](../020_applications/decisions.md) S6 seen from the ring.
+handshakes, recorded from an implementation that had one. The middleware chain
+is the natural home for it and the middleware chain does not see WebSocket
+scopes. §7 states the boundary; nothing states where the gate goes. Recorded in
+the same wording in [20_spa/030 channel](../../20_spa/030_channel/README.md),
+and it is the same subject as
+[020 applications](../020_applications/decisions.md) S6 seen from the
+middleware chain.
 
 **S3 [undocumented · cross] — a middleware of one's own cannot be named in a
 description, and here the grammar refuses the word.** The class travels as a
@@ -202,10 +205,11 @@ quieten the log — it makes every request a warning. A reader configuring
 `level` almost certainly means the other thing. Nothing records which was
 intended, and the two readings differ in what an operator's log looks like.
 
-**S6 [unratified] — nothing states that the ring is uniform per machine.** §8
-is written from the shape of the code, not from a decision: no source says a
-middleware may not be per-application, and the same question is open one entry
-away for plugins ([025 routing system](../025_routing-system/decisions.md) S5). The two should
+**S6 [unratified] — nothing states that the middleware chain is uniform per
+machine.** §8 is written from the shape of the code, not from a decision: no
+source says a middleware may not be per-application, and the same question is
+open one entry away for plugins
+([025 routing system](../025_routing-system/decisions.md) S5). The two should
 be answered together, because the answer decides whether the switches stay in
 the server's vocabulary or move into each application's.
 
@@ -237,19 +241,20 @@ cross-origin header and the session cookie and 404 **with neither**.
 The cross-origin half is the one that costs. A browser cannot read a response
 that carries no allow-origin header, so an application that asked for its
 errors as JSON — which §4 exists to give it — receives a network failure
-instead of the 404 the ring carefully negotiated. The negotiation is honoured
-and then made unreadable.
+instead of the 404 the middleware chain carefully negotiated. The negotiation
+is honoured and then made unreadable.
 
 **S10 [silent] — `errors=False` is accepted, and then nothing answers.** The
 switch is a plain member of the six, so a description may turn the outermost
 layer off. With it off, an `HTTPNotFound` raised by the route resolution
 **escapes the server uncaught** — proven live in [status.md](status.md).
 
-Compare [025 routing system](../025_routing-system/decisions.md) §4, where disabling one of the
-fixed pair is an error rather than an opt-out, on the argument that a control
-nobody can rely on is not a control. The same argument applies here with more
-force: every other layer in the ring, and every raise in the codebase, is
-written on the assumption that this one is present.
+Compare [025 routing system](../025_routing-system/decisions.md) §4, where
+disabling one of the fixed pair is an error rather than an opt-out, on the
+argument that a control nobody can rely on is not a control. The same argument
+applies here with more force: every other layer in the middleware chain, and
+every raise in the codebase, is written on the assumption that this one is
+present.
 
 **S11 [cross] — the request id never reaches the log line.**
 [020 applications](../020_applications/README.md) §4 says every request carries an id

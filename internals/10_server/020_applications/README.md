@@ -8,7 +8,7 @@ answer. Written from the inside it is a class you subclass — its handlers are 
 methods, its address is a class attribute, its configuration words are its own.
 Nothing about it is registered in a central table. There are two classes to
 subclass: `BaseApplication` is the contract and nothing else, which suits
-something that is not a site at all; `RoutedApplication` adds the route tree, and
+something that is not a site at all; `RoutedApplication` adds the routing tree, and
 that is what an installation normally hosts.
 
 Its parts:

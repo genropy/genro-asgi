@@ -150,7 +150,7 @@ delete=…, any=…, transaction=…)` exists (genro-bag
 `src/genro_bag/bag/_events.py:161`), with writes able to fire or suppress the
 trigger (`set_item(..., do_trigger=…)`).
 
-So what is absent is the writing door and the subscribers, not the mechanism
+So what is absent is the mutator and the subscribers, not the mechanism
 they would stand on.
 
 **The live-config architecture is parked, not forgotten**: D23,

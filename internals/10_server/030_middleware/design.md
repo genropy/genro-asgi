@@ -2,8 +2,8 @@
 
 **Version**: 0.3 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
 
-The ring every request passes through on its way in and on its way out, and
-the six things this core puts in it.
+The middleware chain every request passes through on its way in and on its way
+out, and the six things this core puts in it.
 
 ## What a middleware is
 
@@ -21,7 +21,7 @@ it does any of that for every request, whichever application the request was
 going to.
 
 There are exactly two extension points in this framework and they are easy to
-confuse. A **plugin** is armed on one application's route tree and sees the
+confuse. A **plugin** is armed on one application's routing tree and sees the
 tree, never the traffic. A **middleware** wraps the dispatch and sees the
 traffic, never the tree. The test that separates them: a middleware can answer
 a request that matched no route at all, and a plugin cannot.
@@ -46,17 +46,17 @@ flowchart LR
 
 | The part | In one line |
 |---|---|
-| the ring and its order | one number per layer, and why the order is the design |
+| the middleware chain and its order | one number per layer, and why the order is the design |
 | assembly | built once, from an explicit list, with no global registry |
 | the six | what each one does, and what it puts on the request |
 | the outermost layer | the one that turns a raised exception into an answer |
-| what the ring does not see | and why that is a decision, not an omission |
+| what the middleware chain does not see | and why that is a decision, not an omission |
 | what a site writes | the switches, and what the capabilities arm by themselves |
 | writing one | the base class, the two attributes, and how it is installed |
 
 ---
 
-## 1. The ring, and why the order is the design
+## 1. The middleware chain, and why the order is the design
 
 Each layer declares **one number**, and the chain is sorted by it: the lowest
 number ends up outermost, closest to the network. That is the whole ordering
@@ -72,11 +72,11 @@ get right. A layer states where it belongs and the chain forms itself.
 | session | 400 | and cors | **yes** — its own capability arms it |
 | auth | 450 | and session | **yes** — its own capability arms it |
 
-The last column is worth reading carefully, because two different things
-decide it. Every layer declares a `middleware_default`, and only errors sets it
-true. But **a capability arms its own layer**: composing a server with sessions
-puts the session layer in the ring, and composing one with identity puts the
-identity layer in, without anybody naming either in the description. A site
+The last column is worth reading carefully, because two different things decide
+it. Every layer declares a `middleware_default`, and only errors sets it true.
+But **a capability arms its own layer**: composing a server with sessions puts
+the session layer in the middleware chain, and composing one with identity puts
+the identity layer in, without anybody naming either in the description. A site
 that wants them out says so explicitly — an explicit `False` always wins.
 
 Three of those positions carry an argument, and each is the kind of thing that
@@ -103,7 +103,7 @@ built. Nothing at request time consults it.
 
 The chain is built when the server is constructed and never rebuilt. It is
 assembled from three explicit inputs: the **registry** of what may be in the
-ring (a mapping from name to class), the **switches** that say which of them
+chain (a mapping from name to class), the **switches** that say which of them
 are on, and the **innermost target**, which is the server's own dispatch.
 
 Nothing about that is ambient. There is **no module-level registry** and
@@ -154,19 +154,19 @@ present and wrong raises, and errors answers 401.
 
 > Sessions are [040 sessions](../040_sessions/README.md) and identity is
 > [050 authentication](../050_authentication/README.md); this page only says where in
-> the ring they sit and what they leave behind.
+> the middleware chain they sit and what they leave behind.
 
 The two that leave something behind — the session and the identity — are why
-the ring exists at all: everything downstream, the route resolution included,
-reads what these two put there.
+the middleware chain exists at all: everything downstream, the route resolution
+included, reads what these two put there.
 
 ---
 
 ## 4. The outermost layer — from a raised exception to an answer
 
-Anything raised anywhere inside the ring arrives here, and this is the only
-place an exception becomes a response. That is what lets a handler, or a
-layer, or the route resolution itself simply **raise** the answer it wants:
+Anything raised anywhere inside the middleware chain arrives here, and this is
+the only place an exception becomes a response. That is what lets a handler, or
+a layer, or the route resolution itself simply **raise** the answer it wants:
 `404`, `401`, `403`, a redirect. Nobody builds an error response by hand.
 
 What comes out depends on who is asking, and on two questions.
@@ -193,7 +193,7 @@ outgoing side at all — it has to know whether it still may speak.
 
 ---
 
-## 5. What the ring does not see
+## 5. What the middleware chain does not see
 
 **Only HTTP enters it.** A WebSocket connection and the server's own
 start-and-stop conversation go straight past, to the server. So no layer here
@@ -207,11 +207,11 @@ conversations is the channel's subject, not this page's.
 
 > [20_spa/030 channel](../../20_spa/030_channel/README.md).
 
-**And the ring does not know applications.** It runs before the server has
-decided who will serve the request, so a layer cannot be armed for one
-application and not another. The ring is the machine's, uniformly. An
-application that wants something of its own puts it in its own tree, where a
-plugin is the tool.
+**And the middleware chain does not know applications.** It runs before the
+server has decided who will serve the request, so a layer cannot be armed for
+one application and not another. The middleware chain is the machine's,
+uniformly. An application that wants something of its own puts it in its own
+tree, where a plugin is the tool.
 
 ---
 
@@ -298,12 +298,13 @@ server = AsgiServer(
 )
 ```
 
-That server's ring is `ErrorMiddleware · StampMiddleware · SessionMiddleware ·
-AuthMiddleware`, and every answer carries `x-served-by: web-01`.
+That server's middleware chain is `ErrorMiddleware · StampMiddleware ·
+SessionMiddleware · AuthMiddleware`, and every answer carries
+`x-served-by: web-01`.
 
 The asymmetry with the six is deliberate and worth stating: **a middleware of
 your own cannot be named in the description.** The section's words are the six
-core names and no others, so `middleware=` at construction is the only door —
+core names and no others, so `middleware=` at construction is the only way in —
 and because the description is mapped onto that same argument, a site that has
 both a description and a hand-passed switch has two writers for one value.
 
@@ -311,9 +312,9 @@ both a description and a hand-passed switch has two writers for one value.
 
 ## A configuration that includes it
 
-A whole installation with the ring armed: the probe filter, the access log,
-and cross-origin access for one site. Sessions and identity are not named —
-their own capabilities arm them.
+A whole installation with the middleware chain armed: the probe filter, the
+access log, and cross-origin access for one site. Sessions and identity are not
+named — their own capabilities arm them.
 
 ```python
 import tempfile
@@ -344,7 +345,7 @@ SITE_DIR = tempfile.mkdtemp(prefix="shop-")
 
 
 class ServerConfiguration(BaseConfiguration):
-    """The ring: errors is on by default, the rest is named here."""
+    """The middleware chain: errors is on by default, the rest is named here."""
 
     def main(self, root):
         cfg = root.configuration()
@@ -399,7 +400,8 @@ a response.
 
 ## What stands on this
 
-Every request served by an installation of this core passes through the ring,
-so the identity the route resolution filters on and the session a handler reads
-are both put there by it. The administrative surface's login flow is the
-outermost layer's challenge negotiation seen from the other side.
+Every request served by an installation of this core passes through the
+middleware chain, so the identity the route resolution filters on and the
+session a handler reads are both put there by it. The administrative surface's
+login flow is the outermost layer's challenge negotiation seen from the other
+side.

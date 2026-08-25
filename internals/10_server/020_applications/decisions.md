@@ -143,7 +143,7 @@ not have it, and a handler contains no authorization code for the framework to
 have to trust.
 
 **Source: Invariant 10, SPECIFICATION.md:688, enforced by D25,
-SPECIFICATION.md:436.** The route tree is a routing structure and never a
+SPECIFICATION.md:436.** The routing tree is a routing structure and never a
 registry of things: something with no routes is not attached to it. An
 implementation once attached a route-less login method to the tree, and the
 rule exists because of it.
@@ -306,14 +306,14 @@ internal message disclosed to them.
 
 ## Gaps in what exists
 
-**S6 [unratified] — an application cannot answer a WebSocket.** The only WebSocket door is
+**S6 [unratified] — an application cannot answer a WebSocket.** The only WebSocket entry point is
 the server's, and at the base it accepts the connection and closes it politely;
 no composition hands a socket to an application, so no application can hold a
 long-lived conversation. Meanwhile the ratified delivery design for the SPA
 world puts pushed traffic on WebSockets. **Q1**, SPECIFICATION.md:695, foresees
 one dispatch engine with two transports, designed so that context, resolution
 hooks and cleanups exist on both. The question that belongs here is what the
-application contract's WebSocket door looks like, since it is the contract that
+application contract's WebSocket entry point looks like, since it is the contract that
 would grow the sixth obligation. Recorded in the same wording in
 [20_spa/030 channel](../../20_spa/030_channel/README.md), and to be settled once for
 both.
@@ -395,14 +395,15 @@ belong in 015, and the paragraph added above this entry's recipe is a patch
 until they are there. Recorded in the same wording in
 [015 configuration](../015_configuration/decisions.md).
 
-**S14 [unread] — two exception-to-status mappings, and nothing relates them.** The
-resolution maps router failures to the HTTP exceptions the ring answers. The
-response class carries a second table of its own, which maps `ValueError` and
-`TypeError` to 400, `FileNotFoundError` to 404, `PermissionError` to 403 and
-everything else to 500. Both exist; no document says which applies when, or
-whether the second is the mechanical cause of S5. The division of labour has to
-be stated, and it belongs partly to [030 middleware](../030_middleware/README.md), which
-owns the ring. Recorded in the same wording there.
+**S14 [unread] — two exception-to-status mappings, and nothing relates them.**
+The resolution maps router failures to the HTTP exceptions the middleware chain
+answers. The response class carries a second table of its own, which maps
+`ValueError` and `TypeError` to 400, `FileNotFoundError` to 404,
+`PermissionError` to 403 and everything else to 500. Both exist; no document
+says which applies when, or whether the second is the mechanical cause of S5.
+The division of labour has to be stated, and it belongs partly to
+[030 middleware](../030_middleware/README.md), which owns the middleware chain.
+Recorded in the same wording there.
 
 ## Half a migration
 

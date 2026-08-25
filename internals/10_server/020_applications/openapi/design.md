@@ -4,7 +4,7 @@
 
 **The need.** A routed surface must be consumable as ordinary REST, documented and explorable, without writing a second API.
 
-`OpenApiApplication`: the route tree served as REST + OpenAPI 3.1 with a
+`OpenApiApplication`: the routing tree served as REST + OpenAPI 3.1 with a
 Swagger docs page.
 
 Interactions: applications (the tree it exposes).

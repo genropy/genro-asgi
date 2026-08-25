@@ -2,14 +2,15 @@
 
 **Version**: 0.1 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
 
-For whoever works ON this entry, not for whoever reads about the ring. The
-working trail: what decided what, what is easy to look for and not find, and
-what the next person needs to know before touching it.
+For whoever works ON this entry, not for whoever reads about the middleware
+chain. The working trail: what decided what, what is easy to look for and not
+find, and what the next person needs to know before touching it.
 
 ## Classification and position
 
 **A shelf** — a technical stratum. Nobody asks for "middleware"; they ask for a
-login, an access log, or cross-origin access, and the ring is where those live.
+login, an access log, or cross-origin access, and the middleware chain is where
+those live.
 
 Fifth and last of the server skeleton. It assumes
 [020 applications](../020_applications/README.md) — the exceptions it answers are the
@@ -22,7 +23,7 @@ elsewhere.
 | They lean on it as | Entries |
 |---|---|
 | the layer that puts their thing on the request | [040 sessions](../040_sessions/README.md), [050 authentication](../050_authentication/README.md) |
-| the ring that answers what they raise | [020 applications](../020_applications/README.md) |
+| the middleware chain that answers what they raise | [020 applications](../020_applications/README.md) |
 | the other side of its login challenge | [090 server-application](../090_server-application/README.md) |
 | the thing it is confused with | [025 routing system](../025_routing-system/README.md) |
 | the boundary its scope filter draws | [20_spa/030 channel](../../20_spa/030_channel/README.md) |
@@ -35,9 +36,9 @@ inside one layer reaches only what that layer does.
 Two of the six layers are the visible half of entries that come later:
 `SessionMiddleware` is where [040 sessions](../040_sessions/README.md) touches a
 request, and `AuthMiddleware` is where
-[050 authentication](../050_authentication/README.md) does. This entry owns **where they
-sit in the ring and what they leave on the request**; what a session *is* and
-how an identity is resolved are theirs.
+[050 authentication](../050_authentication/README.md) does. This entry owns
+**where they sit in the middleware chain and what they leave on the request**;
+what a session *is* and how an identity is resolved are theirs.
 
 The line to hold when auditing those two: `session.py` and
 `authentication.py` are 137 and 48 lines and are largely described here already
@@ -69,13 +70,14 @@ anonymous, 403 for the known — and it is the same commit
   running server does nothing — there is no rebuild path, and nothing watches
   the configuration. Relevant when the live-configuration worksite reaches this
   entry.
-- **The ring never sees a WebSocket or a lifespan scope.** The mixin's
-  `__call__` sends them to `super()`. Anything written here that assumes it
-  sees all traffic is wrong. Friction S2.
-- **`Response.ERROR_MAP` is not the ring's error mapping.** The ring's is the
-  explicit branching in `_error_response`. `set_error` is called only for an
-  `HTTPException`, which never reaches `ERROR_MAP`. Do not "fix" a status by
-  editing that table: nothing in production reads it. Friction S1.
+- **The middleware chain never sees a WebSocket or a lifespan scope.** The
+  mixin's `__call__` sends them to `super()`. Anything written here that assumes
+  it sees all traffic is wrong. Friction S2.
+- **`Response.ERROR_MAP` is not the middleware chain's error mapping.** The
+  middleware chain's is the explicit branching in `_error_response`. `set_error`
+  is called only for an `HTTPException`, which never reaches `ERROR_MAP`. Do not
+  "fix" a status by editing that table: nothing in production reads it.
+  Friction S1.
 - **`level` on the access log is a severity, not a threshold** — and a
   misspelled one silently becomes INFO. Frictions S4 and S5.
 - **The `next` of the login redirect is validated, not echoed.** It goes
@@ -91,8 +93,8 @@ anonymous, 403 for the known — and it is the same commit
   browser cannot read the error at all. Friction S9.
 - **`middleware_default = False` on the session and identity layers is
   misleading.** Their own mixins `setdefault` them on, so on an `AsgiServer`
-  they are in the ring regardless of the description. Reading the class
-  attribute alone gives the wrong answer about a shipped server.
+  they are in the middleware chain regardless of the description. Reading the
+  class attribute alone gives the wrong answer about a shipped server.
 - **`errors=False` is writable and nothing refuses it.** With the outermost
   layer gone, raises escape the server. Friction S10.
 - **The middleware grammar element has six named parameters and no
@@ -138,10 +140,10 @@ competing mappings; read from here it is one live path and one table with no
 production caller. That halves the question: it is not "which applies when" but
 "does the dead one go or start being used".
 
-**S6 pairs with 025's S5.** Whether the ring is per-machine and whether plugins
-are per-server are the same question asked of the two extension points, and
-answering one without the other would leave the framework saying different
-things about scope depending on which tool you reached for.
+**S6 pairs with 025's S5.** Whether the middleware chain is per-machine and
+whether plugins are per-server are the same question asked of the two extension
+points, and answering one without the other would leave the framework saying
+different things about scope depending on which tool you reached for.
 
 **S9 and S10 are the two the blind reader found that execution had not**, and
 they are the heaviest here. S9 makes the error negotiation of §4 unreadable to

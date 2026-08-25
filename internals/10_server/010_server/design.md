@@ -45,13 +45,13 @@ flowchart TB
 
 | The part | In one line |
 |---|---|
-| the composition | the server is a chain: a lean base, capability layers above it |
+| the composition | the server is a chain: a lean base, layers above it |
 | the applications | what it hosts, and the two things it knows about each |
 | the demux | how one request finds its one application |
 | the registry | which request am I serving, and what else is in flight |
 | the lifespan | who starts first, who stops last |
 | the work pool | where blocking code runs so the loop stays free |
-| the three doors | how uvicorn's three kinds of traffic enter |
+| the three scope types | how uvicorn's three kinds of traffic enter |
 | the configuration | where the whole shape comes from |
 
 Each of the eight is described on its own below. They are meant to be read in
@@ -65,13 +65,13 @@ A server is not one class. It is a **chain of classes**, assembled from the
 bottom.
 
 At the bottom sits the **base server**. It is deliberately small: it hosts
-applications, routes each request to one of them, and owns the four members
-of the anatomy. Everything else a real installation needs — knowing who the
-user is, keeping state between requests, the uniform ring every request
+applications, routes each request to one of them, and owns the four members of
+the anatomy. Everything else a real installation needs — knowing who the user
+is, keeping state between requests, the uniform middleware chain every request
 passes through, plugged capabilities, filesystem access, background work, a
 channel to a parent process — is **not** in it.
 
-Above the base come the **capability layers**. Each is a self-contained piece
+Above the base come the **capability mixins**. Each is a self-contained piece
 adding exactly one concern. Each takes its own construction arguments, keeps
 what belongs to it and passes the rest down the chain, so a layer is added
 without any other layer knowing. The base is always the end of the chain: an
@@ -83,7 +83,7 @@ own:
 - the **bare base**, when you want to embed a single application and nothing
   else;
 - the **public server** — the composition an installation actually runs, with
-  authentication, sessions, the middleware ring, plugins, storage and
+  authentication, sessions, the middleware chain, plugins, storage and
   background work stacked on. This is the one the recipes at the foot of these
   pages build, and the class is `AsgiServer`;
 - the **internal server**, which is never exposed: it is composed *without*
@@ -277,7 +277,7 @@ library that was never written for asynchronous use.
 
 So the server owns **one** thread pool, and only blocking work goes to it.
 Code written for the loop stays on the loop and never comes near the pool.
-Blocking code is handed to the pool through a single door, and the caller's
+Blocking code is handed to the pool through `run_sync`, and the caller's
 context travels with it — so code running on a pool thread still sees the
 current request, exactly as if it had stayed on the loop.
 
@@ -296,7 +296,7 @@ the situation you consult it for.
 
 ---
 
-## 7. The three doors — how traffic enters
+## 7. The three scope types — how traffic enters
 
 Uvicorn drives the server with three kinds of traffic, and the server accepts
 those three and nothing else.
@@ -307,9 +307,10 @@ when the handler failed — the request's end-of-life callbacks run and the
 entry is removed. A handler that raises is not an exception to this: it is the
 reason the guarantee is written that way.
 
-**WebSocket.** A door that is present and, at the base, empty: it accepts the
-connection request and closes it politely. The base server has no long-lived
-conversations. A composition that needs them supplies its own behaviour here.
+**WebSocket.** A scope type that is present and, at the base, empty: it accepts
+the connection request and closes it politely. The base server has no
+long-lived conversations. A composition that needs them supplies its own
+behaviour here.
 
 **Lifespan.** The ordered start-and-stop conversation described above, plus
 the teardown of anything the server built for itself while running.
@@ -432,9 +433,9 @@ been built, because no blocking handler has run yet.
 
 ## What stands on this
 
-Everything else in genro-asgi is one of two things: a **capability layer**
+Everything else in genro-asgi is one of two things: a **capability mixin**
 stacked on the server, or an **application** it hosts. Authentication,
-sessions, the middleware ring, storage and background work are the first kind.
+sessions, the middleware chain, storage and background work are the first kind.
 The administrative surface, the SPA front and the machine-readable interfaces
 are the second. Both rest on exactly what is described above, and neither
 changes any of it.

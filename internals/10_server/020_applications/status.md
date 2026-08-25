@@ -40,7 +40,7 @@ attributes are the defaults) and `:57` (the leftover kwarg).
 assignment (application.py:120-125). Proven by `test_contract.py:67`, `:70`,
 `:81` and `:87` (`test_serving_the_same_app_on_a_second_server_raises`).
 
-**The configuration door.** `config(path, default)` (application.py:127-150)
+**The configuration seam.** `config(path, default)` (application.py:127-150)
 prefixes `applications.<code>.` and delegates to the server's own read door.
 With no server, or a server built with no configuration, the call-site default
 answers and its absence raises a `KeyError` naming the full path
@@ -61,10 +61,10 @@ here**: the monitor reads it with `hasattr`/`getattr` off whatever the
 contributor happens to expose
 ([monitor_section.py:192, :210](../../../src/genro_asgi/applications/server_sections/monitor_section.py)).
 
-**Lifecycle and the ASGI door.** `on_startup`/`on_shutdown` are no-ops
+**Lifecycle and the ASGI callable.** `on_startup`/`on_shutdown` are no-ops
 (application.py:174-178); `__call__` raises `NotImplementedError` naming the
 class (application.py:180-182). Proven by `test_contract.py:161` and `:166`.
-Nothing checks the ASGI door at install time: `register_application` validates
+Nothing checks the ASGI callable at install time: `register_application` validates
 only the code and the mount ([server.py:126-141](../../../src/genro_asgi/server.py)),
 so a class that does not implement it mounts and fails at its first request.
 
@@ -356,7 +356,7 @@ shared with [010 server](../010_server/README.md)), and `tests/throwaway_app.py`
 D7 phase-0 fixture kept out of `src/`.
 
 Every request in `test_routed_application.py` drives a real `AsgiServer`
-composition at the ASGI level — no uvicorn, but the middleware ring armed and
+composition at the ASGI level — no uvicorn, but the middleware chain armed and
 sync handlers crossing the server pool.
 
 ## The subclasses that live elsewhere

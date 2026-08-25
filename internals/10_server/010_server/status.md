@@ -78,7 +78,7 @@ drives a fourth scope type.
 `on_websocket` (server.py:253-260) is the empty socket: consume the connect,
 close with code 1000. Proven by `test_demux.py:167`.
 
-**Thread pool door.** `run_sync` (server.py:169-176) delegates to
+**Thread pool seam.** `run_sync` (server.py:169-176) delegates to
 `WorkPool.run`. `pool`, `requests`, `lifespan`, `databases` are plain
 properties over the members built in `__init__` (server.py:88-91).
 
@@ -271,6 +271,6 @@ the pieces exist and are unused here.
   occurrences in `src/` and `tests/`, and `config/handler.py` declares no
   mutator — the handler is a read door only.
 
-So what is absent is the writing door on `_server` and the subscriber that
+So what is absent is the mutator on `_server` and the subscriber that
 reacts, not the machinery underneath.
 

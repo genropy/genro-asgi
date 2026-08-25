@@ -14,7 +14,7 @@ class**, and everything in this page is what a routing class brings with it.
 
 A routing class turns a class into a tree. It does it by reading the class
 rather than by being told: a method carrying the route marker becomes a node
-named after the method, and the nodes together are the class's **route tree**.
+named after the method, and the nodes together are the class's **routing tree**.
 Nothing is registered anywhere, and there is no list of paths to keep in step
 with the code.
 
@@ -43,7 +43,7 @@ description rather than from the code.
 
 ```mermaid
 flowchart TB
-    CLS["a routing class<br/>marked methods"] --> TREE["its route tree"]
+    CLS["a routing class<br/>marked methods"] --> TREE["its routing tree"]
     SUB["another routing class<br/>attached below a name"] --> TREE
     TREE --> WALK["the walk<br/>path → node"]
     F["three filters<br/>tags · capabilities · channel"] --> WALK
@@ -178,12 +178,12 @@ plugin can say things about a route nobody has called yet, and a middleware can
 answer a request no route matched.
 
 **Not the mixin that provides plugins.** The machinery — the resolved set, the
-registry, the arming — is a capability layer of the server, stacked on the
+registry, the arming — is a capability mixin of the server, stacked on the
 server class like the others. A plugin is what that machinery installs. The two
 are one word apart and one level apart, and this page uses *plugin* only for
 the installed thing.
 
-> The ring is [030 middleware](../030_middleware/README.md).
+> The middleware chain is [030 middleware](../030_middleware/README.md).
 
 ---
 

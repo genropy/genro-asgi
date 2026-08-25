@@ -15,7 +15,7 @@ It was `025_plugins` until 2026-08-24, when the owner made the routing system
 its subject and put the plugins after it. Two reasons, both worth keeping: the
 plugins were unreadable without the tree they arm, and
 [020 applications](../020_applications/README.md) was carrying two subjects — what an
-application is, and what a route tree is — which is why its friction tail grew
+application is, and what a routing tree is — which is why its friction tail grew
 to twice any other entry's.
 
 Fourth in reading order **and it comes after what it explains**, deliberately:

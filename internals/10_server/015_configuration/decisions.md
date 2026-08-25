@@ -112,7 +112,7 @@ that is named and missing stops the boot; it is never a silent skip.
 executed and the results are folded, so what a description inherits does not
 depend on which class it happened to subclass.
 
-## 5. One door, four layers of fallback
+## 5. The read door, four layers of fallback
 
 **Source: Ratified 2026-07-29, SPECIFICATION.md:772** (the inherited four-layer
 read stack).

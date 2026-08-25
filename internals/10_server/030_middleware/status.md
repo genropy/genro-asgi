@@ -243,7 +243,7 @@ Every test is a **contract test**; `tests/x/` holds only `__init__.py`.
   session id never changes; the middleware issues a cookie only for a session
   it created. Held exactly.
 - **`5b567a3`** (2026-08-14) — 401 for the anonymous, 403 for the known; the
-  challenge negotiation this ring performs.
+  challenge negotiation the middleware chain performs.
 - **Invariant 4** (SPECIFICATION.md:674) — an origin gate on WebSocket
   handshakes. **Not held here and not holdable here**: the chain never sees a
   WebSocket scope. See [design.md](decisions.md), friction S2.
@@ -259,9 +259,9 @@ Every test is a **contract test**; `tests/x/` holds only `__init__.py`.
 `middleware` kwarg they forward
 ([auth/mixin.py:83-85](../../../src/genro_asgi/auth/mixin.py),
 [session/mixin.py:21-24](../../../src/genro_asgi/session/mixin.py)), so on an
-`AsgiServer` the session and identity layers are in the ring whether or not the
-description names them — and an explicit `False` still wins, because
-`setdefault` never overrides. Driven live: the recipe at the foot of
+`AsgiServer` the session and identity layers are in the middleware chain
+whether or not the description names them — and an explicit `False` still wins,
+because `setdefault` never overrides. Driven live: the recipe at the foot of
 [README.md](design.md) names three layers and the chain carries six.
 
 So the `middleware_default = False` on those two classes is true of the class
