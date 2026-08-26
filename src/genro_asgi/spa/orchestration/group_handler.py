@@ -90,12 +90,37 @@ bonifica of a wild death uses. A departure is settled on the LAST PHOTO, so a
 worker nobody ever photographed would take its users down with it: the order
 takes a photo first, which is what ``ping_process`` is for.
 
+**The soft quit blocks BEFORE it orders.** ``quit_all`` raises the hold on every
+user it places on a worker and only then sends that worker's order. It is the
+same barrier the photo's flags raise at the vertex — a flag is read there as a
+hold — moved ahead of the order, which closes the window the photo cannot: the
+photo rides the answer, and until it arrives a request of his would walk into a
+process already emptying. The closure of a single worker (``close_worker``,
+``restart_worker``) blocks nobody in advance and meets its users on the photo, as
+before.
+
 **Both crises are a polite 503.** ``saturated`` says the memory quota is full and
 somebody has to leave before anybody else comes in; ``broken`` says a process
 could not be started at all. Residents are served as ever in either; newcomers
 and the woken get a 503 with a ``Retry-After``. A saturation ends the moment the
 group has room again; a broken group is closed by the first process that starts.
 A user never changes group: there is no fallback and no policy key.
+
+**Putting one user to sleep is the group's own move, in one order.**
+``freeze_hosted_user`` blocks him at the vertex FIRST — from that instant a
+request of his waits instead of walking into a process that is emptying — then
+orders his worker to park him and waits for the REPLY, which IS the
+confirmation. The worker judges nothing on that road; it only executes. A
+departure that did not happen gives the block back and leaves him where he was.
+
+**And WHO sleeps is decided here too, on the same photos.**
+``check_user_activity`` is the group's second periodic: it reads the two
+real clocks of every active user off his worker's last photo, parks whoever has
+been silent past ``user_idle_freeze_minutes`` through the order above, and drops
+whoever is silent past his own expiry — the same horizon the vertex applies to a
+parcel, asked of the vertex. Nothing below this rung has a gauge of its own: the
+worker was where that judgment used to live, and it kept no policy after the
+freeze order was built.
 
 **The group never touches an index of the vertex and never opens the freezer.**
 It READS from a user's row what he is expected to cost, and it writes its own map
@@ -108,13 +133,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import time
 from typing import Any
 
 from .envelope_handler import GroupEnvelopeHandler
 from .exceptions import AssignmentRefused
 from .beats import every
 from .template_connector import TemplateConnector
-from .worker_handler import WorkerHandler
+from .worker_handler import DROP_USER_OP_PATH, FREEZE_USER_OP_PATH, WorkerHandler
 
 #: The states of a worker whose process has ended: it is in the list only until
 #: the round that reads it, and it is nobody's candidate.
@@ -129,6 +155,22 @@ WORKER_MAX_NUMBER = 6
 # health of a process is every turn's business; the shape of the group is a
 # slower thing, and the number lives here because the knowledge does.
 CHECK_OCCUPANCY_BEATS = 6
+
+# And how many pass between two readings of who has gone quiet. Slower still,
+# because the silence it judges is declared in MINUTES: reading it oftener would
+# cost turns to answer a question whose answer cannot have changed.
+CHECK_USER_ACTIVITY_BEATS = 12
+
+#: The conversion the silence needs: it is a policy of the installation and comes
+#: in minutes, the clocks it is read against are seconds.
+SECONDS_PER_MINUTE = 60.0
+
+#: How long the group waits for the confirmation of ONE ordered departure — a
+#: freeze or a drop — before giving up, releasing the hold and leaving the user
+#: where he is. A beat: the round that sends the order is the group's own, and a
+#: round that waits longer than a beat stops the group from beating at all. ONE
+#: number for the two orders, because the reason for the ceiling is the same.
+DEPARTURE_ORDER_WAIT_LIMIT = 5.0
 
 __all__ = ["DEAD_STATES", "GroupHandler"]
 
@@ -152,6 +194,10 @@ class GroupHandler:
         newcomer_reserve_count: how many newcomers of that size must ALWAYS find
             room — the group grows at its own round before anybody is refused,
             and no closure may eat into it.
+        user_idle_freeze_minutes: the silence, IN MINUTES, past which this group
+            parks a user in the freezer; with nothing said, silence never parks
+            anybody. Minutes because it is a policy of the installation, and the
+            comparison against the photo's clocks converts where it is made.
         memory_concession_bytes: what the machine concedes the whole pool, in
             bytes — the total every percentage below is read against.
         memory_max_percent: this group's share of that concession.
@@ -178,6 +224,7 @@ class GroupHandler:
         new_user_occupancy_percent: float = 5.0,
         newcomer_reserve_count: int = 1,
         worker_max_users: float = math.inf,
+        user_idle_freeze_minutes: float = math.inf,
         memory_concession_bytes: int,
         memory_max_percent: float = 100.0,
         worker_max_number: int = WORKER_MAX_NUMBER,
@@ -194,6 +241,7 @@ class GroupHandler:
         self.new_user_occupancy_percent = new_user_occupancy_percent
         self.newcomer_reserve_count = newcomer_reserve_count
         self.worker_max_users = worker_max_users
+        self.user_idle_freeze_minutes = user_idle_freeze_minutes
         self.memory_concession_bytes = memory_concession_bytes
         self.memory_max_percent = memory_max_percent
         self.worker_max_number = worker_max_number
@@ -280,7 +328,9 @@ class GroupHandler:
 
         Acts on the group: it consumes the wake it was given — which brings the
         reading of the shape forward — settles every process whose end has not
-        been read yet, and lets ``check_occupancy`` take its step.
+        been read yet, and lets its two periodics take their step. The shape
+        comes first: a worker restarted or closed by that step changes who there
+        is to read the silence of.
         """
         woken = self.ping_now_event.is_set()
         self.ping_now_event.clear()
@@ -289,6 +339,7 @@ class GroupHandler:
                 worker_handler.envelope_handler.report_death()
         await self.ping_workers()
         await self.check_occupancy(now=woken)
+        await self.check_user_activity()
 
     async def ping_workers(self) -> None:
         """Beat every silent worker of this group at once, and wait for all of them.
@@ -416,6 +467,56 @@ class GroupHandler:
             self.new_user_occupancy_percent if occupancy_percent is None else occupancy_percent
         )
 
+    async def freeze_hosted_user(self, user: str) -> bool:
+        """Block one of this group's users, have his worker park him, let the block fall.
+
+        Args:
+            user: a user this group has placed; one it has not placed is a loud
+                ``KeyError``, since nobody but the group orders this.
+
+        Returns:
+            True when he is in the deposit; False when the departure did not
+            happen, its refusal named in the orchestration log.
+
+        Acts on the vertex's barrier, and through the fold on everything else.
+        The hold goes up BEFORE the order and comes down at the other end. On
+        the confirmation there is nothing left to write: the ``user_frozen``
+        worker event travelled in that same REPLY and the fold reads an envelope
+        BEFORE the caller of the order is answered, so the mark, the barrier and
+        the placement already say what they must. On anything else the hold is
+        what this method gives back — a user must never stay blocked on a
+        departure that did not happen — and that includes the CANCELLATION of
+        this coroutine, which is why the release is in a ``finally``.
+
+        The order has a deadline, ``DEPARTURE_ORDER_WAIT_LIMIT``: the round that
+        sends it is the group's own, and a user with a long call in flight would
+        otherwise hold that round — and with it the group's whole beat — for as
+        long as the call lasts. The expiry takes the road of a refusal and loses
+        nothing: the next round of ``check_user_activity`` judges him again.
+
+        ACCEPTED, and stated as the choice it is: at the expiry only the future
+        is dropped, the order stays alive on the worker, and it may park the user
+        AFTER the hold has fallen. The window ``hold_user`` closes reopens in
+        that one case, and no code here covers it.
+        """
+        worker_handler = self.worker_handler_map[self.user_worker_map[user]]
+        self.spa_commander.hold_user(user, f"freeze on {worker_handler.name}")
+        refusal: str | None = "CancelledError"
+        try:
+            reply = await worker_handler.connector.call(
+                FREEZE_USER_OP_PATH, {"user": user}, timeout=DEPARTURE_ORDER_WAIT_LIMIT
+            )
+            refusal = reply.get("error")
+        except Exception as exc:
+            refusal = f"{type(exc).__name__}: {exc}"
+        finally:
+            if refusal is not None:
+                self.spa_commander.release_user_hold(user)
+                self.spa_commander.log_order(
+                    self.name, "freeze_hosted_user", user, outcome=str(refusal)
+                )
+        return refusal is None
+
     @property
     def _may_grow(self) -> bool:
         """Whether one more worker is allowed right now — the judge `_grow` obeys too."""
@@ -448,6 +549,68 @@ class GroupHandler:
         spare = self._spare_worker(picture)
         if spare is not None:
             await self._order_quit(spare, "close_worker")
+
+    @every(CHECK_USER_ACTIVITY_BEATS)
+    async def check_user_activity(self) -> None:
+        """Read the silence off the photos and send whoever is due where he belongs.
+
+        Acts on the users of this group's living workers: whoever has been silent
+        past his own expiry is DROPPED — on the worker by the order, and at the
+        vertex through the fold that reads the announcement — and whoever is
+        silent past ``user_idle_freeze_minutes`` is parked through
+        ``freeze_hosted_user``. The silence is read on the REAL clocks, never on
+        ``last_refresh_ts``, which a beat alone keeps warm forever.
+
+        BOTH departures block the user at the vertex before the order goes out,
+        so one coming back at that instant waits instead of being routed onto a
+        worker that is erasing him, and BOTH orders carry
+        ``DEPARTURE_ORDER_WAIT_LIMIT``: a child that does not answer would
+        otherwise hold this round, and with it the group's whole beat, for as
+        long as it stays mute. A drop that CONFIRMS releases nothing here —
+        ``SpaCommander.drop_user`` lets go of the hold when the fold reads the
+        announcement, and whoever was waiting wakes to find him gone — but a
+        drop that did not happen gives the block back on the spot, as the freeze
+        does, so no user is ever left blocked on a departure that failed. The
+        expiry of the deadline is one such refusal, and it loses nothing: the
+        next round judges him again.
+
+        The judgment is this rung's alone: the worker keeps no gauge and takes no
+        departure decision of its own. The photo it is read off is as fresh as
+        the last envelope out — seconds, against a silence declared in minutes —
+        and only a user this group still places on that worker is judged, so a
+        photo that has not yet caught up with a departure names nobody.
+        """
+        now = time.time()
+        idle_limit = self.user_idle_freeze_minutes * SECONDS_PER_MINUTE
+        for worker_handler in self.living_workers:
+            photo = worker_handler.worker_snapshot or {}
+            for user, row in photo.get("users", {}).items():
+                item = row["item"]
+                if item["state"] != "active":
+                    continue
+                if self.user_worker_map.get(user) != worker_handler.name:
+                    continue
+                idle = now - max(item["last_user_ts"], item["last_rpc_ts"])
+                if idle > self.spa_commander.get_user_expiry_seconds(user):
+                    self.spa_commander.hold_user(user, f"expiry on {worker_handler.name}")
+                    refusal: str | None = "CancelledError"
+                    try:
+                        await worker_handler.connector.call(
+                            DROP_USER_OP_PATH,
+                            {"user": user},
+                            timeout=DEPARTURE_ORDER_WAIT_LIMIT,
+                        )
+                        refusal = None
+                    except Exception as exc:
+                        refusal = f"{type(exc).__name__}: {exc}"
+                    finally:
+                        if refusal is not None:
+                            self.spa_commander.release_user_hold(user)
+                        self.spa_commander.log_order(
+                            self.name, "drop_user", user, outcome=refusal or "expired"
+                        )
+                elif idle > idle_limit:
+                    await self.freeze_hosted_user(user)
 
     async def start_worker(self) -> WorkerHandler | None:
         """Bring one more worker into this group and start its process.
@@ -609,17 +772,31 @@ class GroupHandler:
         )
 
     async def quit_all(self, freezer_path: str) -> None:
-        """Tell every process of this group to leave, parking its users in *freezer_path*.
+        """Block the users of every process of this group, then tell each one to leave.
 
         Args:
             freezer_path: the directory this group's parcels are written to —
                 the reboot directory, never the working deposit.
 
-        Acts on each of its workers, one order per worker, and on the template
-        when there is one: it is nobody's watcher, but it outlives the workers
-        it forked, so it goes last. A worker already dead is ordered nothing.
+        Acts on the vertex's barrier and on each of its workers. Every user this
+        group places on a worker is BLOCKED before that worker is ordered away:
+        from that instant a request of his waits instead of walking into a
+        process that is emptying. The order stays ONE per worker — no per-user
+        order travels the wire here, the worker's own cycle parks everybody as it
+        has since wf/33 — and the holds fall as the freezes confirm, each through
+        the fold that reads ``user_frozen``, the death of the process saying it
+        for whoever's own announcement did not survive the closing wire. A worker
+        already dead is ordered nothing and blocks nobody: its death is written,
+        and the round that read it has already marked or purged whoever it held.
+        The template goes last: it is nobody's watcher, but it outlives the
+        workers it forked.
         """
         for worker_handler in list(self.worker_handler_map.values()):
+            if worker_handler.state in DEAD_STATES:
+                continue
+            for user, name in list(self.user_worker_map.items()):
+                if name == worker_handler.name:
+                    self.spa_commander.hold_user(user, f"quit of {worker_handler.name}")
             await self._order_quit(worker_handler, "quit_all", freezer_path=freezer_path)
         if self.template is not None:
             await self.template.stop()

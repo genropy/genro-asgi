@@ -41,9 +41,9 @@ The day, in order:
 4. **His next click finds his store**, under his real name now: what he
    accumulated as a guest travelled inside the connection's parcel and was
    installed where the pool put him. (R3/R5, proved AT THE DESTINATION.)
-5. **Somebody goes quiet and is parked.** The driver's two orders flag her and
-   let her go — no clock calls them yet — and her own next click wakes her, with
-   the trail she left behind her.
+5. **Somebody goes quiet and is parked.** The group's own round reads her silence
+   off the photo and orders her worker to park her, and her own next click wakes
+   her, with the trail she left behind her.
 6. **The pool grows, and stickiness is proved on two workers.** The concession
    shrinks until the reception refuses, a shape step brings a second process into
    being, and a SECOND browser of the same person lands on it as a guest. When he
@@ -61,7 +61,7 @@ The day, in order:
 
 The clock stays alive — the beat keeps the processes answered, the frozen swept
 and the expired dropped — but the SHAPE steps are driven where the story wants
-them, by raising the cadence of ``GroupHandler.check_occupancy`` and asking for it
+them, by raising the cadence of the group's two periodics and asking for them
 by hand. Its wake still overrides the cadence, which is why the refusal of the
 last chapter rests on the memory gate: a pool that cannot grow, and not a round
 that has not arrived.
@@ -86,7 +86,7 @@ from genro_asgi.spa.orchestration.spa_commander import GUEST_PREFIX
 
 from ..conftest import LifespanRunner, ask_app, get_answer_header
 from .conftest import kill_process, wait_for
-from .x_spa_worker import EXECUTE_ORDER, PLAN_ORDER, X_SpaWorker
+from .x_spa_worker import X_SpaWorker
 
 #: The front that owns the pool of this story, and its two groups: the one the
 #: recipe ELECTS, and one declared before it so the election says something.
@@ -297,6 +297,7 @@ async def server(story_root, monkeypatch):
     # The beat stays alive; only the reading of the SHAPE is taken out of its
     # hands, so the two chapters that need a shape step ask for it themselves.
     monkeypatch.setattr(GroupHandler.check_occupancy, "every_beats", 10_000)
+    monkeypatch.setattr(GroupHandler.check_user_activity, "every_beats", 10_000)
     asgi_server = AsgiServer(config=story_root / "pool_config.py")
     runner = LifespanRunner(asgi_server)
     await runner.startup()
@@ -358,17 +359,11 @@ async def test_a_day_of_the_site_from_the_front_to_the_child(server):
 
     await asyncio.sleep(2 * IDLE_SECONDS)
     await browse(server, "/orders", cid)            # mario has just spoken
-    planned = await reception.connector.call(PLAN_ORDER, timeout=CALL_TIMEOUT)
-    flags = planned["worker_snapshot"]["users"]
 
-    assert {user: row["transfer_flag"] for user, row in flags.items()} == {
-        "mario": None,
-        "anna": "T",
-    }
-
-    await reception.connector.call(EXECUTE_ORDER, timeout=CALL_TIMEOUT)
+    await group.check_user_activity(now=True)
 
     assert vertex.user_is_frozen("anna") is True
+    assert vertex.user_is_frozen("mario") is False
     assert group.user_worker_map["anna"] is None
 
     # Her own next click wakes her, and the trail is where she left it.

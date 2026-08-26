@@ -122,10 +122,27 @@ parks on the per-user barrier up to `REQUEST_HOLD_MAX_SECONDS`. A sudden
 worker death restarts the small set of users involved: an accepted,
 observable risk, not a gap.
 
+**Putting ONE user to sleep is one ordered operation, and the group owns it**
+(wf/41, landing): `GroupHandler.freeze_hosted_user` blocks him at the vertex
+(`hold_user`), orders his worker (`/op/freeze_user` →
+`SpaWorker.freeze_designated_user`), and the REPLY IS the confirmation — the
+`user_frozen` event rides it, so the fold has already marked, released and
+unplaced him when the caller is answered; a refusal releases the hold
+(`SpaCommander.release_user_hold`) and leaves him where he was. WHO sleeps is
+the group's judgment too: `GroupHandler.check_user_activity` is its second
+periodic and reads the two REAL clocks off each worker's last photo — silence
+past `user_idle_freeze_minutes` (now a GROUP setting, no longer the worker's)
+is parked, silence past `SpaCommander.get_user_expiry_seconds` is dropped
+(`/op/drop_user`). The worker keeps no gauge and takes no departure decision
+of its own.
+
 **The reboot (landed 2026-08-25, wf/33).** A server that leaves QUITTING
 takes the soft quit: `SpaCommander.quit` stops the clock, orders every group
-(`GroupHandler.quit_all`) to park its users in `reboot_temp` — each worker
-swaps its `FreezeHandler` onto that root, freezes each user as his last call
+(`GroupHandler.quit_all`) to park its users in `reboot_temp` — each group
+BLOCKS at the vertex every user it places on a worker BEFORE ordering that
+worker away, so no request of his walks into a process already emptying, and
+each hold falls as its freeze confirms; each worker swaps its `FreezeHandler`
+onto that root, freezes each user as his last call
 ends, and CUTS the stuck ones past `PENDING_CALL_GRACE_SECONDS` (the user is
 parked anyway; the lost answer reads 503 via the front, which tells a wire
 lost while quitting from a real 502) — then writes its own

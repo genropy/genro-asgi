@@ -148,6 +148,12 @@ QUIT_OP_PATH = "/op/quit"
 DROP_USER_OP_PATH = "/op/drop_user"
 DROP_CONNECTION_OP_PATH = "/op/drop_connection"
 
+#: The routing key of the ordered freeze of ONE user: the worker waits for
+#: whatever holds him — a pull bringing him home, his calls in flight — parks
+#: him, and only then answers, so the REPLY IS the confirmation. A user this
+#: process does not host is refused out loud in that same REPLY.
+FREEZE_USER_OP_PATH = "/op/freeze_user"
+
 #: How long an ordered departure may take before this handler stops waiting for
 #: it, in seconds. Past it the process is killed and the death that follows is an
 #: abort like any other: whoever was leaving had its time.
@@ -169,6 +175,7 @@ __all__ = [
     "DROP_CONNECTION_OP_PATH",
     "DROP_USER_OP_PATH",
     "EVAL_OP_PATH",
+    "FREEZE_USER_OP_PATH",
     "OBSERVE_OP_PATH",
     "PING_OP_PATH",
     "PROCESS_PING_INTERVAL",

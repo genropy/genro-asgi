@@ -32,6 +32,7 @@ the very reason worker names are short.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import tempfile
@@ -41,8 +42,14 @@ from typing import Any
 import pytest
 
 from genro_asgi.spa.orchestration import AssignmentRefused, GroupHandler, SpaCommander
-from genro_asgi.spa.orchestration.worker_connector import ENVELOPE_SLOT_WORKER_SNAPSHOT
+from genro_asgi.spa.orchestration import group_handler as group_handler_module
+from genro_asgi.spa.orchestration.worker_connector import (
+    ENVELOPE_SLOT_WORKER_EVENTS,
+    ENVELOPE_SLOT_WORKER_SNAPSHOT,
+)
 from genro_asgi.spa.orchestration.worker_handler import (
+    DROP_USER_OP_PATH,
+    FREEZE_USER_OP_PATH,
     QUIT_OP_PATH,
     WORKER_ENV_VAR,
     WorkerHandler,
@@ -56,6 +63,7 @@ CHILD_SCRIPT = '''
 import asyncio
 import json
 import os
+import time
 
 from genro_asgi.channel.frame import REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
 
@@ -66,10 +74,28 @@ async def live() -> None:
     if kwargs["behaviour"] == "absent":
         await asyncio.sleep(60)
         return
+    # The row of a user as a real photo carries it: his flag, his state, and his
+    # three clocks. The two REAL ones are pushed into the past by the silence the
+    # story declares for him; ``last_refresh_ts`` is always NOW, which is a beat
+    # keeping the row warm and proving nobody. A story whose users are RESIDENTS
+    # and not departing declares no flag: a flag is read at the vertex as a hold.
+    now = time.time()
     photo = {{
         "pid": os.getpid(),
         "rss_bytes": kwargs["rss_bytes"],
-        "users": {{user: {{"transfer_flag": "T"}} for user in kwargs["users"]}},
+        "users": {{
+            user: {{
+                "transfer_flag": kwargs["transfer_flag"],
+                "item": {{
+                    "state": "active",
+                    "connection_count": 1,
+                    "last_refresh_ts": now,
+                    "last_user_ts": now - kwargs["user_silence"].get(user, 0),
+                    "last_rpc_ts": now - kwargs["user_silence"].get(user, 0),
+                }},
+            }}
+            for user in kwargs["users"]
+        }},
     }}
     reader, writer = await asyncio.open_unix_connection(payload["uds_url"].removeprefix("uds:"))
     stream = FrameStream(reader, writer)
@@ -87,6 +113,57 @@ async def live() -> None:
             return
         if frame.method == "CALL":
             data = {{"result": {{}}}}
+            # The ordered freeze: the REPLY IS the confirmation, and the worker
+            # event of the departure rides it. Refused on demand, which is the
+            # departure that did not happen.
+            if frame.path == "{freeze_path}":
+                user = (frame.data or {{}})["user"]
+                # Taken and never answered: the order that outlives the caller's
+                # own deadline, which is the wait the group puts a ceiling on.
+                if kwargs["freeze_unanswered"]:
+                    continue
+                if kwargs["freeze_refused"]:
+                    data = {{"error": "the deposit refused the parcels of " + user}}
+                else:
+                    photo["users"].pop(user, None)
+                    data = {{
+                        "result": {{"frozen": user}},
+                        "{events_key}": [
+                            {{
+                                "op": "user_frozen",
+                                "worker": payload["name"],
+                                "user": user,
+                                "placement": None,
+                            }}
+                        ],
+                    }}
+                await stream.write(
+                    Frame(id=frame.id, method="REPLY", path=frame.path, data=data)
+                )
+                continue
+            # The order to forget somebody: the row goes and the departure is
+            # ANNOUNCED, which is what prunes the indexes above.
+            if frame.path == "{drop_path}":
+                user = (frame.data or {{}})["user"]
+                # Taken and never answered, like the freeze above: the drop order
+                # has a ceiling of its own and the group must not sit on it.
+                if kwargs["drop_unanswered"]:
+                    continue
+                photo["users"].pop(user, None)
+                await stream.write(
+                    Frame(
+                        id=frame.id,
+                        method="REPLY",
+                        path=frame.path,
+                        data={{
+                            "result": {{}},
+                            "{events_key}": [
+                                {{"op": "drop_user", "worker": payload["name"], "user": user}}
+                            ],
+                        }},
+                    )
+                )
+                continue
             # A real worker attaches its photo only when one is DUE, so an
             # answer — the one to the order to leave included — may carry none.
             if frame.path != "{quit_path}" or kwargs["photo_on_quit"]:
@@ -103,7 +180,12 @@ async def live() -> None:
 
 asyncio.run(live())
 '''.format(
-    env_var=WORKER_ENV_VAR, snapshot_key=ENVELOPE_SLOT_WORKER_SNAPSHOT, quit_path=QUIT_OP_PATH
+    env_var=WORKER_ENV_VAR,
+    snapshot_key=ENVELOPE_SLOT_WORKER_SNAPSHOT,
+    events_key=ENVELOPE_SLOT_WORKER_EVENTS,
+    quit_path=QUIT_OP_PATH,
+    freeze_path=FREEZE_USER_OP_PATH,
+    drop_path=DROP_USER_OP_PATH,
 )
 
 CHILD_MODULE = "scripted_group_child"
@@ -143,8 +225,13 @@ def group_settings(instance_root):
         "worker_kwargs": {
             "behaviour": "answer",
             "users": [],
+            "user_silence": {},
+            "transfer_flag": "T",
             "rss_bytes": 0,
             "photo_on_quit": True,
+            "freeze_refused": False,
+            "freeze_unanswered": False,
+            "drop_unanswered": False,
         },
         "process_ping_timeout": 2.0,
     }
@@ -159,16 +246,26 @@ async def make_group(commander, group_settings):
         *,
         behaviour: str = "answer",
         users: list[str] | None = None,
+        user_silence: dict[str, float] | None = None,
+        transfer_flag: str | None = "T",
         rss_bytes: int = 0,
         photo_on_quit: bool = True,
+        freeze_refused: bool = False,
+        freeze_unanswered: bool = False,
+        drop_unanswered: bool = False,
         **policies: Any,
     ) -> GroupHandler:
         settings = dict(group_settings)
         settings["worker_kwargs"] = {
             "behaviour": behaviour,
             "users": users or [],
+            "user_silence": user_silence or {},
+            "transfer_flag": transfer_flag,
             "rss_bytes": rss_bytes,
             "photo_on_quit": photo_on_quit,
+            "freeze_refused": freeze_refused,
+            "freeze_unanswered": freeze_unanswered,
+            "drop_unanswered": drop_unanswered,
         }
         group = GroupHandler(
             commander,
@@ -579,6 +676,86 @@ async def test_the_group_orders_every_worker_into_the_reboot_directory(make_grou
     ]
 
 
+async def test_the_quit_blocks_a_worker_s_users_before_its_order_leaves(
+    make_group, commander, monkeypatch
+):
+    """The block is up when the order goes out, and only for that worker's users."""
+    group = make_group()
+    first = await group.start_worker()
+    second = await group.start_worker()
+    known_at_the_vertex(commander, "cid-a", "mario")
+    known_at_the_vertex(commander, "cid-b", "lucia")
+    group.user_worker_map["mario"] = first.name
+    group.user_worker_map["lucia"] = second.name
+    held_when_ordered = []
+
+    async def record(self, freezer_path=None):
+        held_when_ordered.append(
+            (self.name, sorted(u for u, r in commander.user_map.items() if r["on_hold"]))
+        )
+
+    monkeypatch.setattr(WorkerHandler, "quit_process", record)
+
+    await group.quit_all("/tmp/reboot_temp")
+
+    # The users of the worker being ordered are already blocked; the one placed
+    # on the worker whose turn has not come is not — his own order raises his.
+    assert held_when_ordered == [
+        (first.name, ["mario"]),
+        (second.name, ["lucia", "mario"]),
+    ]
+    assert commander.user_map["mario"]["on_hold"] == f"quit of {first.name}"
+
+
+async def test_a_worker_already_dead_is_ordered_nothing_and_blocks_nobody(
+    make_group, commander, monkeypatch
+):
+    """Its death is written: the round that read it already said what became of him."""
+    group = make_group()
+    worker_handler = await group.start_worker()
+    known_at_the_vertex(commander, "cid-a", "mario")
+    group.user_worker_map["mario"] = worker_handler.name
+    worker_handler.state = "aborted"
+    ordered = []
+    monkeypatch.setattr(
+        WorkerHandler, "quit_process", lambda self, freezer_path=None: ordered.append(self.name)
+    )
+
+    await group.quit_all("/tmp/reboot_temp")
+
+    assert ordered == []
+    assert commander.user_map["mario"]["on_hold"] is None
+
+
+async def test_the_quit_gives_every_hold_back_as_the_freezes_confirm(make_group, commander):
+    """The whole soft quit: blocked before the order, frozen and free after it."""
+    # The child's photo carries mario flagged for the freezer, which is what a
+    # real worker's answer to the order says of everybody on board.
+    group = make_group(users=["mario"])
+    # His row exists before the process does: the REGISTER photo already carries
+    # his flag, and a flag is read at the vertex as a hold.
+    known_at_the_vertex(commander, "cid-a", "mario")
+    worker_handler = await group.start_worker()
+    group.user_worker_map["mario"] = worker_handler.name
+    worker_handler.hosted_users.add("mario")
+
+    await group.quit_all("/tmp/reboot_temp")
+
+    # Blocked he is; the cause reads `transfer_flag T` and not the quit's own,
+    # because this scripted child carries the flag from birth and a hold keeps
+    # its first cause. What the cause says is test 1's business.
+    assert commander.user_map["mario"]["on_hold"] is not None
+    assert worker_handler.state == "quitted"
+
+    # The death is read at the group's round, and it says of every flagged user
+    # what his own announcement would have said had the wire outlived it.
+    worker_handler.envelope_handler.report_death()
+
+    assert commander.user_is_frozen("mario") is True
+    assert commander.user_map["mario"]["on_hold"] is None
+    assert group.user_worker_map["mario"] is None
+
+
 async def test_a_worker_at_its_user_ceiling_makes_the_placement_father_a_new_one(
     make_group, commander
 ):
@@ -638,3 +815,318 @@ async def test_the_occupancy_reads_the_fullest_component_cpu_included(make_group
 
     # Neither: as today, nothing measurable reads empty.
     assert group.get_occupancy_percent({}) == 0.0
+
+
+async def test_the_group_orders_the_freeze_and_the_confirmation_settles_everything(
+    make_group, commander
+):
+    """The whole sequence for one user: block, order, confirmation, block gone."""
+    group = make_group()
+    worker_handler = await group.start_worker()
+    known_at_the_vertex(commander, "cid-a", "mario")
+    assert await group.assign_user("mario") == worker_handler.name
+    worker_handler.hosted_users.add("mario")
+
+    assert await group.freeze_hosted_user("mario") is True
+
+    # Nothing of this was written by the method: the worker event travelled in
+    # the REPLY that confirms the order, and the fold read it before the caller
+    # was answered.
+    assert commander.user_is_frozen("mario") is True
+    assert commander.user_map["mario"]["on_hold"] is None
+    assert group.user_worker_map["mario"] is None
+    assert worker_handler.hosted_users == set()
+
+
+async def test_a_freeze_the_worker_refuses_leaves_the_user_unblocked_and_where_he_was(
+    make_group, commander
+):
+    """A departure that did not happen gives the block back."""
+    group = make_group(freeze_refused=True)
+    worker_handler = await group.start_worker()
+    known_at_the_vertex(commander, "cid-a", "mario")
+    await group.assign_user("mario")
+    worker_handler.hosted_users.add("mario")
+
+    assert await group.freeze_hosted_user("mario") is False
+
+    assert commander.user_is_frozen("mario") is False
+    assert commander.user_map["mario"]["on_hold"] is None
+    assert commander.resolve_user("cid-a") == "mario"
+    assert group.user_worker_map["mario"] == worker_handler.name
+    assert worker_handler.hosted_users == {"mario"}
+
+
+async def test_a_request_arriving_under_the_order_waits_and_is_served_after_it(
+    make_group, commander
+):
+    """#40: no request of his can reach the emptying process, and none is refused.
+
+    The order is held ON THE WIRE while a request of his arrives, which is the
+    window the block exists for: it parks on his barrier instead of walking into
+    a worker that is writing his parcels, and it is served once the confirmation
+    has dropped the block — at the destination the vertex assigns him again.
+    """
+    group = make_group()
+    worker_handler = await group.start_worker()
+    known_at_the_vertex(commander, "cid-a", "mario")
+    await group.assign_user("mario")
+    worker_handler.hosted_users.add("mario")
+    ordered = asyncio.Event()
+    confirm = asyncio.Event()
+    on_the_wire = []
+    placed_call = worker_handler.connector.call
+
+    async def held_order(path, data=None, timeout=None):
+        on_the_wire.append(path)
+        if path == FREEZE_USER_OP_PATH:
+            ordered.set()
+            await confirm.wait()
+        return await placed_call(path, data, timeout)
+
+    worker_handler.connector.call = held_order
+
+    order = asyncio.ensure_future(group.freeze_hosted_user("mario"))
+    await ordered.wait()
+    request = asyncio.ensure_future(
+        commander.serve_request("cid-a", {"path": "/invoices"}, hold_timeout=5.0)
+    )
+    await asyncio.sleep(0.05)
+
+    # He waits, and NOTHING of his went down that wire: no page of his can be
+    # born on the worker that is writing his parcels, which is #40 itself.
+    assert not request.done()
+    assert on_the_wire == [FREEZE_USER_OP_PATH]
+
+    confirm.set()
+
+    assert await order is True
+    assert "error" not in await request
+    assert group.user_worker_map["mario"] == worker_handler.name
+
+
+async def test_the_group_parks_whoever_has_gone_quiet_and_spares_the_active(
+    make_group, commander
+):
+    """The valve is the GROUP's: it reads the silence off the photo and orders.
+
+    Mario has been silent a minute past a valve set to half of one, and his
+    ``last_refresh_ts`` is NOW: a beat keeps a row warm and proves nobody. Anna
+    has just spoken, and nobody touches her.
+    """
+    group = make_group(
+        users=["mario", "anna"],
+        user_silence={"mario": 60},
+        transfer_flag=None,
+        user_idle_freeze_minutes=0.5,
+    )
+    worker_handler = await group.start_worker()
+    for cid, user in (("cid-a", "mario"), ("cid-b", "anna")):
+        known_at_the_vertex(commander, cid, user)
+        await group.assign_user(user)
+        worker_handler.hosted_users.add(user)
+
+    await group.check_user_activity(now=True)
+
+    assert commander.user_is_frozen("mario") is True
+    assert group.user_worker_map["mario"] is None
+    assert commander.user_map["mario"]["on_hold"] is None
+    assert commander.user_is_frozen("anna") is False
+    assert group.user_worker_map["anna"] == worker_handler.name
+    assert worker_handler.hosted_users == {"anna"}
+
+
+async def test_whoever_is_past_his_own_expiry_is_dropped_and_not_parked(
+    make_group, commander
+):
+    """The other verdict: he is forgotten whole, and nothing of his is written.
+
+    The horizon is the vertex's own — the one it applies to a parcel in the
+    deposit — asked of it per identity, so a guest's shorter life needs no second
+    setting anywhere. Expiry wins over the valve on the same user.
+    """
+    commander.user_expiry_hours = 0.5
+    group = make_group(
+        users=["ugo"],
+        user_silence={"ugo": 3600},
+        transfer_flag=None,
+        user_idle_freeze_minutes=0.1,
+    )
+    worker_handler = await group.start_worker()
+    known_at_the_vertex(commander, "cid-c", "ugo")
+    await group.assign_user("ugo")
+    worker_handler.hosted_users.add("ugo")
+
+    await group.check_user_activity(now=True)
+
+    assert "ugo" not in commander.user_map
+    assert "ugo" not in group.user_worker_map
+    assert worker_handler.hosted_users == set()
+    assert commander.freeze_handler.user_folders == set()
+
+
+async def test_a_drop_order_nobody_answers_expires_and_gives_the_block_back(
+    make_group, commander, monkeypatch
+):
+    """The same ceiling on the other order: the round gives up rather than hang.
+
+    The worker takes the drop and never answers it. Without a deadline this
+    round would wait as long as the child stays mute, and the vertex gathers the
+    group turns, so its whole clock would stop with it. The expiry takes the road
+    of a refusal: the block falls, the user stays where he was, and the next
+    round judges him again.
+    """
+    monkeypatch.setattr(group_handler_module, "DEPARTURE_ORDER_WAIT_LIMIT", 0.2)
+    commander.user_expiry_hours = 0.5
+    group = make_group(
+        users=["ugo"],
+        user_silence={"ugo": 3600},
+        transfer_flag=None,
+        drop_unanswered=True,
+    )
+    worker_handler = await group.start_worker()
+    known_at_the_vertex(commander, "cid-c", "ugo")
+    await group.assign_user("ugo")
+    worker_handler.hosted_users.add("ugo")
+
+    await group.check_user_activity(now=True)
+
+    assert "ugo" in commander.user_map
+    assert commander.user_map["ugo"]["on_hold"] is None
+    assert "ugo" not in commander.user_hold_event_map
+    assert group.user_worker_map["ugo"] == worker_handler.name
+
+
+async def test_a_drop_order_that_cannot_be_sent_frees_the_user_and_the_round(
+    make_group, commander
+):
+    """A wire gone under the order: the hold falls and the other users are judged.
+
+    The expiry road raises the block before it orders, so an order that cannot
+    even be sent must give it back — otherwise every request of his would park
+    at the vertex and answer 503 for as long as the process lives. And the round
+    must go on: anna, silent past the valve, is parked in the same turn.
+    """
+    commander.user_expiry_hours = 0.5
+    group = make_group(
+        users=["ugo", "anna"],
+        user_silence={"ugo": 3600, "anna": 60},
+        transfer_flag=None,
+        user_idle_freeze_minutes=0.5,
+    )
+    worker_handler = await group.start_worker()
+    for cid, user in (("cid-c", "ugo"), ("cid-b", "anna")):
+        known_at_the_vertex(commander, cid, user)
+        await group.assign_user(user)
+        worker_handler.hosted_users.add(user)
+    worker_handler.connector._stream = None
+
+    await group.check_user_activity(now=True)
+
+    assert "ugo" in commander.user_map
+    assert commander.user_map["ugo"]["on_hold"] is None
+    assert "ugo" not in commander.user_hold_event_map
+    assert commander.user_map["anna"]["on_hold"] is None
+
+
+async def test_an_order_nobody_answers_expires_and_leaves_the_user_where_he_was(
+    make_group, commander, monkeypatch
+):
+    """The deadline on the order: the round gives up rather than stop beating.
+
+    The worker takes the order and never answers it. Without a deadline this
+    round — and with it every later beat of the group — would wait as long as
+    the call it is stuck behind lasts. The expiry takes the road of a refusal:
+    the block falls, the user stays on his worker, and the next round judges him
+    again.
+    """
+    monkeypatch.setattr(group_handler_module, "DEPARTURE_ORDER_WAIT_LIMIT", 0.2)
+    group = make_group(freeze_unanswered=True)
+    worker_handler = await group.start_worker()
+    known_at_the_vertex(commander, "cid-a", "mario")
+    await group.assign_user("mario")
+    worker_handler.hosted_users.add("mario")
+
+    assert await group.freeze_hosted_user("mario") is False
+
+    assert commander.user_is_frozen("mario") is False
+    assert commander.user_map["mario"]["on_hold"] is None
+    assert group.user_worker_map["mario"] == worker_handler.name
+
+
+async def test_an_order_cancelled_under_the_await_gives_the_block_back(
+    make_group, commander
+):
+    """The quit cancels the beat: a user caught mid-order must not stay blocked."""
+    group = make_group(freeze_unanswered=True)
+    worker_handler = await group.start_worker()
+    known_at_the_vertex(commander, "cid-a", "mario")
+    await group.assign_user("mario")
+    worker_handler.hosted_users.add("mario")
+
+    order = asyncio.ensure_future(group.freeze_hosted_user("mario"))
+    await asyncio.sleep(0.05)
+    assert commander.user_map["mario"]["on_hold"] is not None
+
+    order.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await order
+
+    assert commander.user_map["mario"]["on_hold"] is None
+    assert "mario" not in commander.user_hold_event_map
+    assert group.user_worker_map["mario"] == worker_handler.name
+
+
+async def test_a_request_arriving_under_the_expiry_order_waits_instead_of_routing(
+    make_group, commander
+):
+    """#40 on the OTHER road: the drop blocks him at the vertex the freeze does.
+
+    The order to forget him is held on the wire while a request of his arrives.
+    Without the block it would be routed onto the very worker that is erasing his
+    rows; with it, it parks on his barrier and is served after — as the newcomer
+    he is once his identity is gone, since the fold that prunes the indexes is
+    also what lets the barrier go.
+    """
+    commander.user_expiry_hours = 0.5
+    group = make_group(
+        users=["ugo"],
+        user_silence={"ugo": 3600},
+        transfer_flag=None,
+        user_idle_freeze_minutes=0.1,
+    )
+    worker_handler = await group.start_worker()
+    known_at_the_vertex(commander, "cid-c", "ugo")
+    await group.assign_user("ugo")
+    worker_handler.hosted_users.add("ugo")
+    ordered = asyncio.Event()
+    confirm = asyncio.Event()
+    on_the_wire = []
+    placed_call = worker_handler.connector.call
+
+    async def held_order(path, data=None, timeout=None):
+        on_the_wire.append(path)
+        if path == DROP_USER_OP_PATH:
+            ordered.set()
+            await confirm.wait()
+        return await placed_call(path, data, timeout)
+
+    worker_handler.connector.call = held_order
+
+    round_of_the_group = asyncio.ensure_future(group.check_user_activity(now=True))
+    await ordered.wait()
+    request = asyncio.ensure_future(
+        commander.serve_request("cid-c", {"path": "/invoices"}, hold_timeout=5.0)
+    )
+    await asyncio.sleep(0.05)
+
+    assert commander.user_map["ugo"]["on_hold"] == f"expiry on {worker_handler.name}"
+    assert not request.done()
+    assert on_the_wire == [DROP_USER_OP_PATH]
+
+    confirm.set()
+    await round_of_the_group
+
+    assert "ugo" not in commander.user_map
+    assert "ugo" not in commander.user_hold_event_map
+    assert "error" not in await request

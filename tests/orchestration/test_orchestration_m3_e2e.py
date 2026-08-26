@@ -23,9 +23,9 @@ test — standing in for the request chain of Macro 4, which is the layer that w
 turn an HTTP request into "resolve the identity, place him, forward".
 
 The worker in the children is ``X_SpaWorker_m3``, which takes the shared
-instrumentation of ``X_SpaWorker`` — the declared memory and the
-driver's two orders — and fills the ``wsgi_app`` seam with a tiny site of its
-own, the way the genropy-asgi bridge fills it with a whole one.
+instrumentation of ``X_SpaWorker`` — the declared memory — and fills the
+``wsgi_app`` seam with a tiny site of its own, the way the genropy-asgi bridge
+fills it with a whole one.
 
 The day, in order:
 
@@ -34,8 +34,8 @@ The day, in order:
 2. **Two people arrive** and are placed on it, and the site answers them through
    the WSGI seam. The rows are born in the vertex's indexes.
 3. **One of them goes quiet** past the ``user_idle_freeze_minutes`` the CONFIG
-   FILE declared, so the shot flags her for the freezer: the vertex parks her, and
-   past the gate her state is on disk and her placement is nobody's.
+   FILE declared, so the group's own round orders her worker to park her: her
+   state is on disk and her placement is nobody's.
 4. **Her next request wakes her**, lazily: the vertex says frozen, the group says
    where, and the call carries the verdict that authorises the trip home.
 5. **The pool grows on demand.** The machine's concession is measured at last and
@@ -79,11 +79,10 @@ from genro_asgi.spa.orchestration import (
     FreezeHandler,
     GroupHandler,
     SpaCommander,
-    UserOnHold,
 )
 
 from .conftest import kill_process, wait_for
-from .x_spa_worker import EXECUTE_ORDER, PLAN_ORDER, X_SpaWorker
+from .x_spa_worker import X_SpaWorker
 
 #: The front that owns the pool of this story: a pool hangs under its own app.
 APP_CODE = "shop"
@@ -298,7 +297,7 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     assert vertex.machine_memory_alarm_percent == 95.0
     assert group.occupancy_max_percent == 80.0
     assert group.reception_reserved_percent == 20.0
-    assert group.worker_settings["worker_kwargs"]["user_idle_freeze_minutes"] == IDLE_MINUTES
+    assert group.user_idle_freeze_minutes == IDLE_MINUTES
 
     # 1. THE RECEPTION IS BORN. One worker, which is a role and not a count: the
     # grammar never said how many.
@@ -323,23 +322,17 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     # on: who is in there is what the process announced.
     assert reception.hosted_users == {mario, anna}
 
-    # 3. ONE GOES QUIET. Past the silence the config file declared, the shot flags
-    # her — the valve is one more reason for a 'T' — while the one who has just
-    # spoken is kept; the vertex parks whoever is on his way out.
+    # 3. ONE GOES QUIET. Past the silence the config file declared, the GROUP's
+    # own round reads her silence off the photo and orders her worker to park
+    # her, while the one who has just spoken is left alone. Nobody drives it: the
+    # group is the rung that judges, and the worker only executes.
     await asyncio.sleep(2 * IDLE_SECONDS)
     await serve(group, mario, "cid-a", "/invoices")
-    planned = await reception.connector.call(PLAN_ORDER, timeout=CALL_TIMEOUT)
 
-    flags = planned["worker_snapshot"]["users"]
-    assert {user: row["transfer_flag"] for user, row in flags.items()} == {mario: None, anna: "T"}
-    with pytest.raises(UserOnHold):
-        vertex.resolve_user("cid-b")
+    await group.check_user_activity(now=True)
 
-    # Past the gate her state is on disk, her row has left the process, and her
-    # placement is nobody's: where she wakes is the vertex's to say.
-    parked = await reception.connector.call(EXECUTE_ORDER, timeout=CALL_TIMEOUT)
-
-    assert announced(parked) == ["user_frozen"]
+    # Her state is on disk, her row has left the process, and her placement is
+    # nobody's: where she wakes is the vertex's to say.
     assert vertex.user_is_frozen(anna) is True
     assert group.user_worker_map[anna] is None
     assert reception.hosted_users == {mario}

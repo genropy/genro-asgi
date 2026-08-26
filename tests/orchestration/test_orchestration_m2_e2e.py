@@ -50,7 +50,6 @@ past it, which is the very reason worker names are short.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import logging
 import time
@@ -74,19 +73,16 @@ DRIVEN_WORKER = f"{__name__}:DrivenWorker"
 #: The two orders of this story that the protocol does NOT carry. They are the
 #: TEST's own routing keys: the shot and the transfer cycle are verbs of the
 #: worker, and in the machine proper they are not orders at all — the shot is
-#: taken by whoever composes a due photo, and the cycle follows it. So they are
-#: reachable from the parent only through a subclass that answers for them. The
+#: taken by whoever composes a due photo, and the cycle follows it. WHO is ceded
+#: is named from above, by the group, which this story does not have: so the
+#: driver names him, through a subclass that answers for these two. The
 #: departure, one of these in Macro 2, is now the protocol's own ``/op/quit`` and
 #: is ordered through the handler's ``quit_process``.
 PLAN_ORDER = "/op/plan_transfers"
 EXECUTE_ORDER = "/op/execute_transfers"
 
-#: The silence past which the valve parks a user — a policy, so the worker counts
-#: it in MINUTES — and the gate the departures wait out. Both shrunk from their
-#: own defaults through the spawn grammar, so the story is told in fractions of a
-#: second instead of in seconds.
-IDLE_SECONDS = 0.5
-IDLE_MINUTES = IDLE_SECONDS / 60
+#: The gate the departures wait out, shrunk from its own default through the
+#: spawn grammar, so the story is told in fractions of a second.
 GATE_DELAY = 0.5
 
 #: The bounds every wait of this test is given: multiples of the times above and
@@ -142,11 +138,12 @@ class DrivenWorker(SpaWorker):
 
         The shot is taken BEFORE the reply is composed, which is the whole point
         of the shot logic: the photo riding the reply is the one the transfers
-        just flagged. The cycle order is answered when the cycle is OVER, so the
-        reply carries what the departures said and the picture they left.
+        just flagged. Whom it cedes travels in the order, since nothing below the
+        group judges that. The cycle order is answered when the cycle is OVER, so
+        the reply carries what the departures said and the picture they left.
         """
         if frame.path == PLAN_ORDER:
-            self.plan_transfers()
+            self.plan_transfers(transfer_users=(frame.data or {}).get("users", ()))
             await self.send_reply(frame, result={})
         elif frame.path == EXECUTE_ORDER:
             await self.execute_transfers()
@@ -227,7 +224,6 @@ async def handler(short_root, group, repo_on_pythonpath):
         worker_class=DRIVEN_WORKER,
         worker_kwargs={
             "group": GROUP,
-            "user_idle_freeze_minutes": IDLE_MINUTES,
             "transfer_start_delay": GATE_DELAY,
             # Every envelope carries a photo: this story reads what the photo
             # says, and the throttle has its own tests one phase down.
@@ -299,19 +295,20 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     }
     assert handler.worker_snapshot == photo
 
-    # A second user arrives while the first has gone quiet past the valve's
-    # silence: one of them is about to be parked, the other has just spoken.
-    await asyncio.sleep(2 * IDLE_SECONDS)
+    # A second user arrives: one of them is about to be parked, the other has
+    # just spoken.
     arrival = await handler.connector.call(
         "/site/orders", http_call("cid-b", "anna", path="/orders"), timeout=CALL_TIMEOUT
     )
     assert announced(arrival) == ["new_user", "new_connection"]
 
-    # THE VALVE FLAGS HIM. The driver orders the shot, and the departures are
-    # decided inside it: the silent one is ceded because he is idle past the
-    # valve's delay — one more reason for a 'T' — and the one who has just
-    # spoken is kept. The decision travels on the photo that answers the order.
-    planned = await handler.connector.call(PLAN_ORDER, timeout=CALL_TIMEOUT)
+    # THE SHOT FLAGS HIM. The driver orders the shot and names whom it cedes —
+    # the judgment is the group's rung, which this story has not got — and the
+    # one nobody named is kept. The decision travels on the photo that answers
+    # the order.
+    planned = await handler.connector.call(
+        PLAN_ORDER, {"users": ["mario"]}, timeout=CALL_TIMEOUT
+    )
 
     flagged = planned[ENVELOPE_SLOT_WORKER_SNAPSHOT]["users"]
     assert {user: pair["transfer_flag"] for user, pair in flagged.items()} == {

@@ -169,8 +169,8 @@ class SpaApplicationGrammar(ApplicationGrammar):
         ``new_user_occupancy_percent`` is what a user nobody has ever measured is
         expected to cost, and ``newcomer_reserve_count`` how many of that size
         must always find room — the group grows at its own round before anybody
-        is refused. ``user_idle_freeze_minutes`` is the silence past which a
-        worker parks a user in the freezer.
+        is refused. ``user_idle_freeze_minutes`` is the silence past which the
+        group parks a user in the freezer.
 
         The IDENTITY of the child: ``entry_module`` (what ``python -m`` runs),
         ``executable`` (the interpreter — a group is how two versions of a site

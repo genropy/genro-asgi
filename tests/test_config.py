@@ -789,18 +789,16 @@ class TestCommanderSection:
             "new_user_occupancy_percent": 4.0,
             "newcomer_reserve_count": 2,
             "worker_max_users": 16,
+            # The silence is the GROUP's own policy: it is the rung that judges
+            # who has gone quiet, and the child measures nothing.
+            "user_idle_freeze_minutes": 45.0,
             "entry_module": "genro_asgi.spa.orchestration.worker_entry",
             "executable": "/srv/shop/.venvs/stable/bin/python",
             "worker_class": "myshop.app:ShopWorker",
             "main_threadpool_size": 8,
             "aux_threadpool_size": 2,
-            # The keys the CHILD reads are his: his group's name, and the silence
-            # he measures himself.
-            "worker_kwargs": {
-                "site_path": "/srv/shop",
-                "group": "stable",
-                "user_idle_freeze_minutes": 45.0,
-            },
+            # The one key the CHILD reads is his: his group's name.
+            "worker_kwargs": {"site_path": "/srv/shop", "group": "stable"},
             # And how its workers are born: a template builds the engine once and
             # forks every one of them out of it.
             "engine_factory": "myshop.app:ShopEngineFactory",
@@ -852,6 +850,8 @@ class TestCommanderSection:
         assert group.worker_max_users == 16
         assert group.memory_max_percent == 80.0
         assert group.worker_memory_max_percent == 40.0
+        # The silence it judges is its own, and never travels down to the child.
+        assert group.user_idle_freeze_minutes == 45.0
         # And what the group hands its workers is what a WorkerHandler is built
         # with: the identity of the child, the two paths, the child's own kwargs.
         assert group.worker_settings == {
@@ -862,11 +862,7 @@ class TestCommanderSection:
             "worker_class": "myshop.app:ShopWorker",
             "main_threadpool_size": 8,
             "aux_threadpool_size": 2,
-            "worker_kwargs": {
-                "site_path": "/srv/shop",
-                "group": "stable",
-                "user_idle_freeze_minutes": 45.0,
-            },
+            "worker_kwargs": {"site_path": "/srv/shop", "group": "stable"},
         }
         # The two engine keys are NOT among those: they are the group's own, and
         # what they reach is the template it owns.

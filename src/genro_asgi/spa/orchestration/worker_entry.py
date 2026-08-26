@@ -194,11 +194,10 @@ class WorkerEntry:
         return FrameStream(reader, writer)
 
     async def serve(self) -> None:
-        """Build, present, serve — and defend the users if the wire dies first.
+        """Build, present, serve — and leave when the wire dies first.
 
         Sets ``worker``. Returns when the worker has left: on its own decision,
-        or because the wire under it was gone and everybody had to be parked in
-        the deposit first.
+        or because the wire under it was gone, which saves nothing.
         """
         self.worker = self.build_worker()
         self.worker.attach_stream(await self.connect())

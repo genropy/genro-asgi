@@ -124,33 +124,39 @@ arrives with the fold.
 user and closes there (``open_request`` / ``close_request``, WSGI stitching
 included); a freeze happens only at empty pendings, because a store photographed
 with live calls inside would take their work nowhere while the browser was told
-it was done. The question is asked TWICE — before the semaphore and again under
-it — because a check taken before the window it decides about decides nothing: a
-call born while the folder was being waited for finds the departure abandoned
-and takes it over at its own tail. The end of a call is therefore where a
+it was done. The question is asked ONCE, at the door: what holds that window
+shut is the BLOCK whoever orders the departure raises at the vertex before
+ordering it, so nothing of his can be born while his parcels are written and no
+check under the semaphore would have anything left to decide. The end of a call
+is therefore where a
 departure that had to wait for it happens — one mechanism, whether the worker is
 being emptied or a single user is being ceded — and a departure is CLAIMED
 before the first await of its path, so the cycle and the hook can never park the
 same user twice.
 
-**The departures are the worker's own initiative.** At photo time
-``plan_transfers`` pairs every user row with a ``transfer_flag``: ``None``
-kept, ``'T'`` ceded, ``'X'`` expired. Expiry is judged on the REAL clocks and
-only for ACTIVE rows — a frozen user is the vertex's business — while the choice
-of whom to cede belongs to whoever holds the measures (the fattest by memory, the
-costliest by load, preferring those with no call in flight) and is handed in.
-THE VALVE IS ONE MORE REASON FOR A ``'T'``: whoever has been silent past
-``user_idle_freeze_minutes`` — silence read on the real clocks, since a beat
-alone proves nobody — is ceded by the same decision, on the same road, with no
-verb of his own. Then THE GATE: the worker does not park anybody in the same turn
-it announced them. It waits ``TRANSFER_START_DELAY``, the time the fold needs to
-park the users just named, and only then lets them go — the expired dropped with
-their worker events, the ceded written to the deposit one at a time, the loop
-breathing between two. So there is ONE departure scheme and no special case: the
+**The departures are decided above.** At photo time ``plan_transfers`` pairs
+every user row with a ``transfer_flag``: ``None`` kept, ``'T'`` ceded. WHO is
+ceded is handed in — by the group, which reads the clocks the photo carries and
+judges the silence, or by the quit, which cedes everybody. No user is named here
+by a policy of this process: silence and expiry are the group's judgment, and
+this rung has no gauge of its own. Then THE GATE: the worker does not park
+anybody in the same turn it announced them. It waits ``TRANSFER_START_DELAY``,
+the time the fold needs to park the users just named, and only then lets them
+go, one at a time, the loop breathing between two. So there is ONE departure
+scheme and no special case: the
 window in which somebody could come back to a row that was already emptied
 cannot open, because whoever comes back either is already in the pendings and
 his freeze waits for him, or arrives after the fold parked him and starts again
 from the vertex with the verdict in hand.
+
+**The ordered freeze.** ``/op/freeze_user`` parks ONE user on the parent's
+order. The worker only executes: it waits for whatever holds him — a pull
+bringing him home, his calls in flight — parks him through the same departure
+every road uses, and only then answers, so the REPLY IS the confirmation and
+``user_frozen`` rides it as always. A user this worker does not host is
+refused out loud in that same REPLY. The waits are serialization, not
+policy: the judgment of WHO sleeps is the caller's alone, and so is the block
+that keeps new work of his from arriving while he leaves.
 
 **The exit.** ``quit`` is that same departure applied to everybody — flag, gate,
 park as the last calls end, leave — and once it starts the plan is TERMINAL: a
@@ -227,7 +233,6 @@ import asyncio
 import copy
 import functools
 import logging
-import math
 import os
 import threading
 import time
@@ -257,6 +262,7 @@ from .worker_handler import (
     DROP_CONNECTION_OP_PATH,
     DROP_USER_OP_PATH,
     EVAL_OP_PATH,
+    FREEZE_USER_OP_PATH,
     OBSERVE_OP_PATH,
     PING_OP_PATH,
     QUIT_OP_PATH,
@@ -288,10 +294,6 @@ WORKER_SNAPSHOT_TTL = 0.5
 #: How long a quit waits for a user whose call is still in flight, in seconds.
 #: Past it the wait is dropped and he is parked without that call.
 PENDING_CALL_GRACE_SECONDS = 5.0
-
-#: The conversion the valve makes: its silence is a policy and comes in minutes,
-#: the clocks it reads are seconds.
-SECONDS_PER_MINUTE = 60.0
 
 #: The three clocks every register item carries, in the order of their rank.
 CLOCK_NAMES = ("last_refresh_ts", "last_user_ts", "last_rpc_ts")
@@ -382,7 +384,6 @@ __all__ = [
     "PARCEL_CONNECTION_REBUILT_FIELDS",
     "PARCEL_PAGE_REBUILT_FIELDS",
     "PARCEL_PAGE_REPLAYED_FIELDS",
-    "SECONDS_PER_MINUTE",
     "SIGNAL_KIND",
     "STATE_KINDS",
     "TRANSFER_START_DELAY",
@@ -429,10 +430,6 @@ class SpaWorker:
             loud.
         transfer_start_delay: how long the gate stays shut between announcing
             the departures and parking them.
-        user_idle_freeze_minutes: the silence, IN MINUTES, past which the valve
-            flags a user for the deposit; with nothing said, the valve never
-            fires. Minutes because it is a policy of the installation, and the
-            comparison against the clocks converts where it is made.
         main_threadpool_size: the traffic pool's size — the WSGI stitching and
             the long calls; ``None`` leaves the interpreter's own default.
         aux_threadpool_size: the service pool's size — the deposit IO, and much
@@ -449,7 +446,6 @@ class SpaWorker:
         deposit_lock_retry_interval: float = DEPOSIT_LOCK_RETRY_INTERVAL,
         deposit_lock_wait_limit: float = DEPOSIT_LOCK_WAIT_LIMIT,
         transfer_start_delay: float = TRANSFER_START_DELAY,
-        user_idle_freeze_minutes: float = math.inf,
         main_threadpool_size: int | None = None,
         aux_threadpool_size: int | None = None,
         worker_snapshot_ttl: float = WORKER_SNAPSHOT_TTL,
@@ -460,7 +456,6 @@ class SpaWorker:
         self.deposit_lock_retry_interval = deposit_lock_retry_interval
         self.deposit_lock_wait_limit = deposit_lock_wait_limit
         self.transfer_start_delay = transfer_start_delay
-        self.user_idle_freeze_minutes = user_idle_freeze_minutes
         self.worker_snapshot_ttl = worker_snapshot_ttl
         self.traffic_pool = ThreadPoolExecutor(
             max_workers=main_threadpool_size, thread_name_prefix=f"{name}-traffic"
@@ -499,6 +494,9 @@ class SpaWorker:
         self._observation_tasks: set[asyncio.Task[None]] = set()
         self._unfreeze_waits: dict[str, asyncio.Event] = {}
         self._pendings: dict[str, int] = {}
+        #: One event per user a freeze order is waiting on: set by the end of
+        #: his last call, which is the instant the order may park him.
+        self._freeze_order_waits: dict[str, asyncio.Event] = {}
         self._transfer_flags: dict[str, str] = {}
         #: One entry per connection that logged in during a call and is
         #: waiting for that call's tail to carry it away: the identity it
@@ -1657,6 +1655,13 @@ class SpaWorker:
             if connection is not None:
                 self.drop_connection(connection["user"], payload["cid"])
             await self.send_reply(frame, result={})
+        elif frame.path == FREEZE_USER_OP_PATH:
+            try:
+                result = await self.freeze_designated_user(payload["user"])
+            except Exception as exc:
+                await self.send_reply(frame, error=f"{type(exc).__name__}: {exc}")
+            else:
+                await self.send_reply(frame, result=result)
         elif frame.path == OBSERVE_OP_PATH:
             self.observation_on = bool(payload["on"])
             await self.send_reply(frame, result={})
@@ -1781,18 +1786,14 @@ class SpaWorker:
         future.set_result(frame.data or {})
 
     async def on_wire_lost(self) -> None:
-        """The wire is gone: park everybody in the deposit and leave.
+        """The wire is gone: leave, and save nothing.
 
-        The mirror of the handler's own ``on_child_lost``, and the second of the
-        two guardians. A process nobody can speak to any more saves its users
-        the one way that does not need the wire — the deposit — and then ends.
-        What it would have announced stays unsaid: nothing could carry it now,
-        and whoever finds the parcels needs no telling.
+        A process that lost its wire is unhealthy, so what it holds is not
+        vouched for: it writes no parcel to the deposit. Its users are lost at
+        the vertex, which drops what such a worker leaves and counts them in
+        ``frozen_users_discarded``.
         """
-        self._logger.warning(
-            "Worker %s: its wire is gone — freezing everybody and leaving", self.name
-        )
-        await self.freeze_all_users()
+        self._logger.warning("Worker %s: its wire is gone — leaving, saving nothing", self.name)
         self.exit_process()
 
     async def adopt_user(self, user: str) -> dict[str, Any]:
@@ -2032,8 +2033,62 @@ class SpaWorker:
                 return
             del self._pendings[user]
             flag = self._transfer_flags.get(user)
+            waiting_order = self._freeze_order_waits.pop(user, None)
+        if waiting_order is not None:
+            waiting_order.set()
         if flag is not None and self._transfers_open:
             await self._execute_transfer(user, flag)
+
+    async def freeze_designated_user(self, user: str) -> dict[str, Any]:
+        """Park one user on the parent's order, waiting for whatever holds him.
+
+        Args:
+            user: the user the order names.
+
+        Returns:
+            ``{"frozen": user}`` — sent only once he is in the deposit, so the
+            REPLY that carries it IS the confirmation.
+
+        Raises:
+            KeyError: this worker does not host him.
+            RuntimeError: he stayed here for good — a departure already under
+                way (a state the caller's own serialization makes impossible),
+                or a deposit that refused his parcels.
+
+        The waits are serialization, never policy: a pull bringing him home is
+        awaited on its own event, a call of his in flight on the event the end
+        of that call sets — and a call born while the parcels were on the disk
+        sends the order back to that same wait. The judgment of WHO sleeps is
+        the caller's alone; this verb only executes.
+        """
+        while True:
+            with self.dispatch_lock:
+                if user not in self.user_register:
+                    raise KeyError(f"freeze order refused: no user {user!r} here")
+                adopting = self._unfreeze_waits.get(user)
+                drained = None
+                if adopting is None and user in self._pendings:
+                    drained = self._freeze_order_waits.get(user)
+                    if drained is None:
+                        drained = self._freeze_order_waits[user] = asyncio.Event()
+            if adopting is not None:
+                await adopting.wait()
+                continue
+            if drained is not None:
+                await drained.wait()
+                continue
+            if not self._claim_departure(user):
+                raise RuntimeError(
+                    f"freeze order refused: a departure of {user!r} is already under way"
+                )
+            try:
+                parked = await self.freeze_user(user)
+            finally:
+                self._release_departure(user)
+            if parked:
+                return {"frozen": user}
+            if parked is False:
+                raise RuntimeError(f"freeze order failed: {user!r} stayed here")
 
     async def freeze_user(self, user: str) -> bool | None:
         """Park a user in the deposit and announce that he left.
@@ -2043,28 +2098,26 @@ class SpaWorker:
 
         Returns:
             True when he went to the deposit; None when a call of his is what
-            holds him — DEFERRED: that call's own end is where his departure
-            happens, and the flag that sent him here must stay untouched;
-            False when he STAYED for good as far as this attempt goes — a row
-            that is not ``active``, a semaphore that never came free, or a
-            deposit that refused the parcels (both failures counted, B1).
+            holds him at the door — DEFERRED: that call's own end is where his
+            departure happens, and the flag that sent him here must stay
+            untouched; False when he STAYED for good as far as this attempt
+            goes — a row that is not ``active``, a semaphore that never came
+            free, or a deposit that refused the parcels (both failures counted,
+            B1).
 
         Writes his store and one parcel per connection under the folder
         semaphore, announces ``user_frozen`` — placement always ``None``, the
         vertex's to decide — and takes his rows out of memory whole. The row is
-        judged THREE times: before the semaphore, under it, and once more when
-        the write is over, each time because the wait just ended could have
-        brought a call of his into being. That last question is asked in the
-        same locked breath as the worker event, so nothing is photographed
-        mid-flight: a call born while the disk was writing takes his parcels
-        back off the deposit, leaves him active with his flag, and the tail of
-        that very call is what parks him. A failed write aborts the whole
-        departure: the semaphore goes back, he stays alive where he is, nothing
-        is announced, and the failure is logged and counted.
+        judged ONCE, at the door: whoever orders a departure BLOCKS him at the
+        vertex first (``GroupHandler.freeze_hosted_user``), so no work of his
+        can be born while the parcels are being written and nothing is ever
+        taken back off the deposit. A failed write aborts the whole departure:
+        the semaphore goes back, he stays alive where he is, nothing is
+        announced, and the failure is logged and counted.
         """
         with self.dispatch_lock:
-            first_look = self.user_register.get(user)
-            if first_look is None or first_look["state"] != "active":
+            item = self.user_register.get(user)
+            if item is None or item["state"] != "active":
                 return False
             if user in self._pendings:
                 return None
@@ -2077,35 +2130,14 @@ class SpaWorker:
             )
             return False
         try:
-            with self.dispatch_lock:
-                item = self.user_register.get(user)
-                if item is None or item["state"] != "active":
-                    return False
-                if user in self._pendings:
-                    return None
             store, connection_parcels = self._get_user_parcels(item)
             await self._run_in_pool(
                 self.service_pool,
                 functools.partial(self._write_parcels, user, store, connection_parcels),
             )
             with self.dispatch_lock:
-                leaving = self._get_freezable_item(user) is not None
-                if leaving:
-                    self.add_worker_event("user_frozen", user=user, placement=None)
-                    self._release_rows(user)
-                deferred = not leaving and user in self._pendings
-            if not leaving:
-                self._logger.warning(
-                    "Worker %s: a call of %s was born while his parcels were written; "
-                    "they go back off the deposit and he stays here",
-                    self.name,
-                    user,
-                )
-                await self._run_in_pool(
-                    self.service_pool,
-                    functools.partial(self._drop_parcels, user, connection_parcels),
-                )
-                return None if deferred else False
+                self.add_worker_event("user_frozen", user=user, placement=None)
+                self._release_rows(user)
         except Exception:
             self._freeze_failures += 1
             self._logger.exception(
@@ -2201,51 +2233,28 @@ class SpaWorker:
             self._release_login_rows(cid, user, previous_user)
         return True
 
-    async def freeze_all_users(self) -> None:
-        """Park every user this worker holds, one at a time.
-
-        Every departure is CLAIMED through the one claim the transfer cycle and
-        the end-of-call hook go through as well: a user somebody is already
-        taking away is left to whoever has him, instead of being queued behind a
-        folder semaphore this same worker is holding. The loop breathes between
-        two of them: a process that stopped answering its probes while emptying
-        itself would be taken for dead. Whoever has a call in flight stays
-        behind — the end of that call parks him.
-        """
-        for user in self.user_register.keys():
-            if self._claim_departure(user):
-                try:
-                    await self.freeze_user(user)
-                finally:
-                    self._release_departure(user)
-            await asyncio.sleep(0)
-
     def plan_transfers(
-        self, *, transfer_users: Iterable[str] = (), expiry_delay: float = math.inf
+        self, *, transfer_users: Iterable[str] = ()
     ) -> dict[str, tuple[dict[str, Any], str | None]]:
         """Pair every user with the flag the next photo carries, and shut the gate.
 
         Args:
-            transfer_users: the users this round cedes, chosen by whoever holds
-                the measures — the fattest by memory, the costliest by load,
-                preferring those with no call in flight.
-            expiry_delay: the silence past which an ACTIVE user is expired; his
-                frozen namesakes are judged at the vertex, never here.
+            transfer_users: the users this round cedes, named by whoever judged
+                them — the group reading the silence off the photo's clocks, or
+                the quit ceding everybody. This rung names nobody.
 
         Returns:
             Every user, mapped to his register item and his flag: ``None`` kept,
-            ``'T'`` ceded, ``'X'`` expired.
+            ``'T'`` ceded.
 
         Remembers the flags that are not ``None`` and starts the clock of the
-        gate: nothing departs before ``transfer_start_delay`` has passed. A user
-        idle past ``user_idle_freeze_minutes`` is ceded like any other — the valve
-        is a reason for a ``'T'``, not a road of its own — unless expiry already
-        claimed him. Once ``quit`` has begun the plan is terminal: everybody is
-        ceded, a row still mid-adoption included (he is a straggler, ceded as
-        soon as his pull lands), no flag already given is taken back, and the
-        gate already open is not shut again. Every plan that leaves flags
-        behind wakes the cycle, so a man named here while the quit waits for a
-        straggler leaves with the others.
+        gate: nothing departs before ``transfer_start_delay`` has passed. A row
+        that is not active is left to the vertex. Once ``quit`` has begun the
+        plan is terminal: everybody is ceded, a row still mid-adoption included
+        (he is a straggler, ceded as soon as his pull lands), no flag already
+        given is taken back, and the gate already open is not shut again. Every
+        plan that leaves flags behind wakes the cycle, so a man named here while
+        the quit waits for a straggler leaves with the others.
         """
         now = time.time()
         ceded = set(transfer_users)
@@ -2255,18 +2264,8 @@ class SpaWorker:
                 self._transfer_flags = {}
             for user, item in self._get_register_rows(self.user_register):
                 flag = self._transfer_flags.get(user)
-                if flag is None:
-                    if item["state"] == "active":
-                        idle = now - self._last_real_activity(item)
-                        if idle > expiry_delay:
-                            flag = "X"
-                        elif (
-                            self._quitting
-                            or user in ceded
-                            or idle > self.user_idle_freeze_minutes * SECONDS_PER_MINUTE
-                        ):
-                            flag = "T"
-                    elif self._quitting:
+                if flag is None and (self._quitting or user in ceded):
+                    if item["state"] == "active" or self._quitting:
                         flag = "T"
                 if flag is not None:
                     self._transfer_flags[user] = flag
@@ -2286,10 +2285,9 @@ class SpaWorker:
     async def execute_transfers(self) -> None:
         """Wait out the gate, then let the flagged users go, one at a time.
 
-        The expired are dropped with their worker events — eliminating them
-        everywhere else is the vertex's — and the ceded go to the deposit as
-        soon as no call of theirs is in flight; whoever still has one is taken
-        by the end of that call. The loop breathes between two users.
+        The ceded go to the deposit as soon as no call of theirs is in flight;
+        whoever still has one is taken by the end of that call. The loop
+        breathes between two users.
 
         An ordinary cycle passes over the flags it found and comes back. The
         cycle of a ``quit`` does not: it re-reads the flag map at every pass —
@@ -2312,14 +2310,10 @@ class SpaWorker:
                 return
             await self._transfers_changed.wait()
 
-    async def quit(
-        self, *, expiry_delay: float = math.inf, freezer_path: str | None = None
-    ) -> None:
+    async def quit(self, *, freezer_path: str | None = None) -> None:
         """Leave: everybody departs, the last call is waited for, the process ends.
 
         Args:
-            expiry_delay: the silence past which a user is expired and dropped
-                instead of parked.
             freezer_path: where the parcels of THIS departure go, when they must
                 not go to the working deposit — the reboot directory of a soft
                 quit. The handler is replaced for good: nothing else will use
@@ -2339,7 +2333,7 @@ class SpaWorker:
         """
         if freezer_path is not None:
             self.freeze_handler = FreezeHandler(freezer_path)
-        self._flag_everybody_for_departure(expiry_delay)
+        self._flag_everybody_for_departure()
         departures = asyncio.ensure_future(self.execute_transfers())
         done, _ = await asyncio.wait({departures}, timeout=PENDING_CALL_GRACE_SECONDS)
         if not done:
@@ -2354,6 +2348,9 @@ class SpaWorker:
         pool and a thread cannot be killed. What is dropped is the WAIT: the
         users are taken out of the pendings, which is the one thing keeping
         ``freeze_user`` from parking them, and the cycle is woken to take them.
+        An ordered freeze parked on the end of one of those calls is woken with
+        them: the wait it is on would otherwise never be set, since the call it
+        was waiting for is the one being given up on.
         The call finishes into a process that is leaving and its answer is lost;
         the front turns that into the same 503 a refusal gets, because the wire
         died on a server that is quitting.
@@ -2366,6 +2363,9 @@ class SpaWorker:
         with self.dispatch_lock:
             cut = list(self._pendings)
             self._pendings.clear()
+            for waiting_order in self._freeze_order_waits.values():
+                waiting_order.set()
+            self._freeze_order_waits.clear()
         if cut:
             self._logger.warning(
                 "Worker %s: %s user(s) still had a call in flight %.1fs into the quit — "
@@ -2417,21 +2417,19 @@ class SpaWorker:
 
         Args:
             frame: the CALL being answered.
-            payload: its payload; ``expiry_delay`` is the silence past which a
-                user is dropped instead of parked.
+            payload: its payload; ``freezer_path`` is where the parcels go.
 
         Acts on the flags before the answer, so the photo riding it shows every
         user ceded and the level above parks them all in one read.
         """
-        expiry_delay = payload.get("expiry_delay", math.inf)
-        self._flag_everybody_for_departure(expiry_delay)
+        self._flag_everybody_for_departure()
         await self.send_reply(frame, result={})
-        await self.quit(expiry_delay=expiry_delay, freezer_path=payload.get("freezer_path"))
+        await self.quit(freezer_path=payload.get("freezer_path"))
 
-    def _flag_everybody_for_departure(self, expiry_delay: float) -> None:
+    def _flag_everybody_for_departure(self) -> None:
         """Cede every user and make the plan terminal: sets ``_quitting`` and the flags."""
         self._quitting = True
-        self.plan_transfers(transfer_users=self.user_register.keys(), expiry_delay=expiry_delay)
+        self.plan_transfers(transfer_users=self.user_register.keys())
 
     async def _guarded_call(self, frame: Frame) -> None:
         """Serve one CALL with the guard inside the task, so nothing dies unretrieved."""
@@ -2507,7 +2505,7 @@ class SpaWorker:
         """Stamp the user a request came in for, and his connection under it.
 
         The http form names no page: what it proves is a real call of that
-        user, which is the clock the valve and the expiry read.
+        user, which is the clock the group's judgment reads off the photo.
         """
         with self.dispatch_lock:
             connection = self.connection_register.get(cid)
@@ -2542,7 +2540,7 @@ class SpaWorker:
         return await asyncio.get_running_loop().run_in_executor(pool, work)
 
     async def _execute_transfer(self, user: str, flag: str) -> None:
-        """Let one flagged user go: the expired dropped, the ceded to the deposit.
+        """Let one flagged user go to the deposit.
 
         The departure is CLAIMED before the first await — the transfer cycle,
         the end-of-call hook and the mass cycle all come through the same claim,
@@ -2560,7 +2558,7 @@ class SpaWorker:
         with self.dispatch_lock:
             if self._transfer_flags.get(user) != flag:
                 return
-            if flag != "X" and user in self._pendings:
+            if user in self._pendings:
                 return
             if not self._claim_departure(user):
                 return
@@ -2569,10 +2567,7 @@ class SpaWorker:
         try:
             if adopting is not None:
                 await adopting.wait()
-            if flag == "X":
-                self.drop_user(user)
-            else:
-                settled = await self.freeze_user(user) is not None
+            settled = await self.freeze_user(user) is not None
         except Exception:
             settled = True
             self._freeze_failures += 1
@@ -2608,10 +2603,18 @@ class SpaWorker:
             return True
 
     def _release_departure(self, user: str) -> None:
-        """Give the claim back, and say so if that was the last departure."""
+        """Give the claim back, say so if that was the last departure, wake the cycle.
+
+        The wakeup is owed to whoever found this claim TAKEN and went away with
+        nothing done: the ordered freeze and the transfer cycle reach the same
+        user by two roads, and the loser leaves the flag where it is. Without
+        this the cycle of a quit would sleep on a change that nobody else is
+        going to announce.
+        """
         with self.dispatch_lock:
             self._departing_users.discard(user)
             self._settle_transfers()
+            self._transfers_changed.set()
 
     def _settle_transfers(self) -> None:
         """Declare the departures over: no flag left, and nobody on his way out.
@@ -2623,24 +2626,6 @@ class SpaWorker:
         with self.dispatch_lock:
             if not self._transfer_flags and not self._departing_users:
                 self._transfers_done.set()
-
-    def _get_freezable_item(self, user: str) -> dict[str, Any] | None:
-        """The user's row if he may leave right now, None if he may not.
-
-        Args:
-            user: the user asked about.
-
-        Returns:
-            His register item when it is here and ``active`` and no call of his
-            is open; None otherwise — a row mid-adoption is nobody's to park,
-            and a store photographed with live calls inside would take their
-            work nowhere.
-        """
-        with self.dispatch_lock:
-            item = self.user_register.get(user)
-            if item is None or item["state"] != "active" or user in self._pendings:
-                return None
-            return item
 
     def _get_user_parcels(self, item: dict[str, Any]) -> tuple[Any, dict[str, dict[str, Any]]]:
         """The store payload and the connection parcels, photographed off the registers.
@@ -2682,17 +2667,6 @@ class SpaWorker:
             self.freeze_handler.write_connection_register_item(
                 user, cid, parcel, writer=self.name, cause="freeze", group=self.group
             )
-
-    def _drop_parcels(self, user: str, connection_parcels: dict[str, dict[str, Any]]) -> None:
-        """Take back off the deposit the parcels of a departure that did not happen.
-
-        Runs on the service pool, under the folder semaphore its caller is still
-        holding. Dropping what is not there is the same outcome as dropping what
-        is, so a departure abandoned halfway leaves the folder as it found it.
-        """
-        self.freeze_handler.drop_user_register_item(user)
-        for cid in connection_parcels:
-            self.freeze_handler.drop_connection_register_item(user, cid)
 
     def _connection_parcel(self, cid: str) -> dict[str, Any]:
         """One connection with its pages, in the shape the adoption reads back.
@@ -2779,10 +2753,6 @@ class SpaWorker:
             self._remove_connection_item(cid)
         self._remove_user_item(user)
         self._unfreeze_waits.pop(user, None)
-
-    def _last_real_activity(self, item: dict[str, Any]) -> float:
-        """The last of the two real clocks — the beat never counts as presence."""
-        return max(item["last_user_ts"], item["last_rpc_ts"])
 
     def _add_user_item(self, user: str, **fields: Any) -> dict[str, Any]:
         """Put a user item in the register, born stamped and with a live store."""

@@ -339,11 +339,10 @@ class ConfigurationHandler(ConfigHandler):
             code: the application whose pool these groups belong to.
 
         The two paths of the installation live on ``commander`` and are folded in
-        here, because a group is what builds the workers that need them. The keys
-        the CHILD reads travel in its own ``worker_kwargs`` — the group's name,
-        which stamps every item it writes, and ``user_idle_freeze_minutes``, the
-        silence the worker itself measures — so a recipe writes each policy once,
-        on the rung it belongs to, and the child is handed what is his.
+        here, because a group is what builds the workers that need them. The one
+        key the CHILD reads travels in its own ``worker_kwargs``: the group's
+        name, which stamps every item it writes. So a recipe writes each policy
+        once, on the rung it belongs to, and the child is handed what is his.
         """
         section = f"applications.{code}.commander"
         node = self.node(f"{section}.groups")
@@ -364,6 +363,7 @@ class ConfigurationHandler(ConfigHandler):
                 "new_user_occupancy_percent",
                 "newcomer_reserve_count",
                 "worker_max_users",
+                "user_idle_freeze_minutes",
                 "entry_module",
                 "executable",
                 "worker_class",
@@ -374,9 +374,6 @@ class ConfigurationHandler(ConfigHandler):
                 "engine_kwargs",
             )
             worker_kwargs = dict(kwargs.pop("worker_kwargs", None) or {}, group=child.label)
-            idle_minutes = self(f"{path}.user_idle_freeze_minutes", default=None)
-            if idle_minutes is not None:
-                worker_kwargs["user_idle_freeze_minutes"] = idle_minutes
             groups[child.label] = {**shared, **kwargs, "worker_kwargs": worker_kwargs}
         return groups
 

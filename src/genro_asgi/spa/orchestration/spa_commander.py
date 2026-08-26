@@ -88,8 +88,9 @@ map is the authority at every step, so nothing is remembered across the wait.
 raises ``UserOnHold`` on; ``user_hold_event_map`` is what a request PARKS on while
 that lasts. One Event per user on hold, born with the hold and gone with its
 release — the same mutators, in the same breath: ``hold_user`` raises both,
-``mark_user_frozen``, ``mark_user_adopted`` and ``drop_user`` let both go. Nobody
-else writes either, so the row and the door cannot say different things.
+``mark_user_frozen``, ``mark_user_adopted``, ``drop_user`` and
+``release_user_hold`` — the ordered departure that did not happen — let both go.
+Nobody else writes either, so the row and the door cannot say different things.
 
 **Up and down.** ``start`` brings the base group's reception into being and
 only then starts the clock: a reception that has presented itself is what READY
@@ -1094,6 +1095,23 @@ class SpaCommander:
         row = self.user_map.get(user)
         return bool(row and row["frozen"])
 
+    def get_user_expiry_seconds(self, user: str) -> float:
+        """How long this identity is kept without a sign of life, in seconds.
+
+        Args:
+            user: the identity; whether he is a guest is read off his name.
+
+        Returns:
+            The horizon in seconds — the guest's is the shorter, because a guest
+            is a browser and not a person the machine knows.
+
+        ONE horizon per identity, whatever is being measured against it: the age
+        of a parcel for whoever is in the deposit, the silence off the photo's
+        clocks for whoever is still on a worker.
+        """
+        guest = user.startswith(GUEST_PREFIX)
+        return (self.guest_expiry_hours if guest else self.user_expiry_hours) * SECONDS_PER_HOUR
+
     def hold_user(self, user: str, cause: str) -> None:
         """Put a user in the waiting room: his next request waits instead of routing.
 
@@ -1125,6 +1143,19 @@ class SpaCommander:
         event = self.user_hold_event_map.get(user)
         if event is not None:
             await asyncio.wait_for(event.wait(), timeout)
+
+    def release_user_hold(self, user: str) -> None:
+        """Let a user out of the waiting room, leaving him where he already was.
+
+        Args:
+            user: the identity whose ordered departure did not happen.
+
+        Acts on his row and on his barrier: the hold goes off and whoever waited
+        for him walks again. Nothing else is written, which is the whole point —
+        he is not frozen and not gone, he is still on the worker he was on.
+        """
+        self.user_map[user]["on_hold"] = None
+        self._release_hold(user)
 
     def _release_hold(self, user: str) -> None:
         """Let go of whoever was waiting for this user, and forget his barrier."""
@@ -1566,9 +1597,7 @@ class SpaCommander:
         expired = []
         for user in users:
             header = self.freeze_handler.get_item_header(user)
-            guest = user.startswith(GUEST_PREFIX)
-            hours = self.guest_expiry_hours if guest else self.user_expiry_hours
-            if header and now - header["ts"] > hours * SECONDS_PER_HOUR:
+            if header and now - header["ts"] > self.get_user_expiry_seconds(user):
                 expired.append(user)
         return expired
 

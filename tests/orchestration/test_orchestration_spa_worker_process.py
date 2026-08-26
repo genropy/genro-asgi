@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""SpaWorker on the wire: the shell, the envelopes, the photo, the self-defense.
+"""SpaWorker on the wire: the shell, the envelopes, the photo, the wire that falls.
 
 Everything here is real except the level above the wire: a real Unix socket, the
 package's own connector and frames, the package's own ``WorkerEntry`` running
@@ -23,8 +23,8 @@ GroupHandler and the Commander are Macro 3's.
 
 The last test spawns a REAL child through the M1 ``WorkerHandler``, and there the
 entry is the process it is meant to be: the site answers over the wire, the wire
-is then taken away, and what the orphan does about its users is read back from
-the deposit on disk.
+is then taken away, and the orphan ends its own process leaving the deposit
+empty — a process that lost its wire saves nothing.
 
 The sockets and the deposit live under a short ``mkdtemp`` root: the system caps
 a UDS path at about a hundred characters and pytest's own directory is already
@@ -61,6 +61,7 @@ from .conftest import kill_process, wait_for
 from genro_asgi.spa.orchestration.worker_handler import (
     DROP_CONNECTION_OP_PATH,
     DROP_USER_OP_PATH,
+    FREEZE_USER_OP_PATH,
     PING_OP_PATH,
     QUIT_OP_PATH,
     WORKER_ENV_VAR,
@@ -652,6 +653,28 @@ async def test_the_order_to_drop_a_connection_answers_with_what_it_announced(wir
     assert worker.connection_register.keys() == []
 
 
+async def test_the_freeze_order_is_answered_once_the_user_is_parked(wire, deposit):
+    worker = await wire.take()
+    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
+
+    reply = await wire.connector.call(FREEZE_USER_OP_PATH, {"user": "mario"}, timeout=5.0)
+
+    assert reply["result"] == {"frozen": "mario"}
+    assert "user_frozen" in announced(reply)
+    assert worker.user_register.keys() == []
+    assert deposit.read_user_register_item("mario") is not None
+
+
+async def test_the_freeze_order_for_a_stranger_is_refused_in_the_reply(wire, deposit):
+    await wire.take()
+
+    reply = await wire.connector.call(FREEZE_USER_OP_PATH, {"user": "nobody"}, timeout=5.0)
+
+    assert "no user 'nobody' here" in reply["error"]
+    assert "result" not in reply
+    assert deposit.read_user_register_item("nobody") is None
+
+
 # ----------------------------------------------------------------------
 # The envelope that has no lane
 # ----------------------------------------------------------------------
@@ -678,20 +701,19 @@ async def test_a_violation_of_the_protocol_ends_the_wire_like_a_death(parent_wir
 
 
 # ----------------------------------------------------------------------
-# The self-defense: a wire gone is everybody into the deposit
+# The wire that falls: the process ends and saves nothing
 # ----------------------------------------------------------------------
 
 
-async def test_a_dead_wire_parks_everybody_in_the_deposit_and_ends_the_worker(wire, deposit):
+async def test_a_dead_wire_ends_the_worker_and_writes_nothing_to_the_deposit(wire, deposit):
     worker = await wire.take()
     await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
 
     await wire.connector.stop()
 
     await wait_for(lambda: worker.exited)
-    assert deposit.read_user_register_item("mario") is not None
-    assert deposit.read_connection_register_item("mario", "cid-a") is not None
-    assert worker.user_register.keys() == []
+    assert deposit.user_folders == set()
+    assert worker.user_register.keys() == ["mario"]
 
 
 # ----------------------------------------------------------------------
@@ -839,7 +861,7 @@ async def handler(short_root, repo_on_pythonpath):
     await worker_handler.connector.stop()
 
 
-async def test_a_real_child_serves_its_site_and_saves_its_users_when_the_wire_goes(
+async def test_a_real_child_serves_its_site_and_ends_alone_when_the_wire_goes(
     handler, deposit
 ):
     # It is born in a process of its own, and presents itself with a photo that
@@ -857,13 +879,11 @@ async def test_a_real_child_serves_its_site_and_saves_its_users_when_the_wire_go
     assert body_of(reply) == "GET /invoices for mario"
     assert announced(reply) == ["new_user", "new_connection"]
 
-    # The wire is taken away under it. Nobody can be told anything any more, so
-    # it parks its user in the deposit — the road that never passed through the
-    # channel — and ends its process by itself.
+    # The wire is taken away under it. A process nobody can speak to any more is
+    # not vouched for, so it saves nothing and ends its process by itself; its
+    # user is lost at the vertex.
     await handler.connector.stop()
 
     await wait_for(lambda: not handler.process.alive, timeout=15.0)
     assert handler.process.exit_code == 0
-    assert deposit.read_user_register_item("mario") is not None
-    assert deposit.read_connection_register_item("mario", "cid-a") is not None
-    assert deposit.lock_holder("mario") is None
+    assert deposit.user_folders == set()

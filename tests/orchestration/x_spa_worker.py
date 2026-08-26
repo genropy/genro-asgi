@@ -14,14 +14,14 @@
 
 """The instrumentation every end-to-end story needs from its child, and no story.
 
-Two things, and both are apparatus rather than subject. The MEMORY a process
-declares replaces the reading of ``/proc/self/status``, which macOS has not, so a
-story whose subject is occupancy stays readable on every platform; the number
-travels in the child's own ``worker_kwargs``, which is how the grammar configures
-the class it names. The DRIVER'S DOOR carries the two orders the protocol does
-not: the shot and the cycle that follows it are verbs of the worker and nobody in
-the machine proper orders them — no clock calls ``plan_transfers`` yet — so a
-story that needs a frozen user reaches them through the subclass.
+One thing, and it is apparatus rather than subject: the MEMORY a process declares
+replaces the reading of ``/proc/self/status``, which macOS has not, so a story
+whose subject is occupancy stays readable on every platform. The number travels
+in the child's own ``worker_kwargs``, which is how the grammar configures the
+class it names.
+
+A story that needs a frozen user needs no door of its own any more: the group is
+the rung that judges who sleeps, and it is asked for its round by hand.
 
 What the site IS belongs to the story: this class wires ``wsgi_app`` to ``site``
 and each story writes that method.
@@ -33,13 +33,9 @@ from typing import Any
 
 from genro_asgi.spa.orchestration import SpaWorker
 
-#: The two orders of the driver: flag whoever is due, then let the flagged go.
-PLAN_ORDER = "/op/plan_transfers"
-EXECUTE_ORDER = "/op/execute_transfers"
-
 
 class X_SpaWorker(SpaWorker):
-    """A worker that declares its memory and answers the driver's two orders."""
+    """A worker that declares its memory."""
 
     def __init__(self, name: str, *, declared_rss_bytes: int = 0, **kwargs: Any) -> None:
         super().__init__(name, **kwargs)
@@ -62,20 +58,3 @@ class X_SpaWorker(SpaWorker):
             The body, in one chunk.
         """
         raise NotImplementedError(f"{type(self).__name__} has no site")
-
-    async def answer_call(self, frame: Any) -> None:
-        """Answer the driver's two orders, and hand everything else upstairs.
-
-        Args:
-            frame: the CALL as it came off the wire.
-
-        Acts through the verb the order names, and through the reply it sends.
-        """
-        if frame.path == PLAN_ORDER:
-            self.plan_transfers()
-            await self.send_reply(frame, result={})
-        elif frame.path == EXECUTE_ORDER:
-            await self.execute_transfers()
-            await self.send_reply(frame, result={})
-        else:
-            await super().answer_call(frame)
