@@ -311,11 +311,19 @@ class GroupHandler:
 
         Returns:
             The fullest of the components the photo carries, each clamped to its
-            own full — 0.0 when nothing in it is measurable.
+            own full — 0.0 when nothing in it is measurable. Two components
+            today: the RSS against this worker's share of the memory quota, and
+            ``cpu_percent``, the share of one core burned between the last two
+            photos (#38) — what sees a GIL-saturated worker whose memory stands
+            still, and what measures the same on platforms with no ``/proc``.
         """
+        photo = worker_snapshot or {}
         ceiling = self.memory_quota_bytes * self.worker_memory_max_percent / 100.0
-        rss_bytes = (worker_snapshot or {}).get("rss_bytes")
+        rss_bytes = photo.get("rss_bytes")
         components = [rss_bytes / ceiling] if rss_bytes is not None else []
+        cpu_percent = photo.get("cpu_percent")
+        if cpu_percent is not None:
+            components.append(cpu_percent / 100.0)
         return 100.0 * min(max(components, default=0.0), 1.0)
 
     def get_worker_cap(self, worker_handler: WorkerHandler) -> float:

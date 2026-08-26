@@ -477,3 +477,71 @@ async def test_a_real_child_announces_and_the_vertex_learns_it(
     assert "The fold refused the envelope" in caplog.text
     assert handler.process is not None
     assert handler.state == "running"
+
+
+async def test_two_photos_apart_the_cpu_seconds_become_a_share_of_one_core(handler, monkeypatch):
+    """#38: the rate is computed at reception and written into the photo."""
+    from genro_asgi.spa.orchestration import envelope_handler as envelope_module
+
+    clock = [100.0]
+    monkeypatch.setattr(envelope_module.time, "monotonic", lambda: clock[0])
+
+    handler.read_envelope(envelope(photo=dict(photo_of(), cpu_seconds=10.0)))
+    assert "cpu_percent" not in handler.worker_snapshot  # the first has no past
+
+    clock[0] = 102.0
+    handler.read_envelope(envelope(photo=dict(photo_of(), cpu_seconds=11.0)))
+
+    # 1 CPU second over 2 wall seconds: half a core — smoothed from an average
+    # born at zero, so the photo carries 0.3 * 50.
+    assert handler.worker_snapshot["cpu_percent"] == pytest.approx(15.0)
+
+
+async def test_a_cpu_burning_more_than_one_core_reads_as_one(handler, monkeypatch):
+    from genro_asgi.spa.orchestration import envelope_handler as envelope_module
+
+    clock = [100.0]
+    monkeypatch.setattr(envelope_module.time, "monotonic", lambda: clock[0])
+    handler.read_envelope(envelope(photo=dict(photo_of(), cpu_seconds=10.0)))
+
+    clock[0] = 101.0
+    handler.read_envelope(envelope(photo=dict(photo_of(), cpu_seconds=15.0)))
+
+    # 5 CPU seconds in 1 wall second: clamped to one core BEFORE the smoothing.
+    assert handler.worker_snapshot["cpu_percent"] == pytest.approx(30.0)
+
+
+async def test_a_sustained_load_converges_on_the_true_share(handler, monkeypatch):
+    from genro_asgi.spa.orchestration import envelope_handler as envelope_module
+
+    clock = [100.0]
+    monkeypatch.setattr(envelope_module.time, "monotonic", lambda: clock[0])
+    cpu = [10.0]
+    handler.read_envelope(envelope(photo=dict(photo_of(), cpu_seconds=cpu[0])))
+    for _ in range(20):
+        clock[0] += 1.0
+        cpu[0] += 0.8  # a steady 80% of one core
+        handler.read_envelope(envelope(photo=dict(photo_of(), cpu_seconds=cpu[0])))
+
+    assert handler.worker_snapshot["cpu_percent"] == pytest.approx(80.0, abs=1.0)
+
+
+async def test_photos_inside_the_minimum_window_carry_the_standing_value(handler, monkeypatch):
+    """A rate over milliseconds is noise: the anchor waits for a whole window."""
+    from genro_asgi.spa.orchestration import envelope_handler as envelope_module
+
+    clock = [100.0]
+    monkeypatch.setattr(envelope_module.time, "monotonic", lambda: clock[0])
+    handler.read_envelope(envelope(photo=dict(photo_of(), cpu_seconds=10.0)))
+
+    # A burst of photos milliseconds apart, every one claiming a busy core:
+    # none of them moves the reading.
+    for _ in range(5):
+        clock[0] += 0.01
+        handler.read_envelope(envelope(photo=dict(photo_of(), cpu_seconds=clock[0] - 90.0)))
+        assert handler.worker_snapshot["cpu_percent"] == 0.0
+
+    # A whole window later the rate is read, over the WHOLE window.
+    clock[0] = 102.0
+    handler.read_envelope(envelope(photo=dict(photo_of(), cpu_seconds=11.0)))
+    assert handler.worker_snapshot["cpu_percent"] == pytest.approx(15.0)

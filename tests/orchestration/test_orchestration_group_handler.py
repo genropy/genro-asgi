@@ -622,3 +622,19 @@ async def test_without_the_ceiling_nothing_changes(make_group, commander):
     commander.record_connection_user("cid-b", "guest_second1")
     assert await group.assign_user("guest_first1") == "standard_0001"
     assert await group.assign_user("guest_second1") == "standard_0001"
+
+
+async def test_the_occupancy_reads_the_fullest_component_cpu_included(make_group):
+    """#38: a GIL-saturated worker with a flat RSS is no longer invisible."""
+    group = make_group()
+
+    # Memory says 10%, CPU says 90%: the judge reads 90.
+    quota = group.memory_quota_bytes * group.worker_memory_max_percent / 100.0
+    photo = {"rss_bytes": int(quota * 0.10), "cpu_percent": 90.0}
+    assert group.get_occupancy_percent(photo) == 90.0
+
+    # No RSS at all (macOS): the CPU component alone carries the reading.
+    assert group.get_occupancy_percent({"cpu_percent": 35.0}) == 35.0
+
+    # Neither: as today, nothing measurable reads empty.
+    assert group.get_occupancy_percent({}) == 0.0

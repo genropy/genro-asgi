@@ -359,7 +359,9 @@ async def parent_wire(short_root, deposit):
 async def test_the_presentation_carries_the_first_photo_and_brings_the_store_home(wire):
     worker = await wire.take()
 
-    assert wire.handler.worker_snapshot == {
+    photo = dict(wire.handler.worker_snapshot)
+    assert photo.pop("cpu_seconds") >= 0.0
+    assert photo == {
         "pid": os.getpid(),
         "name": WORKER_NAME,
         "group": GROUP,

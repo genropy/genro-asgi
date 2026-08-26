@@ -585,6 +585,18 @@ class SpaWorker:
         return self._exited
 
     @property
+    def cpu_seconds(self) -> float:
+        """The CPU time this process has consumed, user plus system, in seconds.
+
+        Returns:
+            What ``os.times()`` says — a scalar every platform measures the same
+            way, unlike the RSS. The reader upstairs turns two of these into a
+            rate: how much of one core this process is burning.
+        """
+        times = os.times()
+        return times.user + times.system
+
+    @property
     def rss_bytes(self) -> int | None:
         """The resident set size of this process, in bytes.
 
@@ -619,6 +631,7 @@ class SpaWorker:
                 "name": self.name,
                 "group": self.group,
                 "rss_bytes": self.rss_bytes,
+                "cpu_seconds": self.cpu_seconds,
                 "user_count": len(self.user_register),
                 "connection_count": len(self.connection_register),
                 "page_count": len(self.page_register),
