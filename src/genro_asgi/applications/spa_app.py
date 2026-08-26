@@ -131,6 +131,8 @@ class SpaApplicationGrammar(ApplicationGrammar):
         worker_memory_max_percent: float | BagResolver = None,
         occupancy_max_percent: float | BagResolver = None,
         restart_occupancy_max_percent: float | BagResolver = None,
+        close_occupancy_max_percent: float | BagResolver = None,
+        worker_min_life_seconds: float | BagResolver = None,
         reception_reserved_percent: float | BagResolver = None,
         new_user_occupancy_percent: float | BagResolver = None,
         newcomer_reserve_count: int | BagResolver = None,
@@ -164,7 +166,11 @@ class SpaApplicationGrammar(ApplicationGrammar):
         hold of that share (the same word one rung down — the cascade is machine,
         concession, quota, worker); ``occupancy_max_percent`` is how full a worker
         gets before it stops admitting and ``restart_occupancy_max_percent`` where
-        a process is replaced instead of kept; ``reception_reserved_percent`` is
+        a process is replaced instead of kept; ``close_occupancy_max_percent`` is
+        the ceiling every survivor must stay under for a worker to be closed —
+        distinctly below the growth setpoint, the band between the two being the
+        pool's normal state — and ``worker_min_life_seconds`` the age before
+        which a worker is no closure candidate; ``reception_reserved_percent`` is
         what the reception keeps free for the trade only it has;
         ``new_user_occupancy_percent`` is what a user nobody has ever measured is
         expected to cost, and ``newcomer_reserve_count`` how many of that size

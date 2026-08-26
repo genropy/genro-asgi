@@ -76,9 +76,14 @@ runs is given another one.
 ``check_occupancy`` takes the occupancy of every living worker once and then does
 the FIRST thing that reading calls for: restart the worker past
 ``restart_occupancy_max_percent`` (it will not get better on its own), bring one
-into being when nobody has room left for a newcomer, or close one whose share the
-others can absorb and still admit. The next round re-reads: a decision is never
-carried over.
+into being when nobody has room left for a newcomer, or close one whose share
+keeps every survivor under ``close_occupancy_max_percent`` — a threshold
+distinctly below the growth's, because reading both decisions against the same
+number made each one create the condition for its own reversal (#36): the band
+between the two is the pool's normal state. A worker younger than
+``worker_min_life_seconds`` is never the one closed, and a closure is refused
+when the survivors lack room BY HEADS for the spare's placed users. The next
+round re-reads: a decision is never carried over.
 
 **The closure is the departure of a whole worker, in six steps.** The group
 orders the quit; the worker answers AT ONCE with the photo of everybody flagged
@@ -134,6 +139,7 @@ import asyncio
 import logging
 import math
 import time
+from collections import Counter
 from typing import Any
 
 from .envelope_handler import GroupEnvelopeHandler
@@ -187,6 +193,13 @@ class GroupHandler:
         occupancy_max_percent: how full a worker may be before it stops admitting.
         restart_occupancy_max_percent: past this a process is restarted rather
             than kept.
+        close_occupancy_max_percent: a closure is ordered only when the spare's
+            share, redistributed, keeps EVERY survivor under this — distinctly
+            below ``occupancy_max_percent``, so the band between the two is the
+            pool's normal state and never a condition to correct. One threshold
+            for both made every growth the evidence for its own reversal (#36).
+        worker_min_life_seconds: a worker is no closure candidate before this
+            age — younger, its occupancy measures its own birth, not its work.
         reception_reserved_percent: what the reception keeps free for the trade
             only it has; its own placement setpoint is the difference.
         new_user_occupancy_percent: what a user nobody has ever measured is
@@ -220,6 +233,8 @@ class GroupHandler:
         *,
         occupancy_max_percent: float = 80.0,
         restart_occupancy_max_percent: float = 95.0,
+        close_occupancy_max_percent: float = 40.0,
+        worker_min_life_seconds: float = 60.0,
         reception_reserved_percent: float = 50.0,
         new_user_occupancy_percent: float = 5.0,
         newcomer_reserve_count: int = 1,
@@ -237,6 +252,8 @@ class GroupHandler:
         self.name = name
         self.occupancy_max_percent = occupancy_max_percent
         self.restart_occupancy_max_percent = restart_occupancy_max_percent
+        self.close_occupancy_max_percent = close_occupancy_max_percent
+        self.worker_min_life_seconds = worker_min_life_seconds
         self.reception_reserved_percent = reception_reserved_percent
         self.new_user_occupancy_percent = new_user_occupancy_percent
         self.newcomer_reserve_count = newcomer_reserve_count
@@ -724,18 +741,25 @@ class GroupHandler:
         return placeable
 
     def _spare_worker(self, picture: dict[str, float]) -> WorkerHandler | None:
-        """The emptiest worker whose closure leaves the reserve whole; None when there is none.
+        """The emptiest worker whose closure leaves the pool cool; None when there is none.
 
         The remaining workers are read as if they shared what this one holds,
-        then asked THE SAME question the growth asks — each against its own cap,
-        the reserve still whole — so a closure can never undo a growth.
+        then asked THREE questions in order: every survivor under
+        ``close_occupancy_max_percent`` — distinctly below the growth setpoint,
+        so a closure can never create the condition for the next growth (#36) —
+        the newcomer reserve still whole, and, the occupancy settled, room BY
+        HEADS for the spare's placed users within each survivor's
+        ``worker_max_users``. A worker younger than ``worker_min_life_seconds``
+        is no candidate: its occupancy measures its own birth.
         """
         # A quitting worker is nobody's spare — its closure is already
         # somebody's order — and nobody's absorber: its room counts for nobody.
         candidates = [
             worker_handler
             for worker_handler in self.living_workers
-            if worker_handler is not self.reception and worker_handler.state != "quitting"
+            if worker_handler is not self.reception
+            and worker_handler.state != "quitting"
+            and worker_handler.life_seconds >= self.worker_min_life_seconds
         ]
         if not candidates:
             return None
@@ -749,7 +773,13 @@ class GroupHandler:
             return None
         shared = picture[spare.name] / len(remaining)
         after = {name: pct + shared for name, pct in remaining.items()}
+        if max(after.values()) > self.close_occupancy_max_percent:
+            return None
         if self._placeable_newcomers(after) < self.newcomer_reserve_count:
+            return None
+        placed = Counter(self.user_worker_map.values())
+        head_room = sum(max(0, self.worker_max_users - placed[name]) for name in remaining)
+        if head_room < placed[spare.name]:
             return None
         return spare
 

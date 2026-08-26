@@ -359,6 +359,8 @@ class ConfigurationHandler(ConfigHandler):
                 "worker_memory_max_percent",
                 "occupancy_max_percent",
                 "restart_occupancy_max_percent",
+                "close_occupancy_max_percent",
+                "worker_min_life_seconds",
                 "reception_reserved_percent",
                 "new_user_occupancy_percent",
                 "newcomer_reserve_count",

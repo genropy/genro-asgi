@@ -254,8 +254,16 @@ class WorkerHandler:
         self._death_wait: asyncio.Future[None] | None = None
         self._listening = False
         self._last_envelope_ts = 0.0
+        self._running_since: float | None = None
         self._observation_switched = False
         self._observation_switch_tasks: set[asyncio.Task[Any]] = set()
+
+    @property
+    def life_seconds(self) -> float:
+        """How long this worker has been serving, in seconds; 0.0 before it presented."""
+        if self._running_since is None:
+            return 0.0
+        return time.monotonic() - self._running_since
 
     @property
     def requires_beat_ping(self) -> bool:
@@ -400,6 +408,7 @@ class WorkerHandler:
             await self.terminate_process()
             raise
         self.state = "running"
+        self._running_since = time.monotonic()
 
     async def start_process(self) -> WorkerProcess:
         """Bring the process into the world, by fork when the group has a template.

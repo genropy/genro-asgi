@@ -141,6 +141,9 @@ class ServerConfiguration(AsgiConfigBuilder):
             worker_memory_max_percent=100.0,
             occupancy_max_percent=80.0,
             restart_occupancy_max_percent=95.0,
+            # The story's spare is closed seconds after its birth: the minimum
+            # life would exempt it, and this stanza is how the recipe waives it.
+            worker_min_life_seconds=0.0,
             reception_reserved_percent=20.0,
             new_user_occupancy_percent=5.0,
             user_idle_freeze_minutes={idle_minutes},

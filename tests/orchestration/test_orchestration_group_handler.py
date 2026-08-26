@@ -222,6 +222,9 @@ def group_settings(instance_root):
         # The scenarios of this file size ONE worker over the whole quota; the
         # core default sizes a group for worker_max_number workers instead.
         "worker_memory_max_percent": 100.0,
+        # Every worker here is newborn: the minimum life would exempt them all
+        # from closure. The one test about the minimum life sets its own.
+        "worker_min_life_seconds": 0.0,
         "worker_kwargs": {
             "behaviour": "answer",
             "users": [],
@@ -267,12 +270,12 @@ async def make_group(commander, group_settings):
             "freeze_unanswered": freeze_unanswered,
             "drop_unanswered": drop_unanswered,
         }
+        settings.update(policies)
         group = GroupHandler(
             commander,
             "standard",
             memory_concession_bytes=MEMORY_CEILING,
             **settings,
-            **policies,
         )
         groups.append(group)
         return group
@@ -393,8 +396,9 @@ async def test_a_worker_past_the_restart_setpoint_is_replaced_by_a_fresh_one(
 async def test_a_closure_that_would_eat_the_reserve_is_not_ordered(make_group):
     # Both at 30%: the spare's share would put the reception at 60, past its own
     # cap (80 less the 50 it reserves) — the flat-average reading would close it,
-    # the per-worker question keeps it.
-    group = make_group(rss_bytes=int(0.30 * MEMORY_CEILING))
+    # the per-worker question keeps it. The closure threshold is lifted out of
+    # the way so the RESERVE is the question this test asks.
+    group = make_group(rss_bytes=int(0.30 * MEMORY_CEILING), close_occupancy_max_percent=100.0)
     await group.start_worker()
     await group.start_worker()
 
@@ -509,6 +513,50 @@ async def test_a_closure_that_would_undo_a_growth_is_not_made(make_group):
     # Alone, the reception would stand at 78 and take nobody: closing the other
     # one now would only have the next round bring it back.
     assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
+    assert spare.state == "running"
+
+
+async def test_a_worker_in_its_first_seconds_is_no_closure_candidate(make_group):
+    group = make_group(worker_min_life_seconds=60.0)
+    await group.start_worker()
+    young = await group.start_worker()
+
+    await group.check_occupancy(now=True)
+
+    # Empty as it reads, its occupancy measures its own birth, not its work:
+    # a newborn is otherwise both the proof that growth was needed and the
+    # proof that closing is safe (#36).
+    assert young.state == "running"
+
+
+async def test_a_closure_leaving_a_survivor_warm_is_not_ordered(make_group):
+    # 35 shared onto 35 puts the survivor at 70: under the growth setpoint —
+    # one threshold for both decisions would close here and grow the round
+    # after (#36) — but over close_occupancy_max_percent, so the pool holds:
+    # the band between the two thresholds is its normal state.
+    group = make_group(rss_bytes=int(0.35 * MEMORY_CEILING), reception_reserved_percent=0.0)
+    await group.start_worker()
+    spare = await group.start_worker()
+
+    await group.check_occupancy(now=True)
+
+    assert spare.state == "running"
+
+
+async def test_a_closure_the_survivors_cannot_take_by_heads_is_refused(make_group):
+    # The occupancy says yes — everybody near zero — but the survivors' own
+    # worker_max_users cannot seat the spare's placed users. The ceiling is
+    # asked LAST, after the occupancy has spoken, the same order the placement
+    # asks it in (#36).
+    group = make_group(worker_max_users=2)
+    reception = await group.start_worker()
+    spare = await group.start_worker()
+    group.user_worker_map.update(
+        {"anna": reception.name, "bruno": reception.name, "carla": spare.name, "dario": spare.name}
+    )
+
+    await group.check_occupancy(now=True)
+
     assert spare.state == "running"
 
 
