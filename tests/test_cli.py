@@ -410,7 +410,7 @@ class TestReloadPayload:
         cli = Cli(registry=AppsRegistry(base_dir=tmp_path))
         launched: dict = {}
         monkeypatch.setattr(
-            "genro_asgi.__main__.uvicorn.run",
+            "genro_asgi.reloading.uvicorn.run",
             lambda target, **kwargs: launched.update(target=target, **kwargs),
         )
         # monkeypatch owns the variable, so the value the launcher writes is
@@ -420,12 +420,15 @@ class TestReloadPayload:
         assert json.loads(os.environ[LAUNCHER_ENV]) == {
             "config": str(module.resolve()),
             "save_session": str(tmp_path / "sessions" / "demo.pickle"),
+            "host": "10.0.0.1",
+            "port": 8321,
         }
         assert launched == {
             "target": "genro_asgi.__main__:factory",
             "factory": True,
             "reload": True,
             "reload_dirs": [str(tmp_path.resolve())],
+            "reload_excludes": None,
             "host": "10.0.0.1",
             "port": 8321,
         }

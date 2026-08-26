@@ -64,10 +64,10 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
-import uvicorn
 
 from .asgi_server import AsgiServer
 from .lifespan import QUITTING
+from .reloading import LAUNCHER_ENV, serve_reloading
 from .config.default_config import DefaultConfig
 
 __all__ = [
@@ -80,10 +80,6 @@ __all__ = [
     "factory",
     "main",
 ]
-
-LAUNCHER_ENV = "GENRO_ASGI_LAUNCHER"
-"""The variable carrying the launcher's state across the reload process boundary."""
-
 
 class CliError(Exception):
     """A runtime error the command reports as one stderr line and exit code 1."""
@@ -372,19 +368,22 @@ class ServerLauncher:
         return host, port
 
     def run_reloading(self, host: str, port: int) -> None:
-        """Boot under uvicorn's reload supervisor, which needs an import string.
+        """Boot under the reload supervisor, with this CLI's own derivations.
 
-        The supervisor imports ``factory`` in a fresh process on every restart,
-        so the source travels to it through the environment.
+        The derivation is the CLI's convenience and stays here: the watch root
+        is the source file's directory. The launch itself is the package's
+        public one (``reloading``, #39) — any other launcher reaches it with
+        roots of its own choosing.
         """
-        os.environ[LAUNCHER_ENV] = json.dumps(self.launcher_payload)
-        uvicorn.run(
-            "genro_asgi.__main__:factory",
-            factory=True,
-            reload=True,
-            reload_dirs=[self.reload_dir],
+        payload = self.launcher_payload
+        serve_reloading(
             host=host,
             port=port,
+            reload_dirs=[self.reload_dir],
+            config=payload.get("config"),
+            application=payload.get("application"),
+            save_session=payload.get("save_session"),
+            debug=payload.get("debug", False),
         )
 
     def run(self) -> int:
