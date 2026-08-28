@@ -23,6 +23,10 @@ be sync or async, detected with ``inspect.iscoroutinefunction`` at call time.
 A hook that raises is logged and the sequence CONTINUES: one app's error
 never blocks the others, and uvicorn always receives the matching
 ``.complete`` message — app errors are isolated, never abort the protocol.
+``FatalBootError`` is the ONE exception to that isolation: an ``on_startup``
+hook raises it to declare its failure fatal, the startup stops there and
+uvicorn receives ``lifespan.startup.failed``, so the server exits instead
+of running without what the hook was there to build.
 
 **The server's lifecycle states live here** — the lifespan is the lifecycle.
 ``RUNNING`` takes new requests in charge; anything else refuses them with 503.
@@ -61,7 +65,25 @@ STOPPING = "stopping"
 #: log and served by nobody: the worker-level cut answers those calls.
 SHUTDOWN_DRAIN_TIMEOUT_SECONDS = 10.0
 
-__all__ = ["QUITTING", "RUNNING", "SHUTDOWN_DRAIN_TIMEOUT_SECONDS", "STOPPING", "Lifespan"]
+__all__ = [
+    "QUITTING",
+    "RUNNING",
+    "SHUTDOWN_DRAIN_TIMEOUT_SECONDS",
+    "STOPPING",
+    "FatalBootError",
+    "Lifespan",
+]
+
+
+class FatalBootError(Exception):
+    """Raised by an ``on_startup`` hook to declare its failure fatal to the server.
+
+    The one exception ``_run_hook`` does not swallow on startup: the startup
+    stops at the app that raised it and ``Lifespan.__call__`` answers
+    ``lifespan.startup.failed`` (message = the exception text) instead of
+    ``.complete``, so uvicorn exits. On shutdown it gets the ordinary
+    logged-and-continue isolation: nothing may abort the shutdown sequence.
+    """
 
 
 class Lifespan:
@@ -72,11 +94,19 @@ class Lifespan:
         self._logger = logging.getLogger(__name__)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:  # noqa: ARG002
-        """Drive the ASGI lifespan protocol: startup then shutdown, both acked."""
+        """Drive the ASGI lifespan protocol: startup then shutdown, both acked.
+
+        A ``FatalBootError`` out of the startup is the one unacked road: the
+        answer is ``lifespan.startup.failed`` and the protocol ends there.
+        """
         while True:
             message = await receive()
             if message["type"] == "lifespan.startup":
-                await self.startup()
+                try:
+                    await self.startup()
+                except FatalBootError as fatal:
+                    await send({"type": "lifespan.startup.failed", "message": str(fatal)})
+                    return
                 await send({"type": "lifespan.startup.complete"})
             elif message["type"] == "lifespan.shutdown":
                 await self.shutdown()
@@ -84,7 +114,7 @@ class Lifespan:
                 return
 
     async def startup(self) -> None:
-        """Run ``on_startup`` in registration order."""
+        """Run ``on_startup`` in registration order; ``FatalBootError`` stops it."""
         for app in self._apps():
             await self._run_hook(app, "on_startup")
 
@@ -115,12 +145,21 @@ class Lifespan:
         return list(self.server.applications.values())
 
     async def _run_hook(self, app: BaseApplication, name: str) -> None:
-        """Call ``app``'s hook; a raise is logged, the sequence continues."""
+        """Call ``app``'s hook; a raise is logged, the sequence continues.
+
+        ``FatalBootError`` from ``on_startup`` propagates instead — the hook
+        declared the server must not start. From ``on_shutdown`` it is an
+        ordinary error: nothing may abort the shutdown sequence.
+        """
         handler = getattr(app, name)
         try:
             if inspect.iscoroutinefunction(handler):
                 await handler()
             else:
                 handler()
+        except FatalBootError:
+            if name == "on_startup":
+                raise
+            self._logger.exception("%s.%s raised", type(app).__name__, name)
         except Exception:
             self._logger.exception("%s.%s raised", type(app).__name__, name)

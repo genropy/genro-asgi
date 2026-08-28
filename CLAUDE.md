@@ -160,6 +160,32 @@ nobody pre-warmed — the lazy wake is the only road back), then
 identity, no re-login. Decision record:
 `temp/decisioni_registri_cancello_2026-08-25.md`.
 
+**The orchestration profile applied (landed 2026-08-28).** A stored profile
+reaches the live pool. `SpaApplication` takes `profiles_path`, `profile_name`,
+`orchestration_control` on its `application` element plus `env_settings` (a
+runtime dict, no grammar word), and at boot `boot_group_settings` composes
+`defaults ⊕ recipe_settings ⊕ profile ⊕ env_settings` through
+`GroupPolicy.from_settings` — the frozen dataclass in
+`spa/orchestration/group_policy.py` that holds the 14 setpoints, IS the
+validation and collects every violation — BEFORE the vertex is built; the recipe
+and env levels stay separate dicts, so every later apply recomposes from them.
+A missing or invalid profile raises `FatalBootError` (`lifespan.py`): the one
+exception `_run_hook` lets through on startup, which answers
+`lifespan.startup.failed` and exits the server. No silent fallback. Hot apply is
+`SpaCommander.apply_group_settings` under `_configuration_lock` for the whole
+apply: stage 1 fallible and mutation-free (read, compose, diff, sha256 digest,
+CPU reconciliation list, payload), stage 2 a plain `def` of guaranteed
+assignments — `GroupHandler.apply_policy`, `active_profile`,
+`configuration_generation` (+1 even when idempotent), `last_apply` — stage 3 best
+effort (the `apply_group_settings` and `cpu_policy_reconciled` audit lines,
+`ping_now()`). Storage is shared with the `_sysop` archive through `OrchestrationProfileStore`
+(`profile_store.py`). Routes, mounted under `_orchestration` only when the gate
+is on: `POST apply` (the body is the profile level, active profile becomes
+null), `POST reload` (`{"name": ...}` or the active one), `GET status`
+(read-only, no lock). Exactly ONE group per named profile — a boot failure or a
+409 (`SingleGroupRequired`) otherwise. Details:
+`internals/10_server/020_applications/configuration_profiles/README.md`.
+
 **Not yet built (second pass).** The deliberate reboot command on `_server`
 (`reboot now`/`reboot wait N`, notify_user, the consumer service-message
 lane); the single-group reboot (needs no photo — the commander survives) and
@@ -174,4 +200,4 @@ commits, still to be entered in the register). Decision registers:
 
 **All general policies are inherited from the parent document: [meta-genro-modules CLAUDE.md](https://github.com/softwellsrl/meta-genro-modules/blob/main/CLAUDE.md)**
 
-**Last Updated**: 2026-08-25
+**Last Updated**: 2026-08-28

@@ -85,6 +85,31 @@ between the two is the pool's normal state. A worker younger than
 when the survivors lack room BY HEADS for the spare's placed users. The next
 round re-reads: a decision is never carried over.
 
+**The early CPU growth (#43, experimental, off by default).** With
+``cpu_grow_percent`` set, a worker whose smoothed ``cpu_percent`` crosses above
+it does TWO things: it asks the round for one worker AHEAD of the demand — the
+fork is cheap, and waiting for the admission ceiling proved 70 seconds late on
+the bench — and it is CLOSED to new users (``cpu_admission_open``), so the
+capacity just created is what fullest-first finds. It reopens only below
+``cpu_grow_rearm_percent``; between the two thresholds it keeps its state —
+the band is hysteresis. One latch per worker (re-armed below the same rearm
+threshold), one spawn per round, under the placement lock. The Hetzner bench
+of 2026-08-28 proved the one-shot preference this policy first shipped with a
+fixed point at two workers: the newborn took ONE user, fullest-first then
+walked every arrival back to the worker already over the threshold, whose
+latch was spent — so nobody could father the third. The admission closure
+replaces that preference: the newborn takes the new users because it is the
+candidate left open, for as long as the trigger worker stays hot, and when the
+newborn crosses the threshold itself it fathers the next one — the policy
+scales one crossing at a time. The composite occupancy takes no part in this
+trigger, the memory protections keep their own judges, and sticky users are
+never moved. When no open worker admits the newcomer and the growth is
+refused, a closed worker still under the hard ``occupancy_max_percent`` takes
+him as a LOGGED fallback — the soft closure protects the pool's shape, never
+at the price of a premature 503. The crossing is judged within a beat, not at
+the shape's own cadence: the envelope layer rings ``ping_now`` when a fresh
+photo crosses a threshold, and the wake anticipates the group's round.
+
 **The closure is the departure of a whole worker, in six steps.** The group
 orders the quit; the worker answers AT ONCE with the photo of everybody flagged
 for the freezer, so the vertex parks them; it then drains, freezing one user at a
@@ -143,6 +168,7 @@ from collections import Counter
 from typing import Any
 
 from .envelope_handler import GroupEnvelopeHandler
+from .group_policy import GroupPolicy
 from .exceptions import AssignmentRefused
 from .beats import every
 from .template_connector import TemplateConnector
@@ -198,6 +224,14 @@ class GroupHandler:
             below ``occupancy_max_percent``, so the band between the two is the
             pool's normal state and never a condition to correct. One threshold
             for both made every growth the evidence for its own reversal (#36).
+        cpu_grow_percent: the early-provision threshold (#43, experimental): a
+            worker whose smoothed ``cpu_percent`` crosses above it asks for one
+            worker AHEAD of the demand — the fork is cheap, waiting for the
+            admission ceiling proved 70 seconds late. None, the default, leaves
+            the policy off and the pool exactly as it was.
+        cpu_grow_rearm_percent: below this the worker's crossing is loaded
+            again. The band between the two is hysteresis: a worker sitting
+            above the threshold fires ONCE, not once per photo.
         worker_min_life_seconds: a worker is no closure candidate before this
             age — younger, its occupancy measures its own birth, not its work.
         reception_reserved_percent: what the reception keeps free for the trade
@@ -234,6 +268,8 @@ class GroupHandler:
         occupancy_max_percent: float = 80.0,
         restart_occupancy_max_percent: float = 95.0,
         close_occupancy_max_percent: float = 40.0,
+        cpu_grow_percent: float | None = None,
+        cpu_grow_rearm_percent: float = 40.0,
         worker_min_life_seconds: float = 60.0,
         reception_reserved_percent: float = 50.0,
         new_user_occupancy_percent: float = 5.0,
@@ -248,25 +284,40 @@ class GroupHandler:
         engine_kwargs: dict[str, Any] | None = None,
         **worker_settings: Any,
     ) -> None:
+        if cpu_grow_percent is not None and not (
+            0.0 <= cpu_grow_rearm_percent < cpu_grow_percent <= 100.0
+        ):
+            raise ValueError(
+                f"Group {name}: cpu_grow_rearm_percent ({cpu_grow_rearm_percent}) must sit "
+                f"below cpu_grow_percent ({cpu_grow_percent}), both inside 0-100 — the band "
+                "between them is the hysteresis; without it a steady worker respawns forever"
+            )
         self.spa_commander = spa_commander
         self.name = name
-        self.occupancy_max_percent = occupancy_max_percent
-        self.restart_occupancy_max_percent = restart_occupancy_max_percent
-        self.close_occupancy_max_percent = close_occupancy_max_percent
-        self.worker_min_life_seconds = worker_min_life_seconds
-        self.reception_reserved_percent = reception_reserved_percent
-        self.new_user_occupancy_percent = new_user_occupancy_percent
-        self.newcomer_reserve_count = newcomer_reserve_count
-        self.worker_max_users = worker_max_users
-        self.user_idle_freeze_minutes = user_idle_freeze_minutes
-        self.memory_concession_bytes = memory_concession_bytes
-        self.memory_max_percent = memory_max_percent
-        self.worker_max_number = worker_max_number
-        self.worker_memory_max_percent = (
-            100.0 / worker_max_number
-            if worker_memory_max_percent is None
-            else worker_memory_max_percent
+        #: Every setpoint of this group, validated together and read through the
+        #: properties below. ``inf`` is how the constructor spells "unlimited"
+        #: and ``null`` is how a profile spells it, so the two translate here.
+        self.policy = GroupPolicy.from_settings(
+            {
+                "occupancy_max_percent": occupancy_max_percent,
+                "restart_occupancy_max_percent": restart_occupancy_max_percent,
+                "close_occupancy_max_percent": close_occupancy_max_percent,
+                "cpu_grow_percent": cpu_grow_percent,
+                "cpu_grow_rearm_percent": cpu_grow_rearm_percent,
+                "worker_min_life_seconds": worker_min_life_seconds,
+                "reception_reserved_percent": reception_reserved_percent,
+                "new_user_occupancy_percent": new_user_occupancy_percent,
+                "newcomer_reserve_count": newcomer_reserve_count,
+                "worker_max_users": None if worker_max_users == math.inf else worker_max_users,
+                "user_idle_freeze_minutes": (
+                    None if user_idle_freeze_minutes == math.inf else user_idle_freeze_minutes
+                ),
+                "memory_max_percent": memory_max_percent,
+                "worker_max_number": worker_max_number,
+                "worker_memory_max_percent": worker_memory_max_percent,
+            }
         )
+        self.memory_concession_bytes = memory_concession_bytes
         self.worker_settings = worker_settings
         #: This group's template, when a factory was declared for it: the process
         #: its workers are forked from. None means its workers are spawned instead.
@@ -300,6 +351,107 @@ class GroupHandler:
         self.beat_counts: dict[str, dict[str, Any]] = {}
         self._closing_wires: set[asyncio.Task[None]] = set()
         spa_commander.group_map[name] = self
+
+    # The setpoints are read through here and stored nowhere else: the names
+    # are the ones every decision and every reader has always used, and after
+    # a swap they answer the new policy at once.
+    @property
+    def occupancy_max_percent(self) -> float:
+        return self.policy.occupancy_max_percent
+
+    @property
+    def restart_occupancy_max_percent(self) -> float:
+        return self.policy.restart_occupancy_max_percent
+
+    @property
+    def close_occupancy_max_percent(self) -> float:
+        return self.policy.close_occupancy_max_percent
+
+    @property
+    def cpu_grow_percent(self) -> float | None:
+        return self.policy.cpu_grow_percent
+
+    @property
+    def cpu_grow_rearm_percent(self) -> float:
+        return self.policy.cpu_grow_rearm_percent
+
+    @property
+    def worker_min_life_seconds(self) -> float:
+        return self.policy.worker_min_life_seconds
+
+    @property
+    def reception_reserved_percent(self) -> float:
+        return self.policy.reception_reserved_percent
+
+    @property
+    def new_user_occupancy_percent(self) -> float:
+        return self.policy.new_user_occupancy_percent
+
+    @property
+    def newcomer_reserve_count(self) -> int:
+        return self.policy.newcomer_reserve_count
+
+    @property
+    def worker_max_users(self) -> float:
+        return self.policy.worker_max_users
+
+    @property
+    def user_idle_freeze_minutes(self) -> float:
+        return self.policy.user_idle_freeze_minutes
+
+    @property
+    def memory_max_percent(self) -> float:
+        return self.policy.memory_max_percent
+
+    @property
+    def worker_max_number(self) -> int:
+        return self.policy.worker_max_number
+
+    @property
+    def worker_memory_max_percent(self) -> float:
+        return self.policy.worker_memory_max_percent
+    def apply_policy(
+        self, new_policy: GroupPolicy, reconciliation: list[tuple[str, bool]]
+    ) -> None:
+        """Take the new setpoints and settle the CPU admission of the listed workers.
+
+        Args:
+            new_policy: the complete policy that governs this group from now on.
+            reconciliation: one ``(worker name, cpu_admission_open)`` pair per
+                worker the caller judged against the NEW thresholds.
+
+        Guaranteed assignments only: no await, no order on a wire, no birth and
+        no log line — everything fallible was done before this is called, so the
+        swap cannot half-happen. Every listed worker is re-armed for the CPU
+        growth, the band its latch was spent against being gone.
+        """
+        self.policy = new_policy
+        for name, admission_open in reconciliation:
+            worker_handler = self.worker_handler_map[name]
+            worker_handler.cpu_admission_open = admission_open
+            worker_handler.cpu_growth_armed = True
+
+    def _policy_held(
+        self, policy: GroupPolicy, order: str, subject: str | None = None
+    ) -> bool:
+        """Whether the policy a decision stood on is still this group's.
+
+        Args:
+            policy: the snapshot the decision bound at its top.
+            order: the order about to be given, for the log.
+            subject: on whom it was to be given, for the log.
+
+        Returns:
+            True when the effect may go ahead. False when the policy was swapped
+            while the decision was waiting — the effect is suppressed and the
+            suppression logged, and the swap's own round judges the group again.
+        """
+        if self.policy is policy:
+            return True
+        self.spa_commander.log_order(
+            self.name, order, subject, outcome="suppressed: policy changed while deciding"
+        )
+        return False
 
     @property
     def living_workers(self) -> list[WorkerHandler]:
@@ -430,6 +582,14 @@ class GroupHandler:
         a moment under a template — and places him on it. The request is never
         parked and never sent away to come back: it waits right here.
 
+        Three levels, each tried only when the one before surrendered. First
+        the CPU-open workers, fullest-first (``_placement_candidate``). Then
+        the birth. LAST, when the growth was refused or failed, a CPU-closed
+        worker still under its hard cap takes him (``_fallback_candidate``) —
+        the soft closure shapes the pool, it must never cost a 503 the hard
+        limit would not have cost; the fallback is logged, never silent, and
+        never reached while an open worker or a birth can serve.
+
         One placement at a time per group, under ``_placement_lock``: sixteen
         simultaneous arrivals must not father sixteen workers when one is
         enough. Whoever waited recomputes and finds the newborn.
@@ -437,15 +597,18 @@ class GroupHandler:
         Acts on ``user_worker_map`` and, in the same breath, on the row at the
         vertex that says which group he is on.
         """
+        policy = self.policy
         async with self._placement_lock:
             worker_handler = self._placement_candidate(user)
-            if worker_handler is None and self._may_grow:
+            if worker_handler is None and self._may_grow and self._policy_held(policy, "grow", user):
                 worker_handler = await self.start_worker()
                 if worker_handler is not None:
                     try:
                         worker_handler.assign_user(user, self._expected_occupancy(user))
                     except AssignmentRefused:
                         worker_handler = None
+            if worker_handler is None:
+                worker_handler = self._fallback_candidate(user)
             if worker_handler is None:
                 # The surrender still rings the wake: the next round is what
                 # writes ``saturated`` where the front can read it.
@@ -456,16 +619,25 @@ class GroupHandler:
             return worker_handler.name
 
     def _placement_candidate(self, user: str) -> WorkerHandler | None:
-        """The fullest living worker that admits *user* right now, or None.
+        """The fullest CPU-open living worker that admits *user* right now, or None.
 
         The choice is a CALCULATION of the group (owner, 2026-08-25) — the
         numbers are all here: the photos, the caps, the counts. Each worker's
         own judgment (``WorkerHandler.assign_user``) stays the single gate a
-        placement passes, so choosing and admitting cannot drift apart.
+        placement passes, so choosing and admitting cannot drift apart. A
+        worker the CPU judge closed (``cpu_admission_open`` False) is not in
+        the running: fullest-first is applied AMONG THE OPEN ONLY — walking a
+        new user back onto the worker whose crossing just fathered capacity is
+        the fixed point the bench measured. With the policy off nobody is ever
+        closed, and this is fullest-first over everybody, as it always was.
         """
         occupancy_percent = self._expected_occupancy(user)
         candidates = sorted(
-            self.living_workers,
+            (
+                worker_handler
+                for worker_handler in self.living_workers
+                if worker_handler.cpu_admission_open
+            ),
             key=lambda worker_handler: -self.get_occupancy_percent(worker_handler.worker_snapshot),
         )
         for worker_handler in candidates:
@@ -474,6 +646,50 @@ class GroupHandler:
             except AssignmentRefused as refusal:
                 self._logger.debug("Group %s: %s", self.name, refusal)
                 continue
+            return worker_handler
+        return None
+
+    def _fallback_candidate(self, user: str) -> WorkerHandler | None:
+        """The fullest CPU-closed worker that still admits *user* under its hard cap.
+
+        Args:
+            user: the newcomer nobody else could take.
+
+        Returns:
+            The worker that takes him, or None — the true surrender.
+
+        The last level of the placement, reached only when no open worker
+        admits him AND the growth was refused or failed: the soft closure is a
+        shaping policy, and shaping must never turn into a 503 the hard
+        ``occupancy_max_percent`` — which ``assign_user`` still enforces here —
+        would not have given. Every fallback placement is logged as its own
+        order: capacity served over the soft limit is a fact the bench must see.
+        """
+        occupancy_percent = self._expected_occupancy(user)
+        candidates = sorted(
+            (
+                worker_handler
+                for worker_handler in self.living_workers
+                if not worker_handler.cpu_admission_open
+            ),
+            key=lambda worker_handler: -self.get_occupancy_percent(worker_handler.worker_snapshot),
+        )
+        for worker_handler in candidates:
+            try:
+                worker_handler.assign_user(user, occupancy_percent)
+            except AssignmentRefused as refusal:
+                self._logger.debug("Group %s: %s", self.name, refusal)
+                continue
+            self.spa_commander.log_order(
+                self.name,
+                "placement_fallback",
+                worker_handler.name,
+                numbers={
+                    "cpu_percent": (worker_handler.worker_snapshot or {}).get("cpu_percent"),
+                    "workers": len(self.living_workers),
+                },
+                outcome=f"{user} placed over the soft limit: no open worker, no growth",
+            )
             return worker_handler
         return None
 
@@ -546,25 +762,30 @@ class GroupHandler:
     async def check_occupancy(self) -> None:
         """Read the group once and take the ONE step that reading calls for.
 
-        Acts on the group: restart past the restart setpoint, growth when nobody
-        has room left, closure of a worker the others can absorb — and ``state``
-        when the memory quota refuses the growth.
+        Acts on the group: restart past the restart setpoint, the early CPU
+        growth when a crossing asks for it (#43), growth when nobody has room
+        left, closure of a worker the others can absorb — and ``state`` when
+        the memory quota refuses the growth.
         """
+        policy = self.policy
         picture = {
             worker_handler.name: self.get_occupancy_percent(worker_handler.worker_snapshot)
             for worker_handler in self.living_workers
         }
         for name, occupancy_percent in picture.items():
-            if occupancy_percent > self.restart_occupancy_max_percent:
-                await self.restart_worker(self.worker_handler_map[name])
+            if occupancy_percent > policy.restart_occupancy_max_percent:
+                if self._policy_held(policy, "restart_worker", name):
+                    await self.restart_worker(self.worker_handler_map[name])
                 return
+        if await self._grow_on_cpu():
+            return
         if not self._has_room(picture):
-            await self._grow(picture)
+            await self._grow()
             return
         if self.state == "saturated":
             self.state = "running"
-        spare = self._spare_worker(picture)
-        if spare is not None:
+        spare = self._spare_worker(picture, policy)
+        if spare is not None and self._policy_held(policy, "close_worker", spare.name):
             await self._order_quit(spare, "close_worker")
 
     @every(CHECK_USER_ACTIVITY_BEATS)
@@ -597,8 +818,9 @@ class GroupHandler:
         and only a user this group still places on that worker is judged, so a
         photo that has not yet caught up with a departure names nobody.
         """
+        policy = self.policy
         now = time.time()
-        idle_limit = self.user_idle_freeze_minutes * SECONDS_PER_MINUTE
+        idle_limit = policy.user_idle_freeze_minutes * SECONDS_PER_MINUTE
         for worker_handler in self.living_workers:
             photo = worker_handler.worker_snapshot or {}
             for user, row in photo.get("users", {}).items():
@@ -609,6 +831,8 @@ class GroupHandler:
                     continue
                 idle = now - max(item["last_user_ts"], item["last_rpc_ts"])
                 if idle > self.spa_commander.get_user_expiry_seconds(user):
+                    if not self._policy_held(policy, "drop_user", user):
+                        continue
                     self.spa_commander.hold_user(user, f"expiry on {worker_handler.name}")
                     refusal: str | None = "CancelledError"
                     try:
@@ -626,7 +850,7 @@ class GroupHandler:
                         self.spa_commander.log_order(
                             self.name, "drop_user", user, outcome=refusal or "expired"
                         )
-                elif idle > idle_limit:
+                elif idle > idle_limit and self._policy_held(policy, "freeze_hosted_user", user):
                     await self.freeze_hosted_user(user)
 
     async def start_worker(self) -> WorkerHandler | None:
@@ -703,6 +927,8 @@ class GroupHandler:
 
         Acts on ``worker_handler_map`` and ``user_worker_map``; the socket is
         taken away detached, since whoever calls this is the fold and cannot wait.
+        The CPU admission and the growth latch live ON the handler, so they die
+        with it here — no per-name state survives a dropped worker.
         """
         worker_handler = self.worker_handler_map.pop(name)
         closing = asyncio.get_running_loop().create_task(worker_handler.connector.stop())
@@ -740,7 +966,9 @@ class GroupHandler:
             placeable += max(0, int(room / self.new_user_occupancy_percent))
         return placeable
 
-    def _spare_worker(self, picture: dict[str, float]) -> WorkerHandler | None:
+    def _spare_worker(
+        self, picture: dict[str, float], policy: GroupPolicy
+    ) -> WorkerHandler | None:
         """The emptiest worker whose closure leaves the pool cool; None when there is none.
 
         The remaining workers are read as if they shared what this one holds,
@@ -759,7 +987,7 @@ class GroupHandler:
             for worker_handler in self.living_workers
             if worker_handler is not self.reception
             and worker_handler.state != "quitting"
-            and worker_handler.life_seconds >= self.worker_min_life_seconds
+            and worker_handler.life_seconds >= policy.worker_min_life_seconds
         ]
         if not candidates:
             return None
@@ -773,33 +1001,193 @@ class GroupHandler:
             return None
         shared = picture[spare.name] / len(remaining)
         after = {name: pct + shared for name, pct in remaining.items()}
-        if max(after.values()) > self.close_occupancy_max_percent:
+        if max(after.values()) > policy.close_occupancy_max_percent:
             return None
-        if self._placeable_newcomers(after) < self.newcomer_reserve_count:
+        if self._placeable_newcomers(after) < policy.newcomer_reserve_count:
             return None
         placed = Counter(self.user_worker_map.values())
-        head_room = sum(max(0, self.worker_max_users - placed[name]) for name in remaining)
+        head_room = sum(max(0, policy.worker_max_users - placed[name]) for name in remaining)
         if head_room < placed[spare.name]:
             return None
         return spare
 
-    async def _grow(self, picture: dict[str, float]) -> None:
-        """Bring a worker into being if the memory affords it; the saturation when it does not."""
-        occupied_percent = self.memory_occupied_percent
-        if self.spa_commander.state == "running" and occupied_percent <= self.memory_max_percent:
-            await self.start_worker()
-            return
-        self.state = "saturated"
-        self.spa_commander.log_order(
-            self.name,
-            "grow",
-            numbers={
-                "memory_occupied_percent": occupied_percent,
-                "memory_max_percent": self.memory_max_percent,
-                "workers": len(picture),
+    async def _grow_on_cpu(self) -> bool:
+        """The early-provision judge (#43, experimental): one CPU crossing, one worker.
+
+        Returns:
+            True when a worker was brought into being — the round's ONE step.
+
+        Off unless ``cpu_grow_percent`` is set. Reads the smoothed
+        ``cpu_percent`` off each photo — never the composite occupancy: its
+        memory component must not father CPU workers, and the memory
+        protections keep their own judges. The same reading drives the SOFT
+        ADMISSION: a worker above the threshold is closed to new users
+        (``cpu_admission_open``), one below the rearm threshold is reopened,
+        and between the two it keeps its state — so the pass that decides the
+        growth is the one pass that writes who the placement may still choose.
+        Each worker carries a latch besides: an armed worker above the
+        threshold fires, and is loaded again only below
+        ``cpu_grow_rearm_percent`` — a worker sitting above the threshold asks
+        ONCE, not once per photo, and stays closed while it sits there. A
+        crossing the group cannot honour stays armed and is judged again next
+        round, its suppression logged with its reason.
+
+        The spawn runs under the placement lock, so the snapshot road and the
+        placement road cannot fork twice for one event; a worker that appeared
+        while waiting for the lock IS the answer, and the latch stays armed.
+        The newborn needs no preference: born open while its father is closed,
+        it is what fullest-first finds — and when it crosses the threshold
+        itself, its own latch fathers the next one. The latch is consumed only
+        by the growth that actually happened.
+        """
+        policy = self.policy
+        if policy.cpu_grow_percent is None:
+            return False
+        worker_count = len(self.worker_handler_map)
+        trigger: tuple[WorkerHandler, float] | None = None
+        for worker_handler in self.living_workers:
+            cpu_percent = (worker_handler.worker_snapshot or {}).get("cpu_percent")
+            if cpu_percent is None:
+                continue
+            if cpu_percent > policy.cpu_grow_percent:
+                if worker_handler.cpu_admission_open:
+                    worker_handler.cpu_admission_open = False
+                    self.spa_commander.log_order(
+                        self.name,
+                        "cpu_admission",
+                        worker_handler.name,
+                        numbers={"cpu_percent": cpu_percent},
+                        outcome="blocked: over the growth threshold",
+                    )
+                if worker_handler.cpu_growth_armed and trigger is None:
+                    trigger = (worker_handler, cpu_percent)
+            elif cpu_percent < policy.cpu_grow_rearm_percent:
+                if not worker_handler.cpu_admission_open:
+                    worker_handler.cpu_admission_open = True
+                    self.spa_commander.log_order(
+                        self.name,
+                        "cpu_admission",
+                        worker_handler.name,
+                        numbers={"cpu_percent": cpu_percent},
+                        outcome="reopened: below the rearm threshold",
+                    )
+                worker_handler.cpu_growth_armed = True
+        if trigger is None:
+            return False
+        worker_handler, cpu_percent = trigger
+        numbers = {
+            "cpu_percent": cpu_percent,
+            "cpu_grow_percent": policy.cpu_grow_percent,
+            "worker_cpu": {
+                name: (handler.worker_snapshot or {}).get("cpu_percent")
+                for name, handler in self.worker_handler_map.items()
             },
-            outcome="saturated",
-        )
+            "workers": len(self.living_workers),
+        }
+        refusal = self._cpu_grow_refusal(worker_handler)
+        if refusal is not None:
+            self.spa_commander.log_order(
+                self.name, "cpu_grow", worker_handler.name, numbers=numbers, outcome=refusal
+            )
+            return False
+        async with self._placement_lock:
+            # The wait may have changed everything the decision stood on:
+            # the same questions again, on what is there NOW.
+            refusal = self._cpu_grow_refusal(worker_handler)
+            if refusal is None and len(self.worker_handler_map) != worker_count:
+                refusal = "suppressed: capacity arrived while waiting for the lock"
+            if refusal is not None:
+                self.spa_commander.log_order(
+                    self.name, "cpu_grow", worker_handler.name, numbers=numbers, outcome=refusal
+                )
+                return False
+            if not self._policy_held(policy, "cpu_grow", worker_handler.name):
+                return False
+            spawn_started = time.monotonic()
+            newborn = await self.start_worker()
+            if newborn is None:
+                return False
+            worker_handler.cpu_growth_armed = False
+            numbers["spawn_seconds"] = round(time.monotonic() - spawn_started, 3)
+            self.spa_commander.log_order(
+                self.name,
+                "cpu_grow",
+                worker_handler.name,
+                numbers=numbers,
+                outcome=f"grown {newborn.name}",
+            )
+        return True
+
+    def _cpu_grow_refusal(self, worker_handler: WorkerHandler) -> str | None:
+        """Why a CPU growth may not happen right now; None when it may.
+
+        Args:
+            worker_handler: the worker whose crossing asks for the growth.
+
+        Returns:
+            The suppression reason, ready for the log, or None. NOTHING here
+            consumes the latch: a suppressed crossing is judged again at the
+            next round.
+
+        Asked twice per growth — before waiting for the placement lock, and
+        again after acquiring it, because the wait may have changed every fact
+        the decision stood on.
+        """
+        if not self._may_grow:
+            return "suppressed: the quota or the server state refuses the growth"
+        if (
+            self.worker_handler_map.get(worker_handler.name) is not worker_handler
+            or worker_handler.state != "running"
+        ):
+            return "suppressed: the trigger worker is gone"
+        if not worker_handler.cpu_growth_armed:
+            return "suppressed: capacity arrived while waiting for the lock"
+        return None
+
+    async def _grow(self) -> None:
+        """Bring a worker into being if the memory affords it; the saturation when it does not.
+
+        Under the placement lock, like every other road to a birth: the caller
+        decided on a picture that is stale by the time the lock is held, so the
+        room is read AGAIN on what is there now — a worker the placement
+        fathered in the meantime IS the capacity that was missing, and growing
+        on the old picture would fork twice for one need.
+        """
+        policy = self.policy
+        async with self._placement_lock:
+            picture = {
+                worker_handler.name: self.get_occupancy_percent(worker_handler.worker_snapshot)
+                for worker_handler in self.living_workers
+            }
+            if self._has_room(picture):
+                self.spa_commander.log_order(
+                    self.name,
+                    "grow",
+                    numbers={"workers": len(picture)},
+                    outcome="suppressed: another road already created the capacity",
+                )
+                return
+            occupied_percent = self.memory_occupied_percent
+            if (
+                self.spa_commander.state == "running"
+                and occupied_percent <= policy.memory_max_percent
+            ):
+                if self._policy_held(policy, "grow"):
+                    await self.start_worker()
+                return
+            if not self._policy_held(policy, "grow"):
+                return
+            self.state = "saturated"
+            self.spa_commander.log_order(
+                self.name,
+                "grow",
+                numbers={
+                    "memory_occupied_percent": occupied_percent,
+                    "memory_max_percent": policy.memory_max_percent,
+                    "workers": len(picture),
+                },
+                outcome="saturated",
+            )
 
     async def quit_all(self, freezer_path: str) -> None:
         """Block the users of every process of this group, then tell each one to leave.

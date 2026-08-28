@@ -1,0 +1,3 @@
+✓ Phase 7 completed: Grammar — the profile words on the spa application element
+
+Baseline was green (1627 passed, ruff clean); after the phase 1629 passed, ruff clean, both contract skeletons implemented. No grammar element was added and none could be: in builders the attributes of a subbuilder envelope belong to the host grammar, and the site dialect's `application` element is already open, so the three words reach the `SpaApplication` kwargs as written — the phase delivered the declaration a recipe author reads (SpaApplicationGrammar docstring plus example) and the contract tests. The placement decision carries a `Verify: now` note for the owner.

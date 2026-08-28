@@ -360,6 +360,8 @@ class ConfigurationHandler(ConfigHandler):
                 "occupancy_max_percent",
                 "restart_occupancy_max_percent",
                 "close_occupancy_max_percent",
+                "cpu_grow_percent",
+                "cpu_grow_rearm_percent",
                 "worker_min_life_seconds",
                 "reception_reserved_percent",
                 "new_user_occupancy_percent",

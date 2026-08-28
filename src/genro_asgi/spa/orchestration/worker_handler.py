@@ -247,6 +247,23 @@ class WorkerHandler:
         #: memory, load, counts, per-connection clocks. Filed by this handler's
         #: own layer of the chain.
         self.worker_snapshot: dict[str, Any] | None = None
+        #: The latch of the early CPU growth (#43): armed, a ``cpu_percent``
+        #: crossing above the group's threshold may fire once; the group
+        #: re-arms it below the rearm threshold. State only — the judge is
+        #: ``GroupHandler._grow_on_cpu``, this handler decides nothing with it.
+        self.cpu_growth_armed = True
+        #: The soft CPU admission (#43): True, this worker is a candidate for
+        #: NEW users. The group's judge writes False when the smoothed
+        #: ``cpu_percent`` crosses above ``cpu_grow_percent`` — the placement
+        #: then skips this worker — and True again below
+        #: ``cpu_grow_rearm_percent``. Deliberately distinct from the latch:
+        #: the latch says whether this worker may still FATHER a growth, the
+        #: admission says whether it still TAKES newcomers — over the
+        #: threshold it stays closed even after its one growth is spent.
+        #: Sticky users are untouched, the hard ``occupancy_max_percent``
+        #: gate in ``assign_user`` stands apart, and the state dies with the
+        #: handler. State only — this handler decides nothing with it.
+        self.cpu_admission_open = True
         self.envelope_handler = WorkerEnvelopeHandler(self, group_handler.envelope_handler)
         self.connector = WorkerConnector(self, self.instance_dir / f"{name}.sock")
         self._logger = logging.getLogger(__name__)
@@ -316,10 +333,11 @@ class WorkerHandler:
             raise WorkerQuittingError(user, f"{self.name} is {self.state}")
         if self.state != "running":
             raise AssignmentRefused(user, f"{self.name} is {self.state}")
+        policy = self.group_handler.policy
         placed = sum(
             1 for worker in self.group_handler.user_worker_map.values() if worker == self.name
         )
-        if placed >= self.group_handler.worker_max_users:
+        if placed >= policy.worker_max_users:
             raise NoRoomError(user, f"{self.name} already hosts {placed} placed user(s)")
         projected = (
             self.group_handler.get_occupancy_percent(self.worker_snapshot) + occupancy_percent

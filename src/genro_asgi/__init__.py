@@ -18,6 +18,8 @@ from importlib.metadata import version as _distribution_version
 
 from .application import ApplicationGrammar, BaseApplication
 from .applications import (
+    ConfigurationProfiles,
+    ConfigurationProfilesApplication,
     McpApplication,
     McpOpenApiApplication,
     OpenApiApplication,
@@ -96,6 +98,8 @@ __all__ = [
     "CommunicationMixin",
     "ConfigError",
     "ConfigurationHandler",
+    "ConfigurationProfiles",
+    "ConfigurationProfilesApplication",
     "DefaultConfig",
     "FileApiKeyStore",
     "FileUserStore",

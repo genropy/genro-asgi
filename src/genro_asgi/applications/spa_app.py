@@ -48,6 +48,16 @@ the hosted site's own connection id, read off the answer and written back on the
 way out, so the identity the browser holds and the identity the site keeps are
 one and the same.
 
+**The pool is configurable while it runs.** ``profile_name`` names a stored
+profile the boot must find, ``env_settings`` is what the installation fixed by
+environment, and the effective configuration of the one group is composed as
+defaults ⊕ recipe ⊕ profile ⊕ env — the two immutable levels kept apart, so
+every later apply recomposes instead of stacking. A profile governs exactly ONE
+group: with zero or several the boot fails and a hot apply reads 409. With the
+``orchestration_control`` gate on, ``OrchestrationControl`` mounts under
+``_orchestration`` and the three routes reach the vertex's own apply; with the
+gate off that path belongs to the hosted site like any other.
+
 **What comes back out.** The site's own answer, rebuilt from the reply. A refusal
 — nobody could take this user, or he stayed between two homes longer than this
 front is willing to wait — is a polite **503** carrying the ``Retry-After`` the
@@ -67,15 +77,28 @@ from typing import TYPE_CHECKING, Any
 
 from genro_bag import BagResolver
 from genro_builders.builder import element
+from genro_routes import RoutingClass, route
 
 from ..application import ApplicationGrammar
+from ..exceptions import HTTPBadRequest, HTTPException, HTTPNotFound
+from ..lifespan import FatalBootError
 from ..middleware.base import cookie_value
+from ..orchestration_profile_store import (
+    OrchestrationProfileContentError,
+    OrchestrationProfileNameError,
+    OrchestrationProfileNotFoundError,
+    OrchestrationProfileStore,
+)
 from ..response import Response
 from ..routed_application import RoutedApplication
 from ..server import QUITTING, REFUSED_RETRY_AFTER_SECONDS, RUNNING
 from ..spa.orchestration import AssignmentRefused, SiteFailedRequest, SpaCommander
+from ..spa.orchestration.group_policy import GroupPolicy, GroupPolicyError
+from ..spa.orchestration.spa_commander import SingleGroupRequired
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from ..types import Receive, Scope, Send
 
 #: The routing cookie. Its value is the hosted site's OWN connection id, never a
@@ -95,6 +118,11 @@ CONNECTION_COOKIE_MAX_AGE = 24 * 3600
 #: and the polite refusal is the honest answer.
 REQUEST_HOLD_MAX_SECONDS = 5.0
 
+#: The app's own root the runtime configuration answers under. It is claimed
+#: ONLY when the gate is on: a first-level root of this front is a root the
+#: hosted site loses, and a machine nobody reconfigures must not lose it.
+ORCHESTRATION_ROOT = "_orchestration"
+
 #: What the two refusals say out loud. The inside of the house — which user, which
 #: worker, what the site raised — goes to the log and not through the wire.
 ERR_503_TEXT = "server busy"
@@ -109,6 +137,23 @@ class SpaApplicationGrammar(ApplicationGrammar):
     its commander → its groups → their workers. A recipe writes them under
     ``applications.<code>.commander``, which is the subtree this application
     reads back through its own door.
+
+    Three words do NOT hang here but on the APPLICATION element itself —
+    ``applications.<code>``, the envelope the site dialect owns and leaves open
+    for an app's own constructor kwargs: ``profiles_path``, ``profile_name`` and
+    ``orchestration_control``, the front's boot kwargs (below). They are the
+    installation's choice of front, not a policy of the pool, so the recipe
+    writes them where it names the class::
+
+        front = applications.application(app_class=SpaApplication, code="spa",
+                                         mount="",
+                                         profiles_path="/var/spa/profiles",
+                                         profile_name="busy_hours",
+                                         orchestration_control=True)
+
+    ``env_settings`` is no word of any grammar: it is a dict the Python recipe
+    composes at runtime out of the environment it has already read, and it
+    travels as a plain constructor kwarg.
     """
 
     @element(parent_tags="commander", sub_tags="group", collection_key="name")
@@ -132,6 +177,8 @@ class SpaApplicationGrammar(ApplicationGrammar):
         occupancy_max_percent: float | BagResolver = None,
         restart_occupancy_max_percent: float | BagResolver = None,
         close_occupancy_max_percent: float | BagResolver = None,
+        cpu_grow_percent: float | BagResolver = None,
+        cpu_grow_rearm_percent: float | BagResolver = None,
         worker_min_life_seconds: float | BagResolver = None,
         reception_reserved_percent: float | BagResolver = None,
         new_user_occupancy_percent: float | BagResolver = None,
@@ -176,7 +223,11 @@ class SpaApplicationGrammar(ApplicationGrammar):
         expected to cost, and ``newcomer_reserve_count`` how many of that size
         must always find room — the group grows at its own round before anybody
         is refused. ``user_idle_freeze_minutes`` is the silence past which the
-        group parks a user in the freezer.
+        group parks a user in the freezer. ``cpu_grow_percent`` (experimental,
+        off when omitted) turns on the early CPU growth of #43: a worker whose
+        smoothed ``cpu_percent`` crosses above it fathers one worker ahead of
+        the demand, once per crossing — the latch re-arms below
+        ``cpu_grow_rearm_percent`` — and the newborn takes the next new user.
 
         The IDENTITY of the child: ``entry_module`` (what ``python -m`` runs),
         ``executable`` (the interpreter — a group is how two versions of a site
@@ -233,6 +284,65 @@ class SpaApplicationGrammar(ApplicationGrammar):
         """
 
 
+class OrchestrationControl(RoutingClass):
+    """The runtime configuration of one pool: apply, reload, read.
+
+    Mounted under ``_orchestration`` only when the front's gate is on. The three
+    routes carry no logic of their own: they name what the caller asked for and
+    hand it to the front, which owns the translation of the vertex's refusals.
+    """
+
+    def __init__(self, application: SpaApplication) -> None:
+        self.application = application
+
+    @route(openapi_method="post")
+    async def apply(
+        self, body_data: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Put the body in force as the profile level: an inline configuration.
+
+        Args:
+            body_data: the setpoints, written the way a stored profile writes
+                them. Nothing stored stays active afterwards.
+
+        Returns:
+            The payload of the apply, as the vertex composed it.
+        """
+        return await self.application.apply_settings(
+            profile=self.application.body_profile(body_data), source="inline"
+        )
+
+    @route(openapi_method="post")
+    async def reload(
+        self, body_data: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Read a stored profile off the disk again and put it in force.
+
+        Args:
+            body_data: optionally ``{"name": ...}`` — the profile to read, which
+                becomes the active one; without it the active profile is reread.
+
+        Returns:
+            The payload of the apply, as the vertex composed it.
+
+        Raises:
+            HTTPException: 400 — no name was given and no profile is active, so
+                there is nothing to reload.
+        """
+        asked = self.application.body_profile(body_data).get("name")
+        name = asked or self.application.orchestration_commander.active_profile
+        if name is None:
+            raise HTTPBadRequest(
+                "nothing to reload: no name was given and no profile is active"
+            )
+        return await self.application.apply_settings(profile_name=name, source="profile")
+
+    @route()
+    async def status(self) -> dict[str, Any]:
+        """What configuration is in force right now; no lock is taken to answer."""
+        return self.application.settings_status
+
+
 class SpaApplication(RoutedApplication):
     """A single-page-application front backed by the new user-sticky pool."""
 
@@ -243,10 +353,45 @@ class SpaApplication(RoutedApplication):
     #: can grow its own machine, say — and the recipe names the subclass.
     commander_class: type[SpaCommander] = SpaCommander
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        profiles_path: str | Path | None = None,
+        profile_name: str | None = None,
+        env_settings: dict[str, Any] | None = None,
+        orchestration_control: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Build the front; the pool itself is born at startup.
+
+        Args:
+            profiles_path: the folder the stored profiles live in — the same one
+                the archive writes; without it no profile is loadable by name.
+            profile_name: the profile the boot must find and put in force; None
+                leaves no profile level at all, which is the boot of always.
+            env_settings: the setpoints the installation fixed by environment,
+                the strongest level of the overlay.
+            orchestration_control: whether the runtime configuration answers
+                under ``_orchestration``. Off, that path stays the site's.
+        """
         self._commander: SpaCommander | None = None
         self._logger = logging.getLogger(__name__)
+        #: Where the named profiles are read from at boot; the vertex is given
+        #: the same folder and reads them itself from there on.
+        self.profiles_path = profiles_path
+        #: Which profile the boot puts in force, and the front's own answer to
+        #: "what was active" until the first apply moves it.
+        self.profile_name = profile_name
+        #: The environment's own level, kept as its own dict for good: every
+        #: apply recomposes recipe ⊕ profile ⊕ env instead of stacking.
+        self.env_settings = dict(env_settings or {})
+        #: Whether the three configuration routes exist at all.
+        self.orchestration_control = orchestration_control
         super().__init__(**kwargs)
+        if orchestration_control:
+            self.route.add_branches(
+                {"name": ORCHESTRATION_ROOT, "instance": OrchestrationControl(self)}
+            )
 
     @property
     def commander(self) -> SpaCommander:
@@ -295,12 +440,194 @@ class SpaApplication(RoutedApplication):
         start leaves its group broken and the front serves polite refusals until
         the group's own round brings one up: a process that fails to start can be
         a passing thing, and the machine knows how to heal it.
+
+        A named profile or an environment level is composed onto the recipe
+        BEFORE the vertex is built, so the pool is born already effective. What
+        the composition refuses — a profile that is not there, one the schema
+        rejects, a machine with no single group to give the setpoints to — is
+        said once on this module's logger and raised as ``FatalBootError``, the
+        one exception the lifespan does not swallow: the server does not start,
+        because a pool nobody could configure as asked is not the pool that was
+        asked for.
         """
         handler = self.server.config
+        groups = handler.group_kwargs(self.code)
+        try:
+            groups, recipe_settings = self.boot_group_settings(groups)
+        except Exception as refused:
+            failure = (
+                f"Front {self.code}: the pool cannot be configured, "
+                f"the server does not start: {refused}"
+            )
+            self._logger.error(failure)
+            raise FatalBootError(failure) from refused
         self._commander = self.commander_class(
-            **handler.commander_kwargs(self.code), groups=handler.group_kwargs(self.code)
+            **handler.commander_kwargs(self.code),
+            groups=groups,
+            profiles_path=self.profiles_path,
+            recipe_settings=recipe_settings,
+            env_settings=self.env_settings,
+            active_profile=self.profile_name,
         )
         await self.commander.start()
+
+    def boot_group_settings(
+        self, groups: dict[str, dict[str, Any]]
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+        """Compose the one group's effective setpoints, and keep the recipe's apart.
+
+        Args:
+            groups: the groups the recipe wrote, as ``{name: kwargs}`` — only the
+                words it actually wrote, so the library defaults are not there.
+
+        Returns:
+            The same map with that group's setpoints replaced by the effective
+            ones (defaults ⊕ recipe ⊕ profile ⊕ env, materialized by
+            ``GroupPolicy``), and the recipe's own setpoint level on its own —
+            the vertex recomposes every later apply from it. A machine with no
+            single group and nothing to overlay is handed back untouched: it is
+            the composition that has always been legitimate.
+
+        Raises:
+            SingleGroupRequired: there is an overlay to compose and this machine
+                has zero or several groups, so nothing says whose setpoints
+                these are.
+            OrchestrationProfileNotFoundError: the named profile is not there, or no folder
+                was declared to look for it in.
+            OrchestrationProfileNameError, OrchestrationProfileContentError:
+                the file could not be read as a profile.
+            GroupPolicyError: the composed settings are invalid, carrying every
+                violation found.
+        """
+        if len(groups) != 1:
+            if self.profile_name is None and not self.env_settings:
+                return groups, {}
+            raise SingleGroupRequired(
+                f"Front {self.code}: a profile governs exactly one group, this recipe "
+                f"declares {len(groups)} ({sorted(groups)})"
+            )
+        name, group_kwargs = next(iter(groups.items()))
+        recipe_settings = {
+            key: value for key, value in group_kwargs.items() if key in GroupPolicy.SETPOINTS
+        }
+        profile: dict[str, Any] = {}
+        if self.profile_name is not None:
+            if self.profiles_path is None:
+                raise OrchestrationProfileNotFoundError(
+                    f"profile {self.profile_name!r} was named and no profiles folder "
+                    "was declared"
+                )
+            profile = OrchestrationProfileStore(self.profiles_path).read(self.profile_name)
+        policy = GroupPolicy.from_settings({**recipe_settings, **profile, **self.env_settings})
+        structural = {
+            key: value for key, value in group_kwargs.items() if key not in GroupPolicy.SETPOINTS
+        }
+        return {name: {**structural, **policy.to_settings()}}, recipe_settings
+
+    @property
+    def orchestration_commander(self) -> SpaCommander:
+        """The pool, when it is in a state to be reconfigured.
+
+        Raises:
+            HTTPException: 503 — the pool is not built yet, or the server has
+                left RUNNING: a machine on its way out takes no new
+                configuration, and the caller is told to come back.
+        """
+        if self._commander is None or self.server.state != RUNNING:
+            raise HTTPException(
+                503,
+                "the pool is not in a state to be reconfigured",
+                headers=[(b"retry-after", str(REFUSED_RETRY_AFTER_SECONDS).encode())],
+            )
+        return self._commander
+
+    def body_profile(self, body_data: Any) -> dict[str, Any]:
+        """The request body as a JSON object, or the one 400 that leaves no audit.
+
+        Args:
+            body_data: what the request layer hydrated — a dict when the body
+                was a JSON object, the raw text when it could not be parsed.
+
+        Returns:
+            The object, an absent body reading as an empty one.
+
+        Raises:
+            HTTPException: 400 — the body is not a JSON object. It is refused
+                HERE, before the vertex is asked anything, which is what keeps a
+                malformed body out of the orchestration log.
+        """
+        if body_data is None:
+            return {}
+        if not isinstance(body_data, dict):
+            raise HTTPBadRequest("the body of a configuration must be a JSON object")
+        return body_data
+
+    async def apply_settings(
+        self,
+        *,
+        profile: dict[str, Any] | None = None,
+        profile_name: str | None = None,
+        source: str,
+    ) -> dict[str, Any]:
+        """Ask the vertex for a new effective configuration, and answer its refusals.
+
+        Args:
+            profile: the profile level given inline.
+            profile_name: the stored profile to read as that level instead.
+            source: who asked — the word that reaches the audit and the answer.
+
+        Returns:
+            The payload the vertex composed: ``outcome``, ``source``,
+            ``active_profile``, ``generation``, ``changed_settings`` and
+            ``effective_settings``.
+
+        Raises:
+            HTTPException: 400 the settings or the stored file are invalid — the
+                violations are the message —, 404 the named profile is not
+                there, 409 this machine has no single group, 503 the pool is not
+                in a state to be reconfigured.
+        """
+        commander = self.orchestration_commander
+        try:
+            return await commander.apply_group_settings(
+                profile=profile, profile_name=profile_name, source=source
+            )
+        except SingleGroupRequired as several:
+            raise HTTPException(409, str(several)) from several
+        except OrchestrationProfileNotFoundError as missing:
+            raise HTTPNotFound(str(missing)) from missing
+        except (
+            GroupPolicyError,
+            OrchestrationProfileNameError,
+            OrchestrationProfileContentError,
+        ) as rejected:
+            raise HTTPBadRequest(str(rejected)) from rejected
+
+    @property
+    def settings_status(self) -> dict[str, Any]:
+        """What configuration is in force: the profile, the generation, the record.
+
+        Returns:
+            ``active_profile``, ``generation``, ``last_apply`` and the
+            ``effective_settings`` the one group is running on. Nothing is
+            locked to read it: the swap that writes those four never yields the
+            loop, so what is read here is one apply's picture and never a mix.
+
+        Raises:
+            HTTPException: 409 this machine has no single group, 503 the pool is
+                not in a state to answer.
+        """
+        commander = self.orchestration_commander
+        try:
+            group = commander.configured_group
+        except SingleGroupRequired as several:
+            raise HTTPException(409, str(several)) from several
+        return {
+            "active_profile": commander.active_profile,
+            "generation": commander.configuration_generation,
+            "last_apply": commander.last_apply,
+            "effective_settings": group.policy.to_settings(),
+        }
 
     async def on_shutdown(self) -> None:
         """Take the pool down with the server: with a photo, or dry.

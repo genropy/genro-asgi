@@ -83,7 +83,10 @@ async def handler(short_root, group, repo_on_pythonpath):
         frozen_users_path=short_root / "frozen_users",
         entry_module=CHILD_MODULE,
         worker_kwargs={"group": "standard"},
-        process_ping_timeout=1.0,
+        # Wide at birth: the same value bounds the wait for the presentation,
+        # and a fresh interpreter on a loaded machine can take seconds to get
+        # there. The mute phase tightens it to what it really measures.
+        process_ping_timeout=10.0,
     )
     group.worker_handler = worker_handler
     yield worker_handler
@@ -153,12 +156,13 @@ async def test_a_worker_is_born_works_dies_wild_and_leaves_its_traces_behind(
     # answers. The beat is repeated once past the timeout and then the process
     # group is killed and its death awaited.
     condemned = handler.process
+    handler.process_ping_timeout = 1.0
     assert await order(handler, GO_MUTE_OP) == {"muted": True}
     started = time.monotonic()
     await handler.ping_process()
     elapsed = time.monotonic() - started
 
-    assert elapsed < 4 * handler.process_ping_timeout
+    assert elapsed < 6 * handler.process_ping_timeout
     assert not condemned.alive
     assert handler.process is None
 

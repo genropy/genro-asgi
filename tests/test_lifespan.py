@@ -24,7 +24,7 @@ hooks so ordering and error isolation can be asserted.
 from __future__ import annotations
 
 from genro_asgi import BaseApplication, BaseServer
-from genro_asgi.lifespan import QUITTING, STOPPING, Lifespan
+from genro_asgi.lifespan import QUITTING, STOPPING, FatalBootError, Lifespan
 
 
 class SyncRecordingApp(BaseApplication):
@@ -159,6 +159,52 @@ class TestErrorIsolation:
         shutdown_events = [e for e in events if e.endswith("on_shutdown")]
         assert shutdown_events == ["admin.on_shutdown", "root.on_shutdown"]
         assert {"type": "lifespan.startup.complete"} in sent
+        assert {"type": "lifespan.shutdown.complete"} in sent
+
+
+class FatalStartupApp(SyncRecordingApp):
+    """Its startup failure is declared fatal: the server must not start."""
+
+    def on_startup(self) -> None:
+        raise FatalBootError(f"{self.name}: the server must not start")
+
+
+class TestFatalBoot:
+    async def test_a_fatal_startup_failure_stops_the_server(self) -> None:
+        events: list[str] = []
+        server = BaseServer(
+            applications=[
+                SyncRecordingApp(mount="", name="root", events=events),
+                FatalStartupApp(name="api", code="api", events=events),
+                SyncRecordingApp(name="admin", code="admin", events=events),
+            ]
+        )
+
+        sent = await drive_lifespan(server, [{"type": "lifespan.startup"}])
+
+        assert sent == [
+            {"type": "lifespan.startup.failed", "message": "api: the server must not start"}
+        ]
+        assert [e for e in events if e.endswith("on_startup")] == ["root.on_startup"]
+
+    async def test_a_fatal_error_on_shutdown_keeps_the_ordinary_isolation(self) -> None:
+        events: list[str] = []
+
+        class FatalOnShutdown(SyncRecordingApp):
+            def on_shutdown(self) -> None:
+                raise FatalBootError(f"{self.name}.on_shutdown failed")
+
+        server = BaseServer(
+            applications=[
+                SyncRecordingApp(mount="", name="root", events=events),
+                FatalOnShutdown(name="api", code="api", events=events),
+            ]
+        )
+
+        sent = await drive_lifespan(server, startup_then_shutdown())
+
+        shutdown_events = [e for e in events if e.endswith("on_shutdown")]
+        assert shutdown_events == ["root.on_shutdown"]
         assert {"type": "lifespan.shutdown.complete"} in sent
 
 

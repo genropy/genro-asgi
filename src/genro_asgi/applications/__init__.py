@@ -25,12 +25,15 @@ system app every server mounts (D4).
 
 from __future__ import annotations
 
+from .configuration_profiles import ConfigurationProfiles, ConfigurationProfilesApplication
 from .mcp import McpApplication, McpOpenApiApplication
 from .openapi import OpenApiApplication
 from .server_app import ServerApplication
 from .spa_app import SpaApplication
 
 __all__ = [
+    "ConfigurationProfiles",
+    "ConfigurationProfilesApplication",
     "McpApplication",
     "McpOpenApiApplication",
     "OpenApiApplication",

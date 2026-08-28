@@ -149,6 +149,8 @@ loop: the vertex must never be the reason a healthy child reads as mute.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
 import time
@@ -161,6 +163,10 @@ from typing import Any
 from genro_bag import Bag
 from genro_tytx import from_tytx, to_tytx
 
+from ...orchestration_profile_store import (
+    OrchestrationProfileNotFoundError,
+    OrchestrationProfileStore,
+)
 from ..global_store import GlobalStore, GlobalStoreLock
 from ..subscription_index import SubscriptionIndex
 from .beats import every
@@ -168,6 +174,7 @@ from .envelope_handler import CommanderEnvelopeHandler
 from .exceptions import AssignmentRefused, UserOnHold, SiteFailedRequest
 from .freeze_handler import FreezeHandler
 from .group_handler import CHECK_OCCUPANCY_BEATS, GroupHandler
+from .group_policy import GroupPolicy, GroupPolicyError
 from .worker_handler import CENSUS_OP_PATH, EVAL_OP_PATH, OBSERVE_OP_PATH
 
 #: What a user with no name of his own is called: the prefix plus his cid. The
@@ -625,6 +632,10 @@ class DeliveryDesk:
         return [change for change in changes if change["change_ts"] >= horizon]
 
 
+class SingleGroupRequired(Exception):
+    """A profile names setpoints and this machine has no single group to give them to."""
+
+
 class SpaCommander:
     """The vertex of the pool: the indexes, the minting, the master store, the log.
 
@@ -652,6 +663,13 @@ class SpaCommander:
             default.
         event_max_age_seconds: how long an event waiting at the delivery desk
             stays deliverable; past it the drain discards it.
+        profiles_path: the folder of the stored profiles, when this machine may
+            be reconfigured by name; None leaves only the inline apply.
+        recipe_settings: the setpoints the recipe declared, kept as their own
+            immutable level — every apply recomposes from it.
+        env_settings: the setpoints the environment overrode, the level ABOVE
+            the profile, kept immutable the same way.
+        active_profile: which stored profile boot put in force, if any.
     """
 
     def __init__(
@@ -668,6 +686,10 @@ class SpaCommander:
         machine_memory_alarm_percent: float = 90.0,
         memory_max_percent: float = 100.0,
         event_max_age_seconds: float = EVENT_MAX_AGE_SECONDS,
+        profiles_path: str | Path | None = None,
+        recipe_settings: dict[str, Any] | None = None,
+        env_settings: dict[str, Any] | None = None,
+        active_profile: str | None = None,
     ) -> None:
         self.freeze_handler = FreezeHandler(frozen_users_path)
         self.user_expiry_hours = user_expiry_hours
@@ -729,6 +751,32 @@ class SpaCommander:
                 memory_concession_bytes=self.memory_concession_bytes,
                 **group_settings,
             )
+        #: Where the named profiles are read from; None means there are none.
+        self.profile_store = (
+            None if profiles_path is None else OrchestrationProfileStore(profiles_path)
+        )
+        #: The two immutable levels of the effective configuration. They are
+        #: never merged into one another: every apply recomposes
+        #: recipe ⊕ profile ⊕ env from these two and the profile of the moment.
+        self.recipe_settings = dict(recipe_settings or {})
+        self.env_settings = dict(env_settings or {})
+        #: Which stored profile is in force; None after an inline apply.
+        self.active_profile = active_profile
+        #: How many effective configurations this machine has had — boot's is 1,
+        #: and every successful apply adds one, an idempotent apply included.
+        self.configuration_generation = 1
+        #: The last apply ATTEMPT, applied or rejected: what an introspection
+        #: reads to know what was tried, by whom and how it ended. Boot carries
+        #: no digest — no apply has run.
+        self.last_apply: dict[str, Any] = {
+            "ts": datetime.now(UTC).isoformat(),
+            "source": "boot",
+            "active_profile": active_profile,
+            "digest": None,
+            "outcome": "applied",
+            "generation": 1,
+        }
+        self._configuration_lock = asyncio.Lock()
 
     @property
     def memory_concession_bytes(self) -> int:
@@ -1332,6 +1380,215 @@ class SpaCommander:
             subject,
             numbers,
             outcome,
+        )
+
+    @property
+    def configured_group(self) -> Any:
+        """The one group a profile governs.
+
+        Raises:
+            SingleGroupRequired: this machine has zero or several groups, so a
+                profile names setpoints without saying whose.
+        """
+        if len(self.group_map) != 1:
+            raise SingleGroupRequired(
+                f"Vertex: a profile governs exactly one group, this machine has "
+                f"{len(self.group_map)} ({sorted(self.group_map)})"
+            )
+        return next(iter(self.group_map.values()))
+
+    async def apply_group_settings(
+        self,
+        *,
+        profile: dict[str, Any] | None = None,
+        profile_name: str | None = None,
+        source: str = "inline",
+    ) -> dict[str, Any]:
+        """Put a new effective configuration in force on the one group, or refuse it whole.
+
+        Args:
+            profile: the profile level given inline; the active profile becomes
+                None, since nothing stored is in force any more.
+            profile_name: the stored profile to read as that level instead, which
+                becomes the active one. Never both.
+            source: who asked — the word that reaches the audit and the answer.
+
+        Returns:
+            The payload of the apply: ``outcome``, ``source``, ``active_profile``,
+            ``generation``, ``changed_settings`` and ``effective_settings``.
+
+        Raises:
+            SingleGroupRequired: not exactly one group.
+            OrchestrationProfileNameError, OrchestrationProfileNotFoundError,
+            OrchestrationProfileContentError: the
+                stored profile could not be read.
+            GroupPolicyError: the composed settings are invalid, carrying every
+                violation found.
+
+        Acts on the group's policy, on the CPU admission of its workers and on
+        this vertex's generation and record. Three stages: everything fallible
+        happens BEFORE anything moves, the swap itself is assignments only, and
+        the log and the wake come after and cannot undo it. The whole apply is
+        serialized on ``_configuration_lock``, the profile read included, so two
+        callers queue instead of colliding.
+        """
+        async with self._configuration_lock:
+            try:
+                group = self.configured_group
+                if profile_name is not None:
+                    if self.profile_store is None:
+                        raise OrchestrationProfileNotFoundError(
+                            "this machine was given no profiles folder"
+                        )
+                    profile = await asyncio.to_thread(self.profile_store.read, profile_name)
+                new_policy = GroupPolicy.from_settings(
+                    {**self.recipe_settings, **(profile or {}), **self.env_settings}
+                )
+            except Exception as error:
+                self._audit_settings_refusal(profile_name, source, error)
+                raise
+            in_force = group.policy.to_settings()
+            effective = new_policy.to_settings()
+            changed = {key: value for key, value in effective.items() if value != in_force[key]}
+            reconciliation = self._cpu_reconciliation(group, new_policy)
+            record = {
+                "ts": datetime.now(UTC).isoformat(),
+                "source": source,
+                "active_profile": profile_name,
+                "digest": self._settings_digest(effective),
+                "outcome": "applied",
+                "generation": self.configuration_generation + 1,
+            }
+            payload = {
+                "outcome": "applied",
+                "source": source,
+                "active_profile": profile_name,
+                "generation": record["generation"],
+                "changed_settings": changed,
+                "effective_settings": effective,
+            }
+            self._commit_group_settings(group, new_policy, reconciliation, record)
+            try:
+                self.log_order(
+                    "vertex",
+                    "apply_group_settings",
+                    profile_name or source,
+                    numbers={
+                        "generation": record["generation"],
+                        "digest": record["digest"],
+                        "source": source,
+                        "changed": changed,
+                    },
+                    outcome="applied",
+                )
+                self.log_order(
+                    "vertex",
+                    "cpu_policy_reconciled",
+                    profile_name or source,
+                    numbers=dict(reconciliation),
+                )
+            except Exception:
+                self._logger.exception("Vertex: the apply of the setpoints could not be audited")
+            try:
+                group.ping_now()
+            except Exception:
+                self._logger.exception("Vertex: the round after the apply could not be anticipated")
+            return payload
+
+    def _commit_group_settings(
+        self,
+        group: Any,
+        new_policy: GroupPolicy,
+        reconciliation: list[tuple[str, bool]],
+        record: dict[str, Any],
+    ) -> None:
+        """Put the prepared configuration in force: guaranteed assignments only.
+
+        Args:
+            group: the group the setpoints govern.
+            new_policy: the validated policy that replaces its current one.
+            reconciliation: the CPU admission each worker lands on, as stage one
+                judged it; a worker that left meanwhile is dropped here.
+            record: the audit row of this apply, generation included.
+
+        No await and nothing that can raise: the loop is never yielded between
+        the swap, the generation and the record, so no task can read one of the
+        three without the other two.
+        """
+        group.apply_policy(
+            new_policy, [pair for pair in reconciliation if pair[0] in group.worker_handler_map]
+        )
+        self.active_profile = record["active_profile"]
+        self.configuration_generation = record["generation"]
+        self.last_apply = record
+
+    def _cpu_reconciliation(
+        self, group: Any, policy: GroupPolicy
+    ) -> list[tuple[str, bool]]:
+        """Where each worker's CPU admission lands under the NEW thresholds.
+
+        Args:
+            group: the group whose workers are judged.
+            policy: the policy about to govern them.
+
+        Returns:
+            One ``(worker name, cpu_admission_open)`` pair per worker. The band
+            between the two new thresholds PRESERVES what the worker is now —
+            that state is the memory of the hysteresis; a policy that is off and
+            a worker with no photo are both open, and nothing is grown here.
+        """
+        reconciliation = []
+        for worker_handler in group.worker_handler_map.values():
+            cpu_percent = (worker_handler.worker_snapshot or {}).get("cpu_percent")
+            if policy.cpu_grow_percent is None or cpu_percent is None:
+                admission_open = True
+            elif cpu_percent > policy.cpu_grow_percent:
+                admission_open = False
+            elif cpu_percent < policy.cpu_grow_rearm_percent:
+                admission_open = True
+            else:
+                admission_open = worker_handler.cpu_admission_open
+            reconciliation.append((worker_handler.name, admission_open))
+        return reconciliation
+
+    def _settings_digest(self, settings: dict[str, Any]) -> str:
+        """The fingerprint of one effective configuration: sha256 of its canonical JSON."""
+        canonical = json.dumps(settings, sort_keys=True, allow_nan=False)
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
+    def _audit_settings_refusal(
+        self, profile_name: str | None, source: str, error: Exception
+    ) -> None:
+        """Record an apply that never happened; the machine stays where it was.
+
+        Args:
+            profile_name: the profile that was asked for, if any.
+            source: who asked.
+            error: what refused it — a ``GroupPolicyError`` carries every
+                violation, anything else speaks for itself.
+
+        Acts on ``last_apply``, which is the last ATTEMPT: the generation and the
+        active profile stay the ones in force, and there is no digest because
+        there is no new configuration.
+        """
+        violations = error.violations if isinstance(error, GroupPolicyError) else [str(error)]
+        outcome = f"rejected: {violations[0]}"
+        if len(violations) > 1:
+            outcome += f"+{len(violations) - 1}"
+        self.last_apply = {
+            "ts": datetime.now(UTC).isoformat(),
+            "source": source,
+            "active_profile": self.active_profile,
+            "digest": None,
+            "outcome": outcome,
+            "generation": self.configuration_generation,
+        }
+        self.log_order(
+            "vertex",
+            "apply_group_settings",
+            profile_name or source,
+            numbers={"generation": self.configuration_generation, "violations": violations},
+            outcome=outcome,
         )
 
     def adopt_frozen_registers(self) -> None:

@@ -236,7 +236,10 @@ def group_settings(instance_root):
             "freeze_unanswered": False,
             "drop_unanswered": False,
         },
-        "process_ping_timeout": 2.0,
+        # Wide: the same value bounds the wait for the presentation, and a
+        # fresh interpreter on a loaded machine can take seconds to get there.
+        # The one scenario about a process that never shows up sets its own.
+        "process_ping_timeout": 10.0,
     }
 
 
@@ -357,7 +360,9 @@ async def test_a_growth_the_quota_refuses_saturates_the_group_until_there_is_roo
 
 
 async def test_a_process_that_never_starts_breaks_the_group_until_one_does(make_group, caplog):
-    group = make_group(behaviour="absent")
+    # The short window here bounds the wait for the absent one, and nothing
+    # else: the test would otherwise sit the whole file default out.
+    group = make_group(behaviour="absent", process_ping_timeout=2.0)
 
     with caplog.at_level("ERROR"):
         assert await group.start_worker() is None
@@ -367,7 +372,9 @@ async def test_a_process_that_never_starts_breaks_the_group_until_one_does(make_
     assert "could not be started" in caplog.text
 
     # The first process that starts closes the crisis — nothing else does.
+    # It presents itself, so it gets the wide window back.
     group.worker_settings["worker_kwargs"]["behaviour"] = "answer"
+    group.worker_settings["process_ping_timeout"] = 10.0
     assert await group.start_worker() is not None
     assert group.state == "running"
 
@@ -396,9 +403,10 @@ async def test_a_worker_past_the_restart_setpoint_is_replaced_by_a_fresh_one(
 async def test_a_closure_that_would_eat_the_reserve_is_not_ordered(make_group):
     # Both at 30%: the spare's share would put the reception at 60, past its own
     # cap (80 less the 50 it reserves) — the flat-average reading would close it,
-    # the per-worker question keeps it. The closure threshold is lifted out of
-    # the way so the RESERVE is the question this test asks.
-    group = make_group(rss_bytes=int(0.30 * MEMORY_CEILING), close_occupancy_max_percent=100.0)
+    # the per-worker question keeps it. The closure threshold is lifted clear of
+    # the 60 so the RESERVE is the question this test asks; it stays below
+    # occupancy_max_percent, which the policy schema requires of it.
+    group = make_group(rss_bytes=int(0.30 * MEMORY_CEILING), close_occupancy_max_percent=79.0)
     await group.start_worker()
     await group.start_worker()
 

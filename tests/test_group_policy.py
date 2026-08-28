@@ -1,0 +1,189 @@
+"""Contract tests for GroupPolicy — defaults, validation, null semantics.
+
+Design sections 4, 6, 8 and the setpoint matrix; test matrix T7, T16, T17, T25.
+"""
+
+import json
+import math
+
+import pytest
+
+from genro_asgi.spa.orchestration.group_policy import GroupPolicy, GroupPolicyError
+
+
+def test_defaults_materialized_from_empty_settings():
+    # wf:contract: T7 — GroupPolicy.from_settings({}) yields a COMPLETE policy
+    # wf:contract: whose values equal today's GroupHandler constructor defaults;
+    # wf:contract: a sparse settings dict fills the absent keys with those same
+    # wf:contract: defaults, never a KeyError.
+    policy = GroupPolicy.from_settings({})
+    assert policy.occupancy_max_percent == 80.0
+    assert policy.restart_occupancy_max_percent == 95.0
+    assert policy.close_occupancy_max_percent == 40.0
+    assert policy.cpu_grow_percent is None
+    assert policy.cpu_grow_rearm_percent == 40.0
+    assert policy.worker_min_life_seconds == 60.0
+    assert policy.reception_reserved_percent == 50.0
+    assert policy.new_user_occupancy_percent == 5.0
+    assert policy.newcomer_reserve_count == 1
+    assert policy.worker_max_users == math.inf
+    assert policy.user_idle_freeze_minutes == math.inf
+    assert policy.memory_max_percent == 100.0
+    assert policy.worker_max_number == 6
+
+    sparse = GroupPolicy.from_settings({"occupancy_max_percent": 70.0})
+    assert sparse.occupancy_max_percent == 70.0
+    assert sparse.close_occupancy_max_percent == 40.0
+    assert sparse.worker_max_number == 6
+    assert set(sparse.to_settings()) == set(GroupPolicy.SETPOINTS)
+
+
+def test_validation_rejects_and_lists_all_violations():
+    # wf:contract: T16 — from_settings collects EVERY violation into one error:
+    # wf:contract: unknown keys; structural keys with the dedicated message
+    # wf:contract: "structural, not a profile key"; bool passed as a number
+    # wf:contract: (rejected before the numeric check); NaN/Infinity values;
+    # wf:contract: percentages outside [0, 100]; memory_max_percent 0 and above
+    # wf:contract: 100 both rejected (0 < v <= 100); negative times; non-integer
+    # wf:contract: counts; worker_max_number <= 0; a broken CPU band
+    # wf:contract: (rearm >= grow); cross rules on the COMPLETE resulting policy:
+    # wf:contract: close_occupancy >= occupancy, occupancy > restart_occupancy,
+    # wf:contract: reception_reserved >= occupancy, new_user_occupancy <= 0.
+    # wf:contract: A single violation means NO policy object is produced.
+    with pytest.raises(GroupPolicyError) as caught:
+        GroupPolicy.from_settings(
+            {
+                "nonsense_percent": 1.0,
+                "engine_factory": "module:factory",
+                "occupancy_max_percent": True,
+                "restart_occupancy_max_percent": float("nan"),
+                "close_occupancy_max_percent": float("inf"),
+                "reception_reserved_percent": 120.0,
+                "memory_max_percent": 0.0,
+                "worker_min_life_seconds": -1.0,
+                "newcomer_reserve_count": 1.5,
+                "worker_max_number": 0,
+            }
+        )
+    violations = caught.value.violations
+    assert len(violations) == 10
+    reported = " | ".join(violations)
+    assert "nonsense_percent: unknown setpoint" in violations
+    assert "engine_factory: structural, not a profile key" in violations
+    for key in (
+        "occupancy_max_percent",
+        "restart_occupancy_max_percent",
+        "close_occupancy_max_percent",
+        "reception_reserved_percent",
+        "memory_max_percent",
+        "worker_min_life_seconds",
+        "newcomer_reserve_count",
+        "worker_max_number",
+    ):
+        assert any(v.startswith(f"{key}:") for v in violations), reported
+    assert "occupancy_max_percent: expected a number, got bool" in violations
+    assert "newcomer_reserve_count: expected an integer, got float" in violations
+
+    with pytest.raises(GroupPolicyError) as caught:
+        GroupPolicy.from_settings({"memory_max_percent": 100.5})
+    assert caught.value.violations == [
+        "memory_max_percent: 100.5 is out of range, must be > 0.0 and <= 100.0"
+    ]
+    assert GroupPolicy.from_settings({"memory_max_percent": 100.0}).memory_max_percent == 100.0
+
+    with pytest.raises(GroupPolicyError) as caught:
+        GroupPolicy.from_settings({"new_user_occupancy_percent": 0.0})
+    assert len(caught.value.violations) == 1
+
+    with pytest.raises(GroupPolicyError) as caught:
+        GroupPolicy.from_settings({"cpu_grow_percent": 30.0, "cpu_grow_rearm_percent": 30.0})
+    assert "cpu_grow_rearm_percent" in caught.value.violations[0]
+
+    with pytest.raises(GroupPolicyError) as caught:
+        GroupPolicy.from_settings({"close_occupancy_max_percent": 80.0})
+    assert "close_occupancy_max_percent" in caught.value.violations[0]
+
+    with pytest.raises(GroupPolicyError) as caught:
+        GroupPolicy.from_settings({"occupancy_max_percent": 96.0})
+    assert len(caught.value.violations) == 1
+    assert "restart_occupancy_max_percent" in caught.value.violations[0]
+
+    with pytest.raises(GroupPolicyError) as caught:
+        GroupPolicy.from_settings({"reception_reserved_percent": 80.0})
+    assert "reception_reserved_percent" in caught.value.violations[0]
+
+    # A per-key violation stops before the policy exists: no partial object.
+    with pytest.raises(GroupPolicyError):
+        GroupPolicy.from_settings({"worker_max_users": None, "worker_max_number": -3})
+
+
+def test_null_means_unlimited_or_off():
+    # wf:contract: T17 — worker_max_users null becomes math.inf internally and
+    # wf:contract: null again in to_settings(); user_idle_freeze_minutes null the
+    # wf:contract: same; cpu_grow_percent null becomes None (policy off);
+    # wf:contract: to_settings() output is JSON-safe: json.dumps(...,
+    # wf:contract: allow_nan=False) never raises on it.
+    policy = GroupPolicy.from_settings(
+        {
+            "worker_max_users": None,
+            "user_idle_freeze_minutes": None,
+            "cpu_grow_percent": None,
+        }
+    )
+    assert policy.worker_max_users == math.inf
+    assert policy.user_idle_freeze_minutes == math.inf
+    assert policy.cpu_grow_percent is None
+
+    settings = policy.to_settings()
+    assert settings["worker_max_users"] is None
+    assert settings["user_idle_freeze_minutes"] is None
+    assert settings["cpu_grow_percent"] is None
+    assert json.loads(json.dumps(settings, allow_nan=False)) == settings
+
+    bounded = GroupPolicy.from_settings({"worker_max_users": 12, "user_idle_freeze_minutes": 30.0})
+    assert bounded.worker_max_users == 12
+    assert bounded.to_settings()["worker_max_users"] == 12
+    assert bounded.to_settings()["user_idle_freeze_minutes"] == 30.0
+    assert json.dumps(GroupPolicy.from_settings({}).to_settings(), allow_nan=False)
+
+
+def test_worker_memory_max_percent_explicit_or_derived():
+    # wf:contract: the property renders the explicit value when set (it may
+    # wf:contract: exceed 100), else 100.0 / worker_max_number; removing the
+    # wf:contract: explicit key restores the derivation.
+    derived = GroupPolicy.from_settings({"worker_max_number": 4})
+    assert derived.worker_memory_max_percent == 25.0
+    assert derived.to_settings()["worker_memory_max_percent"] is None
+
+    explicit = GroupPolicy.from_settings(
+        {"worker_max_number": 4, "worker_memory_max_percent": 400.0}
+    )
+    assert explicit.worker_memory_max_percent == 400.0
+    assert explicit.to_settings()["worker_memory_max_percent"] == 400.0
+
+    restored = GroupPolicy.from_settings(
+        {"worker_max_number": 4, "worker_memory_max_percent": None}
+    )
+    assert restored.worker_memory_max_percent == 25.0
+    assert restored.to_settings()["worker_memory_max_percent"] is None
+
+    with pytest.raises(GroupPolicyError) as caught:
+        GroupPolicy.from_settings({"worker_memory_max_percent": 0.0})
+    assert "worker_memory_max_percent" in caught.value.violations[0]
+
+
+def test_profile_version_reserved_key():
+    # wf:contract: T25 — profile_version absent is accepted as 1; the value 1 is
+    # wf:contract: accepted; any other value is rejected explicitly; the key
+    # wf:contract: never enters the setpoints nor to_settings() output.
+    assert "profile_version" not in GroupPolicy.from_settings({}).to_settings()
+    accepted = GroupPolicy.from_settings({"profile_version": 1, "worker_max_number": 3})
+    assert "profile_version" not in accepted.to_settings()
+    assert accepted.worker_max_number == 3
+
+    for value in (2, "1", True, None):
+        with pytest.raises(GroupPolicyError) as caught:
+            GroupPolicy.from_settings({"profile_version": value})
+        assert caught.value.violations == [
+            f"profile_version: only version 1 is supported, got {value!r}"
+        ]

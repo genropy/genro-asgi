@@ -1,0 +1,3 @@
+✓ Phase 1 completed: ProfileStore — the shared profile storage component
+
+`src/genro_asgi/profile_store.py` (new, neutral: no `applications/` or `spa/` imports) plus the 6 contract tests copied verbatim into `tests/test_profile_store.py` and implemented — full suite 1591 passed, `ruff check src/` clean. The commit lists its own paths explicitly: the tree carried the owner's uncommitted docs edits before the run, and they are still uncommitted and untouched.

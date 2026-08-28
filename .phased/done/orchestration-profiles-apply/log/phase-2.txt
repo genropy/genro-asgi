@@ -1,0 +1,3 @@
+✓ Phase 2 completed: ConfigurationProfiles delegates to ProfileStore
+
+`ConfigurationProfiles` now holds a `ProfileStore` and translates its errors through one private contextmanager (404 for not-found, 400 for name/content), so routes and payloads are unchanged. `tests/test_configuration_profiles_application.py` passes unmodified (git diff empty), full suite 1591 passed, `ruff check src/` clean. Commit 07556c0 carries only the source file, the plan and notes.

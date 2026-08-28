@@ -54,6 +54,21 @@ class BrokenFactory:
         raise RuntimeError("this factory cannot build an engine")
 
 
+class NoisyFactory(EngineFactory):
+    """A factory whose build PRINTS, as the bridge's site build really does.
+
+    The prints must reach the logs and never the answer channel: read as
+    answers they failed the first forks of every container start
+    («Extra data», diagnosed 2026-08-28).
+    """
+
+    def build_group_engine(self) -> str:
+        """The same engine, announced out loud on stdout first."""
+        print("noise: the engine build talks on stdout")
+        print("noise: and more than once")
+        return super().build_group_engine()
+
+
 class EngineWorker(SpaWorker):
     """A worker that takes the engine, and writes down what it was given.
 

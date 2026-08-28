@@ -1,0 +1,3 @@
+Phase 8 chiusa `[x]` e committata (75738ec). Il criterio `Done:` è verificato letteralmente: `grep -i planned` sul README non rende nulla, CLAUDE.md porta il paragrafo del meccanismo, il diff di fase toccca solo i due file più il plan; suite 1629 passed, `ruff check src/` clean. Resta una nota `Verify: now` per il titolare sull'altitudine dei due documenti.
+
+✓ Phase 8 completed: Core documentation

@@ -1,0 +1,5 @@
+Il tool di messaggistica verso il foreman (sessione per titolo) non esiste in questa sessione: notifica saltata in silenzio, come prevede il protocollo.
+
+⚠ Phase 6 has issues: plan-defect claim su T3 — la clausola «il lifespan fallisce e il server non parte» è contraddetta dal core (`Lifespan._run_hook` cattura, logga e continua per contratto documentato), e `lifespan.py` non è nei `Files:` di questa fase.
+
+Tutto il resto della fase è implementato e verde: i quattro kwargs ratificati, la composizione `defaults ⊕ recipe ⊕ profile ⊕ env` prima della costruzione del vertice, il gate `_orchestration` con le tre route e la traduzione 400/404/409/503, più i tre contract test di audit (T22a/b/c). Suite: 1624 passed, 1 failed (solo quella clausola); `ruff check src/ tests/` pulito; commit `1770b1e` con i soli file della fase.

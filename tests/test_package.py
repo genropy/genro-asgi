@@ -31,6 +31,8 @@ def test_root_exports_public_api():
         "CommunicationMixin",
         "ConfigError",
         "ConfigurationHandler",
+        "ConfigurationProfiles",
+        "ConfigurationProfilesApplication",
         "DefaultConfig",
         "FileApiKeyStore",
         "FileUserStore",

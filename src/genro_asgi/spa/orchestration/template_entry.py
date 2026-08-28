@@ -59,6 +59,16 @@ ordinary worker life, ``WorkerEntry`` with the payload and the engine.
 
 ``stderr`` is left alone — it is not a pipe — so the logs of the template and of
 every child go where the GroupHandler's own go.
+
+**The answer channel is nobody's stdout.** At birth (real pipes only, never the
+injected ones of a test) the template duplicates its stdout descriptor and
+keeps the duplicate as the channel, then points ``stdout`` itself at
+``stderr``: the engine build runs arbitrary deployment code, and a ``print()``
+in it must land in the logs — landing in the channel made the GroupHandler
+read it as an answer, and the first forks of every container start failed with
+«Extra data» until the build's lines were consumed. The forked child closes
+the duplicate with the other pipes, and its own stdout — like the template's —
+speaks to the logs.
 """
 
 from __future__ import annotations
@@ -96,7 +106,23 @@ class TemplateEntry:
         # node reached under an unpinned loop hands back a coroutine, not a value.
         set_sync()
         self.pipe_in = sys.stdin if pipe_in is None else pipe_in
-        self.pipe_out = sys.stdout if pipe_out is None else pipe_out
+        if pipe_out is None:
+            # The answer channel is a DUPLICATE of the real stdout, taken for
+            # this process alone, and stdout itself is pointed at stderr —
+            # BEFORE the engine is built, because the factory runs arbitrary
+            # deployment code (the bridge's builds a whole legacy site) and
+            # every print() of that build used to land IN the channel: the
+            # GroupHandler read those lines as answers and the first forks of
+            # every container start failed with «Extra data» (diagnosis of
+            # 2026-08-28). From here on a print anywhere in this process — the
+            # build, the frozen engine, a forked child before it closes its
+            # copy — goes to the logs, and the channel carries answers only.
+            # Only for the REAL stdout: a test that injects its pipes gets
+            # them verbatim, and no descriptor of the test runner is touched.
+            self.pipe_out = os.fdopen(os.dup(sys.stdout.fileno()), "w")
+            os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+        else:
+            self.pipe_out = pipe_out
         self.name = ""
         self.group_engine: Any = None
         self.logger = logging.getLogger(__name__)

@@ -139,3 +139,78 @@ async def test_the_worker_forked_off_a_template_serves_with_the_engine_in_hand(
             kill_process(handler.process)
         await handler.connector.stop()
         await group.template.stop()
+
+
+async def test_a_build_that_prints_cannot_dirty_the_answer_channel(
+    group, short_root, tmp_path, repo_on_pythonpath
+):
+    # The bridge's real build prints on stdout. Pre-fix those lines were read
+    # as answers: the FIRST forks failed with «Extra data» and the true
+    # answers lagged behind by as many lines. Now the channel is the
+    # template's own duplicate and every print goes to the logs: the first
+    # answer is immediate, and each answer carries the pid of ITS OWN fork.
+    connector = TemplateConnector(
+        group,
+        engine_factory="tests.orchestration.engine_stub:NoisyFactory",
+        engine_kwargs={"mark": GROUP},
+    )
+    try:
+        pids = []
+        for tag in ("first", "second"):
+            report = tmp_path / f"{tag}.json"
+            pid = await connector.fork_worker(
+                {
+                    "name": f"{GROUP}_{tag}",
+                    "uds_url": f"uds:{short_root}/nobody.sock",
+                    "frozen_users_path": str(short_root / "frozen_users"),
+                    "worker_class": ENGINE_WORKER,
+                    "kwargs": {"group": GROUP, "report_path": str(report)},
+                }
+            )
+            await wait_for(report.exists)
+            got = json.loads(report.read_text())
+            assert got["pid"] == pid  # the answer of THIS fork, not a stale one
+            assert got["engine"] == f"engine-{GROUP}"
+            pids.append(pid)
+        assert len(set(pids)) == 2
+    finally:
+        await connector.stop()
+
+
+async def test_a_living_child_does_not_mask_the_templates_death(
+    short_root, tmp_path, repo_on_pythonpath
+):
+    # The child closes ITS copy of the answer channel: with the template gone,
+    # the GroupHandler's read meets EOF even while a forked worker still
+    # serves — a child holding the write end open would hang that read forever.
+    import asyncio
+
+    group = GroupStub(short_root / "frozen_users", name=GROUP)
+    group.template = TemplateConnector(
+        group, engine_factory=FACTORY, engine_kwargs={"mark": GROUP}
+    )
+    handler = WorkerHandler(
+        group,
+        WORKER_NAME,
+        instance_dir=short_root / "i",
+        frozen_users_path=short_root / "frozen_users",
+        entry_module="genro_asgi.spa.orchestration.worker_entry",
+        worker_class=ENGINE_WORKER,
+        worker_kwargs={"group": GROUP, "report_path": str(tmp_path / "child.json")},
+        process_ping_timeout=30.0,
+    )
+    try:
+        await handler.launch_process()
+        assert handler.process.alive is True
+
+        template_process = group.template.process
+        template_process.stdin.close()
+        raw = await asyncio.wait_for(template_process.stdout.readline(), timeout=10.0)
+
+        assert raw == b""  # EOF: nobody held the write end, the child included
+        assert handler.process.alive is True
+    finally:
+        if handler.process is not None:
+            kill_process(handler.process)
+        await handler.connector.stop()
+        await group.template.stop()
