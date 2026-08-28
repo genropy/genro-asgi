@@ -20,14 +20,16 @@ stands on its own.
 
 ## 1. The principle: static only where dynamic cannot be had
 
-**Source: owner, 2026-08-23.** Staticity is **never a presupposition and
+**Source: D32 (ratified 2026-08-25; owner, 2026-08-23).** Staticity is **never a presupposition and
 never a goal**. It is accepted where we have not managed to make something
 dynamic — and where it is accepted, the reason is written down. A design voice
 may not celebrate a fixed set, a boot-time-only decision or a restart-to-change
 behaviour as if immobility were a virtue.
 
-This principle governs the rest of this document and, being a principle,
-governs the other entries too — see the friction on where it gets written.
+This principle governs the rest of this document and every other entry:
+it is D32 in the specification log, and
+[00 overview](../../00_overview/README.md) states it where entries are
+written.
 
 ## 2. The base owns a small, closed list
 
@@ -300,11 +302,6 @@ Interview file: `temp/interview_010_server.md`.
 
 ## Upstream — settling these edits SPECIFICATION.md
 
-**S4 [placement] — where the principle of §1 gets written.** "Static only where dynamic
-cannot be had" governs all 31 entries, not this one. If it lives only here,
-the next entry does not inherit it. Candidate homes: the rules list in
-`internals/00_overview/README.md`, a new D-entry in SPECIFICATION.md, or the
-coding rules of the meta CLAUDE.md.
 
 ## Consequences of §4 to be decided
 
@@ -384,26 +381,3 @@ recorded here because the server is the first subject to meet it.
 Found by a reader who had only the documents. Each lives between two or three
 entries, is written in the same words in each, and is settled once for all of
 them.
-
-**S13 [placement] — two documents answer "how does a handler know which request it is
-serving" differently.** §4 of [README.md](design.md) says the registry answers
-*which request am I serving right now?*, "asked by code buried deep inside a
-handler, which needs the request but was never handed it".
-[020 applications](../020_applications/decisions.md) §5 says there is no ambient
-current request and that the old pair never returns. Both describe something
-real — the registry holds a thin in-flight record, not the request object — but
-no document draws that line, so the two pages read as opposites. Settling it
-means writing the distinction in both. Recorded in the same wording in
-[020 applications](../020_applications/decisions.md).
-
-**S14 [placement] — the application contract has three different lengths across the
-dossier.** [020 applications](../020_applications/decisions.md) §1 splits it four
-and four. §2 of [README.md](design.md) states a list of its own and adds that
-an application declares what may be done to it.
-[015 configuration](../015_configuration/README.md) §5 adds the survivable-failure
-declaration. A reader who reads the three in order is told three times that the
-contract is small and gets three different contracts. The split in 020 is that
-entry's proposal, not a ratified shape: settling it means one list, written
-there and referred to from the other two. Recorded in the same wording in
-[020 applications](../020_applications/decisions.md) and
-[015 configuration](../015_configuration/decisions.md).

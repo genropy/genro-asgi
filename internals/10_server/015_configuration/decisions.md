@@ -328,18 +328,6 @@ Found by a reader who had only the documents. Each lives between two or three
 entries, is written in the same words in each, and is settled once for all of
 them.
 
-**S8 [placement] — the application contract has three different lengths across the
-dossier.** [020 applications](../020_applications/decisions.md) §1 splits it four
-and four. [010 server](../010_server/README.md) §2 states a list of its own and adds
-that an application declares what may be done to it. §5 of
-[README.md](design.md) adds the survivable-failure declaration. A reader who
-reads the three in order is told three times that the contract is small and
-gets three different contracts. The split in 020 is that entry's proposal, not
-a ratified shape: settling it means one list, written there and referred to
-from the other two. Recorded in the same wording in
-[010 server](../010_server/decisions.md) and
-[020 applications](../020_applications/decisions.md).
-
 **S9 [undocumented] — this entry never documents `BaseConfiguration`'s hooks.** A site recipe
 deviates from the package defaults by overriding one hook — `server_section`,
 `storage_section`, or the `storage_mounts` that the second calls. §3 above names

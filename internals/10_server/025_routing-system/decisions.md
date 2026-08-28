@@ -222,16 +222,6 @@ about eight problems (owner, 2026-08-23).
 
 Interview file: `temp/interview_025_routing-system.md`.
 
-**S1 [placement] — the dossier's own index promises entry points that do not
-exist.** The one-line description of this entry in
-[00 overview](../../00_overview/README.md) reads "capabilities plugged by name,
-genro-routes entry points". There is **no entry-point mechanism**: not in this
-package, not in the routing library, and not in either `pyproject.toml`
-(searched for `entry_point`/`entry-points`, nothing). A plugin a site brings
-arrives as a class handed to the server, which is a different thing. Either the
-line means the library's own plugin registry and is misleading, or it describes
-something intended and unbuilt. Settling it edits the overview.
-
 **S2 [silent] — two servers in one process, one plugin code, two classes: the
 first one wins, and nobody is told.** The registration behind a code is the
 routing library's, and it is **class-level and process-wide**. The first server

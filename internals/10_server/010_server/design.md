@@ -131,16 +131,20 @@ writes, the application reads.
 
 Everything else an application is — its routes, its handlers, its pages — is
 its own business, and the server never inspects it. The only contract it must
-satisfy is small: be callable the way ASGI expects, carry a code and a mount,
-accept the ownership assignment, and answer the two lifecycle calls of the
-lifespan.
+satisfy is small — **four requirements**: be callable the way ASGI expects,
+carry its identity (`code` + `mount`), accept the ownership assignment, and
+answer the two lifecycle calls of the lifespan. Alongside them an application
+carries **four declarations** about itself, each with a default that says
+*nothing special*. The normative statement of the whole contract, requirements
+and declarations, is [020 applications](../020_applications/decisions.md) §1.
 
 The installed set is **not sealed**: which applications are installed is a
 fact of the configuration, and it changes while the server runs — the last
 block of this page describes how.
 
 Which does not mean the server may do as it likes with them. **An application
-declares what may be done to it**: one holding live state — people using it,
+declares what may be done to it** — one of the four declarations: one holding
+live state — people using it,
 pages open, connections held — says whether it can be removed while running and
 put back, and saying so means guaranteeing the mechanism that makes it
 possible. One that cannot does not claim it can, and its change waits for a
@@ -213,8 +217,10 @@ the empty string, so the first branch matches and forwards the same `/`.
 
 Two questions get asked constantly and have nothing to do with routing:
 
-- *which request am I serving right now?* — asked by code buried deep inside a
-  handler, which needs the request but was never handed it;
+- *which request am I serving right now?* — asked by the server's own
+  machinery around the dispatch: a middleware layer, the logging, the
+  cleanup at the end of the dispatch. Never by a handler — handlers are pure
+  and receive nothing from the environment;
 - *what is in flight across the whole server?* — asked from outside, by
   whoever is watching the machine.
 
@@ -225,7 +231,9 @@ when the dispatch ends, and nobody else writes.
 Each entry is one **item** — a deliberately thin record, because there is one
 per request and requests are many: an id, the kind of traffic, the path, and
 the moment it started. Not the request object itself, not its body, not its
-headers.
+headers. This is why the current request is no ambient request: what the
+machinery reads back is the thin item, and the `Request` an application built
+stays the application's.
 
 The "current request" is per **task**, not per server: two requests being
 served at the same time each see their own, with no locking and no

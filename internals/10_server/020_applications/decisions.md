@@ -32,7 +32,10 @@ is also what makes an application writable by somebody who has never read the
 server: what they must satisfy is those four items, every one of them about
 the handover and none about the server's insides.
 
-**Source: owner, 2026-08-23.** The contract stays that small because
+**Source: owner, 2026-08-23; the four-plus-four split ratified as THE
+contract list by the owner, 2026-08-25 — this section is the normative
+statement, and every other entry refers here.** The contract stays that small
+because
 everything else is on the other side of a line: what an application
 **declares about itself**. A declaration is not a requirement — it has a
 default that says *nothing special* — and what makes the set a contract is
@@ -115,6 +118,12 @@ it as a value**; the caller of the node — the dispatch, which holds the live
 `Request` — recognizes the returned effect and executes it. Each surface
 executes its own effects at its own call point; a test calls the handler bare
 and sees the pure value.
+
+The registry's "current request" does exist and does not contradict this: it
+is the machinery's — middleware, logging, the monitor, end-of-dispatch
+cleanups — and it holds the registry's thin item (id, kind, path), never the
+`Request` object. No handler reads it. See
+[010 server](../010_server/design.md) §4.
 
 Two things follow, and both are worth more than they cost.
 
@@ -356,27 +365,6 @@ are owed consumers — an age is what a monitor would show — or leftovers.
 These four were found by a reader who had only the documents. Each lives
 between two or three entries, is written in the same words in each, and is
 settled once for all of them.
-
-**S11 [placement] — two documents answer "how does a handler know which request it is
-serving" differently.** [010 server](../010_server/README.md) §4 says the registry
-answers *which request am I serving right now?*, "asked by code buried deep
-inside a handler, which needs the request but was never handed it". §5 above
-says there is no ambient current request and that the old pair never returns.
-Both describe something real — the registry holds a thin in-flight record, not
-the request object — but no document draws that line, so the two pages read as
-opposites. Settling it means writing the distinction in both. Recorded in the
-same wording in [010 server](../010_server/decisions.md).
-
-**S12 [placement] — the application contract has three different lengths across the
-dossier.** §1 above splits it four and four. [010 server](../010_server/README.md) §2
-states a list of its own and adds that an application declares what may be
-done to it. [015 configuration](../015_configuration/README.md) §5 adds the
-survivable-failure declaration. A reader who reads the three in order is told
-three times that the contract is small and gets three different contracts. The
-split above is this entry's proposal, not a ratified shape: settling it means
-one list, written here and referred to from the other two. Recorded in the same
-wording in [010 server](../010_server/decisions.md) and
-[015 configuration](../015_configuration/decisions.md).
 
 **S13 [undocumented] — `BaseConfiguration`'s hooks are used and nowhere documented.** A site
 recipe deviates from the package defaults by overriding one hook —

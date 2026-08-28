@@ -80,6 +80,13 @@ References to other entries still belong in the three reader-facing
 documents — but as a **pointer at the end of a block**, never woven through a
 sentence. The description has to stand on its own first.
 
+### The design principle every entry inherits
+
+**Static only where dynamic cannot be had** (D32, SPECIFICATION.md). Staticity
+is never a goal: it is accepted where dynamic has not been managed, and where
+it is accepted the reason is written where the limit is accepted. No design
+voice celebrates a fixed set or a restart-to-change behaviour as a virtue.
+
 ### The style contract
 
 Four rules govern how every document in this dossier is written. They apply to

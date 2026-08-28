@@ -912,3 +912,13 @@ Each surface executes its own effects at its own call point; a test calls the
 handler bare and sees the pure value. genro-routes is untouched — the call is
 genro-asgi's. The `_request` injection and the `ServerApplication.bind_kwargs`
 override are dismantled accordingly (implementation pending).
+
+### Ratified 2026-08-25
+
+**D32 — Static only where dynamic cannot be had.**
+Staticity is never a presupposition and never a goal (owner, 2026-08-23). It
+is accepted where making the thing dynamic has not been managed — and where
+it is accepted, the reason is written down where the limit is accepted. A
+design may not celebrate a fixed set, a boot-time-only decision or a
+restart-to-change behaviour as if immobility were a virtue. The principle
+governs every design in this repository, the technical dossier included.

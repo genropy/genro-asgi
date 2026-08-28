@@ -217,7 +217,8 @@ not run either: a prefix claimed twice, an application class that will not
 import. The installation is described wrongly, and the moment to say so is
 before the first request. The one exception is declared by the part itself: an
 application may say that a failure of its own is survivable, and then the
-server starts without it.
+server starts without it — one of the four declarations of the application
+contract ([020 applications](../020_applications/decisions.md) §1).
 
 **While it runs, a change has two phases.**
 
