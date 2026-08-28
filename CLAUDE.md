@@ -172,7 +172,7 @@ front declared without either does not boot (`FatalBootError` →
 `lifespan.startup.failed`) — wanting no pool means declaring no spa front. At
 boot `boot_group_settings` composes `defaults ⊕ recipe_settings ⊕ profile ⊕ env_settings` through
 `GroupPolicy.from_settings` — the frozen dataclass in
-`spa/orchestration/group_policy.py` that holds the 14 setpoints, IS the
+`spa/orchestration/group_policy.py` that holds the 15 setpoints, IS the
 validation and collects every violation — BEFORE the vertex is built; the recipe
 and env levels stay separate dicts, so every later apply recomposes from them.
 A missing or invalid profile raises `FatalBootError` (`lifespan.py`): the one
@@ -197,6 +197,20 @@ one without remounting the route. Routes: `POST apply`
 (`{"name": ...}` or the active one), `GET status` (read-only, no lock). Exactly ONE group per named profile — a boot failure or a
 409 (`SingleGroupRequired`) otherwise. Details:
 `internals/10_server/020_applications/configuration_profiles/README.md`.
+
+**The retirement holds through CPU pressure (landed 2026-08-28).**
+`cpu_retirement_quiet_seconds` (group setpoint, default 60.0, `>= 0`) is how
+long the CPU must stay silent before `check_occupancy` may close a worker again.
+`GroupHandler.record_cpu_pressure` stamps the clock on every CPU event — a
+crossing blocked, a growth landed, a growth the quota or the server state
+refused (`CPU_GROW_QUOTA_REFUSAL`, one constant with two readers), a worker
+reopened — and on an `apply_policy` that actually MOVES a worker's admission;
+an apply that moves nobody invents no cooldown. `get_retirement_suspension`
+answers the gate: a living worker still CPU-closed, or an event younger than the
+quiet. `_cpu_pressure_monotonic` is born `None`, so a boot imposes no cooldown,
+and with `cpu_grow_percent` off the gate is never consulted. Past the quiet
+`_spare_worker` and `_order_quit` are exactly what they always were —
+consolidation of a worker with users included.
 
 **Not yet built (second pass).** The deliberate reboot command on `_server`
 (`reboot now`/`reboot wait N`, notify_user, the consumer service-message

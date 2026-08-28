@@ -377,6 +377,18 @@ expected to cost, and `newcomer_reserve_count` is how many of that size must
 always find room: the group grows at its own round before anybody is refused,
 and no closure may eat into that reserve (default 1).
 
+**The CPU keys are the early provision, and its brake.** `cpu_grow_percent`
+(experimental, off when omitted) is the smoothed CPU above which a worker
+fathers one worker ahead of the demand — once per crossing, the latch re-arming
+below `cpu_grow_rearm_percent`, and the worker closed to NEW users while it sits
+above. `cpu_retirement_quiet_seconds` (default 60) is the other half: how long
+the CPU must stay SILENT — nothing blocked, grown, quota-refused or reopened —
+before the closure judge resumes. It is the quiet of the whole GROUP, not the
+age of one worker (that is `worker_min_life_seconds`), and every CPU event
+restarts it whole. Without it, closing the emptiest worker while demand still
+stands hands its users back to the hot one, which regrows seconds later. With
+the CPU policy off the brake does not exist at all.
+
 **The ages are the vertex's.** `user_expiry_hours` / `guest_expiry_hours` on
 `commander` are how long a FROZEN user is kept before the machine forgets him
 whole — the vertex holds them because a frozen user lives in no process, and a

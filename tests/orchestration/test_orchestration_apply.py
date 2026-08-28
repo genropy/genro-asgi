@@ -358,3 +358,232 @@ async def test_post_commit_best_effort(configured, make_group, caplog, monkeypat
     assert payload["generation"] == 3
     assert group.occupancy_max_percent == 56.0
     assert "the round after the apply could not be anticipated" in caplog.text
+
+
+# --- the retirement quiet meets the hot apply -----------------------------------
+
+
+async def test_applying_the_quiet_alone_moves_no_clock(configured, make_group):  # noqa: F811
+    # A new quiet is a setpoint like any other: it changes at once what the gate
+    # reads, and it invents no CPU event — an apply is not pressure.
+    group = make_group(reception_reserved_percent=0.0)
+    await group.start_worker()
+    assert group._cpu_pressure_monotonic is None
+
+    await configured.apply_group_settings(profile={"cpu_retirement_quiet_seconds": 5.0})
+
+    assert group.cpu_retirement_quiet_seconds == 5.0
+    assert group._cpu_pressure_monotonic is None
+
+
+async def test_a_foreign_apply_during_the_quiet_leaves_it_running(
+    configured, make_group  # noqa: F811
+):
+    # A change that has nothing to do with the CPU neither clears nor renews the
+    # stamp: the time already elapsed stays elapsed.
+    group = make_group(reception_reserved_percent=0.0, cpu_grow_percent=50.0)
+    worker = await group.start_worker()
+    declare_cpu(worker, 10.0)
+    group.record_cpu_pressure()
+    stamped = group._cpu_pressure_monotonic
+
+    await configured.apply_group_settings(profile={"occupancy_max_percent": 61.0})
+
+    assert group.occupancy_max_percent == 61.0
+    assert group._cpu_pressure_monotonic == stamped
+
+
+async def test_switching_the_policy_on_without_a_transition_is_no_pressure(
+    configured, make_group  # noqa: F811
+):
+    # OFF -> ON with nobody's admission actually moving: no cooldown is invented
+    # out of the reconfiguration, and the retirement judges as it always did.
+    group = make_group(reception_reserved_percent=0.0)
+    worker = await group.start_worker()
+    declare_cpu(worker, 10.0)
+
+    await configured.apply_group_settings(
+        profile={"cpu_grow_percent": 50.0, "cpu_grow_rearm_percent": 20.0}
+    )
+
+    assert group.cpu_grow_percent == 50.0
+    assert worker.cpu_admission_open is True
+    assert group._cpu_pressure_monotonic is None
+    assert group.get_retirement_suspension(group.policy) is None
+
+
+async def test_an_apply_that_closes_a_worker_is_pressure(configured, make_group):  # noqa: F811
+    # OFF -> ON that really closes somebody: the same fact the periodic judge
+    # would have recorded, so the quiet starts here too.
+    group = make_group(reception_reserved_percent=0.0)
+    hot = await group.start_worker()
+    declare_cpu(hot, 90.0)
+
+    await configured.apply_group_settings(
+        profile={
+            "cpu_grow_percent": 50.0,
+            "cpu_grow_rearm_percent": 20.0,
+            "cpu_retirement_quiet_seconds": 60.0,
+        }
+    )
+
+    assert hot.cpu_admission_open is False
+    assert group._cpu_pressure_monotonic is not None
+    # And the closed worker is its own reason, before the clock is even read.
+    assert group.get_retirement_suspension(group.policy) == "a worker is still CPU-closed"
+
+
+async def test_an_apply_that_reopens_a_worker_is_pressure(configured, make_group):  # noqa: F811
+    # A reconciliation that REOPENS is a CPU event as much as one that closes:
+    # the reopen is exactly the transition the measured churn came from.
+    group = make_group(reception_reserved_percent=0.0)
+    hot = await group.start_worker()
+    declare_cpu(hot, 90.0)
+    await configured.apply_group_settings(
+        profile={"cpu_grow_percent": 50.0, "cpu_grow_rearm_percent": 20.0}
+    )
+    group._cpu_pressure_monotonic = None  # forget the close: judge the reopen alone
+
+    await configured.apply_group_settings(
+        profile={
+            "cpu_grow_percent": 95.0,
+            "cpu_grow_rearm_percent": 92.0,
+            "cpu_retirement_quiet_seconds": 60.0,
+        }
+    )
+
+    assert hot.cpu_admission_open is True
+    assert group._cpu_pressure_monotonic is not None
+    suspension = group.get_retirement_suspension(group.policy)
+    assert suspension is not None and "the quiet lasts" in suspension
+
+
+async def test_switching_the_policy_off_frees_the_retirement_at_once(
+    configured, make_group  # noqa: F811
+):
+    # ON -> OFF: the gate is inert from that instant, and the timestamp the
+    # policy left behind holds nothing back.
+    group = make_group(
+        reception_reserved_percent=0.0,
+        cpu_grow_percent=50.0,
+        cpu_retirement_quiet_seconds=3600.0,
+    )
+    reception = await group.start_worker()
+    spare = await group.start_worker()
+    declare_cpu(reception, 90.0)
+    declare_cpu(spare, 1.0)
+    await group.check_occupancy(now=True)  # blocked: pressure, and a growth
+    assert group._cpu_pressure_monotonic is not None
+
+    declare_cpu(reception, 1.0)
+    stamped = group._cpu_pressure_monotonic
+    await configured.apply_group_settings(profile={})  # the policy off
+
+    assert group.cpu_grow_percent is None
+    # The reopenings this apply performed are the gate being dismantled, not the
+    # CPU speaking: the clock stays exactly where the last real event left it.
+    assert group._cpu_pressure_monotonic == stamped
+    for worker_handler in group.living_workers:
+        declare_cpu(worker_handler, 1.0)
+    await group.check_occupancy(now=True)
+
+    assert any(
+        worker_handler.state in ("quitting", "quitted")
+        for worker_handler in group.worker_handler_map.values()
+    )
+
+
+async def test_a_refused_apply_moves_neither_policy_nor_clock(configured, make_group):  # noqa: F811
+    # Stage one refuses before anything moves: no policy, no admission, no stamp.
+    group = make_group(
+        reception_reserved_percent=0.0,
+        cpu_grow_percent=50.0,
+        cpu_retirement_quiet_seconds=60.0,
+    )
+    hot = await group.start_worker()
+    declare_cpu(hot, 90.0)
+    await group.check_occupancy(now=True)
+    before_policy = group.policy
+    before_stamp = group._cpu_pressure_monotonic
+    before_admission = hot.cpu_admission_open
+
+    with pytest.raises(GroupPolicyError):
+        await configured.apply_group_settings(
+            profile={"cpu_retirement_quiet_seconds": -1.0}
+        )
+
+    assert group.policy is before_policy
+    assert group._cpu_pressure_monotonic == before_stamp
+    assert hot.cpu_admission_open == before_admission
+
+
+async def test_the_quiet_travels_through_status_digest_and_changed(
+    configured, make_group  # noqa: F811
+):
+    # The setpoint is in the effective settings, in the changed diff when it
+    # moves, and it moves the digest like any other.
+    make_group()
+    first = await configured.apply_group_settings(profile={"cpu_retirement_quiet_seconds": 90.0})
+
+    assert first["changed_settings"] == {"cpu_retirement_quiet_seconds": 90.0}
+    assert first["effective_settings"]["cpu_retirement_quiet_seconds"] == 90.0
+    moved_digest = configured.last_apply["digest"]
+
+    second = await configured.apply_group_settings(profile={"cpu_retirement_quiet_seconds": 90.0})
+    assert second["changed_settings"] == {}
+    assert configured.last_apply["digest"] == moved_digest
+
+    third = await configured.apply_group_settings(profile={})
+    assert third["changed_settings"] == {"cpu_retirement_quiet_seconds": 60.0}
+    assert configured.last_apply["digest"] != moved_digest
+
+
+async def test_off_then_on_again_leaves_no_cooldown_behind(configured, make_group):  # noqa: F811
+    # The three steps in a row: a worker closed under the policy, the policy
+    # switched off — the worker reopens, the clock does not move and the
+    # retirement is free — and the policy switched back on with nobody moving,
+    # which must not resurrect a quiet out of the old pressure.
+    group = make_group(reception_reserved_percent=0.0)
+    hot = await group.start_worker()
+    spare = await group.start_worker()
+    declare_cpu(hot, 90.0)
+    declare_cpu(spare, 1.0)
+    band = {
+        "cpu_grow_percent": 50.0,
+        "cpu_grow_rearm_percent": 20.0,
+        "cpu_retirement_quiet_seconds": 3600.0,
+    }
+
+    # 1) The policy on closes the hot worker: a real transition, so pressure.
+    await configured.apply_group_settings(profile=band)
+    assert hot.cpu_admission_open is False
+    closed_at = group._cpu_pressure_monotonic
+    assert closed_at is not None
+    assert group.get_retirement_suspension(group.policy) == "a worker is still CPU-closed"
+
+    # 2) The policy off reopens him, and the clock does not move: the gate is
+    # gone, so the retirement is free at once despite the huge quiet.
+    await configured.apply_group_settings(profile={"cpu_retirement_quiet_seconds": 3600.0})
+    assert group.cpu_grow_percent is None
+    assert hot.cpu_admission_open is True
+    assert group._cpu_pressure_monotonic == closed_at
+
+    declare_cpu(hot, 1.0)
+    await group.check_occupancy(now=True)
+    assert any(
+        worker_handler.state in ("quitting", "quitted")
+        for worker_handler in group.worker_handler_map.values()
+    )
+
+    # 3) The policy back on with nobody moving — both workers are open and cool
+    # — stamps nothing: the only pressure on record is still step 1's, so the
+    # quiet that governs from here runs from THAT instant and not from the
+    # apply. Whatever is left of it is real time already elapsed, never a fresh
+    # period the reconfiguration invented.
+    for worker_handler in group.living_workers:
+        declare_cpu(worker_handler, 1.0)
+    await configured.apply_group_settings(profile=band)
+
+    assert group.cpu_grow_percent == 50.0
+    assert all(w.cpu_admission_open for w in group.living_workers)
+    assert group._cpu_pressure_monotonic == closed_at

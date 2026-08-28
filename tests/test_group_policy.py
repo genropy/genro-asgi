@@ -22,6 +22,7 @@ def test_defaults_materialized_from_empty_settings():
     assert policy.close_occupancy_max_percent == 40.0
     assert policy.cpu_grow_percent is None
     assert policy.cpu_grow_rearm_percent == 40.0
+    assert policy.cpu_retirement_quiet_seconds == 60.0
     assert policy.worker_min_life_seconds == 60.0
     assert policy.reception_reserved_percent == 50.0
     assert policy.new_user_occupancy_percent == 5.0
@@ -187,3 +188,30 @@ def test_profile_version_reserved_key():
         assert caught.value.violations == [
             f"profile_version: only version 1 is supported, got {value!r}"
         ]
+
+
+def test_the_retirement_quiet_is_a_non_negative_duration():
+    # wf:contract: cpu_retirement_quiet_seconds is a finite number >= 0 — zero
+    # wf:contract: is a legitimate duration ("judge as soon as nobody is
+    # wf:contract: closed"), null is not (the quiet is never "off"), and a
+    # wf:contract: negative one is out of range.
+    assert GroupPolicy.from_settings({"cpu_retirement_quiet_seconds": 0}).\
+        cpu_retirement_quiet_seconds == 0
+    assert GroupPolicy.from_settings({"cpu_retirement_quiet_seconds": 0.5}).\
+        cpu_retirement_quiet_seconds == 0.5
+
+    for refused, expected in (
+        (-1.0, "out of range"),
+        (None, "null is not allowed"),
+        (float("inf"), "must be a finite number"),
+        ("60", "expected a number"),
+    ):
+        with pytest.raises(GroupPolicyError) as error:
+            GroupPolicy.from_settings({"cpu_retirement_quiet_seconds": refused})
+        assert expected in str(error.value)
+        assert "cpu_retirement_quiet_seconds" in str(error.value)
+
+    # It survives the round trip a profile takes, like every other setpoint.
+    written = GroupPolicy.from_settings({"cpu_retirement_quiet_seconds": 12.5}).to_settings()
+    assert written["cpu_retirement_quiet_seconds"] == 12.5
+    assert json.dumps(written, allow_nan=False)

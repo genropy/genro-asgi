@@ -108,7 +108,14 @@ refused, a closed worker still under the hard ``occupancy_max_percent`` takes
 him as a LOGGED fallback — the soft closure protects the pool's shape, never
 at the price of a premature 503. The crossing is judged within a beat, not at
 the shape's own cadence: the envelope layer rings ``ping_now`` when a fresh
-photo crosses a threshold, and the wake anticipates the group's round.
+photo crosses a threshold, and the wake anticipates the group's round. And the
+RETIREMENT STANDS ASIDE while the CPU speaks: a living worker still CPU-closed,
+or any CPU event younger than ``cpu_retirement_quiet_seconds`` — a blocking, a
+growth, a quota refusal, a reopening — suspends the closure judge, because
+closing the emptiest worker under standing demand hands its users back to the
+hot one, which regrows seconds later (the close→grow cycle the bench measured,
+churn 2026-08-28). The quiet is CONTINUOUS: every event restarts it whole, the
+reopen included. After it, the retirement is exactly what it always was.
 
 **The closure is the departure of a whole worker, in six steps.** The group
 orders the quit; the worker answers AT ONCE with the photo of everybody flagged
@@ -197,6 +204,13 @@ CHECK_USER_ACTIVITY_BEATS = 12
 #: in minutes, the clocks it is read against are seconds.
 SECONDS_PER_MINUTE = 60.0
 
+#: The suppression a crossing meets when the growth is refused by the memory
+#: quota or the server state. ONE constant, because two readers depend on the
+#: same words: the orchestration log, and the pressure clock — a crossing the
+#: group cannot honour is UNMET demand, and the retirement must not eat the
+#: capacity that demand is waiting for.
+CPU_GROW_QUOTA_REFUSAL = "suppressed: the quota or the server state refuses the growth"
+
 #: How long the group waits for the confirmation of ONE ordered departure — a
 #: freeze or a drop — before giving up, releasing the hold and leaving the user
 #: where he is. A beat: the round that sends the order is the group's own, and a
@@ -232,6 +246,14 @@ class GroupHandler:
         cpu_grow_rearm_percent: below this the worker's crossing is loaded
             again. The band between the two is hysteresis: a worker sitting
             above the threshold fires ONCE, not once per photo.
+        cpu_retirement_quiet_seconds: how long the CPU must stay SILENT — no
+            crossing blocked, no growth landed or quota-refused, no worker
+            reopened — before the retirement judges again, with the policy on.
+            Not the age of a worker (that is ``worker_min_life_seconds``): this
+            is the quiet of the whole group, and every CPU event restarts it
+            whole. Closing the emptiest worker while demand still speaks hands
+            its users back to the hot one, which regrows seconds later
+            (measured, churn 2026-08-28).
         worker_min_life_seconds: a worker is no closure candidate before this
             age — younger, its occupancy measures its own birth, not its work.
         reception_reserved_percent: what the reception keeps free for the trade
@@ -270,6 +292,7 @@ class GroupHandler:
         close_occupancy_max_percent: float = 40.0,
         cpu_grow_percent: float | None = None,
         cpu_grow_rearm_percent: float = 40.0,
+        cpu_retirement_quiet_seconds: float = 60.0,
         worker_min_life_seconds: float = 60.0,
         reception_reserved_percent: float = 50.0,
         new_user_occupancy_percent: float = 5.0,
@@ -304,6 +327,7 @@ class GroupHandler:
                 "close_occupancy_max_percent": close_occupancy_max_percent,
                 "cpu_grow_percent": cpu_grow_percent,
                 "cpu_grow_rearm_percent": cpu_grow_rearm_percent,
+                "cpu_retirement_quiet_seconds": cpu_retirement_quiet_seconds,
                 "worker_min_life_seconds": worker_min_life_seconds,
                 "reception_reserved_percent": reception_reserved_percent,
                 "new_user_occupancy_percent": new_user_occupancy_percent,
@@ -344,6 +368,14 @@ class GroupHandler:
         #: system. What it says is which group rang it.
         self.ping_now_event = asyncio.Event()
         self._placement_lock = asyncio.Lock()
+        #: When the CPU last spoke (#43): a crossing blocked, a growth landed
+        #: or was refused by the quota, a worker reopened — an apply that
+        #: actually moves a worker's admission included. None from birth — no
+        #: artificial cooldown at boot: until a real CPU event this gate does
+        #: not exist, and the retirement judges as it always did. The retirement
+        #: resumes only after ``cpu_retirement_quiet_seconds`` of CONTINUOUS
+        #: silence past this instant.
+        self._cpu_pressure_monotonic: float | None = None
         self._logger = logging.getLogger(__name__)
         self._worker_counter = 0
         #: One row per periodic method of this group — turns seen, runs, errors
@@ -374,6 +406,10 @@ class GroupHandler:
     @property
     def cpu_grow_rearm_percent(self) -> float:
         return self.policy.cpu_grow_rearm_percent
+
+    @property
+    def cpu_retirement_quiet_seconds(self) -> float:
+        return self.policy.cpu_retirement_quiet_seconds
 
     @property
     def worker_min_life_seconds(self) -> float:
@@ -424,10 +460,23 @@ class GroupHandler:
         no log line — everything fallible was done before this is called, so the
         swap cannot half-happen. Every listed worker is re-armed for the CPU
         growth, the band its latch was spent against being gone.
+
+        An admission this apply actually MOVES is a CPU event like any other and
+        restarts the retirement's quiet: new thresholds that close a worker, or
+        reopen one, are the same fact the periodic judge would have recorded. An
+        apply that moves nobody — a new quiet, another setpoint entirely — leaves
+        the clock exactly where it was, so nothing invents a cooldown out of a
+        reconfiguration. A policy switched OFF moves nobody either, whatever it
+        reopens: those reopenings are the gate being dismantled, not the CPU
+        speaking, and stamping them would leave a cooldown behind for whoever
+        switches the policy back on.
         """
+        cpu_policy_on = new_policy.cpu_grow_percent is not None
         self.policy = new_policy
         for name, admission_open in reconciliation:
             worker_handler = self.worker_handler_map[name]
+            if cpu_policy_on and worker_handler.cpu_admission_open != admission_open:
+                self.record_cpu_pressure()
             worker_handler.cpu_admission_open = admission_open
             worker_handler.cpu_growth_armed = True
 
@@ -784,6 +833,18 @@ class GroupHandler:
             return
         if self.state == "saturated":
             self.state = "running"
+        if policy.cpu_grow_percent is not None:
+            # The retirement stands aside while the CPU policy is under
+            # pressure (#43): closing the emptiest worker while demand stands
+            # hands its users back to the hot one, which regrows seconds later
+            # — the close→grow cycle the bench measured. With the policy off
+            # this gate does not exist.
+            suspension = self.get_retirement_suspension(policy)
+            if suspension is not None:
+                self._logger.debug(
+                    "Group %s: retirement suspended — %s", self.name, suspension
+                )
+                return
         spare = self._spare_worker(picture, policy)
         if spare is not None and self._policy_held(policy, "close_worker", spare.name):
             await self._order_quit(spare, "close_worker")
@@ -1052,6 +1113,7 @@ class GroupHandler:
             if cpu_percent > policy.cpu_grow_percent:
                 if worker_handler.cpu_admission_open:
                     worker_handler.cpu_admission_open = False
+                    self.record_cpu_pressure()
                     self.spa_commander.log_order(
                         self.name,
                         "cpu_admission",
@@ -1064,6 +1126,7 @@ class GroupHandler:
             elif cpu_percent < policy.cpu_grow_rearm_percent:
                 if not worker_handler.cpu_admission_open:
                     worker_handler.cpu_admission_open = True
+                    self.record_cpu_pressure()
                     self.spa_commander.log_order(
                         self.name,
                         "cpu_admission",
@@ -1086,6 +1149,8 @@ class GroupHandler:
         }
         refusal = self._cpu_grow_refusal(worker_handler)
         if refusal is not None:
+            if refusal == CPU_GROW_QUOTA_REFUSAL:
+                self.record_cpu_pressure()
             self.spa_commander.log_order(
                 self.name, "cpu_grow", worker_handler.name, numbers=numbers, outcome=refusal
             )
@@ -1097,6 +1162,8 @@ class GroupHandler:
             if refusal is None and len(self.worker_handler_map) != worker_count:
                 refusal = "suppressed: capacity arrived while waiting for the lock"
             if refusal is not None:
+                if refusal == CPU_GROW_QUOTA_REFUSAL:
+                    self.record_cpu_pressure()
                 self.spa_commander.log_order(
                     self.name, "cpu_grow", worker_handler.name, numbers=numbers, outcome=refusal
                 )
@@ -1108,6 +1175,7 @@ class GroupHandler:
             if newborn is None:
                 return False
             worker_handler.cpu_growth_armed = False
+            self.record_cpu_pressure()
             numbers["spawn_seconds"] = round(time.monotonic() - spawn_started, 3)
             self.spa_commander.log_order(
                 self.name,
@@ -1117,6 +1185,58 @@ class GroupHandler:
                 outcome=f"grown {newborn.name}",
             )
         return True
+
+    def record_cpu_pressure(self) -> None:
+        """Stamp NOW as the instant the CPU last spoke — the retirement's quiet restarts.
+
+        Called on every CPU event: a worker blocked over the growth threshold, a
+        growth that landed, a growth the quota or the server state refused, a
+        worker reopened below the rearm threshold — and an apply that actually
+        moves a worker's admission, which is the same fact said by a
+        reconfiguration instead of a photo.
+
+        The reopen counts ON PURPOSE: a worker that was closed for minutes and
+        reopens must not meet the retirement at the very next beat — the bench
+        measured exactly that close, and the regrowth it caused 5 seconds later
+        (churn of 2026-08-28, rearm30).
+        """
+        self._cpu_pressure_monotonic = time.monotonic()
+
+    def get_retirement_suspension(self, policy: GroupPolicy) -> str | None:
+        """Why the retirement stands aside right now; None when it may judge.
+
+        Args:
+            policy: the setpoints THIS round decided on, so the answer belongs
+                to the same picture as everything else the round did.
+
+        Returns:
+            The reason, ready for the log, or None when the closure judge may
+            run.
+
+        Two reasons, in the order they are asked. The policy off is no reason at
+        all: with no ``cpu_grow_percent`` this is never consulted and the
+        retirement is exactly what it always was. A living worker still
+        CPU-closed is standing demand — its load has nowhere to consolidate
+        INTO. And a CPU event younger than ``cpu_retirement_quiet_seconds``
+        means the pressure only just ended: the quiet must be CONTINUOUS, so
+        every event — the reopen included — restarts the whole period. Born
+        None, the clock imposes no cooldown at boot: before any CPU event only
+        the first answer exists.
+        """
+        if any(
+            not worker_handler.cpu_admission_open for worker_handler in self.living_workers
+        ):
+            return "a worker is still CPU-closed"
+        last_pressure = self._cpu_pressure_monotonic
+        if last_pressure is None:
+            return None
+        elapsed = time.monotonic() - last_pressure
+        if elapsed < policy.cpu_retirement_quiet_seconds:
+            return (
+                f"the CPU spoke {elapsed:.1f}s ago, the quiet lasts "
+                f"{policy.cpu_retirement_quiet_seconds:.1f}s"
+            )
+        return None
 
     def _cpu_grow_refusal(self, worker_handler: WorkerHandler) -> str | None:
         """Why a CPU growth may not happen right now; None when it may.
@@ -1134,7 +1254,7 @@ class GroupHandler:
         the decision stood on.
         """
         if not self._may_grow:
-            return "suppressed: the quota or the server state refuses the growth"
+            return CPU_GROW_QUOTA_REFUSAL
         if (
             self.worker_handler_map.get(worker_handler.name) is not worker_handler
             or worker_handler.state != "running"

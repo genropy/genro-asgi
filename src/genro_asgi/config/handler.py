@@ -391,6 +391,7 @@ class ConfigurationHandler(ConfigHandler):
                 "close_occupancy_max_percent",
                 "cpu_grow_percent",
                 "cpu_grow_rearm_percent",
+                "cpu_retirement_quiet_seconds",
                 "worker_min_life_seconds",
                 "reception_reserved_percent",
                 "new_user_occupancy_percent",

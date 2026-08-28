@@ -61,6 +61,7 @@ Example profile:
 {
   "cpu_grow_percent": 50,
   "cpu_grow_rearm_percent": 40,
+  "cpu_retirement_quiet_seconds": 60,
   "occupancy_max_percent": 80,
   "reception_reserved_percent": 0
 }
@@ -83,7 +84,7 @@ configuration is refused rather than started.
 the effective configuration BEFORE the vertex is built, as
 `defaults ⊕ recipe_settings ⊕ profile ⊕ env_settings`, through
 `GroupPolicy.from_settings` (`src/genro_asgi/spa/orchestration/group_policy.py`
-— the frozen dataclass that carries the 14 setpoints, IS the validation and
+— the frozen dataclass that carries the 15 setpoints, IS the validation and
 collects every violation). The defaults are the dataclass fields; the recipe
 level is what the recipe wrote; the profile level is the named stored profile;
 `env_settings` is the last word. The two immutable levels — recipe and env —

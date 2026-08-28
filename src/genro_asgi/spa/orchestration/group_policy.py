@@ -75,6 +75,7 @@ class GroupPolicy:
         "close_occupancy_max_percent": (False, False, 0.0, False, 100.0),
         "cpu_grow_percent": (False, True, 0.0, False, 100.0),
         "cpu_grow_rearm_percent": (False, False, 0.0, False, 100.0),
+        "cpu_retirement_quiet_seconds": (False, False, 0.0, False, None),
         "worker_min_life_seconds": (False, False, 0.0, False, None),
         "reception_reserved_percent": (False, False, 0.0, False, 100.0),
         "new_user_occupancy_percent": (False, False, 0.0, True, None),
@@ -91,6 +92,7 @@ class GroupPolicy:
     close_occupancy_max_percent: float = 40.0
     cpu_grow_percent: float | None = None
     cpu_grow_rearm_percent: float = 40.0
+    cpu_retirement_quiet_seconds: float = 60.0
     worker_min_life_seconds: float = 60.0
     reception_reserved_percent: float = 50.0
     new_user_occupancy_percent: float = 5.0

@@ -218,6 +218,7 @@ class SpaApplicationGrammar(ApplicationGrammar):
         close_occupancy_max_percent: float | BagResolver = None,
         cpu_grow_percent: float | BagResolver = None,
         cpu_grow_rearm_percent: float | BagResolver = None,
+        cpu_retirement_quiet_seconds: float | BagResolver | None = None,
         worker_min_life_seconds: float | BagResolver = None,
         reception_reserved_percent: float | BagResolver = None,
         new_user_occupancy_percent: float | BagResolver = None,
@@ -266,7 +267,12 @@ class SpaApplicationGrammar(ApplicationGrammar):
         off when omitted) turns on the early CPU growth of #43: a worker whose
         smoothed ``cpu_percent`` crosses above it fathers one worker ahead of
         the demand, once per crossing — the latch re-arms below
-        ``cpu_grow_rearm_percent`` — and the newborn takes the next new user.
+        ``cpu_grow_rearm_percent`` — the worker is closed to NEW users while
+        over the threshold, and the newborn, left the open candidate, takes
+        them. ``cpu_retirement_quiet_seconds`` is how long the CPU must stay
+        silent — no blocking, growth, quota refusal or reopening — before the
+        retirement judges again: the quiet of the GROUP, distinct from the age
+        of one worker, restarted whole by every CPU event.
 
         The IDENTITY of the child: ``entry_module`` (what ``python -m`` runs),
         ``executable`` (the interpreter — a group is how two versions of a site

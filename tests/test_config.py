@@ -729,6 +729,7 @@ class SpaPoolConfig(AsgiConfigBuilder):
             new_user_occupancy_percent=4.0,
             newcomer_reserve_count=2,
             worker_max_users=16,
+            cpu_retirement_quiet_seconds=75.0,
             user_idle_freeze_minutes=45.0,
             entry_module="genro_asgi.spa.orchestration.worker_entry",
             executable="/srv/shop/.venvs/stable/bin/python",
@@ -831,6 +832,9 @@ class TestCommanderSection:
             "new_user_occupancy_percent": 4.0,
             "newcomer_reserve_count": 2,
             "worker_max_users": 16,
+            # The retirement's quiet is a policy of the GROUP (#43): how long
+            # the CPU must stay silent before the closure judge resumes.
+            "cpu_retirement_quiet_seconds": 75.0,
             # The silence is the GROUP's own policy: it is the rung that judges
             # who has gone quiet, and the child measures nothing.
             "user_idle_freeze_minutes": 45.0,
@@ -892,6 +896,8 @@ class TestCommanderSection:
         assert group.worker_max_users == 16
         assert group.memory_max_percent == 80.0
         assert group.worker_memory_max_percent == 40.0
+        # The new word of #43 lands on the built group, exactly as declared.
+        assert group.cpu_retirement_quiet_seconds == 75.0
         # The silence it judges is its own, and never travels down to the child.
         assert group.user_idle_freeze_minutes == 45.0
         # And what the group hands its workers is what a WorkerHandler is built

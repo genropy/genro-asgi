@@ -514,3 +514,52 @@ async def test_status_introspection(tmp_path):
     # Read-only: nothing moved, and the apply lock was never taken.
     assert commander.configuration_generation == applied["generation"]
     assert commander._configuration_lock.locked() is False
+
+
+async def test_the_retirement_quiet_travels_the_four_levels(tmp_path):
+    # wf:contract: cpu_retirement_quiet_seconds is a setpoint like any other:
+    # wf:contract: the recipe writes it under the group, a stored profile
+    # wf:contract: overrides it, env_settings overrides the profile, and what
+    # wf:contract: nobody names falls back to the dataclass default.
+    folder = tmp_path / "profiles"
+    written(folder, "quiet", {"cpu_retirement_quiet_seconds": 30.0})
+
+    # The recipe alone.
+    plain = pool_server(tmp_path)
+    await boot(plain)
+    assert plain.applications["site0"].commander.configured_group.policy.\
+        cpu_retirement_quiet_seconds == 60.0
+
+    # The profile over the recipe.
+    profiled = pool_server(tmp_path, profiles_path=folder, profile_name="quiet")
+    await boot(profiled)
+    assert profiled.applications["site0"].commander.configured_group.policy.\
+        cpu_retirement_quiet_seconds == 30.0
+
+    # And the environment over the profile.
+    overridden = pool_server(
+        tmp_path,
+        profiles_path=folder,
+        profile_name="quiet",
+        env_settings={"cpu_retirement_quiet_seconds": 7.5},
+    )
+    await boot(overridden)
+    commander = overridden.applications["site0"].commander
+    assert commander.configured_group.policy.cpu_retirement_quiet_seconds == 7.5
+
+    # It is readable from outside like every other setpoint.
+    front = overridden.applications["site0"]
+    assert front.settings_status["effective_settings"]["cpu_retirement_quiet_seconds"] == 7.5
+
+
+async def test_a_profile_with_a_negative_quiet_fails_the_boot(tmp_path):
+    # wf:contract: the quiet is validated with the rest of the policy: a stored
+    # wf:contract: profile carrying a negative one does not start the server.
+    folder = tmp_path / "profiles"
+    written(folder, "wrong", {"cpu_retirement_quiet_seconds": -1.0})
+    server = pool_server(tmp_path, profiles_path=folder, profile_name="wrong")
+
+    with pytest.raises(GroupPolicyError) as refused:
+        await boot(server)
+
+    assert any("cpu_retirement_quiet_seconds" in v for v in refused.value.violations)

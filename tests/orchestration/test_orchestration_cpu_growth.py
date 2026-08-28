@@ -28,10 +28,13 @@ below ``cpu_grow_rearm_percent`` — is what these tests photograph now.
 from __future__ import annotations
 
 import asyncio
+import time as real_time
 
 import pytest
 
 from genro_asgi.spa.orchestration import AssignmentRefused
+from genro_asgi.spa.orchestration import group_handler as group_handler_module
+from genro_asgi.spa.orchestration.group_policy import GroupPolicyError
 
 from .conftest import kill_process, wait_for
 
@@ -57,6 +60,36 @@ async def grown_group(make_group, **policies):
 def declare_cpu(worker_handler, cpu_percent: float) -> None:
     """Write the smoothed CPU into the photo the judge reads."""
     worker_handler.worker_snapshot["cpu_percent"] = cpu_percent
+
+
+class ControlledTime:
+    """The clock of the retirement quiet, advanced by hand — no real waiting.
+
+    Stands in for the ``time`` module INSIDE group_handler only: ``monotonic``
+    answers this clock, everything else is the real module — the workers, the
+    envelope layer and asyncio keep the real time, so a test advancing the
+    quiet moves no timer but the group's own.
+    """
+
+    def __init__(self) -> None:
+        self.now = real_time.monotonic()
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+    def __getattr__(self, name):
+        return getattr(real_time, name)
+
+
+@pytest.fixture
+def group_clock(monkeypatch):
+    """group_handler's clock, controlled: advance() is the only way it moves."""
+    clock = ControlledTime()
+    monkeypatch.setattr(group_handler_module, "time", clock)
+    return clock
 
 
 def arrival(commander, group, user: str):
@@ -549,31 +582,39 @@ async def test_the_newborn_is_not_retired_by_the_next_round(make_group):
     assert len(group.worker_handler_map) == 2
 
 
-async def test_after_the_descent_the_spare_worker_is_still_released(make_group):
-    group = await grown_group(make_group)
+async def test_after_the_descent_and_the_quiet_the_spare_worker_is_released(
+    make_group, group_clock
+):
+    group = await grown_group(make_group, cpu_retirement_quiet_seconds=60.0)
     declare_cpu(group.reception, 55.0)
     await group.check_occupancy(now=True)
     newborn = group.worker_handler_map["standard_0002"]
 
-    # The load is gone: the reception reopens, the newborn is idle and of age.
+    # The load is gone: the reception reopens — a CPU event, the quiet restarts.
     declare_cpu(group.reception, 5.0)
     declare_cpu(newborn, 1.0)
-    await group.check_occupancy(now=True)  # reopens the reception, rearms
-    await group.check_occupancy(now=True)  # and this round closes the spare
+    await group.check_occupancy(now=True)
+    assert newborn.state == "running"  # suspended: the reopen just spoke
+
+    group_clock.advance(61.0)
+    await group.check_occupancy(now=True)  # the quiet elapsed: judged as always
 
     assert newborn.state in ("quitting", "quitted")
 
 
-async def test_no_spawn_close_spawn_cycle_without_new_load(make_group):
-    group = await grown_group(make_group)
+async def test_no_spawn_close_spawn_cycle_without_new_load(make_group, group_clock):
+    group = await grown_group(make_group, cpu_retirement_quiet_seconds=60.0)
     declare_cpu(group.reception, 55.0)
     await group.check_occupancy(now=True)
     newborn = group.worker_handler_map["standard_0002"]
 
     declare_cpu(group.reception, 5.0)
     declare_cpu(newborn, 1.0)
+    await group.check_occupancy(now=True)  # reopen: the quiet restarts
+    group_clock.advance(61.0)
     for _ in range(4):
         await group.check_occupancy(now=True)
+        group_clock.advance(61.0)
 
     assert len(group.worker_handler_map) == 2  # the spare quit, nobody respawned
     assert newborn.state in ("quitting", "quitted")
@@ -586,3 +627,208 @@ async def test_the_thresholds_must_leave_a_hysteresis_band(make_group):
 
     make_group(cpu_grow_percent=50.0, cpu_grow_rearm_percent=40.0)
     make_group(cpu_grow_rearm_percent=60.0)  # policy off: the band is nobody's business
+
+
+# --- the retirement stands aside while the CPU speaks ---------------------------
+
+
+async def test_policy_off_keeps_the_retirement_immediate(make_group):
+    # No CPU policy: the gate does not exist and the spare quits at once,
+    # exactly as it always did — no cooldown appears from anywhere.
+    group = make_group(reception_reserved_percent=0.0, cpu_retirement_quiet_seconds=3600.0)
+    await group.start_worker()
+    second = await group.start_worker()
+    declare_cpu(group.reception, 1.0)
+    declare_cpu(second, 1.0)
+
+    await group.check_occupancy(now=True)
+
+    assert second.state in ("quitting", "quitted")
+
+
+async def test_policy_off_ignores_even_a_fresh_pressure_stamp(make_group):
+    # The gate is inert with the policy off: a timestamp left by a policy that
+    # was on — or by an apply that switched it off — holds nothing back.
+    group = make_group(reception_reserved_percent=0.0, cpu_retirement_quiet_seconds=3600.0)
+    await group.start_worker()
+    second = await group.start_worker()
+    declare_cpu(group.reception, 1.0)
+    declare_cpu(second, 1.0)
+    group.record_cpu_pressure()
+
+    await group.check_occupancy(now=True)
+
+    assert second.state in ("quitting", "quitted")
+
+
+async def test_policy_on_from_boot_imposes_no_artificial_cooldown(make_group):
+    # Policy ON, a huge quiet, and NO CPU event ever — no blocked, grown,
+    # refusal or reopened: the pressure clock is still None, both workers are
+    # open, and the FIRST check retires the spare as always. Distinct from the
+    # policy-off test: here the gate exists and answers None.
+    group = await grown_group(make_group, cpu_retirement_quiet_seconds=3600.0)
+    second = await group.start_worker()
+    declare_cpu(group.reception, 1.0)
+    declare_cpu(second, 1.0)
+    assert group._cpu_pressure_monotonic is None
+    assert group.reception.cpu_admission_open and second.cpu_admission_open
+
+    await group.check_occupancy(now=True)
+
+    assert second.state in ("quitting", "quitted")
+
+
+async def test_a_cpu_closed_worker_suspends_the_retirement(make_group):
+    # Even with a zero quiet, standing demand — a worker still closed — is
+    # its own gate: the emptiest worker is not handed back to the hot one.
+    group = await grown_group(make_group, cpu_retirement_quiet_seconds=0.0)
+    declare_cpu(group.reception, 55.0)
+    await group.check_occupancy(now=True)
+    newborn = group.worker_handler_map["standard_0002"]
+    declare_cpu(newborn, 1.0)
+    declare_cpu(group.reception, 45.0)  # in the band: stays blocked
+
+    await group.check_occupancy(now=True)
+
+    assert newborn.state == "running"
+    assert group.reception.cpu_admission_open is False
+
+
+async def test_a_fresh_growth_holds_the_retirement_for_the_whole_quiet(
+    make_group, group_clock
+):
+    group = await grown_group(make_group, cpu_retirement_quiet_seconds=60.0)
+    declare_cpu(group.reception, 55.0)
+    await group.check_occupancy(now=True)  # blocked + grown: pressure spoke
+    newborn = group.worker_handler_map["standard_0002"]
+    declare_cpu(group.reception, 5.0)
+    declare_cpu(newborn, 1.0)
+    await group.check_occupancy(now=True)  # reopen: restarts the quiet
+
+    group_clock.advance(59.0)
+    await group.check_occupancy(now=True)  # still inside the quiet
+
+    assert newborn.state == "running"
+
+
+async def test_a_quota_refused_growth_is_pressure_too(
+    make_group, commander, group_clock, caplog
+):
+    # A crossing the group cannot honour is UNMET demand: the retirement must
+    # not eat the capacity that demand is waiting for.
+    group = await grown_group(make_group, cpu_retirement_quiet_seconds=60.0)
+    second = await group.start_worker()
+    declare_cpu(group.reception, 60.0)
+    declare_cpu(second, 1.0)
+    commander.state = "saturated"  # _may_grow says no: the growth is refused
+
+    with caplog.at_level("INFO", logger=ORDERS_LOGGER):
+        await group.check_occupancy(now=True)  # crossing, growth refused
+
+    assert "suppressed: the quota or the server state refuses the growth" in caplog.text
+    group_clock.advance(59.0)
+    declare_cpu(group.reception, 45.0)  # the band: still blocked, but even if...
+    group.reception.cpu_admission_open = True  # ...nobody is closed any more
+    await group.check_occupancy(now=True)
+
+    assert second.state == "running"  # the refused demand still holds the quiet
+
+
+async def test_a_reopen_restarts_the_whole_quiet(make_group, group_clock):
+    # The measured churn defect: a worker closed for LONGER than the quiet,
+    # then reopened — the retirement must not meet it at the very next beat.
+    group = await grown_group(make_group, cpu_retirement_quiet_seconds=60.0)
+    declare_cpu(group.reception, 55.0)
+    await group.check_occupancy(now=True)
+    newborn = group.worker_handler_map["standard_0002"]
+    declare_cpu(newborn, 1.0)
+
+    group_clock.advance(120.0)  # closed for two whole quiets: pressure is old
+    declare_cpu(group.reception, 5.0)
+    await group.check_occupancy(now=True)  # THIS round reopens the reception
+
+    assert group.reception.cpu_admission_open is True
+    assert newborn.state == "running"  # and closes nobody: the quiet restarted
+
+    group_clock.advance(59.0)
+    await group.check_occupancy(now=True)
+    assert newborn.state == "running"  # still inside the restarted quiet
+
+    group_clock.advance(2.0)
+    await group.check_occupancy(now=True)
+    assert newborn.state in ("quitting", "quitted")
+
+
+async def test_new_pressure_during_the_quiet_restarts_it(make_group, group_clock):
+    group = await grown_group(make_group, cpu_retirement_quiet_seconds=60.0)
+    declare_cpu(group.reception, 55.0)
+    await group.check_occupancy(now=True)
+    newborn = group.worker_handler_map["standard_0002"]
+    declare_cpu(group.reception, 5.0)
+    declare_cpu(newborn, 1.0)
+    await group.check_occupancy(now=True)  # reopen: quiet running
+
+    group_clock.advance(50.0)
+    declare_cpu(group.reception, 55.0)  # the CPU speaks again mid-quiet
+    await group.check_occupancy(now=True)  # blocked (+ a third is grown)
+    declare_cpu(group.reception, 5.0)
+    await group.check_occupancy(now=True)  # reopened: restarted again
+
+    group_clock.advance(59.0)
+    for worker_handler in group.living_workers:
+        declare_cpu(worker_handler, 1.0)
+    await group.check_occupancy(now=True)
+
+    assert all(w.state == "running" for w in group.living_workers)
+
+
+async def test_a_worker_with_users_is_consolidated_after_the_quiet(
+    make_group, commander, group_clock
+):
+    # No absolute "a worker with users cannot close": after the descent and
+    # the quiet, the spare's user is redistributed — the consolidation stands.
+    group = await grown_group(make_group, cpu_retirement_quiet_seconds=60.0)
+    declare_cpu(group.reception, 55.0)
+    await group.check_occupancy(now=True)
+    newborn = group.worker_handler_map["standard_0002"]
+    resident = await arrival(commander, group, "resident")
+    assert resident == "standard_0002"
+
+    declare_cpu(group.reception, 5.0)
+    declare_cpu(newborn, 2.0)
+    await group.check_occupancy(now=True)  # reopen
+    group_clock.advance(61.0)
+    await group.check_occupancy(now=True)  # quiet over: the spare is judged
+
+    assert newborn.state in ("quitting", "quitted")
+
+
+async def test_sticky_users_stand_until_the_intentional_retirement(
+    make_group, commander, group_clock
+):
+    group = await grown_group(make_group, cpu_retirement_quiet_seconds=60.0)
+    declare_cpu(group.reception, 55.0)
+    await group.check_occupancy(now=True)
+    newborn = group.worker_handler_map["standard_0002"]
+    home = await arrival(commander, group, "settler")
+    assert home == "standard_0002"
+
+    declare_cpu(group.reception, 5.0)
+    declare_cpu(newborn, 2.0)
+    await group.check_occupancy(now=True)  # reopen: suspended
+    group_clock.advance(30.0)
+    await group.check_occupancy(now=True)  # still quiet: suspended
+
+    assert group.user_worker_map["settler"] == "standard_0002"  # untouched so far
+    assert newborn.state == "running"
+
+
+def test_the_quiet_is_a_duration_and_zero_is_one(make_group):
+    # The validation is the policy's, and it lists what is wrong: a negative
+    # quiet is out of range, zero is a legitimate duration.
+    with pytest.raises(GroupPolicyError, match="cpu_retirement_quiet_seconds"):
+        make_group(cpu_retirement_quiet_seconds=-1.0)
+
+    assert make_group(cpu_retirement_quiet_seconds=0.0).cpu_retirement_quiet_seconds == 0.0
+    # And a group that names it nowhere runs on the dataclass default.
+    assert make_group().cpu_retirement_quiet_seconds == 60.0
