@@ -79,15 +79,25 @@ class ProfiledFront(SpaApplication):
     commander_class = QuietCommander
 
 
-def pool_recipe(root: Path, groups: tuple[str, ...] = ("standard",)) -> type[AsgiConfigBuilder]:
-    """A recipe with the pool section and as many groups as asked for."""
+def pool_recipe(
+    root: Path,
+    groups: tuple[str, ...] = ("standard",),
+    orchestration: dict[str, Any] | None = None,
+    env_settings: dict[str, Any] | None = None,
+) -> type[AsgiConfigBuilder]:
+    """A recipe with the whole orchestration subtree and as many groups as asked for."""
 
     class PoolConfig(AsgiConfigBuilder):
         def main(self, configuration_root: Any) -> None:
             cfg = configuration_root.configuration()
             applications = cfg.applications()
-            front = applications.application(code="site0", mount="", app_class=ProfiledFront)
-            commander = front.commander(
+            front_kwargs: dict[str, Any] = {}
+            if env_settings is not None:
+                front_kwargs["env_settings"] = env_settings
+            front = applications.application(
+                code="site0", mount="", app_class=ProfiledFront, **front_kwargs
+            )
+            commander = front.orchestration(**(orchestration or {})).commander(
                 frozen_users_path=str(root / "frozen_users"),
                 instance_dir=str(root / "i"),
             )
@@ -106,15 +116,21 @@ def pool_recipe(root: Path, groups: tuple[str, ...] = ("standard",)) -> type[Asg
 
 
 def pool_server(
-    root: Path, groups: tuple[str, ...] = ("standard",), **front_kwargs: Any
+    root: Path,
+    groups: tuple[str, ...] = ("standard",),
+    *,
+    env_settings: dict[str, Any] | None = None,
+    **orchestration: Any,
 ) -> AsgiServer:
-    """A server whose front carries the four profile words by hand.
+    """A server built the way production builds one: everything through the recipe.
 
-    The recipe still owns the pool section — the front reads its own subtree by
-    code — while the words phase 7 will put in the grammar travel as kwargs.
+    The three words go on the orchestration node, ``env_settings`` on the
+    application element — it is a runtime dict and no grammar declares it — and
+    the front is instantiated by the server out of that recipe alone.
     """
-    front = ProfiledFront(code="site0", mount="", **front_kwargs)
-    return AsgiServer(config=pool_recipe(root, groups), applications=[front])
+    if "profiles_path" in orchestration:
+        orchestration["profiles_path"] = str(orchestration["profiles_path"])
+    return AsgiServer(config=pool_recipe(root, groups, orchestration, env_settings))
 
 
 async def boot(server: AsgiServer) -> None:
@@ -298,7 +314,7 @@ async def test_zero_or_multi_group_rejection(tmp_path):
 
     # Two groups, the gate on and nothing named: the boot is today's, and the
     # apply is what refuses — it is the one that needs a single group.
-    gated = pool_server(tmp_path, ("standard", "heavy"), orchestration_control=True)
+    gated = pool_server(tmp_path, ("standard", "heavy"), control_enabled=True)
     await boot(gated)
     assert set(gated.applications["site0"].commander.group_map) == {"standard", "heavy"}
 
@@ -330,7 +346,7 @@ async def test_router_gate_off_and_on(tmp_path):
     assert status == 200
     assert answer == SITE_BODY
 
-    opened = pool_server(tmp_path, orchestration_control=True)
+    opened = pool_server(tmp_path, control_enabled=True)
     await boot(opened)
     gated = opened.applications["site0"]
     assert ORCHESTRATION_ROOT in gated.internal_roots
@@ -346,8 +362,9 @@ async def test_http_contract_success_and_errors(tmp_path):
     # wf:contract: no active profile ("nothing to reload"); 409 not exactly one
     # wf:contract: group; 503 commander not started or server not RUNNING.
     folder = tmp_path / "profiles"
-    server = pool_server(tmp_path, profiles_path=folder, orchestration_control=True)
+    server = pool_server(tmp_path, profiles_path=folder, control_enabled=True)
     await boot(server)
+    server_commander = server.applications["site0"].commander
     apply_path = f"/{ORCHESTRATION_ROOT}/apply"
     reload_path = f"/{ORCHESTRATION_ROOT}/reload"
 
@@ -391,15 +408,22 @@ async def test_http_contract_success_and_errors(tmp_path):
     assert "nothing to reload" in answer["error"]
 
     # 409 — the machine has no single group the setpoints could govern.
-    several = pool_server(tmp_path, ("standard", "heavy"), orchestration_control=True)
+    several = pool_server(tmp_path, ("standard", "heavy"), control_enabled=True)
     await boot(several)
     status, answer = await ask(several, apply_path, method="POST", body={})
     assert status == 409
 
-    # 503 — the pool is not built, and the server that left RUNNING takes nothing.
-    unbuilt = pool_server(tmp_path, orchestration_control=True)
-    status, answer = await ask(unbuilt, apply_path, method="POST", body={})
+    # Before the boot the root is not claimed at all: the gate is mounted last,
+    # once the pool is up, so an unstarted front leaves the path to the site.
+    unbooted = pool_server(tmp_path, control_enabled=True)
+    assert ORCHESTRATION_ROOT not in unbooted.applications["site0"].internal_roots
+
+    # 503 — the pool is gone under a mounted gate, and the server that left
+    # RUNNING takes nothing.
+    server.applications["site0"]._commander = None
+    status, answer = await ask(server, apply_path, method="POST", body={})
     assert status == 503
+    server.applications["site0"]._commander = server_commander
     server.state = STOPPING
     status, answer = await ask(server, apply_path, method="POST", body={})
     assert status == 503
@@ -415,7 +439,7 @@ async def test_profile_level_replacement(tmp_path):
     server = pool_server(
         tmp_path,
         profiles_path=folder,
-        orchestration_control=True,
+        control_enabled=True,
         env_settings={"newcomer_reserve_count": 2},
     )
     await boot(server)
@@ -443,7 +467,7 @@ async def test_invalid_apply_all_or_nothing(tmp_path):
     # wf:contract: T8 — one violation means the state is untouched, generation
     # wf:contract: does not move, and the response is 400 with the complete
     # wf:contract: violations list.
-    server = pool_server(tmp_path, orchestration_control=True)
+    server = pool_server(tmp_path, control_enabled=True)
     await boot(server)
     commander = server.applications["site0"].commander
     before = commander.configured_group.policy
@@ -469,7 +493,7 @@ async def test_status_introspection(tmp_path):
     # wf:contract: the last apply, read-only, no lock taken.
     folder = tmp_path / "profiles"
     written(folder, "fast", {"occupancy_max_percent": 62.0})
-    server = pool_server(tmp_path, profiles_path=folder, orchestration_control=True)
+    server = pool_server(tmp_path, profiles_path=folder, control_enabled=True)
     await boot(server)
     commander = server.applications["site0"].commander
 

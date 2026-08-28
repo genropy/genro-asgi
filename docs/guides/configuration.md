@@ -288,19 +288,33 @@ Outside a recipe the same three shapes reach the constructor as `storage=`:
 `None` for the default `site:` mount, a ready `StorageManager` to adopt, or
 genro-storage's own `list[dict]` of mount configurations.
 
-## The pool section: `commander` and its `groups`
+## The pool subtree: `orchestration`, its `commander` and its `groups`
 
-A site whose pages live in worker processes declares the pool in one section. It
-has two rungs — the `commander` (the vertex: one per server) and one `group` per
-family of workers — and **nothing in it says how many processes there are**: the
-group brings its reception into being at boot, then grows on demand and shrinks
-when capacity is spare, so the count is something you read in the log, never
-something you set.
+A site whose pages live in worker processes declares the whole thing under ONE
+node of the front that owns it: `orchestration`. It is not a section of the site
+dialect — it belongs to the SPA application's own grammar — so it is written on
+the `application` element, never on `cfg`:
+
+    applications → application → orchestration → commander → groups → group
+
+Three rungs carry words: `orchestration` (the profiles and the control surface),
+the `commander` (the vertex: one per front) and one `group` per family of
+workers. **Nothing in it says how many processes there are**: the group brings
+its reception into being at boot, then grows on demand and shrinks when capacity
+is spare, so the count is something you read in the log, never something you set.
 
 ```python
-def commander_section(self, cfg):
-    """The pool: one vertex, two groups on two interpreters."""
-    commander = cfg.commander(
+def applications_section(self, cfg):
+    """The front, its orchestration, one vertex, two groups on two interpreters."""
+    front = cfg.applications().application(
+        app_class=SpaApplication, code="shop", mount="",
+    )
+    orchestration = front.orchestration(
+        profiles_path="/var/lib/shop/profiles",   # where the stored profiles live
+        profile_name="busy_hours",                # the one the boot must find
+        control_enabled=True,                     # apply/reload/status under /_orchestration
+    )
+    commander = orchestration.commander(
         frozen_users_path="/var/lib/shop/frozen_users",
         instance_dir="/var/run/shop",
         orchestration_log_path="/var/log/shop/orchestration.log",
@@ -319,6 +333,25 @@ def commander_section(self, cfg):
                  entry_module="genro_asgi.spa.orchestration.worker_entry",
                  worker_class="myshop.app:ShopWorker")
 ```
+
+**The node is required, and so is the commander under it.** A spa front IS its
+pool: one declared without `orchestration` would answer every request with a
+raise, so the server does not start and the recipe is asked for the node. Wanting
+no pool means declaring no spa front, not declaring one and leaving it hollow.
+The same holds one rung down: the node MUST carry a `commander`, because a
+profile and a control surface with no pool to act on address nothing. Either way
+the boot fails loudly instead of starting half-configured.
+
+**The profiles and the control surface are the node's own.** `profiles_path` is
+the folder the stored profiles are read from — the same one the `_sysop` archive
+writes — and `profile_name` the profile the boot must find and put in force:
+named without a folder, or named and not there, or there and invalid, and the
+server does not start. `control_enabled` opens `apply`, `reload` and `status`
+under the front's `_orchestration` root; off, that root is never claimed and the
+path belongs to the hosted site. The effective configuration of the one group is
+composed as **defaults ⊕ recipe ⊕ profile ⊕ env** — `env_settings` being a plain
+constructor kwarg of the application, a dict the Python recipe builds out of the
+environment, and no word of any grammar.
 
 **The two paths are the installation's**, so they are declared once, on
 `commander`: `frozen_users_path` (the freezer — one root for the whole machine,

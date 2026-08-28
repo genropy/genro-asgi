@@ -161,10 +161,16 @@ identity, no re-login. Decision record:
 `temp/decisioni_registri_cancello_2026-08-25.md`.
 
 **The orchestration profile applied (landed 2026-08-28).** A stored profile
-reaches the live pool. `SpaApplication` takes `profiles_path`, `profile_name`,
-`orchestration_control` on its `application` element plus `env_settings` (a
-runtime dict, no grammar word), and at boot `boot_group_settings` composes
-`defaults ⊕ recipe_settings ⊕ profile ⊕ env_settings` through
+reaches the live pool. The whole pool hangs under ONE node of the front —
+`application → orchestration → commander → groups → group`: `SpaApplication`
+reads `profiles_path`, `profile_name` and `control_enabled` off
+`applications.<code>.orchestration` at boot (never constructor kwargs — a recipe
+still writing them, or `orchestration_control`, on the application element is
+refused by name), plus `env_settings` (a runtime dict on the application element,
+no grammar word). The node is REQUIRED and so is the commander under it: a spa
+front declared without either does not boot (`FatalBootError` →
+`lifespan.startup.failed`) — wanting no pool means declaring no spa front. At
+boot `boot_group_settings` composes `defaults ⊕ recipe_settings ⊕ profile ⊕ env_settings` through
 `GroupPolicy.from_settings` — the frozen dataclass in
 `spa/orchestration/group_policy.py` that holds the 14 setpoints, IS the
 validation and collects every violation — BEFORE the vertex is built; the recipe
@@ -179,10 +185,16 @@ assignments — `GroupHandler.apply_policy`, `active_profile`,
 `configuration_generation` (+1 even when idempotent), `last_apply` — stage 3 best
 effort (the `apply_group_settings` and `cpu_policy_reconciled` audit lines,
 `ping_now()`). Storage is shared with the `_sysop` archive through `OrchestrationProfileStore`
-(`profile_store.py`). Routes, mounted under `_orchestration` only when the gate
-is on: `POST apply` (the body is the profile level, active profile becomes
-null), `POST reload` (`{"name": ...}` or the active one), `GET status`
-(read-only, no lock). Exactly ONE group per named profile — a boot failure or a
+(`orchestration_profile_store.py`). Routes, mounted under `_orchestration` only
+when the gate is on — and mounted LAST, after the vertex is built and started, so
+a failed boot leaves the router untouched; that the root is FREE is established
+before anything is built (a root the front's own router already claims is a fatal
+boot with no vertex constructed), and an unexpected mount failure takes the pool
+back down. The lifecycle is closed: a startup on a live pool does nothing, a
+shutdown lets the vertex go in `finally`, and the startup after it builds a new
+one without remounting the route. Routes: `POST apply`
+(the body is the profile level, active profile becomes null), `POST reload`
+(`{"name": ...}` or the active one), `GET status` (read-only, no lock). Exactly ONE group per named profile — a boot failure or a
 409 (`SingleGroupRequired`) otherwise. Details:
 `internals/10_server/020_applications/configuration_profiles/README.md`.
 

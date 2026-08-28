@@ -125,7 +125,7 @@ class ServerConfiguration(AsgiConfigBuilder):
         front = cfg.applications().application(
             code="{app_code}", mount="", app_class=SpaApplication
         )
-        commander = front.commander(
+        commander = front.orchestration().commander(
             frozen_users_path="{root}/frozen_users",
             instance_dir="{root}/i",
             orchestration_log_path="{root}/orchestration.log",

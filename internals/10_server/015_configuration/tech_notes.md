@@ -35,7 +35,7 @@ words live in this tree:
 | `applications` | [020 applications](../020_applications/README.md); each entry's children are the app's own |
 | `databases` | [065 db](../065_db/README.md) |
 | `plugins` | [025 routing system](../025_routing-system/README.md) |
-| `applications.<code>.commander` | [20_spa/020 orchestration](../../20_spa/020_orchestration/README.md) — NOT a top-level section |
+| `applications.<code>.orchestration` | [20_spa/020 orchestration](../../20_spa/020_orchestration/README.md) — the SPA front's whole pool subtree, NOT a top-level section |
 
 A change to the read stack or to the layering reaches all of them. A change to
 one section's words reaches only its owner.

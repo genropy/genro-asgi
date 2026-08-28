@@ -181,5 +181,6 @@ Every test is a **contract test**; `tests/x/` holds only `__init__.py`.
   future macro.
 - **The pool is not a section of this dialect** (elements.py:63-66): a pool
   belongs to the application that owns it, so its words live in that
-  application's grammar under `applications.<code>.commander`. Proven by
-  `test_config.py:885`.
+  application's grammar, all under one node —
+  `applications.<code>.orchestration.commander`. Proven by
+  `test_config.py::TestCommanderSection`.

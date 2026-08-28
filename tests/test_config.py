@@ -690,7 +690,7 @@ class TestTasksConfig:
 
 
 class SpaPoolConfig(AsgiConfigBuilder):
-    """The ``commander`` section with every key of both rungs, and two groups.
+    """The ``orchestration`` subtree with every key of both rungs, and two groups.
 
     The second group declares nothing but its child: what it leaves out is what
     the objects' own defaults answer for, which is the read stack's whole
@@ -706,8 +706,8 @@ class SpaPoolConfig(AsgiConfigBuilder):
         self.commander_section(front)
 
     def commander_section(self, front: Any) -> None:
-        """The vertex, then its groups: stable and canary, two interpreters."""
-        commander = front.commander(
+        """The orchestration, the vertex under it, then its groups on two interpreters."""
+        commander = front.orchestration().commander(
             frozen_users_path="/srv/shop/frozen_users",
             instance_dir="/srv/shop/instance",
             memory_max_percent=75.0,
@@ -746,14 +746,56 @@ class ElectedGroupConfig(SpaPoolConfig):
     """The same pool, with the group that receives a newcomer elected by name."""
 
     def commander_section(self, front: Any) -> None:
-        commander = front.commander(frozen_users_path="/srv/shop/frozen_users")
+        commander = front.orchestration().commander(
+            frozen_users_path="/srv/shop/frozen_users"
+        )
         groups = commander.groups(default="canary")
         groups.group(name="stable", entry_module="genro_asgi.spa.orchestration.worker_entry")
         groups.group(name="canary", entry_module="genro_asgi.spa.orchestration.worker_entry")
 
 
 class TestCommanderSection:
-    """``commander`` → the vertex's kwargs, and one kwargs set per group."""
+    """``orchestration`` → its own three words, ``commander`` → the vertex's kwargs
+    and one kwargs set per group."""
+
+    def test_the_orchestration_node_is_read_on_its_own_path(self) -> None:
+        """The three words of the node, and the commander one rung below it."""
+
+        class ProfiledPoolConfig(SpaPoolConfig):
+            def commander_section(self, front: Any) -> None:
+                orchestration = front.orchestration(
+                    profiles_path="/srv/shop/profiles",
+                    profile_name="busy_hours",
+                    control_enabled=True,
+                )
+                orchestration.commander(
+                    frozen_users_path="/srv/shop/frozen_users"
+                ).groups().group(name="stable")
+
+        handler = ConfigurationHandler(ProfiledPoolConfig)
+
+        assert handler.orchestration_kwargs("shop") == {
+            "profiles_path": "/srv/shop/profiles",
+            "profile_name": "busy_hours",
+            "control_enabled": True,
+        }
+        assert handler.commander_kwargs("shop") == {
+            "frozen_users_path": "/srv/shop/frozen_users"
+        }
+        assert set(handler.group_kwargs("shop")) == {"stable"}
+
+    def test_an_orchestration_that_declares_no_commander_reads_as_none(self) -> None:
+        """The node alone: its words are there, and there is no vertex to build."""
+
+        class BareOrchestrationConfig(SpaPoolConfig):
+            def commander_section(self, front: Any) -> None:
+                front.orchestration(control_enabled=True)
+
+        handler = ConfigurationHandler(BareOrchestrationConfig)
+
+        assert handler.orchestration_kwargs("shop") == {"control_enabled": True}
+        assert handler.commander_kwargs("shop") is None
+        assert handler.group_kwargs("shop") == {}
 
     def test_the_recipe_elects_the_group_that_receives_a_newcomer(self) -> None:
         kwargs = ConfigurationHandler(ElectedGroupConfig).commander_kwargs("shop")
@@ -889,9 +931,10 @@ class TestCommanderSection:
 
         assert group.template is None
 
-    def test_a_site_with_no_pool_declares_no_group(self) -> None:
+    def test_a_site_with_no_pool_declares_no_orchestration_at_all(self) -> None:
         handler = ConfigurationHandler(TwoAppConfig)
-        assert handler.commander_kwargs("shop") == {}
+        assert handler.orchestration_kwargs("shop") is None
+        assert handler.commander_kwargs("shop") is None
         assert handler.group_kwargs("shop") == {}
 
     def test_the_pool_section_travels_through_a_real_server(self) -> None:
@@ -906,7 +949,7 @@ class TestCommanderSection:
                 front = cfg.applications().application(
                     code="shop", mount="", app_class=SpaApplication
                 )
-                front.commander().group(name="stable")
+                front.orchestration().commander().group(name="stable")
 
         with pytest.raises(ValueError, match="parent"):
             ConfigurationHandler(StrayGroupConfig)
@@ -916,9 +959,9 @@ class TestCommanderSection:
 
         class TopLevelPoolConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                root.configuration().commander(frozen_users_path="/srv/shop/frozen_users")
+                root.configuration().orchestration()
 
-        with pytest.raises(AttributeError, match="commander"):
+        with pytest.raises(AttributeError, match="orchestration"):
             ConfigurationHandler(TopLevelPoolConfig)
 
 

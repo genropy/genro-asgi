@@ -23,13 +23,17 @@ travel in a recipe, and whoever wants another pool subclasses this front, which 
 what the recipe already names.
 
 **A pool belongs to the application that owns it.** The chain is server →
-applications → this front → its commander → its groups → their workers, and the
-recipe says it in that shape: the pool's words are this class's own grammar and
-are written under ``applications.<code>.commander``. Several fronts on one server
-are legitimate, each with its own pool. ``memory_max_percent`` stays a share of
-the MACHINE, so apportioning it between two pools is the installation's own
-business; an installation that over-declares is caught by the machine's alarm
-line, past which nothing grows.
+applications → this front → its ORCHESTRATION → its commander → its groups →
+their workers, and the recipe says it in that shape: the pool's words are this
+class's own grammar and are written under
+``applications.<code>.orchestration.commander``. That node is REQUIRED — a spa
+front declared without it, or with it and no commander under it, does not boot:
+a front with no pool answers every request with a raise, and the recipe is asked
+for the node instead. Several fronts on one server are legitimate,
+each with its own orchestration. ``memory_max_percent`` stays a share of the
+MACHINE, so apportioning it between two pools is the installation's own business;
+an installation that over-declares is caught by the machine's alarm line, past
+which nothing grows.
 
 **Serving is a two-stage demux.**
 Stage 1 reads the FIRST segment of the (already mount-relative) path: not one of
@@ -48,15 +52,17 @@ the hosted site's own connection id, read off the answer and written back on the
 way out, so the identity the browser holds and the identity the site keeps are
 one and the same.
 
-**The pool is configurable while it runs.** ``profile_name`` names a stored
-profile the boot must find, ``env_settings`` is what the installation fixed by
-environment, and the effective configuration of the one group is composed as
-defaults ⊕ recipe ⊕ profile ⊕ env — the two immutable levels kept apart, so
-every later apply recomposes instead of stacking. A profile governs exactly ONE
-group: with zero or several the boot fails and a hot apply reads 409. With the
-``orchestration_control`` gate on, ``OrchestrationControl`` mounts under
-``_orchestration`` and the three routes reach the vertex's own apply; with the
-gate off that path belongs to the hosted site like any other.
+**The pool is configurable while it runs.** ``orchestration.profile_name`` names
+a stored profile the boot must find, ``env_settings`` is what the installation
+fixed by environment — a constructor kwarg and no word of any grammar — and the
+effective configuration of the one group is composed as
+defaults ⊕ recipe ⊕ profile ⊕ env, the two immutable levels kept apart, so every
+later apply recomposes instead of stacking. A profile governs exactly ONE group:
+with zero or several the boot fails and a hot apply reads 409. With
+``orchestration.control_enabled`` on, ``OrchestrationControl`` mounts under
+``_orchestration`` — LAST, once the pool is actually up, so a boot that failed
+leaves the router untouched — and the three routes reach the vertex's own apply;
+with the gate off that path belongs to the hosted site like any other.
 
 **What comes back out.** The site's own answer, rebuilt from the reply. A refusal
 — nobody could take this user, or he stayed between two homes longer than this
@@ -71,15 +77,17 @@ exception's text carries the inside of the house.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from genro_bag import BagResolver
 from genro_builders.builder import element
 from genro_routes import RoutingClass, route
 
 from ..application import ApplicationGrammar
+from ..config.handler import ConfigError
 from ..exceptions import HTTPBadRequest, HTTPException, HTTPNotFound
 from ..lifespan import FatalBootError
 from ..middleware.base import cookie_value
@@ -123,6 +131,10 @@ REQUEST_HOLD_MAX_SECONDS = 5.0
 #: hosted site loses, and a machine nobody reconfigures must not lose it.
 ORCHESTRATION_ROOT = "_orchestration"
 
+#: The words that used to hang on the application element and now live on the
+#: ``orchestration`` node. A recipe still writing one of them is refused by name.
+MOVED_APPLICATION_WORDS = ("profiles_path", "profile_name", "orchestration_control")
+
 #: What the two refusals say out loud. The inside of the house — which user, which
 #: worker, what the site raised — goes to the log and not through the wire.
 ERR_503_TEXT = "server busy"
@@ -130,37 +142,64 @@ ERR_502_TEXT = "the site could not answer this request"
 
 
 class SpaApplicationGrammar(ApplicationGrammar):
-    """The words this front adds to a recipe: its pool, and the groups under it.
+    """The words this front adds to a recipe, all under one node: ``orchestration``.
 
     They live HERE and not in the site dialect because a pool belongs to the
     application that owns it: the chain is server → applications → this front →
-    its commander → its groups → their workers. A recipe writes them under
-    ``applications.<code>.commander``, which is the subtree this application
-    reads back through its own door.
-
-    Three words do NOT hang here but on the APPLICATION element itself —
-    ``applications.<code>``, the envelope the site dialect owns and leaves open
-    for an app's own constructor kwargs: ``profiles_path``, ``profile_name`` and
-    ``orchestration_control``, the front's boot kwargs (below). They are the
-    installation's choice of front, not a policy of the pool, so the recipe
-    writes them where it names the class::
+    ITS ORCHESTRATION → its commander → its groups → their workers, and the
+    recipe says it in that shape::
 
         front = applications.application(app_class=SpaApplication, code="spa",
-                                         mount="",
-                                         profiles_path="/var/spa/profiles",
-                                         profile_name="busy_hours",
-                                         orchestration_control=True)
+                                         mount="")
+        orchestration = front.orchestration(profiles_path="/var/spa/profiles",
+                                            profile_name="busy_hours",
+                                            control_enabled=True)
+        commander = orchestration.commander(frozen_users_path="/var/spa/frozen",
+                                            instance_dir="/run/genro-asgi")
+        commander.groups(default="standard").group(name="standard")
+
+    ``orchestration`` is REQUIRED: a spa front IS its pool, so one declared
+    without the node is an incomplete configuration and the server does not
+    start. Wanting no pool is declaring no spa front. Nothing of the pool hangs
+    on the application element any more — a recipe writing ``profiles_path``,
+    ``profile_name`` or ``orchestration_control`` there is refused by name, with
+    the new path in the message.
 
     ``env_settings`` is no word of any grammar: it is a dict the Python recipe
     composes at runtime out of the environment it has already read, and it
-    travels as a plain constructor kwarg.
+    travels as a plain constructor kwarg of the application — the last level of
+    the overlay, above anything a recipe or a profile may say.
     """
+
+    @element(sub_tags="commander[0:1]", node_label="orchestration")
+    def orchestration(
+        self,
+        profiles_path: str | BagResolver | None = None,
+        profile_name: str | None = None,
+        control_enabled: bool = False,
+    ) -> None:
+        """The whole orchestration of this front: its own three words, then the pool.
+
+        ``profiles_path`` is the folder the stored profiles are read from — the
+        same one the ``_sysop`` archive writes — and ``profile_name`` the profile
+        the boot must find and put in force. Named without a folder, or named and
+        not there, or there and invalid: the server does not start.
+
+        ``control_enabled`` opens the runtime configuration under the front's
+        ``_orchestration`` root — apply, reload, status. Off, that root is never
+        claimed and the path belongs to the hosted site.
+
+        The node MUST carry a ``commander``: a profile and a control surface
+        with no pool to act on address nothing, and the boot says so instead of
+        starting half-configured. The node itself is not optional either — a spa
+        front declared without it does not start.
+        """
 
     @element(parent_tags="commander", sub_tags="group", collection_key="name")
     def groups(self, default: str = None) -> None:
         """Collection of worker groups, each labelled by its ``name`` — stable paths
-        ``applications.<code>.commander.groups.<name>``. A group is the workers built from ONE grammar:
-        the same child, the same policies.
+        ``applications.<code>.orchestration.commander.groups.<name>``. A group is
+        the workers built from ONE grammar: the same child, the same policies.
 
         The optional ``default`` ELECTS the group that receives whoever arrives
         with no past; omitted, the first group declared is the one. Unlike
@@ -244,7 +283,7 @@ class SpaApplicationGrammar(ApplicationGrammar):
         spawns its workers the ordinary way and has no template at all.
         """
 
-    @element(sub_tags="groups[0:1]", node_label="commander")
+    @element(parent_tags="orchestration", sub_tags="groups[0:1]", node_label="commander")
     def commander(
         self,
         frozen_users_path: str | BagResolver = None,
@@ -353,44 +392,58 @@ class SpaApplication(RoutedApplication):
     #: can grow its own machine, say — and the recipe names the subclass.
     commander_class: type[SpaCommander] = SpaCommander
 
-    def __init__(
-        self,
-        *,
-        profiles_path: str | Path | None = None,
-        profile_name: str | None = None,
-        env_settings: dict[str, Any] | None = None,
-        orchestration_control: bool = False,
-        **kwargs: Any,
-    ) -> None:
-        """Build the front; the pool itself is born at startup.
+    def __init__(self, *, env_settings: dict[str, Any] | None = None, **kwargs: Any) -> None:
+        """Build the front; the whole orchestration is read at startup.
 
         Args:
-            profiles_path: the folder the stored profiles live in — the same one
-                the archive writes; without it no profile is loadable by name.
-            profile_name: the profile the boot must find and put in force; None
-                leaves no profile level at all, which is the boot of always.
             env_settings: the setpoints the installation fixed by environment,
-                the strongest level of the overlay.
-            orchestration_control: whether the runtime configuration answers
-                under ``_orchestration``. Off, that path stays the site's.
+                the strongest level of the overlay. It is a runtime dict and no
+                word of any grammar, so it travels HERE and nowhere else.
+
+        Raises:
+            ConfigError: the recipe wrote one of the three words that moved
+                under ``orchestration`` on the application element.
         """
+        self.refuse_moved_words(kwargs)
         self._commander: SpaCommander | None = None
         self._logger = logging.getLogger(__name__)
         #: Where the named profiles are read from at boot; the vertex is given
-        #: the same folder and reads them itself from there on.
-        self.profiles_path = profiles_path
+        #: the same folder and reads them itself from there on. Written by the
+        #: boot out of the orchestration node, so it is None until then.
+        self.profiles_path: str | Path | None = None
         #: Which profile the boot puts in force, and the front's own answer to
         #: "what was active" until the first apply moves it.
-        self.profile_name = profile_name
+        self.profile_name: str | None = None
+        #: Whether the three configuration routes exist at all. The boot reads
+        #: it, and mounts them only once the pool is up.
+        self.control_enabled = False
+        #: Whether THIS front already put them on its router. It tells a second
+        #: boot (a retry, a stop and start) from a root somebody else claimed.
+        self._control_mounted = False
         #: The environment's own level, kept as its own dict for good: every
         #: apply recomposes recipe ⊕ profile ⊕ env instead of stacking.
         self.env_settings = dict(env_settings or {})
-        #: Whether the three configuration routes exist at all.
-        self.orchestration_control = orchestration_control
         super().__init__(**kwargs)
-        if orchestration_control:
-            self.route.add_branches(
-                {"name": ORCHESTRATION_ROOT, "instance": OrchestrationControl(self)}
+
+    def refuse_moved_words(self, kwargs: dict[str, Any]) -> None:
+        """Refuse, by name, the words that moved under ``orchestration``.
+
+        Args:
+            kwargs: the constructor kwargs, which are the attributes the recipe
+                wrote on the application element.
+
+        Raises:
+            ConfigError: naming every word found and the path it now lives at.
+                The bare ``TypeError`` of an unexpected kwarg would say the word
+                is unknown, when it is known and has moved.
+        """
+        moved = [word for word in MOVED_APPLICATION_WORDS if word in kwargs]
+        if moved:
+            raise ConfigError(
+                f"{', '.join(moved)}: no longer written on the application element — "
+                f"the orchestration of a spa front is one subtree, so these live on "
+                f"applications.<code>.orchestration "
+                f"(orchestration_control is now control_enabled)"
             )
 
     @property
@@ -428,11 +481,31 @@ class SpaApplication(RoutedApplication):
         return bool(self.route.node(path).error != "not_found")
 
     async def on_startup(self) -> None:
-        """Build the pool out of the recipe and bring it up, once the server is there.
+        """Read the orchestration, build the pool, bring it up, then open the door.
 
         The vertex is born HERE and not in the constructor: its words live under
-        ``applications.<code>.commander``, and an application reaches its own
-        subtree only once a server has it.
+        ``applications.<code>.orchestration``, and an application reaches its own
+        subtree only once a server has it. The three words of the node are read
+        first and land on this front, so what follows composes on them.
+
+        The order is the point. Everything that can refuse runs BEFORE anything
+        is mounted — the node, the composition, the vertex, its start — and
+        ``OrchestrationControl`` goes on the router last, only when the pool is
+        actually up. A boot that fails leaves the router exactly as it was, and
+        leaves this front holding NO vertex: a start that raises, and a mount that
+        raises after it, both take the half-built pool back down first, so the
+        next startup builds a new one instead of guarding a broken one.
+
+        A front declared with no ``orchestration`` node is an INCOMPLETE
+        configuration and does not boot: a spa front without a pool answers every
+        request with a raise, so the recipe is asked for the node instead of the
+        server pretending to serve. A front WITH the node and no commander under
+        it is refused for the same reason: a profile and a control surface with
+        nothing to act on address nothing. Wanting no pool at all is declaring no
+        spa front, not declaring one and leaving it hollow.
+
+        A startup on a front whose pool is already up does nothing: the same
+        object is never given a second vertex while the first is running.
 
         Acts on this application — the vertex is born here — and, through
         ``SpaCommander.start``, on the machine: the base group's reception is
@@ -450,26 +523,117 @@ class SpaApplication(RoutedApplication):
         because a pool nobody could configure as asked is not the pool that was
         asked for.
         """
+        if self._commander is not None:
+            return
         handler = self.server.config
-        groups = handler.group_kwargs(self.code)
-        try:
-            groups, recipe_settings = self.boot_group_settings(groups)
-        except Exception as refused:
-            failure = (
-                f"Front {self.code}: the pool cannot be configured, "
-                f"the server does not start: {refused}"
+        orchestration = handler.orchestration_kwargs(self.code)
+        if orchestration is None:
+            self.refuse_boot(
+                "it declares no 'orchestration' node — a spa front is its pool, so "
+                "the recipe must write applications.<code>.orchestration with a "
+                "commander under it"
             )
-            self._logger.error(failure)
-            raise FatalBootError(failure) from refused
-        self._commander = self.commander_class(
-            **handler.commander_kwargs(self.code),
+        self.profiles_path = orchestration.get("profiles_path")
+        self.profile_name = orchestration.get("profile_name")
+        self.control_enabled = bool(orchestration.get("control_enabled", False))
+        commander_kwargs = handler.commander_kwargs(self.code)
+        if commander_kwargs is None:
+            self.refuse_boot("its orchestration declares no commander")
+        if (
+            self.control_enabled
+            and not self._control_mounted
+            and ORCHESTRATION_ROOT in self.internal_roots
+        ):
+            self.refuse_boot(
+                f"the {ORCHESTRATION_ROOT!r} root is already claimed by its own router, "
+                f"so the runtime configuration has nowhere to mount"
+            )
+        try:
+            groups, recipe_settings = self.boot_group_settings(handler.group_kwargs(self.code))
+        except Exception as refused:
+            self.refuse_boot(f"the pool cannot be configured: {refused}", refused)
+        commander = self.commander_class(
+            **commander_kwargs,
             groups=groups,
             profiles_path=self.profiles_path,
             recipe_settings=recipe_settings,
             env_settings=self.env_settings,
             active_profile=self.profile_name,
         )
-        await self.commander.start()
+        self._commander = commander
+        try:
+            await commander.start()
+        except asyncio.CancelledError:
+            # Whoever cancelled this boot gets its cancellation back: the pool is
+            # taken down all the same, and nothing is turned into a boot failure.
+            await self.take_pool_down(commander)
+            raise
+        except Exception as broken:
+            await self.take_pool_down(commander)
+            self.refuse_boot(f"the pool could not be brought up: {broken}", broken)
+        try:
+            self.mount_control()
+        except Exception as broken:
+            await self.take_pool_down(commander)
+            self.refuse_boot(
+                f"the runtime configuration could not be mounted and the pool was "
+                f"taken back down: {broken}",
+                broken,
+            )
+
+    async def take_pool_down(self, commander: SpaCommander) -> None:
+        """Undo a boot that could not finish: stop the pool, and let go of it.
+
+        Args:
+            commander: the vertex the boot built and could not bring all the way
+                up. It is passed rather than read back, because letting go is
+                exactly what this does.
+
+        A pool that refuses to stop is said on this module's logger and nothing
+        more: it must never replace the reason the boot failed, which is what the
+        caller raises next. Either way the front ends holding no vertex, so the
+        next startup builds a new one instead of finding this one.
+        """
+        try:
+            await commander.stop()
+        except Exception:
+            self._logger.exception(
+                "Front %s: the pool refused to go back down after a failed boot", self.code
+            )
+        finally:
+            self._commander = None
+
+    def refuse_boot(self, reason: str, cause: Exception | None = None) -> NoReturn:
+        """Say the boot failed once, on this module's logger, and make it fatal.
+
+        Args:
+            reason: what is wrong, in the front's own words.
+            cause: the exception underneath, when there is one — the tests read
+                it back off ``__cause__``.
+
+        Raises:
+            FatalBootError: always. It is the one exception the lifespan does not
+                swallow on startup, so uvicorn receives ``lifespan.startup.failed``.
+        """
+        failure = f"Front {self.code}: {reason}, the server does not start"
+        self._logger.error(failure)
+        raise FatalBootError(failure) from cause
+
+    def mount_control(self) -> None:
+        """Put the runtime configuration on the router, if the recipe asked for it.
+
+        The LAST mutation of the boot, when the pool is up: the root is claimed
+        only by a front that can actually answer on it. That the root is FREE was
+        established before anything was built, so what is left here cannot refuse
+        — and a startup after a shutdown finds the branch this method already put
+        there and does nothing.
+        """
+        if not self.control_enabled or self._control_mounted:
+            return
+        self.route.add_branches(
+            {"name": ORCHESTRATION_ROOT, "instance": OrchestrationControl(self)}
+        )
+        self._control_mounted = True
 
     def boot_group_settings(
         self, groups: dict[str, dict[str, Any]]
@@ -636,13 +800,24 @@ class SpaApplication(RoutedApplication):
         reboot directory and the vertex's own item beside them. Any other way
         out is dry, which is what every start that is not the deliberate liturgy
         expects to find (F2).
+
+        The front lets go of the vertex whatever it answered, so the pool it held
+        is never handed to a second startup: that one reads the configuration
+        again and builds a new one.
         """
-        if self._commander is None:
+        commander = self._commander
+        if commander is None:
             return
-        if self.server.state == QUITTING:
-            await self.commander.quit()
-        else:
-            await self.commander.stop()
+        try:
+            if self.server.state == QUITTING:
+                await commander.quit()
+            else:
+                await commander.stop()
+        finally:
+            # The front lets go whatever the vertex answered: a pool that failed
+            # to go down cleanly is still not this front's any more, and the next
+            # startup builds a new one instead of finding a dead one.
+            self._commander = None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Demultiplex: the app's own router, else the hosted site."""

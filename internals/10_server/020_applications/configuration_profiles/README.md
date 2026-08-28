@@ -14,7 +14,7 @@ Applying a stored profile to a live pool is a separate mechanism and lives
 elsewhere: the `SpaApplication` front reads a profile at boot and exposes the
 hot apply under its own `_orchestration` root — see *Applying a profile* below.
 Both sides share one storage component, `OrchestrationProfileStore`
-(`src/genro_asgi/profile_store.py`): name validation, symlink refusal, the
+(`src/genro_asgi/orchestration_profile_store.py`): name validation, symlink refusal, the
 1 MiB limit, the object-only JSON read and the atomic write live there, and
 this archive delegates to it.
 
@@ -70,9 +70,14 @@ Example profile:
 
 Reading a profile and putting it in force belongs to the SPA front
 (`src/genro_asgi/applications/spa_app.py`), never to this archive. The front
-takes four kwargs on the `application` element of its recipe — `profiles_path`,
-`profile_name`, `orchestration_control` — plus `env_settings`, a runtime dict
-the Python recipe hands over and no grammar declares.
+reads three words off its own `orchestration` node — `profiles_path`,
+`profile_name`, `control_enabled`, at `applications.<code>.orchestration` — plus
+`env_settings`, a runtime dict the Python recipe hands to the application element
+and no grammar declares. The commander, the groups and the workers hang under
+that same node: `application → orchestration → commander → groups → group`. The
+node is REQUIRED and so is the commander under it: a spa front declared without
+either does not boot — a front with no pool serves nothing, so the incomplete
+configuration is refused rather than started.
 
 **Boot read — four levels, one composition.** `boot_group_settings` composes
 the effective configuration BEFORE the vertex is built, as
@@ -108,8 +113,12 @@ exactly one group. A machine with several groups fails the boot when a profile
 or an env level is given, and answers 409 (`SingleGroupRequired`) on a hot
 apply or a status read.
 
-**Routes**, mounted under `_orchestration` only when `orchestration_control` is
-on (gate off, the root is not claimed and the path reaches the hosted site):
+**Routes**, mounted under `_orchestration` only when `control_enabled` is on
+(gate off, the root is not claimed and the path reaches the hosted site). The
+mount is the LAST thing the boot does, after the vertex is built and started, so
+a boot that fails leaves the router exactly as it was; a second startup on the
+same front mounts nothing twice, and a root the front's own router already claims
+is a fatal boot rather than a silent half-mount:
 
 | Route | Effect |
 |-------|--------|

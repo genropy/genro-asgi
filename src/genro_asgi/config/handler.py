@@ -47,7 +47,8 @@ Section → constructor kwarg:
   cooperative chain has run.
 - ``plugins`` → ``plugins`` ({code: bool | dict} switches).
 - ``openapi`` → no core-1a consumer; read and skipped.
-- ``commander`` → the SPA pool: the vertex's own kwargs, and one kwargs set per
+- ``orchestration`` → the SPA front's whole orchestration subtree: its own three
+  words, and under it ``commander`` — the vertex's kwargs and one kwargs set per
   declared group (the two installation paths folded in, the child's own keys
   gathered into its ``worker_kwargs``).
 """
@@ -300,13 +301,39 @@ class ConfigurationHandler(ConfigHandler):
             )
         return descriptors
 
-    def commander_kwargs(self, code: str) -> dict[str, Any]:
+    def orchestration_kwargs(self, code: str) -> dict[str, Any] | None:
+        """One application's orchestration node, or ``None`` when it has none.
+
+        Args:
+            code: the application whose orchestration this is — the words live
+                under ``applications.<code>.orchestration``.
+
+        Returns:
+            ``profiles_path``, ``profile_name`` and ``control_enabled``, the
+            three the recipe actually wrote, or ``None`` when the node is absent
+            — which is a front that declares no pool at all.
+        """
+        if self.node(f"applications.{code}.orchestration") is None:
+            return None
+        return self.closed_attrs(
+            f"applications.{code}.orchestration",
+            "profiles_path",
+            "profile_name",
+            "control_enabled",
+        )
+
+    def commander_kwargs(self, code: str) -> dict[str, Any] | None:
         """The pool of one application as its vertex's own constructor kwargs.
 
         Args:
             code: the application whose pool this is — a pool belongs to the
                 front that owns it, so the words live under
-                ``applications.<code>.commander``.
+                ``applications.<code>.orchestration.commander``.
+
+        Returns:
+            The vertex's kwargs, or ``None`` when the node is absent — an
+            orchestration node with no commander under it, which the front
+            refuses.
 
         ``instance_dir`` is NOT among them: the sockets are the workers' business,
         so that path is folded into every group instead (``group_kwargs``). The
@@ -315,7 +342,9 @@ class ConfigurationHandler(ConfigHandler):
         What the recipe leaves out is left out, and the vertex's own default
         answers.
         """
-        section = f"applications.{code}.commander"
+        section = f"applications.{code}.orchestration.commander"
+        if self.node(section) is None:
+            return None
         kwargs = self.closed_attrs(
             section,
             "frozen_users_path",
@@ -344,7 +373,7 @@ class ConfigurationHandler(ConfigHandler):
         name, which stamps every item it writes. So a recipe writes each policy
         once, on the rung it belongs to, and the child is handed what is his.
         """
-        section = f"applications.{code}.commander"
+        section = f"applications.{code}.orchestration.commander"
         node = self.node(f"{section}.groups")
         if node is None:
             return {}

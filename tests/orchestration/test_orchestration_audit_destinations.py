@@ -64,7 +64,7 @@ async def test_reload_handler_errors_audited_as_rejected(tmp_path, caplog):
     # wf:contract: the handler leaves a commander log_order line with outcome
     # wf:contract: "rejected: ...".
     folder = tmp_path / "profiles"
-    server = pool_server(tmp_path, profiles_path=folder, orchestration_control=True)
+    server = pool_server(tmp_path, profiles_path=folder, control_enabled=True)
     await boot(server)
     (folder / "corrupt.json").write_text("{not json")
 
@@ -95,7 +95,7 @@ async def test_request_parser_400_is_not_orchestration_audit(tmp_path, caplog):
     # wf:contract: T22c — malformed JSON on the body is answered 400 by the
     # wf:contract: request layer and leaves NO orchestration log line: it is the
     # wf:contract: single exclusion from the orchestration audit.
-    server = pool_server(tmp_path, orchestration_control=True)
+    server = pool_server(tmp_path, control_enabled=True)
     await boot(server)
 
     with caplog.at_level(logging.INFO, logger=ORDERS_LOGGER_NAME):

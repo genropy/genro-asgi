@@ -54,7 +54,7 @@ Sections:
 
 The SPA pool is NOT a section of this dialect: a pool belongs to the application
 that owns it, so its words live in that application's own grammar and its recipe
-is written under ``applications.<code>.commander``.
+is written under ``applications.<code>.orchestration.commander``.
 
 A recipe subclasses ``AsgiConfigBuilder`` and overrides ``main(self, root)``;
 application classes are imported and passed as objects::

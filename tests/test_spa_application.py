@@ -96,8 +96,9 @@ def recipe_for(root, fronts: int = 1) -> type[AsgiConfigBuilder]:
                     mount="" if not index else f"other{index}",
                     app_class=ScriptedFront,
                 )
-                # The pool belongs to the front that owns it: its words hang here.
-                commander = front.commander(
+                # The pool belongs to the front that owns it: its whole
+                # orchestration hangs here, under its own node.
+                commander = front.orchestration().commander(
                     frozen_users_path=str(root / f"frozen_users{index}"),
                     instance_dir=str(root / f"i{index}"),
                 )
@@ -140,8 +141,14 @@ async def test_the_pool_is_built_from_the_recipe_when_the_server_starts(server):
     assert front.commander.default_group == "standard"
     assert set(front.commander.group_map) == {"standard"}
 
+    pool = front.commander
     await runner.shutdown()
-    assert front.commander.started is False
+    # The pool was taken down AND let go: the front holds no vertex out of the
+    # lifespan, so a later startup builds a new one instead of finding a dead one.
+    assert pool.started is False
+    assert front._commander is None
+    with pytest.raises(RuntimeError):
+        front.commander
 
 
 async def test_two_fronts_each_own_their_pool(tmp_path):
@@ -309,12 +316,16 @@ async def test_the_front_takes_the_photo_only_when_the_server_is_quitting(starte
     async def note_stop(self):
         called.append("stop")
 
-    monkeypatch.setattr(type(front.commander), "quit", note_quit)
-    monkeypatch.setattr(type(front.commander), "stop", note_stop)
+    monkeypatch.setattr(ScriptedCommander, "quit", note_quit)
+    monkeypatch.setattr(ScriptedCommander, "stop", note_stop)
 
+    # One way out per pool: the front lets go of its vertex on the way down, so
+    # the second exit is a second pool, built by its own startup.
     monkeypatch.setattr(front.server, "state", STOPPING)
     await front.on_shutdown()
+    await front.on_startup()
     monkeypatch.setattr(front.server, "state", QUITTING)
     await front.on_shutdown()
 
     assert called == ["stop", "quit"]
+    assert front._commander is None

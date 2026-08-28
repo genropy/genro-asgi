@@ -86,7 +86,7 @@ class WorkerMaxNumberConfig(AsgiConfigBuilder):
         front = cfg.applications().application(
             code="shop", mount="", app_class=SpaApplication
         )
-        commander = front.commander(
+        commander = front.orchestration().commander(
             frozen_users_path="/srv/shop/frozen_users",
             instance_dir="/srv/shop/instance",
         )
