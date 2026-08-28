@@ -1,0 +1,321 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>genro-asgi — stato attuale</title>
+<style>:root {
+  --ground: #f2f4f3; --surface: #ffffff; --surface-sunk: #e9edec;
+  --line: #d5dcdb; --line-soft: #e4e9e8;
+  --ink: #141d1e; --ink-soft: #4a5657; --ink-faint: #6d7b7b;
+  --accent: #0f6b74; --accent-soft: #e0eeee;
+  --done: #3a7a55; --done-soft: #e2efe7;
+  --partial: #94631a; --partial-soft: #f6ecd9;
+  --planned: #64717c; --planned-soft: #e8ebee;
+  --open: #7b4a6e; --open-soft: #f0e6ee;
+  --shadow: 0 1px 2px rgba(20,29,30,.06), 0 8px 24px -16px rgba(20,29,30,.3);
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --ground: #0d1416; --surface: #141d20; --surface-sunk: #101819;
+  --line: #263436; --line-soft: #1c282a;
+  --ink: #e4ecea; --ink-soft: #a8b6b5; --ink-faint: #7d8c8c;
+  --accent: #56b9c2; --accent-soft: #123338;
+  --done: #6bb98c; --done-soft: #14291f;
+  --partial: #d3a355; --partial-soft: #2b2317;
+  --planned: #93a1ac; --planned-soft: #1b2226;
+  --open: #c393b6; --open-soft: #271c25;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px -20px rgba(0,0,0,.8);
+} }
+:root[data-theme="dark"] {
+  --ground: #0d1416; --surface: #141d20; --surface-sunk: #101819;
+  --line: #263436; --line-soft: #1c282a;
+  --ink: #e4ecea; --ink-soft: #a8b6b5; --ink-faint: #7d8c8c;
+  --accent: #56b9c2; --accent-soft: #123338;
+  --done: #6bb98c; --done-soft: #14291f;
+  --partial: #d3a355; --partial-soft: #2b2317;
+  --planned: #93a1ac; --planned-soft: #1b2226;
+  --open: #c393b6; --open-soft: #271c25;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px -20px rgba(0,0,0,.8);
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body { margin: 0; background: var(--ground); color: var(--ink);
+  font-family: var(--serif); font-size: 17px; line-height: 1.62; }
+code { font-family: var(--mono); font-size: .855em; background: var(--surface-sunk);
+  padding: .1em .38em; border-radius: 4px; color: var(--ink-soft);
+  word-break: break-word; }
+.wrap { max-width: 980px; margin: 0 auto; padding: 0 24px 96px; }
+
+header.top { border-bottom: 1px solid var(--line); background: var(--surface); padding: 56px 0 0; }
+.eyebrow { font-family: var(--sans); font-size: 12px; font-weight: 600;
+  letter-spacing: .14em; text-transform: uppercase; color: var(--accent); margin: 0 0 14px; }
+h1 { font-size: clamp(32px, 5vw, 50px); line-height: 1.08; font-weight: 600;
+  letter-spacing: -.015em; margin: 0 0 18px; text-wrap: balance; }
+.lede { font-size: 19px; color: var(--ink-soft); margin: 0 0 34px; max-width: 64ch; }
+
+.facts { display: flex; flex-wrap: wrap; gap: 0; border-top: 1px solid var(--line);
+  margin: 0; padding: 0; }
+.fact { flex: 1 1 160px; padding: 16px 20px 14px 0; border-right: 1px solid var(--line-soft); }
+.fact:last-child { border-right: 0; }
+.fact dt { font-family: var(--sans); font-size: 11px; font-weight: 600;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--ink-faint); }
+.fact dd { margin: 4px 0 0; display: flex; flex-direction: column; }
+.fact dd strong { font-size: 26px; font-weight: 600; letter-spacing: -.01em; }
+.fact dd span { font-family: var(--sans); font-size: 12.5px; color: var(--ink-faint); }
+
+.worldnav { display: flex; flex-wrap: wrap; gap: 4px; border-top: 1px solid var(--line);
+  padding: 10px 0; margin: 0; }
+.worldnav a { font-family: var(--sans); font-size: 13px; font-weight: 500;
+  text-decoration: none; color: var(--ink-soft); padding: 7px 14px; border-radius: 999px; }
+.worldnav a:hover { background: var(--accent-soft); color: var(--accent); }
+
+.legend { margin: 44px 0 8px; }
+h2.small { font-family: var(--sans); font-size: 12px; font-weight: 600; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--ink-faint); margin: 0 0 16px; }
+.legend-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 14px; }
+.leg { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 10px;
+  padding: 14px 16px; }
+.leg p { margin: 9px 0 0; font-size: 14.5px; color: var(--ink-soft); line-height: 1.5; }
+.note { font-size: 15px; color: var(--ink-faint); max-width: 68ch; margin: 18px 0 0; }
+
+.chip { display: inline-block; font-family: var(--sans); font-size: 11.5px; font-weight: 600;
+  letter-spacing: .04em; padding: 4px 11px; border-radius: 999px; white-space: nowrap; }
+.chip.done { background: var(--done-soft); color: var(--done); }
+.chip.partial { background: var(--partial-soft); color: var(--partial); }
+.chip.planned { background: var(--planned-soft); color: var(--planned); }
+.chip.open { background: var(--open-soft); color: var(--open); }
+
+.world { margin: 56px 0 0; }
+.world-head { border-top: 2px solid var(--ink); padding: 22px 0 20px; }
+.world-head h2 { font-size: clamp(26px, 3.4vw, 34px); font-weight: 600; margin: 0 0 10px;
+  letter-spacing: -.012em; }
+.world-lead { margin: 0 0 12px; color: var(--ink-soft); max-width: 66ch; font-size: 17px; }
+.tallies { margin: 0; font-family: var(--sans); font-size: 12.5px; }
+.tally { font-weight: 600; }
+.tally.done { color: var(--done); } .tally.partial { color: var(--partial); }
+.tally.planned { color: var(--planned); } .tally.open { color: var(--open); }
+
+.node { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 12px;
+  padding: 20px 22px; margin: 12px 0; box-shadow: var(--shadow); scroll-margin-top: 20px; }
+.node.sub { margin-left: 28px; border-left: 3px solid var(--line); }
+.node-head { display: flex; align-items: baseline; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+.node-head h3 { font-size: 19.5px; font-weight: 600; margin: 0; letter-spacing: -.008em; }
+.node .lead { margin: 0; color: var(--ink-soft); font-size: 16.5px; max-width: 70ch; }
+ul.proofs { list-style: none; margin: 14px 0 0; padding: 0; }
+ul.proofs li { position: relative; padding-left: 18px; margin: 7px 0;
+  font-family: var(--sans); font-size: 14px; color: var(--ink-soft); line-height: 1.55; }
+ul.proofs li::before { content: ""; position: absolute; left: 2px; top: .62em;
+  width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+.reserve { margin: 16px 0 0; background: var(--partial-soft); border-radius: 9px;
+  padding: 12px 16px 13px; }
+.reserve-label { font-family: var(--sans); font-size: 11px; font-weight: 700;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--partial); }
+.reserve ul { margin: 7px 0 0; padding-left: 18px; }
+.reserve li { font-size: 15px; color: var(--ink-soft); margin: 5px 0; line-height: 1.55; }
+.reserve code { background: rgba(0,0,0,.05); }
+
+.foot { border-top: 1px solid var(--line); margin-top: 60px; padding-top: 22px; }
+.foot p { font-family: var(--sans); font-size: 13.5px; color: var(--ink-faint);
+  margin: 0 0 6px; max-width: 74ch; }
+.foot .lic { font-size: 12.5px; }
+
+@media (max-width: 640px) {
+  body { font-size: 16px; }
+  .node { padding: 17px 16px; }
+  .node.sub { margin-left: 12px; }
+  .fact { flex-basis: 46%; }
+}
+</style>
+<header class="top"><div class="wrap">
+<p class="eyebrow">genro-asgi · stato attuale</p>
+<h1>Dove siamo, voce per voce</h1>
+<p class="lede">I tre documenti di presentazione descrivono il punto di arrivo. Questa pagina è il solo
+posto dove si legge quanto di quel disegno esiste oggi, e l'unico che cambia mentre l'implementazione
+procede. Ogni riga porta la propria prova: un file con la sua copertura, un test che la esercita,
+oppure la constatazione che non esiste una riga di codice.</p>
+<dl class="facts"><div class='fact'><dt>Test</dt><dd><strong>1519</strong><span>verdi, 0 falliti</span></dd></div><div class='fact'><dt>Copertura</dt><dd><strong>97%</strong><span>8.028 stmt, 279 scoperti</span></dd></div><div class='fact'><dt>Voci</dt><dd><strong>33</strong><span>sui tre mondi di internals/</span></dd></div><div class='fact'><dt>Consolidate</dt><dd><strong>20</strong><span>8 con riserve, 5 solo progettate</span></dd></div></dl>
+<nav class="worldnav"><a href="#server">Il server</a><a href="#spa">Il mondo SPA</a><a href="#deploy">Rilascio e scala</a></nav>
+</div></header>
+<main class="wrap">
+<section class="legend"><h2 class="small">Le quattro voci della scala</h2><div class="legend-grid"><div class="leg"><span class="chip done">Consolidato</span><p>codice completo, test dedicati, decisione ratificata e chiusa</p></div><div class="leg"><span class="chip partial">Attivo con riserve</span><p>funziona ed è testato, ma con punti esplicitamente differiti o costanti provvisorie</p></div><div class="leg"><span class="chip planned">Solo progettato</span><p>ratificato o discusso, nessuna riga di codice</p></div><div class="leg"><span class="chip open">Questione aperta</span><p>nessuna decisione presa: resta una domanda</p></div></div>
+<p class="note">La scala non è un giudizio: è derivata da fatti verificabili — se il codice esiste, se
+esistono test dedicati che lo esercitano, e se la decisione che lo riguarda è chiusa o ancora aperta.</p></section>
+<section id="server" class="world"><header class="world-head"><p class="eyebrow">documento 1</p><h2>Il server</h2><p class="world-lead">La macchina su cui gira ogni installazione, da <code>BaseServer</code> in su.</p><p class="tallies"><span class="tally done">15 consolidato</span> · <span class="tally partial">5 attivo con riserve</span> · <span class="tally planned">2 solo progettato</span></p></header><article id="v-server" class="node">
+<div class="node-head"><h3>Il server e le sue applicazioni</h3><span class="chip partial">Attivo con riserve</span></div>
+<p class="lead">L'oggetto server, le applicazioni che ospita, come una richiesta ne trova una, avvio e spegnimento ordinati.</p>
+<ul class="proofs"><li><code>server.py</code> 130 stmt · 99% · <code>asgi_server.py</code> 97% · <code>pool.py</code> 100% · <code>lifespan.py</code> 98% · <code>request_registry.py</code> 99%</li><li><code>test_contract.py</code>, <code>test_demux.py</code>, <code>test_pool.py</code>, <code>test_lifespan.py</code>, <code>test_request_registry.py</code></li><li>Gli stati di vita del server — <code>running</code>, <code>quitting</code>, <code>stopping</code> — e il drenaggio limitato delle richieste in volo (<code>lifespan.py</code>)</li></ul>
+<div class="reserve"><span class="reserve-label">Riserve</span><ul><li>L'indice di sito su <code>/</code> è ratificato (D29, 24 agosto) e non costruito: oggi quel caso risponde 404.</li></ul></div>
+</article>
+<article id="v-configuration" class="node">
+<div class="node-head"><h3>La configurazione</h3><span class="chip done">Consolidato</span></div>
+<p class="lead">L'albero da cui ogni voce legge le proprie parole: strati, pila di lettura, sottoscrittori.</p>
+<ul class="proofs"><li><code>config/handler.py</code> 147 stmt · 100% · <code>elements.py</code> 100% · <code>builder.py</code> 100% · <code>default_config.py</code> 98%</li><li><code>test_config.py</code> — 82 casi, il file più esercitato del progetto — e <code>test_config_env.py</code></li></ul>
+</article>
+<article id="v-applications" class="node">
+<div class="node-head"><h3>Le applicazioni e il loro albero di rotte</h3><span class="chip done">Consolidato</span></div>
+<p class="lead"><code>RoutedApplication</code> e l'albero di rotte che serve REST e MCP insieme.</p>
+<ul class="proofs"><li><code>application.py</code> 100% · <code>routed_application.py</code> 95%</li><li><code>test_routed_application.py</code>, <code>test_package.py</code></li></ul>
+</article>
+<article id="v-openapi" class="node sub">
+<div class="node-head"><h3>OpenAPI</h3><span class="chip done">Consolidato</span></div>
+<p class="lead">Lo schema e le pagine di documentazione, tradotti dalla lettura dell'albero.</p>
+<ul class="proofs"><li><code>applications/openapi.py</code> 100% · <code>plugins/openapi/translator.py</code> 86% · <code>plugin.py</code> 77%</li><li><code>test_openapi_application.py</code>, <code>test_plugins.py</code> (32 casi)</li></ul>
+</article>
+<article id="v-mcp" class="node sub">
+<div class="node-head"><h3>MCP</h3><span class="chip done">Consolidato</span></div>
+<p class="lead">Il motore JSON-RPC e il trasporto Streamable HTTP sullo stesso albero.</p>
+<ul class="proofs"><li><code>applications/mcp.py</code> 96% · <code>mcp/engine.py</code> 98%</li><li><code>test_mcp_application.py</code>, <code>test_mcp_engine.py</code> (31), <code>test_mcp_push.py</code></li></ul>
+</article>
+<article id="v-routing" class="node">
+<div class="node-head"><h3>Il sistema di routing</h3><span class="chip done">Consolidato</span></div>
+<p class="lead">L'albero, la passeggiata filtrata, e i plugin armati sopra di esso.</p>
+<ul class="proofs"><li><code>plugin_mixin.py</code> 100% — cinque plugin di libreria: <code>auth</code>, <code>env</code>, <code>channel</code>, <code>pydantic</code>, <code>logging</code></li><li><code>test_plugins.py</code> (32 casi)</li></ul>
+</article>
+<article id="v-middleware" class="node">
+<div class="node-head"><h3>La catena dei middleware</h3><span class="chip done">Consolidato</span></div>
+<p class="lead">La catena uniforme che ogni richiesta attraversa, ordinata da un numero.</p>
+<ul class="proofs"><li>otto moduli: <code>errors</code> 99% · <code>session</code> 100% · <code>cors</code> 96% · <code>logging</code> 85% · <code>wellknown</code> 100%</li><li><code>test_middleware.py</code> e <code>test_middleware_std.py</code> (27)</li></ul>
+</article>
+<article id="v-sessions" class="node">
+<div class="node-head"><h3>Le sessioni</h3><span class="chip done">Consolidato</span></div>
+<p class="lead">Stato per utente sul server fra una richiesta e l'altra.</p>
+<ul class="proofs"><li><code>session/store.py</code> 100% · <code>session.py</code> 100% · <code>mixin.py</code> 100%</li><li><code>test_session.py</code> (50), <code>test_login_flow.py</code> (28)</li></ul>
+</article>
+<article id="v-auth" class="node">
+<div class="node-head"><h3>L'autenticazione</h3><span class="chip done">Consolidato</span></div>
+<p class="lead">401 all'anonimo, 403 a chi è già noto. Password con blocco progressivo, OIDC con PKCE, basic, bearer, JWT, chiavi API.</p>
+<ul class="proofs"><li><code>auth/core.py</code> 95% · <code>oidc_method.py</code> 97% · <code>user_store.py</code> 94% · <code>api_key_store.py</code> 95%</li><li><code>test_auth.py</code> (46), <code>test_oidc.py</code> (27), <code>test_user_store.py</code>, <code>test_api_key_store.py</code></li></ul>
+</article>
+<article id="v-avatar" class="node sub">
+<div class="node-head"><h3>L'avatar</h3><span class="chip done">Consolidato</span></div>
+<p class="lead">Chi è l'utente corrente, con i suoi tag, dal login alla richiesta.</p>
+<ul class="proofs"><li><code>session/avatar.py</code> 94% — coperto da <code>test_session.py</code> e <code>test_auth.py</code></li></ul>
+</article>
+<article id="v-tags" class="node sub">
+<div class="node-head"><h3>I tag di autorizzazione</h3><span class="chip done">Consolidato</span></div>
+<p class="lead">L'autorizzazione dichiarata sulla rotta, non scritta dentro l'handler.</p>
+<ul class="proofs"><li>i tag entrano dalla grammatica (<code>auth/core.py:105</code>) e sono letti dal plugin <code>auth</code> del router</li></ul>
+</article>
+<article id="v-storage" class="node">
+<div class="node-head"><h3>Lo storage</h3><span class="chip done">Consolidato</span></div>
+<p class="lead">L'unico accesso al filesystem, attraverso nodi di storage. Pinnato sincrono.</p>
+<ul class="proofs"><li><code>storage_mixin.py</code> 100% — <code>set_sync()</code> imposto dal mixin</li><li><code>test_storage_mixin.py</code></li></ul>
+</article>
+<article id="v-db" class="node">
+<div class="node-head"><h3>Il database</h3><span class="chip done">Consolidato</span></div>
+<p class="lead">Il contratto minimo per un database montato dalla ricetta. Nessun backend nel core, per disegno.</p>
+<ul class="proofs"><li><code>db.py</code> 17 stmt · 100% · <code>test_db.py</code></li></ul>
+</article>
+<article id="v-tasks" class="node">
+<div class="node-head"><h3>I task</h3><span class="chip partial">Attivo con riserve</span></div>
+<p class="lead">Il lavoro che non è una richiesta HTTP: pianificazione in tre forme, spool su file, esecuzione.</p>
+<ul class="proofs"><li><code>tasks/spool.py</code> 148 stmt · 100% · <code>schedule.py</code> 98% · <code>scheduler.py</code> 91% · <code>store.py</code> 94% · <code>manager.py</code> 97% · <code>executor.py</code> 100%</li><li>cinque file di test, fra cui <code>test_task_spool.py</code> (28)</li></ul>
+<div class="reserve"><span class="reserve-label">Riserve</span><ul><li>L'esecuzione è in-processo sul server vivo (<code>LocalTaskExecutor</code>). L'esecuzione su processi dedicati è dichiarata fuori scope in D22 e non esiste.</li></ul></div>
+</article>
+<article id="v-thermometers" class="node">
+<div class="node-head"><h3>I termometri dei batch</h3><span class="chip partial">Attivo con riserve</span></div>
+<p class="lead">Vedere un batch muoversi, e fermarlo con garbo.</p>
+<ul class="proofs"><li><code>manager.publish_progress</code> (<code>manager.py:160</code>) scrive <code>progress.json</code> e pubblica sul canale vivo in una chiamata sola</li><li>letto da <code>tasks_section.py:230</code> e da <code>applications/mcp.py:262</code></li></ul>
+<div class="reserve"><span class="reserve-label">Riserve</span><ul><li>Il segnale di stop è deposto (<code>spool.request_cancel</code>) e leggibile (<code>is_cancelled</code>), ma <strong>nessun consumatore in <code>src/</code></strong>: il core non ferma nulla. Un batch che non lo controlla da sé non si ferma. L'unico lettore è un test.</li></ul></div>
+</article>
+<article id="v-serverapp" class="node">
+<div class="node-head"><h3>L'app di sistema <code>_server</code></h3><span class="chip partial">Attivo con riserve</span></div>
+<p class="lead">Montata su ogni server, mai configurata: login, utenti, credenziali, task, monitor, inspector.</p>
+<ul class="proofs"><li><code>server_app.py</code> 100% · sezioni <code>auth</code>, <code>users</code>, <code>tokens</code>, <code>tasks</code> tutte al 100%</li></ul>
+<div class="reserve"><span class="reserve-label">Riserve</span><ul><li>Restano da fare i tag di autenticazione per sezione e la pagina di configurazione dei plugin.</li></ul></div>
+</article>
+<article id="v-monitor" class="node sub">
+<div class="node-head"><h3>Il monitor</h3><span class="chip done">Consolidato</span></div>
+<p class="lead">Una pagina sola su ogni applicazione montata, attraverso il contratto <code>app_snapshot</code>/<code>app_panel</code>/<code>panel_source</code>.</p>
+<ul class="proofs"><li><code>monitor_section.py</code> 51 stmt · 100% · <code>test_server_monitor.py</code> (20 casi)</li></ul>
+</article>
+<article id="v-inspector" class="node sub">
+<div class="node-head"><h3>L'inspector</h3><span class="chip done">Consolidato</span></div>
+<p class="lead">La sezione che apre un server vivo all'ispezione.</p>
+<ul class="proofs"><li><code>inspector_section.py</code> 37 stmt · 95% · <code>test_inspector_section.py</code></li></ul>
+</article>
+<article id="v-cli" class="node">
+<div class="node-head"><h3>La riga di comando</h3><span class="chip done">Consolidato</span></div>
+<p class="lead">Guidare le installazioni dalla shell. Un <code>config.py</code> più <code>genroasgi serve</code> sono un'unità di rilascio completa.</p>
+<ul class="proofs"><li><code>__main__.py</code> 291 stmt · 98% — verbi <code>serve</code>, <code>apps</code>, <code>stop</code>, <code>remove</code></li><li><code>test_cli.py</code> (50 casi)</li></ul>
+</article>
+<article id="v-restart" class="node">
+<div class="node-head"><h3>Il riavvio</h3><span class="chip partial">Attivo con riserve</span></div>
+<p class="lead">Il soft quit e il soft start: uscendo tutti gli utenti vengono parcheggiati congelati, rientrando le mappe tornano al loro posto e il risveglio è pigro.</p>
+<ul class="proofs"><li><code>SpaCommander.quit</code> e <code>adopt_frozen_registers</code> (<code>spa_commander.py:1306</code>) · <code>freeze_handler.py</code> 110 stmt · 99%</li><li>il rinominare la cartella È la prova di completezza: <code>reboot_temp</code> → <code>reboot_data</code></li><li>sotto <code>serve --reload</code> ogni uscita salva — verificato dal vivo: stesso cookie, processo nuovo, nessun nuovo login</li></ul>
+<div class="reserve"><span class="reserve-label">Riserve</span><ul><li>Manca il comando deliberato su <code>_server</code> (<code>reboot now</code> / <code>reboot wait N</code>) e la corsia dei messaggi di servizio verso il consumer.</li><li>La sentinella dei sorgenti guarda il progetto per intero: manca il classificatore che dice a quale gruppo appartiene il file cambiato, e quindi il riavvio del solo gruppo interessato.</li><li>Il ponte genropy-asgi non passa ancora <code>--reload</code> al nucleo: la sua riga di comando lo accetta e lo ignora.</li></ul></div>
+</article>
+<article id="v-wsx" class="node">
+<div class="node-head"><h3>Il trasporto WSX</h3><span class="chip planned">Solo progettato</span></div>
+<p class="lead">Il secondo trasporto del motore unico: stesso albero di rotte, stessi plugin, stessa autorizzazione di HTTP.</p>
+<ul class="proofs"><li>Scritto e provato nel prototipo <code>genro-asgi-legacy</code>: <code>src/genro_asgi/wsx/</code> — 690 righe su quattro moduli (<code>protocol.py</code>, <code>handler.py</code>, <code>registry.py</code>) — con 68 casi su quattro file di test</li><li>WSX sta per WebSocket eXtended: un messaggio porta il prefisso <code>WSX://</code> e poi il JSON con id, method, path, headers, cookies, query e data — semantica HTTP sopra il WebSocket</li><li>Su <code>develop</code> non è ancora stato trasportato: <code>BaseServer.on_websocket</code> (<code>server.py:287</code>) accetta nulla e chiude con codice 1000, e non c'è una sola occorrenza di <code>websocket.accept</code> in <code>src/</code></li></ul>
+<div class="reserve"><span class="reserve-label">Riserve</span><ul><li>Il trasporto non si ricopia: nel prototipo lo smistamento HTTP e quello WSX erano divergenti perché nulla li obbligava a restare uguali. La lezione è registrata come invariante 9 della specifica — prove di contratto su ogni interfaccia con più implementazioni — e il trasporto va rifatto sotto quella regola, con un motore di smistamento solo.</li></ul></div>
+</article>
+<article id="v-ratelimit" class="node">
+<div class="node-head"><h3>Il limite di frequenza per IP</h3><span class="chip planned">Solo progettato</span></div>
+<p class="lead">Un middleware dedicato che limita per indirizzo, distinto dal blocco progressivo per identità.</p>
+<ul class="proofs"><li>zero occorrenze di <code>rate_limit</code> in <code>src/</code></li><li>il blocco progressivo per identità esiste ed è operativo (D28), ed è un'altra cosa</li></ul>
+</article></section><section id="spa" class="world"><header class="world-head"><p class="eyebrow">documento 2</p><h2>Il mondo SPA</h2><p class="world-lead">Il mondo che ospita un sito a pagina singola con stato vivo sul server.</p><p class="tallies"><span class="tally done">5 consolidato</span> · <span class="tally partial">3 attivo con riserve</span></p></header><article id="v-front" class="node">
+<div class="node-head"><h3>Il front SPA</h3><span class="chip done">Consolidato</span></div>
+<p class="lead">Una porta sola e stabile verso il sito ospitato, senza stato nella porta: cookie, demux a due stadi, traduzione HTTP.</p>
+<ul class="proofs"><li><code>applications/spa_app.py</code> 106 stmt · 99% · <code>test_spa_application.py</code></li><li>un rifiuto esce 503 con <code>Retry-After</code>, un sito che fallisce dentro il proprio processo esce 502</li></ul>
+</article>
+<article id="v-orchestration" class="node">
+<div class="node-head"><h3>L'orchestrazione</h3><span class="chip partial">Attivo con riserve</span></div>
+<p class="lead">Molti utenti con stato vivo, distribuiti su più processi e mai spezzati. La catena è commander → gruppo → worker.</p>
+<ul class="proofs"><li><code>spa_commander.py</code> 490 stmt · 97% · <code>spa_worker.py</code> 921 · 97% · <code>group_handler.py</code> 207 · 97% · <code>worker_handler.py</code> 172 · 97% · <code>envelope_handler.py</code> 100%</li><li>27 file sotto <code>tests/orchestration/</code></li><li>il gruppo che dichiara <code>engine_factory</code> possiede un processo template: costruisce il motore una volta, congela l'heap, e ogni worker è un suo fork (<code>template_entry.py</code>, <code>template_connector.py</code>)</li><li>la ricetta di un gruppo dichiara <code>executable</code>: il processo del server e i worker di ogni gruppo possono stare su interpreti diversi (<code>worker_handler.py:425</code>, <code>template_connector.py:133</code>)</li><li>i massimali sono <code>worker_max_number</code> e <code>worker_max_users</code>; la memoria è una cascata di percentuali e solo il fondo è in byte</li></ul>
+<div class="reserve"><span class="reserve-label">Riserve</span><ul><li>Non esiste il worker in-processo. Il canale locale c'è ed è testato (<code>channel/local.py</code> 92%), ma nessun percorso dell'orchestrazione lo usa per costruire un worker dentro il commander.</li><li>Non esiste il ribilanciamento che sceglie chi spostare in base al consumo recente: il pool cresce, riavvia un worker oltre soglia, e chiude quello in esubero.</li><li>Non esiste la serie storica della memoria né la stima di quando un processo toccherà il limite: <code>restart_occupancy_max_percent</code> è una soglia secca.</li></ul></div>
+</article>
+<article id="v-channel" class="node">
+<div class="node-head"><h3>Il canale</h3><span class="chip done">Consolidato</span></div>
+<p class="lead">Il filo: frame con prefisso di lunghezza, hub, corsia. Zero dipendenze esterne.</p>
+<ul class="proofs"><li><code>channel/hub.py</code> 202 stmt · 90% · <code>client.py</code> 91% · <code>frame.py</code> 94% · <code>local.py</code> 92%</li><li><code>test_channel.py</code>, <code>test_channel_hub.py</code>, <code>test_channel_local.py</code></li></ul>
+</article>
+<article id="v-globalstore" class="node">
+<div class="node-head"><h3>Lo store globale</h3><span class="chip done">Consolidato</span></div>
+<p class="lead">Un solo stato condiviso, con lettura-e-scrittura sicura. Un master sul commander e <strong>nessuna replica</strong>: un worker legge con una chiamata sulla corsia e scrive attraverso la concessione.</p>
+<ul class="proofs"><li><code>spa/global_store.py</code> 66 stmt · 94% · <code>test_spa_global_store.py</code></li><li><code>store_get</code> è una chiamata; la concessione porta con sé il contenuto del master, e le modifiche atterrano tutte al rilascio</li><li>prove di contratto: fasi 10, 12, 13 sotto <code>tests/orchestration/</code></li></ul>
+</article>
+<article id="v-datachanges" class="node">
+<div class="node-head"><h3>I datachange</h3><span class="chip done">Consolidato</span></div>
+<p class="lead">Quello che una pagina cambia, le altre lo devono vedere. Consegna indirizzata attraverso il <code>DeliveryDesk</code>, mai una fotografia per processo.</p>
+<ul class="proofs"><li><code>subscription_index.py</code> 44 stmt · 100% · il banco vive sul commander (<code>spa_commander.py:251</code>)</li><li>la consegna è a richiesta: nulla viene mai spinto dal banco</li><li>prove di contratto: fasi 3, 8, 13</li></ul>
+</article>
+<article id="v-dbevents" class="node">
+<div class="node-head"><h3>I dbevent</h3><span class="chip done">Consolidato</span></div>
+<p class="lead">Il database ha cambiato una tabella, e la pagina lo deve sapere. La sottoscrizione è attiva appena depositata, quindi chi sottoscrive e committa nella stessa richiesta si ritrova servito.</p>
+<ul class="proofs"><li>prova di contratto: fase 4 · code con età limitata, esclusione dell'origine dal fan-out</li></ul>
+</article>
+<article id="v-console" class="node">
+<div class="node-head"><h3>La console</h3><span class="chip partial">Attivo con riserve</span></div>
+<p class="lead">Chiedere a un pool vivo le domande che nessuno aveva previsto, servite come strumenti MCP.</p>
+<ul class="proofs"><li><code>applications/spa_console.py</code> 33 stmt · 88% · <code>test_orchestration_console.py</code></li><li><code>eval</code> in un processo qualunque del pool — <code>commander</code> o un worker per nome — attraverso la corsia che il commander già tiene</li></ul>
+<div class="reserve"><span class="reserve-label">Riserve</span><ul><li>Il montaggio È il cancello: è eval pieno per costruzione, e non deve mai essere montata in produzione.</li></ul></div>
+</article>
+<article id="v-bridge" class="node">
+<div class="node-head"><h3>Il contratto del bridge</h3><span class="chip partial">Attivo con riserve</span></div>
+<p class="lead">Che cosa il sito ospitato deve fornire e che cosa può consumare: la callable WSGI dietro <code>WsgiSeam</code>, il sito che battezza la propria connessione mentre serve, i verbi del piano dati.</p>
+<ul class="proofs"><li><code>spa/environ.py</code> 60 stmt · 85% — l'ambiente WSGI sintetizzato, invocato in-processo su un pool di thread dedicato</li><li>l'identità è quella del sito: il cookie <code>spa_connection_id</code> porta il connection id che il sito stesso ha coniato</li></ul>
+<div class="reserve"><span class="reserve-label">Riserve</span><ul><li>genropy-asgi, il primo cliente del contratto, non è ancora stato ribasato su <code>develop</code>: il contratto non è mai stato esercitato qui da un sito vero.</li></ul></div>
+</article></section><section id="deploy" class="world"><header class="world-head"><p class="eyebrow">documento 3</p><h2>Rilascio e scala</h2><p class="world-lead">Come un'installazione si spedisce, si aggiorna e cresce oltre una macchina. <strong>Tutto qui è proposta non ratificata.</strong></p><p class="tallies"><span class="tally planned">3 solo progettato</span></p></header><article id="v-bundles" class="node">
+<div class="node-head"><h3>Gruppi dinamici e bundle applicativi</h3><span class="chip planned">Solo progettato</span></div>
+<p class="lead">Gruppi come oggetti vivi — aggiunti, aggiornati e rimossi a server acceso — ciascuno agganciato a un bundle applicativo immutabile costruito dalla CI dell'applicazione e distribuito su S3.</p>
+<ul class="proofs"><li>nessuna riga: le cinque occorrenze di «bundle» in <code>src/</code> sono i <em>bundled plugins</em> di genro-routes, altro significato</li><li>fonte: <code>codex/progetto-distribuzione-bundle-applicativi-s3-2026-08-20.md</code>, 791 righe, decisioni D1–D7, che dichiara di non autorizzare alcuna modifica al codice</li></ul>
+<div class="reserve"><span class="reserve-label">Riserve</span><ul><li>Restano da decidere: il formato esatto del bundle, la sorte dello stato residente durante l'aggiornamento di un gruppo, e l'API pubblica del ciclo di vita.</li><li>La §3.5 del progetto — «tutti i worker di una installazione usano lo stesso Python» — è superata da una decisione del titolare del 26 agosto: il processo del server e i worker di ogni gruppo possono stare su interpreti diversi, portati dall'immagine. Il meccanismo esiste già nel codice (<code>executable</code> nella ricetta del gruppo).</li></ul></div>
+</article>
+<article id="v-kube" class="node">
+<div class="node-head"><h3>Kubernetes</h3><span class="chip planned">Solo progettato</span></div>
+<p class="lead">Il cluster esegue, il commander decide. Se ne prendono i muscoli e non il giudizio.</p>
+<ul class="proofs"><li>nessuna riga · proposta non ratificata</li></ul>
+</article>
+<article id="v-subcommanders" class="node">
+<div class="node-head"><h3>I subcommander</h3><span class="chip planned">Solo progettato</span></div>
+<p class="lead">Autorità delegata lungo la catena: radice → subcommander → gruppo → worker.</p>
+<ul class="proofs"><li>nessuna riga · proposta non ratificata</li><li>il protocollo del canale è disegnato dall'inizio per due collocazioni, in-processo e su rete; oggi ne esiste una</li></ul>
+</article></section>
+<footer class="foot"><p>Aggiornato al 26 agosto 2026 · misurato su <code>develop</code> con <code>pytest --cov</code>.
+Le voci del corpo dei tre documenti non cambiano quando una riga di questa pagina cambia stato.</p>
+<p class="lic">genro-asgi · Apache License 2.0 · Softwell S.r.l.</p></footer>
+</main>

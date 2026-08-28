@@ -70,10 +70,6 @@ pre b { color: var(--ink); font-weight: 650; }
 .card p { font-size: 15.5px; color: var(--ink-soft); margin-bottom: 0; line-height: 1.55; }
 ul.tight { margin: 0 0 20px; padding-left: 24px; }
 ul.tight li { margin-bottom: 10px; }
-.tag { display: inline-block; font-family: var(--sans); font-size: 10.5px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; padding: 2px 8px; border-radius: 3px; white-space: nowrap; }
-.tag.ok { color: var(--accent); background: var(--accent-soft); }
-.tag.wip { color: var(--soon); background: var(--soon-soft); }
-.roadmap-note { font-family: var(--sans); font-size: 13.5px; color: var(--ink-faint); max-width: 70ch; margin-top: 22px; }
 .note { background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; padding: 18px 22px; margin: 28px 0; max-width: 72ch; }
 .note.warn { border-left-color: var(--warn); }
 .note p:last-child { margin-bottom: 0; }
@@ -101,7 +97,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
 
 <header class="top">
   <div class="wrap">
-    <p class="eyebrow">genro-asgi <span class="of">· documento 3 di 3</span></p>
+    <p class="eyebrow">genro-asgi <span class="of">· documento 3 di 4</span></p>
     <h1>Più macchine: cervello nostro, braccia loro</h1>
     <p class="lede">Come il piano cresce oltre una macchina senza cedere a nessuno la decisione su dove vive una persona — e come si usa Kubernetes prendendone i muscoli e non il giudizio.</p>
   </div>
@@ -121,7 +117,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
     <a href="#guasti">Quando qualcosa muore</a>
     <a href="#pannello">Il pannello</a>
     <a href="#metriche">Metriche</a>
-    <a href="#roadmap">Roadmap</a>
+    <a href="#stato">Dove siamo</a>
   </div>
 </nav>
 
@@ -137,7 +133,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
 
   <div class="note">
     <span class="label">Come leggere questo documento</span>
-    <p>Descrive l'architettura distribuita nella sua forma compiuta. La <a href="#roadmap">roadmap in appendice</a> dichiara cosa è già operativo e cosa è in corso di implementazione: è l'unica parte che cambia mentre il lavoro procede. Presuppone il secondo documento — lo stato vivo, l'utente come chiave, i gruppi come versioni.</p>
+    <p>Descrive l'architettura distribuita nella sua forma compiuta. Lo stato di avanzamento non sta qui: vive in un <a href="stato_attuale.html">documento suo</a>, ed è l'unica cosa che cambia mentre il lavoro procede. Presuppone il secondo documento — lo stato vivo, l'utente come chiave, i gruppi come versioni.</p>
   </div>
 </section>
 
@@ -569,42 +565,18 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
   </div>
 </section>
 
-<section id="roadmap">
-  <h2><span class="kicker">Appendice</span>Roadmap: dove siamo</h2>
+<section id="stato">
+  <h2><span class="kicker">Appendice</span>Dove siamo oggi</h2>
   <div class="prose">
-    <p>Il documento descrive l'architettura distribuita nella sua forma compiuta. Questa appendice è il solo posto dove si legge lo stato di avanzamento.</p>
-    <p>Il fondamento è già in piedi: il protocollo del canale è nato con due collocazioni — in processo e su socket — e una sola batteria di test di contratto le verifica insieme. È la premessa che rende il sub-commander un'aggiunta e non una riscrittura, perché non introduce un protocollo nuovo: monta quello esistente un livello più in basso.</p>
-  </div>
-
-  <div class="tablewrap"><table>
-    <thead><tr><th>Capitolo</th><th>Stato</th><th>Nota</th></tr></thead>
-    <tbody>
-      <tr><td>Protocollo del canale con più collocazioni</td><td><span class="tag ok">operativo</span></td><td>in processo e su socket, verificate dalla stessa batteria di test</td></tr>
-      <tr><td>Il vertice come titolare del dominio di casa</td><td><span class="tag ok">operativo</span></td><td>genera, sorveglia, rilancia, misura</td></tr>
-      <tr><td>Spostamento a caldo di una persona fra processi</td><td><span class="tag ok">operativo</span></td><td>la primitiva su cui poggia ogni ricollocazione, anche fra domini</td></tr>
-      <tr><td>Sopravvivenza dello stato al riavvio</td><td><span class="tag ok">operativo</span></td><td>raccolta allo spegnimento, ripiazzamento all'avvio</td></tr>
-      <tr><td>Misura delle risorse e giudizio sull'occupazione</td><td><span class="tag ok">operativo</span></td><td>saturazione per componente, memoria misurata onestamente</td></tr>
-      <tr><td>Canali di specie mista sul vertice</td><td><span class="tag wip">in implementazione</span></td><td>oggi il vertice tiene processi di casa; l'aggancio di un dominio remoto è il passo che apre il multi-macchina</td></tr>
-      <tr><td>Sub-commander</td><td><span class="tag wip">in implementazione</span></td><td>è la stessa classe del vertice con il genitore armato: il disegno prevede due collocazioni fin dall'inizio, oggi ne esiste una</td></tr>
-      <tr><td>Capogruppo come decisore della propria versione</td><td><span class="tag wip">in implementazione</span></td><td>le politiche — nascita, ritiro, ribilanciamento, ricambio — sono operative sul pool; resta da separarle per gruppo</td></tr>
-      <tr><td>Mappa grossa e risoluzione a due tappe</td><td><span class="tag wip">in implementazione</span></td><td>la mappa fine utente → processo è operativa; l'indirizzo tipizzato è il passo che la affianca</td></tr>
-      <tr><td>Attuatore per cluster</td><td><span class="tag wip">in implementazione</span></td><td>materializzazione dei pod via API, con bilanciatore, autoscaling e rilascio graduale nativi deliberatamente non usati</td></tr>
-      <tr><td>Pannello dei domini e matrice gruppi × domini</td><td><span class="tag wip">in implementazione</span></td><td>il pannello del pool è operativo e il sub-commander espone lo stesso; la vista di sistema arriva con i canali di specie mista</td></tr>
-      <tr><td>Metriche di sistema in formato Prometheus</td><td><span class="tag wip">in implementazione</span></td><td>terzo livello: capacità per dominio, distribuzione fra gruppi, budget · stesso formato dei livelli sottostanti</td></tr>
-      <tr><td>Budget per gruppo</td><td><span class="tag wip">in implementazione</span></td><td>l'arbitraggio del ferro condiviso fra sezioni autonome</td></tr>
-    </tbody>
-  </table></div>
-
-  <p class="roadmap-note">Ultimo aggiornamento della roadmap: 13 agosto 2026. Le voci del corpo del documento non cambiano quando una riga di questa tabella passa a «operativo».</p>
-
-  <div class="back">
-    <span class="label">I documenti precedenti</span>
-    <p>Il primo descrive il server: routing agnostico dal trasporto, grammatiche di configurazione, OpenAPI e MCP, autenticazione, sessioni, task, storage. Il secondo spiega perché lo stato di lavoro vive in memoria, perché questo lega una persona al suo processo, e come i gruppi permettono di far convivere due versioni. Questo terzo porta lo stesso disegno oltre il confine della macchina.</p>
+    <p>Questo documento descrive l'architettura distribuita nella sua forma compiuta: quello che è quando il lavoro è finito. Non dichiara, riga per riga, che cosa di tutto ciò sia già scritto — perché quello cambia ogni settimana, e una pagina che lo mescola alla descrizione invecchia tutta insieme.</p>
+    <p>Lo stato di avanzamento vive in un documento suo: <a href="stato_attuale.html">stato attuale</a>, voce per voce, con la prova accanto a ciascuna. La parte che riguarda questo capitolo è il ramo <a href="stato_attuale.html#deploy">rilascio e scala</a>, ed è il più giovane di tutti: quasi tutto quello che si legge qui è proposta, non ancora ratificata.</p>
+    <p>La divisione è deliberata. Le pagine dei quattro documenti non cambiano quando una voce di quel documento cambia stato.</p>
+    <p>Il quarto e ultimo documento lascia l'architettura e va sul caso concreto: un sito GenroPy già scritto che sale su questo server perdendo per strada il processo separato che oggi ne tiene il registro — e come si dimostra, sessione per sessione, che il comportamento non è cambiato.</p>
   </div>
 </section>
 
 <footer>
-  <p>genro-asgi · documento 3 di 3 · Apache License 2.0 · Softwell S.r.l.</p>
+  <p>genro-asgi · documento 3 di 4 · Apache License 2.0 · Softwell S.r.l.</p>
 </footer>
 
 </div>

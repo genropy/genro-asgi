@@ -74,9 +74,6 @@ pre .k { color: var(--accent); }
 ul.tight { margin: 0 0 20px; padding-left: 24px; }
 ul.tight li { margin-bottom: 9px; }
 .soon { display: inline-block; font-family: var(--sans); font-size: 10.5px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; color: var(--soon); background: var(--soon-soft); padding: 2px 7px; border-radius: 3px; vertical-align: 2px; margin-left: 6px; white-space: nowrap; }
-.tag { display: inline-block; font-family: var(--sans); font-size: 10.5px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; padding: 2px 8px; border-radius: 3px; white-space: nowrap; }
-.tag.ok { color: var(--accent); background: var(--accent-soft); }
-.tag.wip { color: var(--soon); background: var(--soon-soft); }
 .roadmap-note { font-family: var(--sans); font-size: 13.5px; color: var(--ink-faint); max-width: 70ch; margin-top: 22px; }
 .note { background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; padding: 18px 22px; margin: 28px 0; max-width: 72ch; }
 .note p:last-child { margin-bottom: 0; }
@@ -103,7 +100,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
 
 <header class="top">
   <div class="wrap">
-    <p class="eyebrow">genro-asgi <span class="of">· documento 1 di 3</span></p>
+    <p class="eyebrow">genro-asgi <span class="of">· documento 1 di 4</span></p>
     <h1>Il server: tutto quello che un applicativo trova già montato</h1>
     <p class="lede">Scrivi il metodo una volta e lo esponi come API REST, come strumento per un agente e come comando. Intorno, già pronto, tutto ciò che un applicativo reale finisce sempre per doversi costruire da sé.</p>
   </div>
@@ -125,7 +122,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
     <a href="#http">HTTP e trasporti</a>
     <a href="#metriche">Metriche</a>
     <a href="#deploy">Deployment</a>
-    <a href="#roadmap">Roadmap</a>
+    <a href="#stato">Dove siamo</a>
   </div>
 </nav>
 
@@ -146,7 +143,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
 
   <div class="note">
     <span class="label">Come leggere questo documento</span>
-    <p>Descrive il server mono-processo nella sua forma compiuta: ciò che genro-asgi mette a disposizione di chi scrive un'applicazione. La <a href="#roadmap">roadmap in appendice</a> dichiara, voce per voce, cosa è già operativo oggi e cosa è in corso di implementazione.</p>
+    <p>Descrive il server mono-processo nella sua forma compiuta: ciò che genro-asgi mette a disposizione di chi scrive un'applicazione. Lo stato di avanzamento non sta qui: vive in un <a href="stato_attuale.html">documento suo</a>, voce per voce e con la prova accanto, ed è l'unica cosa che cambia mentre il lavoro procede. Il rimando è <a href="#stato">in appendice</a>.</p>
     <p>Il piano di orchestrazione — lo stato vivo per utente e per pagina, i processi multipli — è materia del <strong>secondo documento</strong>, che spiega anche perché quella scelta è stata fatta.</p>
   </div>
 
@@ -360,10 +357,15 @@ server = AsgiServer(config=ServerConfiguration)</pre>
   </table></div>
 
   <div class="prose">
+    <h3>Il server sa in che momento della propria vita si trova</h3>
+    <p>Un server non è acceso o spento: attraversa degli stati, e li dichiara. Finché sta servendo prende in carico ogni richiesta. Appena qualcuno gli chiede di chiudere smette di prenderne di nuove — risponde a chi arriva con un rifiuto esplicito che dice fra quanto riprovare, invece di far cadere la connessione — e nel frattempo lascia finire quelle che aveva già in mano, entro un tempo massimo. Solo quando il campo è sgombro esegue le chiusure, in ordine inverso rispetto alle aperture.</p>
+    <p>Chi chiude dice anche <em>come</em>: una chiusura che salva lo stato per ritrovarlo alla riaccensione è una cosa diversa da una che lo abbandona, e la differenza sta in una parola passata a chi spegne, non in due procedure separate.</p>
+
     <h3>Le capacità si compongono</h3>
     <p>Il server spedito impila su una base snella tutte le capacità come mixin cooperativi: comunicazione, autenticazione, sessioni, middleware, plugin, storage, task. Le capacità <em>esistono sempre</em> — non aggiungi una capacità sottoclassando, la alimenti passandole configurazione. Non esiste l'attributo che è <code>None</code> finché un flag non lo accende.</p>
     <h3>L'app di sistema, senza configurarla</h3>
-    <p>Ogni server monta da sé un'applicazione di sistema sotto <code>/_server</code>: login e logout, elenco dei metodi di accesso disponibili, gestione degli utenti, gestione delle credenziali emesse, e la superficie completa dei task. Ha il suo schema OpenAPI come ogni altra applicazione. È automatica, non configurata: un server costruito a mano ce l'ha esattamente come uno costruito da una configurazione.</p>
+    <p>Ogni server monta da sé un'applicazione di sistema sotto <code>/_server</code>: login e logout, elenco dei metodi di accesso disponibili, gestione degli utenti, gestione delle credenziali emesse, la superficie completa dei task, il monitor e l'inspector. Ha il suo schema OpenAPI come ogni altra applicazione. È automatica, non configurata: un server costruito a mano ce l'ha esattamente come uno costruito da una configurazione.</p>
+    <p>Il <strong>monitor</strong> compone una pagina sola su tutte le applicazioni montate, qualunque cosa siano: ogni applicazione dichiara che cosa sa dire di sé e come si guarda, e il monitor la interroga con quel contratto invece di conoscerla. Un'applicazione nuova entra nel monitor dichiarando, non modificandolo. L'<strong>inspector</strong> sta accanto e risponde a un'altra domanda: come è fatto questo server, che rotte ha, che configurazione sta leggendo davvero.</p>
   </div>
 </section>
 
@@ -733,53 +735,31 @@ server = AsgiServer(config=ServerConfiguration)</pre>
     <p>Un file di configurazione più un comando sono un'unità di deployment completa. Il comando risolve quello che gli passi in tre passi: un'assegnazione che nomina direttamente una classe applicativa, un percorso a un file esistente, oppure il nome di un server già registrato.</p>
     <p>I server registrati vivono in un registro che è un <strong>archivio di puntatori, mai una copia</strong>: tiene la stringa sorgente e le opzioni date, quindi rilanciare per nome esegue sempre il codice corrente. Un file di pid non viene mai creduto sulla parola — mancante, illeggibile o riferito a un processo che non c'è più si leggono tutti come «non in esecuzione», così un server crollato risulta fermo e non fantasma.</p>
     <p>C'è la ricarica automatica per lo sviluppo. La supervisione multi-processo, invece, è deliberatamente fuori: appartiene a uno strumento dedicato della famiglia.</p>
+    <h3>Si sviluppa sullo stack di produzione</h3>
+    <p>Non c'è un server per lo sviluppo e un altro per l'esercizio. Il comando che avvii sulla tua macchina è quello che gira in produzione: stesso server, stessa catena di middleware, stesso smistamento, stessa autenticazione. Quello che cambia è un flag.</p>
+    <p>E il flag è davvero solo un flag: la modalità di sviluppo è un valore dichiarato su cui <strong>il server non si ramifica in nessun punto</strong>. Esiste perché chi aggiunge un middleware o un controllo possa comportarsi diversamente sapendo in che modo il server sta girando, non perché il server faccia due cose diverse.</p>
+    <p>È una scelta che si paga a monte e rende in continuazione. Un difetto che compare solo in esercizio, e che sulla macchina di chi l'ha scritto non si riproduce, quasi sempre nasce dalla distanza fra i due ambienti: il server di sviluppo serve i file in un modo, quello di esercizio in un altro; uno tiene una connessione aperta, l'altro la chiude; uno è a thread singolo, l'altro no. Se i due ambienti sono lo stesso ambiente, quella famiglia di difetti non ha dove nascere.</p>
+    <p>Perché questo sia praticabile serve però una cosa, ed è la vera ragione per cui esiste un server di sviluppo separato: <strong>salvare un file e ritrovarsi il codice nuovo</strong>. Senza quello nessuno svilupperebbe sullo stack di esercizio, e riavvierebbe a mano cento volte al giorno.</p>
+    <p>Quindi c'è una sentinella che guarda i file del progetto. Quando uno cambia, il server viene sostituito con uno che monta il codice nuovo. Fin qui è quello che fa qualunque server di sviluppo.</p>
+    <p>La differenza è quello che succede alle persone collegate. Un server che tiene in memoria lo stato di lavoro di chi lo sta usando, riavviato di colpo, quello stato lo butta — e sviluppare su un server del genere significherebbe rifare il login e ricostruire il contesto a ogni salvataggio. Qui non accade, perché <strong>l'uscita provocata dalla sentinella è una di quelle che salvano</strong>: prima di morire il processo parcheggia ogni persona congelata e scrive le proprie mappe, e il processo che nasce al suo posto le riprende. Chi stava lavorando batte il colpo successivo e viene risvegliato dove serve, con lo stesso cookie e la stessa identità.</p>
+    <p class="pull">Salvi un file, il server rinasce col codice nuovo, e chi era collegato non deve rifare il login.</p>
+    <p>Questo è anche il motivo per cui il meccanismo di parcheggio non è una funzione di esercizio prestata allo sviluppo: è il contrario. Serve tutti i giorni a chi scrive codice, e il giorno del rilascio si scopre che è lo stesso meccanismo che permette di riavviare un impianto vivo.</p>
+    <p>La sentinella guarda il progetto per intero, quindi un cambiamento fa rinascere tutto. Quando i processi sono divisi in gruppi, guarda anche a quale gruppo appartiene il file che è cambiato, e fa rinascere solo quelli: chi lavora su una versione che non hai toccato non se ne accorge affatto.</p>
+    <p>In esercizio l'unità non è più un file di configurazione su una macchina: è un'<strong>immagine</strong>. Tutto quello che questo documento descrive — il server, il suo supervisore, gli interpreti, le fondamenta condivise — sta dentro un'immagine sola, identica per ogni cliente, che si aggiorna come si aggiorna qualsiasi applicazione: si pubblica una versione nuova e si passa a quella. Quello che non c'è dentro è l'applicazione del cliente, che viaggia separata e con i propri tempi. Il secondo documento spiega come.</p>
   </div>
 </section>
 
-<section id="roadmap">
-  <h2><span class="kicker">Appendice</span>Roadmap: dove siamo</h2>
+<section id="stato">
+  <h2><span class="kicker">Appendice</span>Dove siamo oggi</h2>
   <div class="prose">
-    <p>Il documento descrive il server nella sua forma compiuta. Questa appendice è il solo posto dove si legge lo stato di avanzamento, e l'unico che cambia mentre l'implementazione procede.</p>
-    <p>Il pacchetto è coperto da <strong>1.567 test</strong> con una copertura del <strong>96%</strong>.</p>
-  </div>
-
-  <div class="tablewrap"><table>
-    <thead><tr><th>Capitolo</th><th>Stato</th><th>Nota</th></tr></thead>
-    <tbody>
-      <tr><td>Routing, gerarchie, introspezione</td><td><span class="tag ok">operativo</span></td><td></td></tr>
-      <tr><td>Plugin del router e configurazione a runtime</td><td><span class="tag ok">operativo</span></td><td>validazione, autorizzazione a tag, capacità, canale, logging</td></tr>
-      <tr><td>Grammatiche e configurazione</td><td><span class="tag ok">operativo</span></td><td>tutte le sezioni, resolver, porta di lettura a quattro livelli</td></tr>
-      <tr><td>Server, applicazioni, smistamento</td><td><span class="tag ok">operativo</span></td><td></td></tr>
-      <tr><td>App di sistema <code>_server</code></td><td><span class="tag ok">operativo</span></td><td>login, utenti, credenziali, task</td></tr>
-      <tr><td>OpenAPI e documentazione</td><td><span class="tag ok">operativo</span></td><td></td></tr>
-      <tr><td>MCP</td><td><span class="tag ok">operativo</span></td><td></td></tr>
-      <tr><td>Autenticazione: password con blocco progressivo</td><td><span class="tag ok">operativo</span></td><td></td></tr>
-      <tr><td>Autenticazione: OIDC con PKCE</td><td><span class="tag ok">operativo</span></td><td>un provider per istanza</td></tr>
-      <tr><td>Autenticazione: basic, bearer, JWT, chiavi API</td><td><span class="tag ok">operativo</span></td><td></td></tr>
-      <tr><td>Sessioni e store</td><td><span class="tag ok">operativo</span></td><td></td></tr>
-      <tr><td>Task: pianificazione e spool</td><td><span class="tag ok">operativo</span></td><td>tre forme di pianificazione, superficie di gestione completa</td></tr>
-      <tr><td>Task: esecuzione su processi dedicati</td><td><span class="tag wip">in implementazione</span></td><td>il modello è completo, l'esecuzione in-processo funziona; la distribuzione riusa la supervisione del documento 2</td></tr>
-      <tr><td>Bag e TYTX anche in JavaScript</td><td><span class="tag ok">operativo</span></td><td>stesse strutture e stessi tipi da entrambe le parti · JSON, XML e MessagePack come formati intercambiabili · equivalenza verificata da una suite di prove attraverso i due linguaggi</td></tr>
-      <tr><td>Storage e database</td><td><span class="tag ok">operativo</span></td><td>mount simbolici · filesystem e dischi di rete, fsspec (S3, GCS, memoria) · 19 capacità dichiarate per backend, versioning verificato interrogando il supporto · cifratura per mount</td></tr>
-      <tr><td>HTTP, flussi, SSE, middleware</td><td><span class="tag ok">operativo</span></td><td></td></tr>
-      <tr><td>Trasporto WSX</td><td><span class="tag ok">operativo</span></td><td>secondo trasporto del motore unico: stesso albero di rotte, stessi plugin, stessa autorizzazione di HTTP</td></tr>
-      <tr><td>Limite di frequenza per IP</td><td><span class="tag wip">in implementazione</span></td><td>middleware dedicato; il blocco progressivo per identità è già operativo</td></tr>
-      <tr><td>Termometri e interruzione cooperativa dei batch</td><td><span class="tag ok">operativo</span></td><td>avanzamento su file e sul canale vivo in un colpo solo; il segnale di stop e la sua verifica</td></tr>
-      <tr><td>Metriche in formato Prometheus</td><td><span class="tag wip">in implementazione</span></td><td>le grandezze sono già misurate e leggibili dagli endpoint di sistema; manca l'endpoint nel formato che i raccoglitori consumano</td></tr>
-      <tr><td>Riga di comando e registro dei server</td><td><span class="tag ok">operativo</span></td><td></td></tr>
-    </tbody>
-  </table></div>
-
-  <p class="roadmap-note">Ultimo aggiornamento della roadmap: 13 agosto 2026. Le voci del corpo del documento non cambiano quando una riga di questa tabella passa a «operativo».</p>
-
-  <div class="next">
-    <span class="label">Continua nel documento 2</span>
-    <p>Quanto detto qui vale per un server che risponde e dimentica. Il secondo documento affronta il caso opposto — l'applicativo dove una pagina resta aperta per ore, accumula stato e riceve aggiornamenti — spiega perché abbiamo deciso di tenere quello stato in memoria invece di serializzarlo a ogni colpo, e perché un bilanciatore di carico, per quanto bravo, non può fare quel lavoro.</p>
+    <p>Questo documento descrive il server nella sua forma compiuta: quello che è quando il lavoro è finito. Non dichiara, riga per riga, che cosa di tutto ciò sia già scritto — perché quello cambia ogni settimana, e una pagina che lo mescola alla descrizione invecchia tutta insieme.</p>
+    <p>Lo stato di avanzamento vive in un documento suo: <a href="stato_attuale.html">stato attuale</a>, voce per voce, con la prova accanto a ciascuna — un file con la sua copertura, un test che la esercita, oppure la constatazione che non esiste una riga di codice. La parte che riguarda questo capitolo è il ramo <a href="stato_attuale.html#server">il server</a>.</p>
+    <p>La divisione è deliberata. Le pagine dei quattro documenti non cambiano quando una voce di quel documento cambia stato.</p>
   </div>
 </section>
 
 <footer>
-  <p>genro-asgi · documento 1 di 3 · Apache License 2.0 · Softwell S.r.l.</p>
+  <p>genro-asgi · documento 1 di 4 · Apache License 2.0 · Softwell S.r.l.</p>
 </footer>
 
 </div>

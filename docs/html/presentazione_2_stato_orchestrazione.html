@@ -69,9 +69,6 @@ p code, li code, td code { background: var(--sunk); padding: 1px 5px; border-rad
 .card p { font-size: 15.5px; color: var(--ink-soft); margin-bottom: 0; line-height: 1.55; }
 ul.tight { margin: 0 0 20px; padding-left: 24px; }
 ul.tight li { margin-bottom: 10px; }
-.tag { display: inline-block; font-family: var(--sans); font-size: 10.5px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; padding: 2px 8px; border-radius: 3px; white-space: nowrap; }
-.tag.ok { color: var(--accent); background: var(--accent-soft); }
-.tag.wip { color: var(--soon); background: var(--soon-soft); }
 .roadmap-note { font-family: var(--sans); font-size: 13.5px; color: var(--ink-faint); max-width: 70ch; margin-top: 22px; }
 .note { background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; padding: 18px 22px; margin: 28px 0; max-width: 72ch; }
 .note.warn { border-left-color: var(--warn); }
@@ -100,7 +97,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
 
 <header class="top">
   <div class="wrap">
-    <p class="eyebrow">genro-asgi <span class="of">· documento 2 di 3</span></p>
+    <p class="eyebrow">genro-asgi <span class="of">· documento 2 di 4</span></p>
     <h1>Lo stato vivo, e perché un bilanciatore non basta</h1>
     <p class="lede">Perché abbiamo deciso di tenere lo stato in memoria invece di serializzarlo a ogni colpo, perché questo obbliga a legare l'utente al suo processo, e che cosa serve davvero per farlo senza rimanerci intrappolati.</p>
   </div>
@@ -120,7 +117,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
     <a href="#videate">Il pannello</a>
     <a href="#gruppi">Gruppi e versioni</a>
     <a href="#metriche">Metriche</a>
-    <a href="#roadmap">Roadmap</a>
+    <a href="#stato">Dove siamo</a>
   </div>
 </nav>
 
@@ -137,7 +134,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
 
   <div class="note">
     <span class="label">Come leggere questo documento</span>
-    <p>Descrive il piano nella sua forma compiuta, e argomenta le decisioni che lo hanno prodotto. La <a href="#roadmap">roadmap in appendice</a> dichiara, voce per voce, cosa è già operativo oggi e cosa è in corso di implementazione: è l'unica parte che cambia mentre il lavoro procede.</p>
+    <p>Descrive il piano nella sua forma compiuta, e argomenta le decisioni che lo hanno prodotto. Lo stato di avanzamento non sta qui: vive in un <a href="stato_attuale.html">documento suo</a>, voce per voce e con la prova accanto, ed è l'unica cosa che cambia mentre il lavoro procede. Il rimando è <a href="#stato">in appendice</a>.</p>
   </div>
 </section>
 
@@ -268,7 +265,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
     <p>Il giorno del rilascio scopri che non puoi sostituire un processo senza scollegare chi ci sta sopra. Il giorno in cui un processo comincia a gonfiarsi scopri che non puoi riavviarlo. Il giorno in cui il carico si sbilancia scopri che non puoi ribilanciare, perché spostare un utente significa perderne il lavoro.</p>
     <p class="pull">La stickiness senza mobilità dello stato non è un'architettura: è un vincolo che ti impedisce di toccare il sistema mentre è vivo.</p>
     <p>La soluzione tipica a quel punto è rassegnarsi: si rilascia di notte, si accetta di scollegare tutti, si sovradimensiona per non dover mai ribilanciare. Sono compromessi che si pagano ogni settimana per sempre.</p>
-    <p>Per questo la primitiva fondante del nostro piano non è l'instradamento appiccicato — quello è la parte facile — ma <strong>lo spostamento a caldo di un utente con tutto il suo stato</strong>. È ciò che rende la stickiness sostenibile invece che paralizzante, ed è la ragione per cui il file di test più esercitato dell'intero progetto è quello che verifica lo spostamento: 119 casi, perché è l'operazione da cui dipende tutto il resto.</p>
+    <p>Per questo la primitiva fondante del nostro piano non è l'instradamento appiccicato — quello è la parte facile — ma <strong>lo spostamento a caldo di un utente con tutto il suo stato</strong>. È ciò che rende la stickiness sostenibile invece che paralizzante, ed è l'operazione da cui dipende tutto il resto: il ribilanciamento, la sostituzione di un processo, il versionamento e il ritorno dopo un riavvio sono quella stessa primitiva, vista da lati diversi.</p>
   </div>
 </section>
 
@@ -348,7 +345,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
 
         <rect x="594" y="174" width="272" height="62" rx="5" fill="var(--surface)" stroke="var(--line)"/>
         <text x="612" y="196" font-size="12" font-weight="650" fill="var(--ink)">Processo</text>
-        <text x="612" y="214" font-size="10.5" fill="var(--ink-soft)">replica dello store globale</text>
+        <text x="612" y="214" font-size="10.5" fill="var(--ink-soft)">legge il globale con una chiamata</text>
         <text x="612" y="228" font-size="10.5" fill="var(--ink-soft)">sottoscrizioni alle tabelle</text>
       </g>
     </svg>
@@ -357,6 +354,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
 
   <div class="prose">
     <p>Il front è un'applicazione ordinaria che si monta come qualunque altra: le sue rotte rispondono da sé, e ciò che appartiene al sito ospitato viene inoltrato al processo giusto. Non conserva stato proprio — legge quello che il supervisore già sa.</p>
+    <p><strong>L'identità è una sola, ed è quella del sito.</strong> Il front non conia niente: il sito ospitato battezza la propria connessione mentre serve, la risposta riporta quel nome, e il cookie lo conserva. Non esiste una seconda identità da tradurre nella prima, quindi non esiste il punto in cui le due possono divergere — e le mappe del supervisore sono indicizzate su nomi veri, non su un identificatore inventato dal front. Il cookie vive ventiquattr'ore, la vita che il sito dà alla propria connessione.</p>
     <p>In sviluppo tutto questo gira in <strong>un solo processo</strong>: il worker vive dentro il supervisore, attaccato allo stesso canale, che in quel caso è una coppia di code in memoria invece di un socket — ma codifica ogni messaggio esattamente allo stesso modo. Se il protocollo funziona nel ruolo singolo, passare a molti processi cambia solo il filo.</p>
   </div>
 </section>
@@ -370,17 +368,19 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
       <li><strong>Un albero di dati per pagina.</strong> Ogni scheda aperta ha il proprio stato sul server, e ciò che cambia le viene consegnato al primo giro utile. La consegna è <em>a richiesta</em>, non spinta: se una pagina tace, i suoi aggiornamenti l'aspettano nel collettore invece di perdersi.</li>
       <li><strong>Aggiornamenti dai dati.</strong> Una pagina sottoscrive le tabelle che la interessano; una modifica raggiunge tutti i sottoscrittori ovunque siedano. Chi ha originato il cambiamento serve prima i propri, poi il resto viaggia: una modifica su una tabella che nessuno guarda non costa un solo invio.</li>
       <li><strong>Cache invalidata da sé.</strong> Un valore memorizzato in una pagina porta il segno della tabella da cui viene; quando quella tabella cambia, il valore viene invalidato con una scrittura vera, che la pagina riceve come ogni altro aggiornamento.</li>
-      <li><strong>Store globale condiviso.</strong> Un albero comune a tutti i processi, con un solo scrittore e una replica locale per ciascuno: le letture non costano un giro di rete. Le modifiche in lettura-e-scrittura passano da una concessione ordinata, tutto-o-niente, che viene rilasciata da sé se chi la teneva muore.</li>
+      <li><strong>Store globale condiviso.</strong> Un albero comune a tutti i processi, con un solo scrittore e <strong>nessuna replica</strong>: il master vive sul supervisore, e un processo lo legge con una chiamata sul canale che già tiene aperto. È la scelta che toglie di mezzo il problema di allineare le copie — non ci sono copie da allineare. Le modifiche in lettura-e-scrittura passano da una concessione ordinata, tutto-o-niente: la concessione porta con sé il contenuto del master, quindi chi la riceve non deve chiedersi se quello che ha in mano è aggiornato, e si libera da sé se chi la teneva muore.</li>
     </ul>
 
     <h3>Il governo dei processi</h3>
     <ul class="tight">
-      <li><strong>Spostamento a caldo.</strong> Tutto ciò che appartiene a una persona viaggia da un processo all'altro e rinasce nell'ordine giusto. La mappa si aggiorna per ultima: finché l'installazione non è confermata, la persona continua a essere servita dove si trova, e se la destinazione muore le si offre un altro posto.</li>
+      <li><strong>Spostamento a caldo, per una strada sola.</strong> Tutto ciò che appartiene a una persona si congela dov'è, viene riassegnato, e rinasce al primo colpo che quella persona batte. I passi sono sempre gli stessi quattro — si alza la barriera, si congela, si riassegna, si risveglia — e servono tutti i casi: restringere il pool, sostituire un processo in modo ordinato, riportare dentro chi c'era prima di un riavvio. Il passaggio diretto da un processo all'altro è stato eliminato di proposito: una strada sola è una strada che si prova davvero. Chi arriva mentre la persona è fra due case attende sulla barriera, non fallisce.</li>
       <li><strong>Bilanciamento sulla risorsa giusta.</strong> Si osserva la saturazione per componente, non un carico medio: un processo oltre soglia su una sola risorsa cede utenti anche se tutto il resto sembra tranquillo. Chi va via viene scelto in proporzione a quanto ha consumato di recente.</li>
       <li><strong>Ricambio prima del limite.</strong> Il sistema tiene memoria di <em>come cresce</em> la memoria di ogni processo e ne sostituisce uno <em>prima</em> che raggiunga il tetto, portando i suoi utenti su un processo fresco. Il problema classico dei processi che si gonfiano diventa un'operazione pianificata invece di un incidente.</li>
       <li><strong>Compattazione.</strong> Quando il carico cala, il pool si restringe: si drena il processo meno carico e lo si ritira. Un processo che tiene ancora qualcosa non viene mai ritirato.</li>
       <li><strong>Sorveglianza che serve a due cose.</strong> Una sonda periodica chiede a ogni processo i suoi numeri: la risposta porta i dati <em>e</em> la prova che il processo è ancora vivo per produrli. Il silenzio è esso stesso l'informazione, e un processo muto viene abbattuto e rilanciato.</li>
-      <li><strong>Un riavvio completo non perde le sessioni.</strong> Andando giù, il pool raccoglie ogni utente e lo scrive su file; risalendo, li ripiazza prima che qualcosa possa essere instradato.</li>
+      <li><strong>Un riavvio completo non perde le sessioni.</strong> Andando giù, ogni gruppo parcheggia i suoi utenti congelati e il supervisore scrive accanto le proprie mappe; la cartella prende il nome definitivo solo quando la fotografia è completa, quindi il nome giusto <em>è</em> la prova che non manca niente. Risalendo, le mappe tornano al loro posto e nessuno viene riacceso in anticipo: la prima richiesta di una persona è ciò che la risveglia. Chi torna dopo il riavvio trova il proprio cookie ancora valido, la propria identità, e nessun nuovo login da fare.</li>
+      <li><strong>Un gruppo può nascere da uno stampo.</strong> Un gruppo che dichiara come costruire il proprio motore possiede un <em>processo template</em>: lo costruisce una volta sola, ne congela la memoria, e ogni worker di quel gruppo è un suo fork. Accendere un processo in più costa un fork invece di un avvio da zero.</li>
+      <li><strong>Ogni gruppo sul proprio interprete.</strong> La ricetta di un gruppo dichiara con quale Python eseguirlo: il processo del supervisore sta sul suo, i worker di ogni gruppo sul proprio. Gli interpreti li porta l'immagine; il gruppo dice quale gli serve.</li>
     </ul>
 
     <h3>Il ponte con l'esistente</h3>
@@ -562,7 +562,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
     <h3>Non solo rilasci: mandare qualcuno avanti</h3>
     <p>Il rilascio in blocco è il caso grosso, ed è il più raro. L'uso quotidiano dei gruppi è un altro, e vale la pena metterlo in evidenza perché è quello che si spende ogni settimana con i clienti.</p>
     <p>La maggior parte delle novità non è una versione nuova del prodotto: è <em>un bottone</em>, un report modificato, una variante di comportamento chiesta da qualcuno. Con i gruppi si può portare quella modifica in esercizio e <strong>mandarci sopra solo chi deve provarla</strong> — un cliente, un reparto, una singola persona — mentre tutti gli altri continuano sulla versione stabile senza accorgersi di nulla.</p>
-    <p>Il costo dell'operazione è basso, ed è basso per una ragione precisa: quando la modifica non tocca le dipendenze, il lockfile è lo stesso e <strong>i due gruppi condividono l'ambiente</strong>. Quello che li distingue è il commit, che viaggia come differenza — kilobyte, non centinaia di megabyte. Non c'è un artefatto grosso da costruire e distribuire per far provare un bottone a tre persone.</p>
+    <p>Il costo dell'operazione è basso, ed è basso per una ragione precisa: il Framework non si tocca. Quello che si costruisce e si spedisce è il bundle dell'applicazione, che pesa quanto l'applicazione e non quanto la piattaforma sotto. Non c'è un artefatto grosso da produrre e distribuire per far provare un bottone a tre persone.</p>
     <p>Chi va sul gruppo di prova ci va con lo stesso meccanismo che assegna chiunque altro, e se la prova va male torna indietro a caldo, con la sessione di lavoro intatta. Il betatester non è una categoria speciale del sistema: è una persona assegnata a un gruppo diverso.</p>
   </div>
 
@@ -572,39 +572,40 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
   </div>
 
   <div class="prose">
-    <h3>Il runtime di un gruppo è un artefatto, non un'installazione</h3>
-    <p>Ogni gruppo dichiara il proprio runtime: quale interprete e quale codice. La domanda vera è <em>chi lo costruisce e quando</em>, e la risposta è la decisione che tiene in piedi tutto il meccanismo.</p>
-    <p>Il runtime <strong>non</strong> viene assemblato sulla macchina che deve servire le richieste. Lo costruisce la CI, una volta, con <strong>uv</strong>: <code>uv sync --frozen</code> materializza l'ambiente esattamente come il lockfile lo descrive, e la versione diventa una <strong>directory immutabile a percorso canonico</strong> che nessuno tocca più. Un gruppo non installa nulla all'avvio: apre una cartella che esiste già.</p>
+    <h3>Il Framework è un'immagine, l'applicazione è un bundle</h3>
+    <p>Ogni gruppo dichiara che cosa esegue. La domanda vera è <em>chi lo costruisce e quando</em>, e la risposta è la decisione che tiene in piedi tutto il meccanismo: le cose che cambiano con ritmi diversi viaggiano separate.</p>
+    <p>Il <strong>Framework</strong> — il server, il supervisore, gli interpreti, tutto ciò che è comune — è un'immagine sola, identica per ogni cliente. Si aggiorna come si aggiorna qualsiasi applicazione: si pubblica una versione nuova e si passa a quella. Non si aggiorna per cliente, né per gruppo, né per utente.</p>
+    <p>L'<strong>applicazione</strong> viaggia a parte, come <strong>bundle</strong>: una build esatta del codice del cliente e delle sue dipendenze, costruita dal repository dell'applicazione con la propria CI, archiviata immutabile e ritirata al momento dell'uso. Un gruppo monta un bundle. Non installa niente all'avvio: apre qualcosa che esiste già, verificato.</p>
   </div>
 
   <div class="grid">
     <div class="card">
-      <h4>uv pinna anche l'interprete</h4>
-      <p>È ciò che chiude il buco storico dei virtual environment: un venv tradizionale fissa i pacchetti ma non il Python sotto, e «python3.12» su due macchine può essere due cose diverse. Con gli interpreti standalone di uv la versione dell'ambiente comprende anche l'interprete, quindi due gruppi possono girare su Python differenti sulla stessa macchina.</p>
+      <h4>L'immagine porta la macchina, il bundle l'applicazione</h4>
+      <p>La divisione è quella: l'immagine sa <em>eseguire</em> le applicazioni, il bundle <em>è</em> l'applicazione da eseguire. Un cliente che chiede una modifica non fa ricostruire il Framework a nessuno — la sua CI produce un bundle e basta.</p>
+    </div>
+    <div class="card">
+      <h4>Un nome logico, molte build</h4>
+      <p>Una build fisica non cambia mai. Un nome logico — <code>collaudo-fatture</code>, <code>produzione</code> — punta di volta in volta a una build diversa. Promuovere significa spostare il nome, non ricostruire: la build che il cliente ha accettato va in esercizio esattamente com'era.</p>
+    </div>
+    <div class="card">
+      <h4>Due Python, e più di due</h4>
+      <p>Il control plane sta sul suo interprete, i worker di un gruppo sul proprio. L'immagine porta gli interpreti che deve servire, il bundle dichiara per quale ABI è stato costruito, e la ricetta del gruppo dice quale usare. Un gruppo su una versione di Python e un altro su una diversa convivono sulla stessa macchina.</p>
     </div>
     <div class="card">
       <h4>Costruito una volta, non a ogni avvio</h4>
-      <p>Risolvere le dipendenze è l'operazione lenta e l'unica che può fallire per ragioni esterne — un indice non raggiungibile, una versione ritirata. Farla in CI significa che non può accadere durante un rilascio: al momento del rilascio l'ambiente esiste già, verificato.</p>
-    </div>
-    <div class="card">
-      <h4>Un artefatto che viaggia</h4>
-      <p>L'ambiente si sposta come archivio rilocabile, con un nome che porta il tag di piattaforma nello stile delle wheel — architettura e versione minima della libreria di sistema. «Linux» non è un'informazione sufficiente, e chi lo scompatta verifica il tag prima di farlo.</p>
-    </div>
-    <div class="card">
-      <h4>Ambienti condivisi quando sono identici</h4>
-      <p>Due gruppi con lo stesso lockfile condividono l'ambiente: nessuna copia. Quando differiscono, la cache di uv deduplica i pacchetti comuni con collegamenti fisici, così due versioni vicine costano poco più di una.</p>
+      <p>Risolvere le dipendenze è l'operazione lenta e l'unica che può fallire per ragioni esterne — un indice non raggiungibile, una versione ritirata. Farla in CI significa che non può accadere durante un rilascio: al momento del rilascio il bundle esiste già, con la sua impronta verificata prima di essere attivato.</p>
     </div>
   </div>
 
   <div class="prose">
-    <h3>Il codice viaggia per differenza</h3>
-    <p>Una versione è in realtà una coppia: <strong>l'ambiente e il commit</strong>. Le due metà cambiano con ritmi diversi — l'ambiente raramente, il codice spesso e per differenze minime, a volte tre moduli. Trattarle allo stesso modo significherebbe spedire centinaia di megabyte per cambiare tre file.</p>
-    <p>Quindi l'ambiente viaggia come archivio, e il codice come <strong>albero di lavoro git immutabile</strong>: un deposito di oggetti per macchina, e ogni versione è il suo albero al percorso canonico. Il delta si misura in kilobyte, gli oggetti comuni restano condivisi, e il rollback è ripuntare all'albero precedente. Non esiste un aggiornamento in place: quella è la strada che porta alla deriva, dove nessuno sa più con certezza quale codice stia girando.</p>
+    <h3>Una modifica piccola tocca molti repository</h3>
+    <p>È il caso che decide il formato. Un cliente chiede una modifica alle fatture; lo sviluppatore interviene sull'applicativo, su un modulo del framework applicativo e su due package condivisi. Quello che va collaudato non è un file: è <strong>una combinazione precisa di quattro repository</strong>.</p>
+    <p>Per questo un bundle non si identifica con un numero di versione leggibile: il suo manifesto registra l'origine esatta di ogni pezzo, commit per commit. Un nome di ramo non basta a dire che cosa si sta provando.</p>
 
     <h3>La CI sta fuori dal percorso di esecuzione</h3>
-    <p>È una scelta deliberata e vale la pena dichiararla: la CI <em>pubblica</em> gli artefatti su un archivio condiviso — l'ambiente e il pacchetto di codice, accanto — e finisce lì il suo compito. Chi avvia un processo li legge da quell'archivio, mai dalla forge.</p>
+    <p>È una scelta deliberata e vale la pena dichiararla: la CI <em>pubblica</em> il bundle sull'archivio condiviso, e finisce lì il suo compito. Chi avvia un processo lo legge da quell'archivio, in sola lettura, mai dalla forge.</p>
     <p>La conseguenza è che il sistema si riavvia, si ribilancia e sostituisce processi anche con la piattaforma di integrazione irraggiungibile. Il momento in cui serve più affidabilità è quello in cui qualcosa è già andato storto, e in quel momento il numero di dipendenze esterne deve essere il più basso possibile.</p>
-    <p>Lo stesso meccanismo dichiarativo — il gruppo descrive il runtime che vuole, e chi avvia i processi lo realizza — ammette altri modi di confezionare un ambiente, immagini di container comprese, senza che nulla cambi nel resto del disegno: cambia l'attuatore, non il contratto.</p>
+    <p>Lo stesso meccanismo dichiarativo — il gruppo descrive quello che vuole eseguire, e chi avvia i processi lo realizza — ammette altri modi di confezionare un'applicazione senza che nulla cambi nel resto del disegno: cambia l'attuatore, non il contratto.</p>
   </div>
 
   <h3>La videata dei gruppi</h3>
@@ -619,7 +620,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
         <g font-size="9.5" font-weight="650" letter-spacing=".08em" fill="var(--ink-faint)">
           <text x="20" y="64">GRUPPO</text>
           <text x="150" y="64">CODICE</text>
-          <text x="250" y="64">AMBIENTE</text>
+          <text x="250" y="64">BUNDLE</text>
           <text x="420" y="64">PROCESSI</text>
           <text x="510" y="64">PERSONE</text>
           <text x="600" y="64">STATO</text>
@@ -631,8 +632,8 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
           <text x="20" y="100" font-size="11.5" font-weight="600" fill="var(--ink)">stabile</text>
           <text x="20" y="115" font-size="9" fill="var(--ink-faint)">predefinito</text>
           <text x="150" y="100" font-size="10" font-family="var(--mono), monospace" fill="var(--ink-soft)">1.4.2 · 8f21c</text>
-          <text x="250" y="100" font-size="10" font-family="var(--mono), monospace" fill="var(--ink-soft)">venv a41c9 · py 3.12.9</text>
-          <text x="250" y="115" font-size="8.5" fill="var(--ink-faint)">condiviso con nessun altro gruppo</text>
+          <text x="250" y="100" font-size="10" font-family="var(--mono), monospace" fill="var(--ink-soft)">fatture/012 · py 3.12</text>
+          <text x="250" y="115" font-size="8.5" fill="var(--ink-faint)">build immutabile · canale «produzione»</text>
           <text x="420" y="100" font-size="10.5" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">3</text>
           <text x="510" y="100" font-size="10.5" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">165</text>
           <rect x="600" y="90" width="56" height="16" rx="3" fill="var(--accent-soft)"/>
@@ -726,51 +727,17 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
   </div>
 </section>
 
-<section id="roadmap">
-  <h2><span class="kicker">Appendice</span>Roadmap: dove siamo</h2>
+<section id="stato">
+  <h2><span class="kicker">Appendice</span>Dove siamo oggi</h2>
   <div class="prose">
-    <p>Il documento descrive il piano nella sua forma compiuta. Questa appendice è il solo posto dove si legge lo stato di avanzamento, e l'unico che cambia mentre l'implementazione procede.</p>
-    <p>La parte difficile è quella già fatta: lo spostamento a caldo di un utente con tutto il suo stato è operativo e verificato da 119 casi di test — è la primitiva da cui dipendono il ribilanciamento, il ricambio dei processi e il versionamento.</p>
-  </div>
-
-  <div class="tablewrap"><table>
-    <thead><tr><th>Capitolo</th><th>Stato</th><th>Nota</th></tr></thead>
-    <tbody>
-      <tr><td>Stato vivo per utente, connessione e pagina</td><td><span class="tag ok">operativo</span></td><td></td></tr>
-      <tr><td>Instradamento appiccicato all'identità</td><td><span class="tag ok">operativo</span></td><td>compresa la ricongiunzione al login di una sessione anonima</td></tr>
-      <tr><td>Spostamento a caldo con tutto lo stato</td><td><span class="tag ok">operativo</span></td><td>fase di quiete, ordine di rinascita, mappa aggiornata per ultima</td></tr>
-      <tr><td>Consegna a richiesta degli aggiornamenti</td><td><span class="tag ok">operativo</span></td><td></td></tr>
-      <tr><td>Sottoscrizioni ai dati e invalidazione della cache</td><td><span class="tag ok">operativo</span></td><td>con esclusione dell'origine dal fan-out</td></tr>
-      <tr><td>Store globale con replica per processo</td><td><span class="tag ok">operativo</span></td><td>concessione ordinata, tutto-o-niente</td></tr>
-      <tr><td>Bilanciamento sulla saturazione per componente</td><td><span class="tag ok">operativo</span></td><td></td></tr>
-      <tr><td>Ricambio dei processi prima del limite di memoria</td><td><span class="tag ok">operativo</span></td><td>misura onesta della memoria, serie storica per processo</td></tr>
-      <tr><td>Compattazione del pool</td><td><span class="tag ok">operativo</span></td><td></td></tr>
-      <tr><td>Sorveglianza e rilancio dei processi</td><td><span class="tag ok">operativo</span></td><td>la sonda porta i dati e la prova di vita</td></tr>
-      <tr><td>Sopravvivenza a un riavvio completo</td><td><span class="tag ok">operativo</span></td><td>raccolta allo spegnimento, ripiazzamento all'avvio</td></tr>
-      <tr><td>Monitor della popolazione viva</td><td><span class="tag ok">operativo</span></td><td></td></tr>
-      <tr><td>Ponte WSGI per un sito esistente</td><td><span class="tag ok">operativo</span></td><td>pool dedicato, separato da quello di servizio</td></tr>
-      <tr><td>Ruolo singolo per lo sviluppo</td><td><span class="tag ok">operativo</span></td><td>stesso protocollo, canale in memoria invece del socket</td></tr>
-      <tr><td>Metriche del pool in formato Prometheus</td><td><span class="tag wip">in implementazione</span></td><td>le letture esistono già — la sonda le raccoglie e il supervisore le archivia; manca la ripubblicazione nel formato standard</td></tr>
-      <tr><td>Trasporto WSX sul canale del browser</td><td><span class="tag ok">operativo</span></td><td>il canale che rende continuo il dialogo con la pagina, sullo stesso motore di smistamento di HTTP</td></tr>
-      <tr><td>Compatibilità dello stato fra versioni</td><td><span class="tag wip">in implementazione</span></td><td>la regola è ratificata — uno stato non riconosciuto fa ripartire la pagina pulita, mai una reidratazione approssimata — e il vincolo di serializzabilità dei registri è già rispettato; manca il riconoscimento della forma nel pacchetto, che arriva con i gruppi perché è lì che due versioni si scambiano stato</td></tr>
-      <tr><td>Gruppi e versioni conviventi</td><td><span class="tag wip">in implementazione</span></td><td>la colonna del gruppo è già presente in ogni registro; restano l'instradamento per gruppo e la costruzione degli ambienti in CI</td></tr>
-      <tr><td>Ri-aggancio della pagina dopo un riavvio</td><td><span class="tag wip">in implementazione</span></td><td>oggi la sessione applicativa sopravvive; il ri-aggancio della singola pagina per identificatore completa il quadro</td></tr>
-      <tr><td>Supervisore remoto e più macchine</td><td><span class="tag wip">in implementazione</span></td><td>il protocollo è disegnato dall'inizio per due implementazioni, in-processo e su rete; oggi ne esiste una</td></tr>
-      <tr><td>Batch su processi dedicati</td><td><span class="tag wip">in implementazione</span></td><td>modello ed esecuzione locale completi; la distribuzione riusa questa stessa supervisione</td></tr>
-    </tbody>
-  </table></div>
-
-  <p class="roadmap-note">Ultimo aggiornamento della roadmap: 13 agosto 2026. Le voci del corpo del documento non cambiano quando una riga di questa tabella passa a «operativo».</p>
-
-  <div class="back">
-    <span class="label">Gli altri due documenti</span>
-    <p>Il primo descrive il server su cui tutto questo poggia: routing agnostico dal trasporto, grammatiche di configurazione, OpenAPI e MCP sulla stessa superficie, autenticazione, sessioni, task e storage. Vale da solo, anche per chi non avrà mai bisogno di una riga di quanto descritto qui.</p>
-    <p>Il terzo porta questo stesso disegno oltre il confine della macchina: come si cresce su più nodi senza cedere a nessuno la decisione su dove vive una persona, e come si usa Kubernetes prendendone i muscoli e non il giudizio.</p>
+    <p>Questo documento descrive il piano nella sua forma compiuta: quello che il sistema è quando il lavoro è finito. Non dichiara, riga per riga, che cosa di tutto ciò sia già scritto — perché quello cambia ogni settimana, e una pagina che lo mescola alla descrizione invecchia tutta insieme.</p>
+    <p>Lo stato di avanzamento vive in un documento suo: <a href="stato_attuale.html">stato attuale</a>, voce per voce, con la prova accanto a ciascuna — un file con la sua copertura, un test che la esercita, oppure la constatazione che non esiste una riga di codice. La parte che riguarda questo capitolo è il ramo <a href="stato_attuale.html#spa">il mondo SPA</a>.</p>
+    <p>La divisione è deliberata. Le pagine dei quattro documenti non cambiano quando una voce di quel documento cambia stato.</p>
   </div>
 </section>
 
 <footer>
-  <p>genro-asgi · documento 2 di 3 · Apache License 2.0 · Softwell S.r.l.</p>
+  <p>genro-asgi · documento 2 di 4 · Apache License 2.0 · Softwell S.r.l.</p>
 </footer>
 
 </div>

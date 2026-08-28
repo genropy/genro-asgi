@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>genro-asgi · 4 — Un sito GenroPy senza il suo daemon</title>
+<style>
+:root {
+  --ground: #f3f3f6; --surface: #ffffff; --sunk: #eaeaf0;
+  --line: #d7d7e0; --line-soft: #e6e6ee;
+  --ink: #16161f; --ink-soft: #4c4c5b; --ink-faint: #6e6e80;
+  --accent: #8a4a2f; --accent-soft: #f6e9e1;
+  --code-bg: #f7f7fb;
+  --warn: #8d3f3f; --warn-soft: #f6e6e6;
+  --soon: #8a6118; --soon-soft: #f6ecd8;
+  --shadow: 0 1px 2px rgba(22,22,31,.05), 0 10px 28px -20px rgba(22,22,31,.35);
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #101018; --surface: #191922; --sunk: #14141c;
+    --line: #2e2e3c; --line-soft: #23232e;
+    --ink: #e8e8f0; --ink-soft: #adadbe; --ink-faint: #82828f;
+    --accent: #e0a37e; --accent-soft: #33231a; --code-bg: #131320;
+    --warn: #e09a9a; --warn-soft: #2c1c1c;
+    --soon: #d3a355; --soon-soft: #2b2317;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 32px -22px rgba(0,0,0,.85);
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #101018; --surface: #191922; --sunk: #14141c;
+  --line: #2e2e3c; --line-soft: #23232e;
+  --ink: #e8e8f0; --ink-soft: #adadbe; --ink-faint: #82828f;
+  --accent: #e0a37e; --accent-soft: #33231a; --code-bg: #131320;
+  --warn: #e09a9a; --warn-soft: #2c1c1c;
+  --soon: #d3a355; --soon-soft: #2b2317;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 32px -22px rgba(0,0,0,.85);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--serif); font-size: 17.5px; line-height: 1.65; }
+.wrap { max-width: 1140px; margin: 0 auto; padding: 0 24px 100px; }
+.prose { max-width: 68ch; }
+header.top { background: var(--surface); border-bottom: 1px solid var(--line); padding: 60px 0 42px; }
+.eyebrow { font-family: var(--sans); font-size: 12px; font-weight: 600; letter-spacing: .15em; text-transform: uppercase; color: var(--accent); margin: 0 0 16px; }
+.eyebrow .of { color: var(--ink-faint); }
+h1 { font-size: clamp(34px, 5.4vw, 56px); line-height: 1.06; font-weight: 600; letter-spacing: -.018em; margin: 0 0 20px; text-wrap: balance; max-width: 19ch; }
+.lede { font-size: 21px; color: var(--ink-soft); margin: 0; max-width: 62ch; }
+nav.toc { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--ground) 93%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); margin-bottom: 56px; }
+nav.toc .inner { max-width: 1140px; margin: 0 auto; padding: 9px 24px; display: flex; gap: 3px; flex-wrap: wrap; font-family: var(--sans); font-size: 12.5px; }
+nav.toc a { color: var(--ink-soft); text-decoration: none; padding: 5px 9px; border-radius: 4px; }
+nav.toc a:hover { background: var(--sunk); color: var(--ink); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+section { margin: 0 0 78px; scroll-margin-top: 64px; }
+h2 { font-size: clamp(26px, 3.4vw, 36px); font-weight: 600; letter-spacing: -.015em; margin: 0 0 14px; text-wrap: balance; }
+h2 .kicker { display: block; font-family: var(--sans); font-size: 12px; font-weight: 650; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); margin-bottom: 9px; }
+h3 { font-size: 20px; font-weight: 600; margin: 40px 0 10px; letter-spacing: -.008em; }
+h4 { font-family: var(--sans); font-size: 15px; font-weight: 650; margin: 26px 0 6px; }
+p { margin: 0 0 18px; }
+a { color: var(--accent); text-underline-offset: 2px; }
+strong { font-weight: 650; }
+em { font-style: italic; }
+code { font-family: var(--mono); font-size: .86em; }
+p code, li code, td code { background: var(--sunk); padding: 1px 5px; border-radius: 3px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; margin: 30px 0; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 20px 22px; box-shadow: var(--shadow); }
+.card h4 { margin-top: 0; }
+.card p { font-size: 15.5px; color: var(--ink-soft); margin-bottom: 0; line-height: 1.55; }
+ul.tight { margin: 0 0 20px; padding-left: 24px; }
+ul.tight li { margin-bottom: 10px; }
+.roadmap-note { font-family: var(--sans); font-size: 13.5px; color: var(--ink-faint); max-width: 70ch; margin-top: 22px; }
+.note { background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; padding: 18px 22px; margin: 28px 0; max-width: 72ch; }
+.note.warn { border-left-color: var(--warn); }
+.note p:last-child { margin-bottom: 0; }
+.note .label { font-family: var(--sans); font-size: 11.5px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 7px; }
+.note.warn .label { color: var(--warn); }
+.tablewrap { overflow-x: auto; margin: 26px 0; }
+table { width: 100%; border-collapse: collapse; font-family: var(--sans); font-size: 14.5px; }
+th { text-align: left; font-size: 11px; font-weight: 650; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-faint); padding: 10px 14px 8px 0; border-bottom: 1px solid var(--line); }
+td { padding: 11px 14px 11px 0; border-bottom: 1px solid var(--line-soft); vertical-align: top; color: var(--ink-soft); }
+td:first-child { color: var(--ink); font-weight: 550; }
+tr:last-child td { border-bottom: 0; }
+.diagram { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 26px 22px; margin: 30px 0; overflow-x: auto; box-shadow: var(--shadow); }
+.diagram svg { display: block; min-width: 580px; width: 100%; height: auto; }
+.caption { font-family: var(--sans); font-size: 13px; color: var(--ink-faint); margin: -14px 0 30px; max-width: 70ch; }
+.pull { font-size: 23px; line-height: 1.42; color: var(--ink); border-left: 3px solid var(--accent); padding: 6px 0 6px 26px; margin: 36px 0; max-width: 58ch; text-wrap: balance; }
+.back { background: var(--accent-soft); border-radius: 6px; padding: 24px 26px; margin: 40px 0 0; }
+.back .label { font-family: var(--sans); font-size: 11.5px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 8px; }
+.back p { margin-bottom: 0; max-width: 64ch; }
+footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px; font-family: var(--sans); font-size: 13px; color: var(--ink-faint); }
+@media (max-width: 620px) { body { font-size: 16.5px; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <p class="eyebrow">genro-asgi <span class="of">· documento 4 di 4</span></p>
+    <h1>Un sito GenroPy senza il suo daemon</h1>
+    <p class="lede">Come un sito già scritto sale su questo server senza essere riscritto, che cosa succede al processo separato che oggi ne tiene il registro, e come si dimostra che il comportamento non è cambiato.</p>
+  </div>
+</header>
+
+<nav class="toc">
+  <div class="inner">
+    <a href="#daemon">Il daemon classico</a>
+    <a href="#costo">Quello che costa</a>
+    <a href="#dentro">Il registro torna dentro</a>
+    <a href="#cancello">GenroPy non si tocca</a>
+    <a href="#cambia">Che cosa cambia davvero</a>
+    <a href="#comparatore">Il comparatore</a>
+    <a href="#benchmark">I benchmark</a>
+    <a href="#stato">Dove siamo</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<section id="daemon">
+  <div class="prose">
+    <h2><span class="kicker">Il punto di partenza</span>Che cos'è il daemon, e perché c'è</h2>
+    <p>Un sito GenroPy in esercizio non è un processo: sono molti processi che servono le stesse persone. Ognuno deve sapere chi è collegato, quali schede ha aperte, che cosa quelle schede stanno guardando e che cosa è cambiato da notificare. Quella conoscenza non può stare dentro un processo solo, perché la richiesta successiva della stessa persona può arrivare a un altro.</p>
+    <p>La soluzione classica è portarla fuori. Il <strong>registro del sito</strong> — utenti, connessioni, pagine, con i loro dati vivi e i cambiamenti in attesa — vive in un processo a parte, il daemon, e ogni processo che serve richieste ci si collega. È una soluzione corretta, ed è la ragione per cui esiste: se lo stato deve essere condiviso da molti, va messo dove tutti lo vedono.</p>
+    <p class="pull">Il daemon non è un difetto di GenroPy. È la conseguenza necessaria di una scelta precedente: molti processi intercambiabili che servono la stessa persona.</p>
+  </div>
+</section>
+
+<section id="costo">
+  <div class="prose">
+    <h2><span class="kicker">Il prezzo</span>Quello che quella scelta costa</h2>
+    <p>Vale la pena essere espliciti, perché sono costi che si pagano ogni giorno e a cui ci si abitua.</p>
+    <ul class="tight">
+      <li><strong>Due processi da avviare, in ordine.</strong> Prima il daemon, poi i processi che servono: il sito legge l'indirizzo del daemon da un file mentre si costruisce, quindi partire nell'ordine sbagliato significa parlare a un indirizzo a cui non risponde nessuno. È un vincolo che ogni script di avvio deve conoscere.</li>
+      <li><strong>Ogni lettura del registro è un viaggio.</strong> Sapere chi è una connessione, che cosa una pagina ha in attesa, quali tabelle sta guardando: ogni domanda esce dal processo e torna. Sono domande che una pagina viva fa in continuazione.</li>
+      <li><strong>Una morte sola le porta via tutte.</strong> Il daemon è un punto singolo: se cade, cade la fotografia di tutti, non di qualcuno.</li>
+      <li><strong>Un pezzo in più da installare e sorvegliare.</strong> Una porta, un file di indirizzo, un processo che qualcuno deve accorgersi se non c'è.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="dentro">
+  <div class="prose">
+    <h2><span class="kicker">La conseguenza</span>Il registro torna dentro il processo</h2>
+    <p>Il secondo documento descrive una scelta diversa: <strong>ogni persona vive in un processo solo, e tutte le sue pagine stanno lì</strong>. Non è una scelta fatta per togliere il daemon — è fatta perché lo stato di lavoro di una sessione di otto ore non entra in un tubo e non va serializzato a ogni colpo. Ma ha una conseguenza diretta su questo capitolo.</p>
+    <p>Se tutte le pagine di una persona stanno nello stesso processo, la fotografia che doveva essere condivisa non deve più esserlo: <strong>è già locale</strong>. Chi è quella connessione, che cosa quella pagina ha in attesa, quali tabelle guarda — sono domande a cui il processo risponde da sé, senza uscire.</p>
+    <p>Resta ciò che attraversa davvero: un valore comune a tutti, un cambiamento che deve raggiungere la pagina di un'altra persona. Quelle cose passano dal supervisore, indirizzate, sulla corsia che il processo tiene già aperta per ricevere gli ordini. Non c'è un secondo canale e non c'è un processo in più: il filo che serve a governare i processi è lo stesso che porta i loro scambi.</p>
+    <div class="note">
+      <span class="label">Emulare, non reinterpretare</span>
+      <p>La regola sotto tutto questo lavoro è che il comportamento osservabile deve combaciare con l'originale. Prima di progettare un meccanismo — la consegna dei cambiamenti, le pendenze di una pagina, il giro di una sottoscrizione — si ricostruisce come funziona nel daemon di GenroPy, leggendolo nel suo codice. Il consumatore finale è un sito che quel comportamento se lo aspetta, e un'architettura più elegante che risponde diversamente è un'architettura sbagliata.</p>
+    </div>
+  </div>
+</section>
+
+<section id="cancello">
+  <div class="prose">
+    <h2><span class="kicker">Il meccanismo</span>GenroPy non viene modificato</h2>
+    <p>La domanda pratica è come si sostituisce il registro senza mettere le mani nel framework. La risposta è un cancello dichiarato dentro GenroPy stesso, e la sua forma merita di essere raccontata perché è la parte che rende la cosa reversibile.</p>
+    <p>Il namespace del daemon può essere sostituito per intero da un pacchetto installato che si dichiari come fornitore. Ma <strong>la sostituzione non è automatica</strong>: avviene solo quando una variabile d'ambiente nomina il fornitore. Con la variabile assente non c'è nessuna sostituzione e nemmeno la ricerca di un fornitore — il pacchetto è quello che era.</p>
+    <div class="grid">
+      <div class="card">
+        <h4>Per processo, non per ambiente</h4>
+        <p>La scelta sta in una variabile d'ambiente, quindi lo stack classico e quello nuovo convivono nella stessa installazione e si sceglie a ogni avvio quale eseguire. Non serve un secondo virtualenv per provare.</p>
+      </div>
+      <div class="card">
+        <h4>Nominare, non indovinare</h4>
+        <p>Il fornitore si chiede per nome, e se quel nome non trova esattamente un fornitore la cosa fallisce. Una richiesta esplicita è una dichiarazione di configurazione: non deve poter degradare in «allora avvio il daemon classico».</p>
+      </div>
+      <div class="card">
+        <h4>Il sito importa quello che ha sempre importato</h4>
+        <p>Il codice del sito continua a chiedere il client del registro dallo stesso posto di sempre. Quello che cambia è che cosa trova. Nessuna riga dell'applicativo sa che il daemon non c'è.</p>
+      </div>
+      <div class="card">
+        <h4>Si torna indietro togliendo una parola</h4>
+        <p>Non c'è una migrazione da annullare. Si riavvia senza quella variabile e il sito è di nuovo sullo stack classico, con il suo daemon, esattamente come prima.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="cambia">
+  <div class="prose">
+    <h2><span class="kicker">In pratica</span>Che cosa cambia per chi ha già un sito</h2>
+    <p>Poco, ed è il punto. Il sito non si tocca: stesso codice, stessa configurazione, stesse pagine. Cambia il comando con cui lo si avvia.</p>
+    <ul class="tight">
+      <li><strong>Un comando al posto dell'altro.</strong> Il server sincrono lascia il posto a quello ASGI. Stesse opzioni, stesso sito, e in più il canale WebSocket che prima non c'era.</li>
+      <li><strong>Nessun daemon da avviare.</strong> Sparisce il processo separato, sparisce l'ordine di avvio, sparisce il file con il suo indirizzo.</li>
+      <li><strong>Il pool non si dimensiona a mano.</strong> Non c'è un numero di processi da dichiarare né una modalità da scegliere: il pool parte con uno e cresce quando serve, e ogni persona resta sul suo.</li>
+      <li><strong>Il sito eredita quello che il piano gli dà.</strong> Sessione appiccicata all'identità, stato vivo per pagina, spostamento a caldo, sopravvivenza al riavvio: un applicativo scritto anni fa entra nel piano senza sapere di esserci entrato.</li>
+      <li><strong>Si sviluppa su quello che va in produzione.</strong> Oggi lo sviluppo gira sul server di prova di werkzeug e l'esercizio su un altro stack: sono due macchine diverse sotto lo stesso sito. Qui il comando è uno solo, ed è quello vero — stesso server, stesso pool, stesso registro, sulla tua macchina come sul cliente.</li>
+      <li><strong>Salvi un file e non rifai il login.</strong> La sentinella che guarda i sorgenti fa rinascere il server a ogni modifica, e l'uscita che provoca è di quelle che salvano: le persone collegate vengono parcheggiate congelate e riprese dal processo nuovo. Senza il daemon lo stato vive nei processi, quindi senza questo meccanismo ogni salvataggio scollegherebbe tutti.</li>
+    </ul>
+    <div class="note">
+      <span class="label">La distanza che sparisce</span>
+      <p>Vale la pena fermarsi su questo punto, perché è quello che si sente ogni giorno e non compare in nessun elenco di funzionalità. Nel modo classico lo sviluppo gira su un server di prova e l'esercizio su un altro, e i due non sono la stessa cosa: servono i file in modo diverso, trattano le connessioni in modo diverso, uno esegue una richiesta per volta e l'altro no. Ogni differenza è un posto dove può nascere un difetto che si vede solo dal cliente e sulla macchina di chi l'ha scritto non si riproduce.</p>
+      <p>Con un comando solo quella distanza non c'è. Quello che cambia fra il tuo portatile e il cliente è un flag di modalità, e <strong>il server non si ramifica su quel flag in nessun punto</strong>. A leggerlo è il sito, per cui quel flag è il cancello che rende disponibili i suoi strumenti per chi programma — ciascuno dei quali ha poi il proprio interruttore. La macchina che serve il sito non cambia.</p>
+      <p>Del vecchio server di prova resta disponibile una cosa sola, la pagina di errore che mostra la traccia e permette di valutare Python nel processo, e va chiesta per nome: la modalità di sviluppo da sola non la accende più, così quella pagina non può comparire per distrazione.</p>
+    </div>
+
+    <div class="note warn">
+      <span class="label">Il confine, dichiarato</span>
+      <p>Il core non impara la logica di GenroPy. Quello che il sito deve fornire e quello che può consumare è un <em>contratto</em>: la callable sincrona da invocare, il sito che battezza la propria connessione mentre serve, i verbi del piano dati. Il ponte implementa quel contratto; il server offre meccanismi generali. È la regola che impedisce al server di diventare il server di un solo framework.</p>
+    </div>
+  </div>
+</section>
+
+<section id="comparatore">
+  <div class="prose">
+    <h2><span class="kicker">La prova</span>Il comparatore: la stessa sessione sui due stack</h2>
+    <p>Sostituire il registro di un sito in esercizio è una promessa forte, e una promessa forte va dimostrata. Non con una batteria di test scritti da chi ha fatto il lavoro — quelli provano che il codice fa quello che l'autore credeva — ma mettendo i due stack a rispondere alla stessa cosa.</p>
+    <p>Il banco di confronto fa esattamente questo. Si naviga il sito attraverso un proxy, e <strong>ogni richiesta viene eseguita due volte</strong>: prima sullo stack classico, poi sul ponte. La risposta che il browser riceve è sempre quella dello stack classico, quindi un difetto del ponte non blocca mai chi sta lavorando. Il ponte è l'ombra, e quello che risponde viene solo confrontato.</p>
+
+    <h3>Uguale significa uguale per struttura</h3>
+    <p>Il confronto non è fra due testi. I due stack hanno ciascuno le proprie sessioni, i propri identificatori di pagina, le proprie connessioni: chiedere che quei numeri coincidano sarebbe chiedere una cosa priva di senso. Quello che deve coincidere è la <strong>sequenza delle chiamate al registro, la forma dei loro argomenti e la forma delle loro risposte</strong>. Se il cliente letto e modificato è Mario Rossi da una parte e Luigi Bianchi dall'altra, non è una divergenza.</p>
+
+    <h3>Ci si ferma alla prima divergenza</h3>
+    <p>È la decisione che rende il banco utile invece di ingombrante. La prima versione confrontava due tracce finite, a posteriori — e il problema di quel disegno è che una divergenza sporca tutto quello che viene dopo, così un rapporto con seicento differenze ne contiene una vera e cinquecentonovantanove conseguenze.</p>
+    <p class="pull">Una divergenza che contamina tutto il seguito non costa niente, se nessuno cammina oltre la prima.</p>
+    <p>Quindi il confronto è vivo: alla prima differenza il proxy stampa il rapporto, lo scrive accanto alla registrazione della sessione, e smette di mandare traffico all'ombra. <strong>Non chiude niente.</strong> I due stack restano in piedi e continuano a rispondere, perché il senso di confrontare dal vivo è poter guardare dentro tutti e due mentre la differenza è ancora lì. Il browser continua a funzionare: sta parlando con lo stack classico, come sempre.</p>
+
+    <h3>Che cosa viene mandato e che cosa viene confrontato</h3>
+    <p>Sono due domande diverse, e tenerle separate è ciò che rende i risultati credibili. Al ponte viene mandato <em>tutto</em> quello che il browser chiede, file statici compresi: se l'ombra vedesse meno traffico dell'originale, il suo stato potrebbe divergere per una ragione introdotta dal banco invece che dal codice. Confrontato, invece, è solo ciò che dice qualcosa — un file statico produce sempre la stessa coppia di chiamate e non insegna niente.</p>
+
+    <h3>Le differenze che non sono differenze</h3>
+    <p>Alcune divergenze sono prodotte dalla situazione, non dal codice, e vanno riconosciute per nome invece di essere discusse ogni volta. Una scheda rimasta aperta da una sessione precedente porta un cookie che il registro nuovo non conosce: lo stack classico la rifiuta, l'ombra — che non ha ereditato niente — la serve. I due stack non stanno dicendo cose diverse, gli si stanno facendo domande diverse. Ogni regola di questo tipo è dichiarata, con la data in cui è stata decisa e la chiamata su cui è stata misurata.</p>
+  </div>
+</section>
+
+<section id="benchmark">
+  <div class="prose">
+    <h2><span class="kicker">Le misure</span>I benchmark, e perché non c'è ancora un numero</h2>
+    <p>La domanda che tutti fanno per prima è quanto va più veloce. La risposta onesta, oggi, è che <strong>non è stata ancora misurata</strong> — e non per dimenticanza: è un ordine deciso.</p>
+    <p>Il programma ha tre fasi. Le prime due riguardano la <strong>fedeltà</strong>: che il ponte faccia le stesse cose dello stack classico. La terza riguarda la <strong>velocità</strong>. Sono in quest'ordine per una ragione che si vede subito appena si prova a invertirlo: gli strumenti che dimostrano la fedeltà registrano ogni scambio e ogni chiamata al registro, e una misura di velocità presa con quella registrazione accesa non misura il sistema, misura lo strumento.</p>
+    <p>Quindi durante le prime due fasi la strumentazione può essere pesante quanto le serve, e i tempi non si leggono. La terza fase parte con la raccolta spenta, e allora i tempi contano.</p>
+
+    <h3>La scala delle misure</h3>
+    <p>Gli strumenti ci sono già, e sono costruiti in modo che un rallentamento si possa <em>attribuire</em> invece che indovinare. Ogni gradino isola uno strato in più.</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Gradino</th><th>Che cosa isola</th></tr></thead>
+      <tbody>
+        <tr><td>Il pavimento</td><td>Il costo del server e basta: niente database, niente logica di pagina.</td></tr>
+        <tr><td>Il ping autenticato</td><td>Il costo del dialogo continuo, mentre il numero di sessioni collegate sale.</td></tr>
+        <tr><td>Il record singolo</td><td>Una query indicizzata e una risposta piccola: la macchina di una chiamata, senza il peso dei dati.</td></tr>
+        <tr><td>La sessione intera</td><td>Il rigioco di una sessione vera registrata da un browser: login, pagine, le letture pesanti.</td></tr>
+      </tbody>
+    </table></div>
+    <p>Ogni gradino si può puntare anche sullo stack classico, con lo stesso comando: è così che i due diventano confrontabili invece che raccontabili.</p>
+
+    <h3>La memoria prima della velocità</h3>
+    <p>La terza fase comincia dalla memoria, non dai tempi, e anche questo è deliberato. La risorsa che si esaurisce per prima in un sistema che tiene stato è la memoria, non la CPU: la si misura su tutto lo stack, a parità di processi, da fermo e sotto carico. I tempi vengono dopo.</p>
+
+    <div class="note warn">
+      <span class="label">Quello che questo documento non dice</span>
+      <p>Non c'è, in queste pagine, nessun confronto di prestazioni fra i due stack, e non va dedotto: gli strumenti per produrlo esistono, il confronto non è ancora stato eseguito. Chi deve decidere sulla base di numeri deve aspettare la terza fase, che parte quando la fedeltà è chiusa.</p>
+      <p>Le condizioni di ogni misura vengono dichiarate insieme al risultato — quante persone, quali processi, quale versione e quale modo di esecuzione da entrambe le parti — perché un numero senza le sue condizioni non è confrontabile con nessun altro numero. E c'è un caso peggiore del numero senza condizioni: il numero le cui condizioni sono <em>dichiarate</em> e non sono state <em>imposte</em>. È successo, e vale la pena raccontarlo: i due stack venivano avviati leggendo il modo di esecuzione da una riga di comando, mentre il sito lo leggeva dalla propria configurazione. Per un tratto del lavoro uno dei due ha girato in modalità di sviluppo mentre la riga che descriveva quella prova dichiarava il contrario, e nessuno poteva accorgersene guardando i risultati. Da allora entrambe le letture passano dalla stessa fonte, e una riga che dichiara una condizione che nessuno ha imposto è considerata un difetto di categoria, non un incidente singolo.</p>
+    </div>
+  </div>
+</section>
+
+<section id="stato">
+  <h2><span class="kicker">Appendice</span>Dove siamo oggi</h2>
+  <div class="prose">
+    <p>Questo documento descrive il ponte nella sua forma compiuta. Lo stato di avanzamento vive in un documento suo: <a href="stato_attuale.html">stato attuale</a>, voce per voce, con la prova accanto a ciascuna. La voce che riguarda questo capitolo è <a href="stato_attuale.html#v-bridge">il contratto del bridge</a>.</p>
+    <p>Due cose vanno dette qui e non lasciate dedurre. Il ponte pubblicato oggi è agganciato alla versione precedente del nucleo e non è ancora stato portato su questa: finché non lo è, il contratto descritto in queste pagine non è mai stato esercitato da un sito vero su questo core. E il banco di confronto sta lavorando alla seconda delle tre fasi — la sessione di riferimento riprodotta sul ponte senza divergenze inspiegate.</p>
+  </div>
+</section>
+
+<footer>
+  <p>genro-asgi · documento 4 di 4 · Apache License 2.0 · Softwell S.r.l.</p>
+</footer>
+
+</div>
+</body>
+</html>
