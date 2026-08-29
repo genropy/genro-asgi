@@ -83,7 +83,7 @@ runs is given another one.
 
 **The shape is decided on ONE picture, and one step per round.**
 ``check_occupancy`` takes the occupancy of every living worker once and then does
-the FIRST thing that reading calls for: restart the worker past
+the FIRST thing that reading calls for: restart the worker whose MEMORY is past
 ``restart_occupancy_max_percent`` (it will not get better on its own), bring one
 into being when nobody has room left for a newcomer, or close one whose share
 keeps every survivor under ``close_occupancy_max_percent`` — a threshold
@@ -240,8 +240,9 @@ class GroupHandler:
         name: the group's name; its workers are named ``<name>_<counter>``, short
             because the name is the socket's too.
         occupancy_max_percent: how full a worker may be before it stops admitting.
-        restart_occupancy_max_percent: past this a process is restarted rather
-            than kept.
+        restart_occupancy_max_percent: past this MEMORY occupancy a process is
+            restarted rather than kept. CPU pressure grows and closes
+            admission; it never replaces a healthy process.
         close_occupancy_max_percent: a closure is ordered only when the spare's
             share, redistributed, keeps EVERY survivor under this — distinctly
             below ``occupancy_max_percent``, so the band between the two is the
@@ -644,13 +645,26 @@ class GroupHandler:
             worker whose memory stands still.
         """
         photo = worker_snapshot or {}
-        ceiling = self.worker_memory_ceiling_bytes
-        accounted_bytes, _kind = self.get_memory_accounting(photo)
-        components = [accounted_bytes / ceiling] if accounted_bytes is not None else []
+        components = [self.get_memory_occupancy_percent(photo) / 100.0]
         cpu_percent = photo.get("cpu_percent")
         if cpu_percent is not None:
             components.append(cpu_percent / 100.0)
         return 100.0 * min(max(components, default=0.0), 1.0)
+
+    def get_memory_occupancy_percent(
+        self, worker_snapshot: dict[str, Any] | None
+    ) -> float:
+        """How full this worker is by memory alone, in percent.
+
+        PSS is the Linux currency and RSS its conservative fallback, selected
+        by ``get_memory_accounting``. This separate reading is what the restart
+        judge uses: CPU pressure asks for capacity and soft admission, never the
+        destruction of a process that still owns live sessions.
+        """
+        accounted_bytes, _kind = self.get_memory_accounting(worker_snapshot)
+        if accounted_bytes is None:
+            return 0.0
+        return 100.0 * min(accounted_bytes / self.worker_memory_ceiling_bytes, 1.0)
 
     def get_worker_cap(self, worker_handler: WorkerHandler) -> float:
         """How full a worker of this group takes users up to, in percent.
@@ -883,21 +897,28 @@ class GroupHandler:
     async def check_occupancy(self) -> None:
         """Read the group once and take the ONE step that reading calls for.
 
-        Acts on the group: restart past the restart setpoint, the early CPU
-        growth when a crossing asks for it (#43), growth when nobody has room
-        left, closure of a worker the others can absorb — and ``state`` when
-        the memory quota refuses the growth.
+        Acts on the group: restart when MEMORY is past the restart setpoint,
+        the early CPU growth when a crossing asks for it (#43), growth when
+        nobody has room left, closure of a worker the others can absorb — and
+        ``state`` when the memory quota refuses the growth. CPU remains part of
+        the capacity picture but never condemns a process by itself.
         """
         policy = self.policy
-        picture = {
-            worker_handler.name: self.get_occupancy_percent(worker_handler.worker_snapshot)
+        snapshots = {
+            worker_handler.name: worker_handler.worker_snapshot
             for worker_handler in self.living_workers
         }
-        for name, occupancy_percent in picture.items():
-            if occupancy_percent > policy.restart_occupancy_max_percent:
+        memory_picture = {
+            name: self.get_memory_occupancy_percent(photo) for name, photo in snapshots.items()
+        }
+        for name, memory_occupancy_percent in memory_picture.items():
+            if memory_occupancy_percent > policy.restart_occupancy_max_percent:
                 if self._policy_held(policy, "restart_worker", name):
                     await self.restart_worker(self.worker_handler_map[name])
                 return
+        picture = {
+            name: self.get_occupancy_percent(photo) for name, photo in snapshots.items()
+        }
         if await self._grow_on_cpu():
             return
         if not self._has_room(picture):
@@ -1434,6 +1455,10 @@ class GroupHandler:
             worker_handler.name,
             numbers={
                 "occupancy_percent": self.get_occupancy_percent(worker_handler.worker_snapshot),
+                "memory_occupancy_percent": self.get_memory_occupancy_percent(
+                    worker_handler.worker_snapshot
+                ),
+                "cpu_percent": (worker_handler.worker_snapshot or {}).get("cpu_percent"),
                 "workers": len(self.living_workers),
             },
         )

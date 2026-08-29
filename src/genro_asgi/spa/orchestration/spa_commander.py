@@ -1103,6 +1103,11 @@ class SpaCommander:
                         "occupancy_percent": group_handler.get_occupancy_percent(
                             worker_handler.worker_snapshot
                         ),
+                        "memory_occupancy_percent": (
+                            group_handler.get_memory_occupancy_percent(
+                                worker_handler.worker_snapshot
+                            )
+                        ),
                         "rss_bytes": (worker_handler.worker_snapshot or {}).get("rss_bytes"),
                         "pss_bytes": (worker_handler.worker_snapshot or {}).get("pss_bytes"),
                         "accounted_memory_bytes": group_handler.get_memory_accounting(

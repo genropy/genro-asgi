@@ -133,6 +133,19 @@ async def test_a_crossing_blocks_the_worker_and_grows_once(make_group, caplog):
     )
 
 
+async def test_cpu_past_the_restart_setpoint_grows_without_restarting(make_group):
+    group = await grown_group(make_group)
+    original = group.reception
+    declare_cpu(original, 96.0)
+
+    await group.check_occupancy(now=True)
+
+    assert original.name in group.worker_handler_map
+    assert original.state == "running"
+    assert original.cpu_admission_open is False
+    assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
+
+
 async def test_snapshots_that_stay_above_the_threshold_are_one_crossing(make_group):
     group = await grown_group(make_group)
     declare_cpu(group.reception, 55.0)

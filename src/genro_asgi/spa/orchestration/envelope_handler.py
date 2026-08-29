@@ -229,10 +229,10 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
         photo has nothing to compare against and carries no such component.
 
         Smoothed because two photos may be milliseconds apart: a raw reading
-        makes one busy instant look like saturation, and the judges — restart
-        included, which with the prefork costs little and stays on the full
-        occupancy (owner, 2026-08-25) — must react to load, not to a spike. The
-        moving average starts at zero — a newborn is presumed idle — the
+        makes one busy instant look like saturation, and the CPU admission and
+        growth judges must react to load, not to a spike. Restart is deliberately
+        memory-only: CPU pressure must not destroy a process that owns live
+        sessions. The moving average starts at zero — a newborn is presumed idle — the
         weight of the newest reading is ``CPU_SMOOTHING_FACTOR``, and no rate
         is read over less than ``CPU_WINDOW_MIN_SECONDS`` of wall clock:
         photos closer than that carry the standing value forward. Policies
@@ -378,10 +378,14 @@ class GroupEnvelopeHandler(EnvelopeHandler):
         return self.commander_envelope_handler(envelope)
 
     def on_worker_snapshot(self, photo: dict[str, Any]) -> None:
-        """Ring the group's wake when this photo cannot wait for the next round."""
+        """Ring the group's wake when MEMORY may require an immediate restart.
+
+        CPU crossings have their own signal in ``WorkerEnvelopeHandler``. They
+        ask for admission and growth, never for a restart through this layer.
+        """
         group_handler = self.group_handler
-        occupancy_percent = group_handler.get_occupancy_percent(photo)
-        if occupancy_percent > group_handler.restart_occupancy_max_percent:
+        memory_percent = group_handler.get_memory_occupancy_percent(photo)
+        if memory_percent > group_handler.restart_occupancy_max_percent:
             group_handler.ping_now()
 
     def on_connection_user_changed(self, worker_event: dict[str, Any]) -> None:

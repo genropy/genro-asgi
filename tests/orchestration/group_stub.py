@@ -90,6 +90,12 @@ class GroupStub:
         """How full the worker of this photo is: full when the tests want it urgent."""
         return 100.0 if self.urgent_snapshots else 0.0
 
+    def get_memory_occupancy_percent(
+        self, worker_snapshot: dict[str, Any] | None
+    ) -> float:
+        """The memory-only reading: this test double has just one gauge."""
+        return self.get_occupancy_percent(worker_snapshot)
+
     def drop_worker(self, worker: str) -> None:
         """Take a dead handler out of the group, with the placements that pointed at it."""
         self.dropped_workers.append(worker)

@@ -84,6 +84,9 @@ async def test_the_pool_census_declares_how_worker_memory_was_accounted(populate
     assert worker_summary["pss_bytes"] == 300
     assert worker_summary["accounted_memory_bytes"] == 300.0
     assert worker_summary["memory_accounting"] == "pss"
+    assert worker_summary["memory_occupancy_percent"] == pytest.approx(
+        100.0 * 300 / group.worker_memory_ceiling_bytes
+    )
     assert worker_summary["occupancy_percent"] == pytest.approx(
         100.0 * 300 / group.worker_memory_ceiling_bytes
     )
