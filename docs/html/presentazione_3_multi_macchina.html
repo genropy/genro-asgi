@@ -154,7 +154,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
     <p>Distribuire introduce una seconda dimensione. Fino a una macchina esisteva solo la <em>versione</em>: quale codice esegue un processo. Con più macchine si aggiunge la <em>capacità</em>: quale ferro lo ospita. Le due dimensioni sono ortogonali — una versione gira su più macchine, una macchina ospita più versioni — e si incrociano esattamente sul processo di lavoro.</p>
     <p>Da qui la scelta di avere due gerarchie distinte invece di una sola che tenta di fare entrambi i mestieri:</p>
     <ul class="tight">
-      <li><strong>La gerarchia logica, per versione.</strong> Il vertice conosce i gruppi; ogni gruppo ha un <em>capogruppo</em> che governa i processi della propria versione, dovunque essi si trovino fisicamente.</li>
+      <li><strong>La gerarchia logica, per versione.</strong> Il vertice — il supervisore del secondo documento, visto dall'alto — conosce i gruppi; ogni gruppo ha un <em>capogruppo</em> che governa i processi della propria versione, dovunque essi si trovino fisicamente.</li>
       <li><strong>La gerarchia fisica, per capacità.</strong> Il vertice conosce i domini; ogni dominio — una macchina, una fetta di cluster — ha un <em>sub-commander</em> che governa la nascita, la sorveglianza e le risorse dei processi che ospita, di qualunque versione siano.</li>
     </ul>
     <p>La conseguenza è che <strong>ogni processo di lavoro ha due genitori con due mestieri diversi</strong>: il capogruppo, che sa quali utenti gli appartengono e decide il suo destino; e il titolare del dominio fisico, che lo fa nascere, lo sorveglia e ne misura le risorse. Nessuno dei due invade il mestiere dell'altro.</p>
@@ -240,7 +240,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
     <thead><tr><th>Livello</th><th>Cosa sa</th><th>Per decidere</th></tr></thead>
     <tbody>
       <tr><td>Il vertice</td><td>utente → <strong>indirizzo</strong> (un dominio, oppure un processo di casa)</td><td>dove mandare la richiesta; le domande globali; l'arbitraggio fra gruppi</td></tr>
-      <tr><td>Il dominio</td><td>utente → <strong>processo</strong>, e il carico dei propri processi</td><td>la distribuzione interna: assegnare, ribilanciare, far nascere</td></tr>
+      <tr><td>Il dominio</td><td>utente → <strong>processo</strong>, e il carico dei propri processi</td><td>la distribuzione interna: assegnare e ribilanciare; materializzare le nascite che i capigruppo ordinano</td></tr>
       <tr><td>Il processo</td><td>utente → connessioni → <strong>pagine</strong>, con tutti i contenuti</td><td>eseguire</td></tr>
     </tbody>
   </table></div>
@@ -248,7 +248,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
   <div class="prose">
     <p>La <strong>mappa fine</strong> — quale processo esatto tiene una persona — vive solo dove vivono i processi. Il vertice tiene la <strong>mappa grossa</strong>: sa che Maria sta nel dominio B, non sa quale processo di B la stia servendo, e non ha bisogno di saperlo.</p>
     <p>Quindi la risoluzione è a due tappe, ognuna su un solo livello: il vertice riconosce il dominio e spedisce lì; il dominio risolve il processo e serve. Nessuna ricerca ricorsiva, nessuna cache da invalidare in cascata, e — soprattutto — <strong>nessuna verità duplicata</strong>: quando il dominio B sposta Maria da un suo processo a un altro, il vertice non ha nulla da aggiornare, perché quello che il vertice sa è ancora vero.</p>
-    <p>Vale anche per gli aggiornamenti dei dati: una modifica destinata a una pagina che sta altrove risale al vertice, che la indirizza al dominio, che la consegna al processo. Un solo schema per il traffico di controllo e per quello dei dati.</p>
+    <p>Vale anche per gli aggiornamenti dei dati: una modifica destinata a una pagina che sta altrove risale al vertice, che la indirizza al dominio, che la consegna al processo. Un solo schema per il traffico di controllo e per quello dei dati. E vale anche per lo spostamento di una persona: dentro un dominio il pacchetto del suo stato passa dal deposito di quel dominio, come sulla macchina singola; fra due domini viaggia sul canale, lungo l'albero, coordinato dal vertice — la stessa strada unica, con un tratto di rete in mezzo.</p>
   </div>
 
   <div class="note">
@@ -270,7 +270,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
     </div>
     <div class="card">
       <h4>Il vertice arbitra</h4>
-      <p>Non micro-decide. Fa tre cose: smista una persona verso il gruppo giusto quando entra; assegna i budget e i massimali di ciascun gruppo, che è il vero arbitraggio del ferro condiviso; governa le operazioni che attraversano i gruppi, come portare una persona da una versione all'altra.</p>
+      <p>Non micro-decide. Fa tre cose: smista una persona verso il gruppo giusto quando entra; assegna i budget e i massimali di ciascun gruppo — quanti processi e quale quota di memoria — che è il vero arbitraggio del ferro condiviso; governa le operazioni che attraversano i gruppi, come portare una persona da una versione all'altra.</p>
     </div>
     <div class="card">
       <h4>Il sub-commander offre ed esegue</h4>
@@ -280,7 +280,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
 
   <div class="prose">
     <p>Questa divisione risponde anche alla domanda pratica di come nasce un nuovo processo quando le risorse si esauriscono, e vale la pena essere precisi su chi tiene la penna, perché è il punto in cui è facile immaginare la catena al contrario.</p>
-    <p>Non è il processo saturo a chiedere aiuto per sé. Il processo <em>misura</em> e riferisce: quanta memoria sta usando davvero, quanto sono saturi i suoi componenti. Chi legge quelle misure è il capogruppo, che vede l'intera sezione e non un pezzo, e che quindi può distinguere il caso in cui basta spostare qualcuno da quello in cui serve davvero un'unità in più. Se la conclusione è che serve, il capogruppo <strong>ordina</strong>; il sub-commander del dominio scelto <strong>materializza</strong>; il processo nuovo nasce, si presenta al proprio commander, e da quel momento è nel giro.</p>
+    <p>Non è il processo saturo a chiedere aiuto per sé. Il processo <em>misura</em> e riferisce: quanta memoria sta usando davvero, quanto sono saturi i suoi componenti. Chi legge quelle misure è il capogruppo, che vede l'intera sezione e non un pezzo, e che quindi può distinguere il caso in cui basta spostare qualcuno da quello in cui serve davvero un'unità in più. Se la conclusione è che serve, il capogruppo <strong>ordina</strong>; il sub-commander del dominio scelto <strong>materializza</strong>; il processo nuovo nasce, si presenta al proprio vertice, e da quel momento è nel giro.</p>
     <p class="pull">Chi misura non decide, chi decide non esegue, chi esegue non conosce la strategia.</p>
   </div>
 </section>
@@ -292,7 +292,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
     <p>Un cliente lavora per dieci mesi l'anno su una macchina sola, comodamente. Poi arriva la stagione — la campagna, la chiusura, il picco — e per qualche settimana servono tre macchine. Poi il picco passa.</p>
     <p>Una versione precedente del disegno vietava i ruoli doppi: il vertice non poteva possedere processi di lavoro, doveva sempre esserci un livello intermedio. Era coerente, e imponeva una cerimonia costante: anche per la macchina singola servivano tre processi, uno dei quali esisteva solo per rispettare la simmetria.</p>
     <p>Ammettendo la specie mista, il caso stagionale diventa <strong>una transizione a costo zero</strong>. Il vertice possiede i suoi processi di casa; quando arrivano le macchine di picco, la sua tabella comincia a contenere anche voci di dominio remoto; quando il picco passa, quelle voci scompaiono. <strong>Il vertice non cambia mai ruolo</strong>, non c'è una riconfigurazione, non c'è un momento di migrazione da una topologia all'altra: crescere e restringersi sono la stessa operazione in due direzioni.</p>
-    <p>E il caso comune — che per la maggior parte dei clienti è l'unico — non paga processi che esistono solo per la coerenza dello schema. Il minimo di sviluppo resta due processi: il vertice e un lavoratore.</p>
+    <p>E il caso comune — che per la maggior parte dei clienti è l'unico — non paga processi che esistono solo per la coerenza dello schema. In sviluppo il lavoratore sa vivere dentro il vertice, sul canale in memoria del secondo documento: un processo solo.</p>
   </div>
 </section>
 
@@ -329,7 +329,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
       </tr>
       <tr>
         <td>L'autoscaling della piattaforma</td>
-        <td>Scala su metriche che non sanno cosa sia una persona: aggiungerebbe unità guardando la CPU mentre la risorsa che si esaurisce è la memoria di chi sta fermo con un oggetto grosso in pancia. La scala la decide il capogruppo, e la <em>ordina</em> alle API — la piattaforma è pienamente comandabile in modo imperativo, ed è così che la usiamo.</td>
+        <td>Scala su metriche che non sanno cosa sia una persona: aggiungerebbe unità guardando la CPU mentre la risorsa che si esaurisce è la memoria di chi sta fermo con un oggetto grosso in pancia. La scala la decide il capogruppo, e la <em>ordina</em> alle API — la piattaforma è pienamente comandabile in modo imperativo, ed è così che la usiamo. Un autoscaler dei nodi resta invece legittimo: aggiunge ferro per ospitare i processi già chiesti da noi, e opera un piano sotto le decisioni applicative.</td>
       </tr>
       <tr>
         <td>Il rilascio graduale nativo</td>
@@ -352,7 +352,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
     <p>È stato accettato con tre ragioni, che vale la pena esporre perché è il tipo di scelta su cui un lettore tecnico vuole vedere i conti:</p>
     <ul class="tight">
       <li><strong>I processi di casa non pagano nulla.</strong> Sono figli diretti del vertice: zero salti aggiuntivi. Nel caso più comune — una macchina — il costo semplicemente non esiste.</li>
-      <li><strong>Il salto è dentro il centro dati.</strong> Si misura in frazioni di millisecondo, contro i venti o cinquanta millisecondi che separano comunque il browser dal server. È rumore dentro un ritardo che c'è già.</li>
+      <li><strong>Il salto è dentro il centro dati.</strong> Si misura in un millisecondo o meno, contro i venti o cinquanta millisecondi che separano comunque il browser dal server. È rumore dentro un ritardo che c'è già.</li>
       <li><strong>Gli eventi si accorpano.</strong> Ciò che viaggia verso un dominio remoto viene raggruppato per destinazione, così un aggiornamento destinato a molte pagine dello stesso dominio costa una sola spedizione.</li>
     </ul>
     <p>In cambio si ottiene la proprietà che rende il sistema comprensibile: i processi di lavoro non si affacciano sulla rete, il perimetro esposto è fatto di due sole specie di componenti, e il traffico segue l'albero — quindi il cammino di un messaggio è sempre disegnabile.</p>
@@ -377,7 +377,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
     </div>
     <div class="card">
       <h4>Muore la macchina del vertice</h4>
-      <p>Si porta via il cervello, e va detto chiaramente. Ma è un costo di <em>qualunque</em> topologia che ospiti il cervello da qualche parte, non un costo di questo disegno in particolare: il coordinamento sta su una macchina, e quella macchina è un punto singolo. La difesa è la stessa che vale per il caso mono-macchina — la sessione applicativa sopravvive al riavvio, perché lo stato viene raccolto scendendo e ripiazzato risalendo.</p>
+      <p>Si porta via il cervello, e va detto chiaramente. Ma è un costo di <em>qualunque</em> topologia che ospiti il cervello da qualche parte, non un costo di questo disegno in particolare: il coordinamento sta su una macchina, e quella macchina è un punto singolo. La difesa vale per il riavvio ordinato, come nel caso mono-macchina: lo stato viene raccolto scendendo e ripiazzato risalendo. Una caduta secca non lascia fotografia: chi era collegato rifà il login — lo stesso prezzo, dichiarato, di ogni morte non ordinata.</p>
     </div>
   </div>
 </section>
@@ -470,7 +470,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
       </g>
     </svg>
   </div>
-  <p class="caption">Ogni riga è un canale del vertice. «Casa» è il dominio che il vertice governa direttamente e non paga salti; gli altri sono agganciati, con la latenza del salto in chiaro accanto — quella frazione di millisecondo che è il costo dichiarato del disegno. La capacità è ciò che il dominio <em>offre</em> contro ciò che ha <em>impegnato</em>: è il numero su cui il vertice assegna i budget.</p>
+  <p class="caption">Ogni riga è un canale del vertice. «Casa» è il dominio che il vertice governa direttamente e non paga salti; gli altri sono agganciati, con la latenza del salto in chiaro accanto — quel millisecondo scarso che è il costo dichiarato del disegno. La capacità è ciò che il dominio <em>offre</em> contro ciò che ha <em>impegnato</em>: è il numero su cui il vertice assegna i budget.</p>
 
   <h3>La matrice che emerge dal basso</h3>
   <div class="diagram">
@@ -555,7 +555,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
   </table></div>
 
   <div class="prose">
-    <p>La raccolta non attraversa la gerarchia: chi raccoglie interroga ogni livello dove è esposto, senza che un livello debba fare da tramite per le metriche di quello sotto. È l'opposto di quel che accade al traffico applicativo, che invece segue i rami dell'albero — e la differenza è voluta, perché il percorso delle metriche non deve poter influenzare le prestazioni di ciò che misura.</p>
+    <p>La raccolta interroga ogni livello dove è esposto. Il titolare di un dominio espone i propri processi — che non parlano HTTP, quindi è lui la loro voce — ma nessuno espone i domini altrui: il vertice non fa da tramite per le letture di un sub-commander. È l'opposto di quel che accade al traffico applicativo, che invece segue i rami dell'albero — e la differenza è voluta, perché il percorso delle metriche non deve poter influenzare le prestazioni di ciò che misura.</p>
     <p>Un dominio irraggiungibile non fa cadere la lettura del sistema: risulta come tale, esattamente come nel pannello di supervisione. Un buco nei dati che si dichiara è un'informazione; un buco che passa per zero è un errore.</p>
   </div>
 

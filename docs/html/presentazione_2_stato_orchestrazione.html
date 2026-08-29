@@ -355,7 +355,8 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
   <div class="prose">
     <p>Il front è un'applicazione ordinaria che si monta come qualunque altra: le sue rotte rispondono da sé, e ciò che appartiene al sito ospitato viene inoltrato al processo giusto. Non conserva stato proprio — legge quello che il supervisore già sa.</p>
     <p><strong>L'identità è una sola, ed è quella del sito.</strong> Il front non conia niente: il sito ospitato battezza la propria connessione mentre serve, la risposta riporta quel nome, e il cookie lo conserva. Non esiste una seconda identità da tradurre nella prima, quindi non esiste il punto in cui le due possono divergere — e le mappe del supervisore sono indicizzate su nomi veri, non su un identificatore inventato dal front. Il cookie vive ventiquattr'ore, la vita che il sito dà alla propria connessione.</p>
-    <p>In sviluppo tutto questo gira in <strong>un solo processo</strong>: il worker vive dentro il supervisore, attaccato allo stesso canale, che in quel caso è una coppia di code in memoria invece di un socket — ma codifica ogni messaggio esattamente allo stesso modo. Se il protocollo funziona nel ruolo singolo, passare a molti processi cambia solo il filo.</p>
+    <p>La prima visita, in quattro passi: la richiesta di un browser mai visto va al processo di accoglienza; il sito, servendola, battezza la connessione; al login il gruppo assegna la persona a un processo; e da lì ogni sua richiesta torna a quel processo. È tutto lo sticky routing: nessuna tabella da amministrare, solo il fatto che l'identità nasce servendo e la mappa si scrive a quel fatto.</p>
+    <p>In sviluppo tutto questo gira in <strong>un solo processo</strong>: il processo di lavoro vive dentro il supervisore, attaccato allo stesso canale, che in quel caso è una coppia di code in memoria invece di un socket — ma codifica ogni messaggio esattamente allo stesso modo. Se il protocollo funziona nel ruolo singolo, passare a molti processi cambia solo il filo.</p>
   </div>
 </section>
 
@@ -365,7 +366,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
   <div class="prose">
     <h3>Lo stato vivo e la sua consegna</h3>
     <ul class="tight">
-      <li><strong>Un albero di dati per pagina.</strong> Ogni scheda aperta ha il proprio stato sul server, e ciò che cambia le viene consegnato al primo giro utile. La consegna è <em>a richiesta</em>, non spinta: se una pagina tace, i suoi aggiornamenti l'aspettano nel collettore invece di perdersi.</li>
+      <li><strong>Un albero di dati per pagina.</strong> Ogni scheda aperta ha il proprio stato sul server, e ciò che cambia le viene consegnato al primo giro utile. La consegna è <em>a richiesta</em>, non spinta: se una pagina tace, i suoi aggiornamenti l'aspettano nel collettore — la casella di pendenze che ogni pagina ha sul server — invece di perdersi.</li>
       <li><strong>Aggiornamenti dai dati.</strong> Una pagina sottoscrive le tabelle che la interessano; una modifica raggiunge tutti i sottoscrittori ovunque siedano. Chi ha originato il cambiamento serve prima i propri, poi il resto viaggia: una modifica su una tabella che nessuno guarda non costa un solo invio.</li>
       <li><strong>Cache invalidata da sé.</strong> Un valore memorizzato in una pagina porta il segno della tabella da cui viene; quando quella tabella cambia, il valore viene invalidato con una scrittura vera, che la pagina riceve come ogni altro aggiornamento.</li>
       <li><strong>Store globale condiviso.</strong> Un albero comune a tutti i processi, con un solo scrittore e <strong>nessuna replica</strong>: il master vive sul supervisore, e un processo lo legge con una chiamata sul canale che già tiene aperto. È la scelta che toglie di mezzo il problema di allineare le copie — non ci sono copie da allineare. Le modifiche in lettura-e-scrittura passano da una concessione ordinata, tutto-o-niente: la concessione porta con sé il contenuto del master, quindi chi la riceve non deve chiedersi se quello che ha in mano è aggiornato, e si libera da sé se chi la teneva muore.</li>
@@ -373,14 +374,14 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
 
     <h3>Il governo dei processi</h3>
     <ul class="tight">
-      <li><strong>Spostamento a caldo, per una strada sola.</strong> Tutto ciò che appartiene a una persona si congela dov'è, viene riassegnato, e rinasce al primo colpo che quella persona batte. I passi sono sempre gli stessi quattro — si alza la barriera, si congela, si riassegna, si risveglia — e servono tutti i casi: restringere il pool, sostituire un processo in modo ordinato, riportare dentro chi c'era prima di un riavvio. Il passaggio diretto da un processo all'altro è stato eliminato di proposito: una strada sola è una strada che si prova davvero. Chi arriva mentre la persona è fra due case attende sulla barriera, non fallisce.</li>
-      <li><strong>Bilanciamento sulla risorsa giusta.</strong> Si osserva la saturazione per componente, non un carico medio: un processo oltre soglia su una sola risorsa cede utenti anche se tutto il resto sembra tranquillo. Chi va via viene scelto in proporzione a quanto ha consumato di recente.</li>
+      <li><strong>Spostamento a caldo, per una strada sola.</strong> Tutto ciò che appartiene a una persona si congela dov'è, viene riassegnato, e rinasce al primo colpo che quella persona batte. I passi sono sempre gli stessi quattro — si alza la barriera, si congela, si riassegna, si risveglia — e servono tutti i casi: restringere il pool, sostituire un processo in modo ordinato, riportare dentro chi c'era prima di un riavvio. Il passaggio diretto da un processo all'altro è stato eliminato di proposito: una strada sola è una strada che si prova davvero. Chi arriva mentre la persona è fra due case attende sulla barriera, non fallisce; oltre il tempo massimo riceve il rifiuto esplicito che dice fra quanto riprovare. La barriera impedisce che una richiesta raggiunga il vecchio processo mentre lo stato cambia proprietario, e il passaggio è concluso soltanto quando la destinazione ha adottato il pacchetto — fino a quel momento la persona è dov'era.</li>
+      <li><strong>Bilanciamento sulla risorsa giusta.</strong> Si osserva la saturazione per componente, non un carico medio: un processo oltre soglia su una sola risorsa cede utenti anche se tutto il resto sembra tranquillo. Chi va via viene scelto in proporzione a quanto ha consumato di recente: la saturazione decide quando intervenire, il consumo recente decide chi parte. E l'utente fermo con l'oggetto grosso in pancia non aspetta il ribilanciamento: chi tace oltre la soglia viene parcheggiato congelato, e la sua memoria torna al pool.</li>
       <li><strong>Ricambio prima del limite.</strong> Il sistema tiene memoria di <em>come cresce</em> la memoria di ogni processo e ne sostituisce uno <em>prima</em> che raggiunga il tetto, portando i suoi utenti su un processo fresco. Il problema classico dei processi che si gonfiano diventa un'operazione pianificata invece di un incidente.</li>
       <li><strong>Compattazione.</strong> Quando il carico cala, il pool si restringe: si drena il processo meno carico e lo si ritira. Un processo che tiene ancora qualcosa non viene mai ritirato.</li>
       <li><strong>Sorveglianza che serve a due cose.</strong> Una sonda periodica chiede a ogni processo i suoi numeri: la risposta porta i dati <em>e</em> la prova che il processo è ancora vivo per produrli. Il silenzio è esso stesso l'informazione, e un processo muto viene abbattuto e rilanciato.</li>
-      <li><strong>Un riavvio completo non perde le sessioni.</strong> Andando giù, ogni gruppo parcheggia i suoi utenti congelati e il supervisore scrive accanto le proprie mappe; la cartella prende il nome definitivo solo quando la fotografia è completa, quindi il nome giusto <em>è</em> la prova che non manca niente. Risalendo, le mappe tornano al loro posto e nessuno viene riacceso in anticipo: la prima richiesta di una persona è ciò che la risveglia. Chi torna dopo il riavvio trova il proprio cookie ancora valido, la propria identità, e nessun nuovo login da fare.</li>
+      <li><strong>Un riavvio completo non perde le sessioni.</strong> Andando giù, ogni gruppo — l'insieme di processi che esegue una stessa versione — parcheggia i suoi utenti congelati e il supervisore scrive accanto le proprie mappe; la cartella prende il nome definitivo solo quando la fotografia è completa, quindi il nome giusto <em>è</em> la prova che non manca niente. Risalendo, le mappe tornano al loro posto e nessuno viene riacceso in anticipo: la prima richiesta di una persona è ciò che la risveglia. Chi torna dopo il riavvio trova il proprio cookie ancora valido, la propria identità, e nessun nuovo login da fare.</li>
       <li><strong>Un gruppo può nascere da uno stampo.</strong> Un gruppo che dichiara come costruire il proprio motore possiede un <em>processo template</em>: lo costruisce una volta sola, ne congela la memoria, e ogni worker di quel gruppo è un suo fork. Accendere un processo in più costa un fork invece di un avvio da zero.</li>
-      <li><strong>Ogni gruppo sul proprio interprete.</strong> La ricetta di un gruppo dichiara con quale Python eseguirlo: il processo del supervisore sta sul suo, i worker di ogni gruppo sul proprio. Gli interpreti li porta l'immagine; il gruppo dice quale gli serve.</li>
+      <li><strong>Ogni gruppo sul proprio interprete.</strong> La ricetta di un gruppo — la sua voce nella configurazione dichiarativa del primo documento — dichiara con quale Python eseguirlo: il processo del supervisore sta sul suo, i worker di ogni gruppo sul proprio. Gli interpreti li porta l'immagine; il gruppo dice quale gli serve.</li>
     </ul>
 
     <h3>Il ponte con l'esistente</h3>
@@ -399,7 +400,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
 <section id="videate">
   <h2><span class="kicker">Il pannello</span>Come si guarda un pool vivo</h2>
   <div class="prose">
-    <p>Tutto quanto descritto finora produce informazione, e quell'informazione ha una forma. Le illustrazioni che seguono non sono schermate di un prodotto finito: mostrano <em>quali</em> dati la superficie di supervisione già possiede, e come si leggono insieme.</p>
+    <p>Tutto quanto descritto finora produce informazione, e quell'informazione ha una forma. Le illustrazioni che seguono non sono schermate di un prodotto finito: mostrano <em>quali</em> dati la superficie di supervisione già possiede, e come si leggono insieme. Ogni vista fotografa un proprio istante: i numeri non si sommano fra una vista e l'altra.</p>
     <p>La cosa da notare è che le due viste rispondono a due domande diverse. La prima guarda i <strong>processi</strong>: come stanno, quanto reggono, cosa conviene fare. La seconda guarda le <strong>persone</strong>: chi c'è, dove sta, quanto pesa.</p>
   </div>
 
@@ -410,7 +411,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
         <rect x="1" y="1" width="878" height="348" rx="7" fill="var(--surface)" stroke="var(--line)"/>
         <path d="M1,42 H879" stroke="var(--line)" fill="none"/>
         <text x="20" y="27" font-size="12.5" font-weight="650" fill="var(--ink)">supervisione · processi</text>
-        <text x="600" y="27" font-size="10.5" fill="var(--ink-faint)">4 attivi · 1 in drenaggio · 187 persone</text>
+        <text x="600" y="27" font-size="10.5" fill="var(--ink-faint)">3 attivi · 1 in drenaggio · 137 persone</text>
 
         <g font-size="9.5" font-weight="650" letter-spacing=".08em" fill="var(--ink-faint)">
           <text x="20" y="64">PROCESSO</text>
@@ -485,7 +486,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
       </g>
     </svg>
   </div>
-  <p class="caption">Ogni riga porta le grandezze su cui il sistema decide davvero: la saturazione <em>per componente</em> con il totale accanto — perché è il componente peggiore a vincolare, non la media — e il pavimento di memoria con la stima di quando toccherà il limite, che è ciò su cui si fonda il ricambio programmato. In basso, la decisione che il pool sta eseguendo: mostrarla è ciò che rende un sistema automatico ispezionabile invece che magico.</p>
+  <p class="caption">Ogni riga porta le grandezze su cui il sistema decide davvero — la memoria, i thread occupati, le attese: le richieste in coda che aspettano un posto sul pool — la saturazione <em>per componente</em> con il totale accanto — il totale è il massimo dei componenti: è il peggiore a vincolare, non la media — e il pavimento di memoria — il livello sotto cui la memoria del processo non torna più nemmeno a riposo — con la stima di quando toccherà il limite, che è ciò su cui si fonda il ricambio programmato. In basso, la decisione che il pool sta eseguendo: mostrarla è ciò che rende un sistema automatico ispezionabile invece che magico.</p>
 
   <h3>Le persone</h3>
   <div class="diagram">
@@ -589,7 +590,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
     </div>
     <div class="card">
       <h4>Due Python, e più di due</h4>
-      <p>Il control plane sta sul suo interprete, i worker di un gruppo sul proprio. L'immagine porta gli interpreti che deve servire, il bundle dichiara per quale ABI è stato costruito, e la ricetta del gruppo dice quale usare. Un gruppo su una versione di Python e un altro su una diversa convivono sulla stessa macchina.</p>
+      <p>Il processo del supervisore sta sul suo interprete, i worker di un gruppo sul proprio. L'immagine porta gli interpreti che deve servire, il bundle dichiara per quale ABI è stato costruito, e la ricetta del gruppo dice quale usare. Un gruppo su una versione di Python e un altro su una diversa convivono sulla stessa macchina.</p>
     </div>
     <div class="card">
       <h4>Costruito una volta, non a ogni avvio</h4>
@@ -600,7 +601,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
   <div class="prose">
     <h3>Una modifica piccola tocca molti repository</h3>
     <p>È il caso che decide il formato. Un cliente chiede una modifica alle fatture; lo sviluppatore interviene sull'applicativo, su un modulo del framework applicativo e su due package condivisi. Quello che va collaudato non è un file: è <strong>una combinazione precisa di quattro repository</strong>.</p>
-    <p>Per questo un bundle non si identifica con un numero di versione leggibile: il suo manifesto registra l'origine esatta di ogni pezzo, commit per commit. Un nome di ramo non basta a dire che cosa si sta provando.</p>
+    <p>Per questo l'identità di un bundle non è il numero leggibile che lo accompagna: è il suo manifesto, che registra l'origine esatta di ogni pezzo, commit per commit. Un nome di ramo non basta a dire che cosa si sta provando.</p>
 
     <h3>La CI sta fuori dal percorso di esecuzione</h3>
     <p>È una scelta deliberata e vale la pena dichiararla: la CI <em>pubblica</em> il bundle sull'archivio condiviso, e finisce lì il suo compito. Chi avvia un processo lo legge da quell'archivio, in sola lettura, mai dalla forge.</p>
@@ -646,8 +647,8 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
         <g>
           <text x="20" y="154" font-size="11.5" font-weight="600" fill="var(--ink)">nuova</text>
           <text x="150" y="154" font-size="10" font-family="var(--mono), monospace" fill="var(--ink-soft)">1.5.0 · d0c74</text>
-          <text x="250" y="154" font-size="10" font-family="var(--mono), monospace" fill="var(--ink-soft)">venv b93f2 · py 3.13.1</text>
-          <text x="250" y="169" font-size="8.5" fill="var(--ink-faint)">lockfile diverso · pacchetti comuni deduplicati</text>
+          <text x="250" y="154" font-size="10" font-family="var(--mono), monospace" fill="var(--ink-soft)">fatture/013 · py 3.13</text>
+          <text x="250" y="169" font-size="8.5" fill="var(--ink-faint)">build immutabile · canale «collaudo»</text>
           <text x="420" y="154" font-size="10.5" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">2</text>
           <text x="510" y="154" font-size="10.5" font-variant-numeric="tabular-nums" fill="var(--ink-soft)">22</text>
           <rect x="600" y="144" width="80" height="16" rx="3" fill="var(--accent-soft)"/>
