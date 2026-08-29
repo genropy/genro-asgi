@@ -112,10 +112,12 @@ IDLE_MINUTES = IDLE_SECONDS / 60
 GATE_DELAY = 0.3
 
 #: What every child of this story declares it holds, and the three concessions the
-#: story reads it against: roomy while the day is ordinary; 100 MB, where the
-#: reception stands at 70% against a cap of 30 and the growth is still afforded;
-#: 85 MB, where two processes hold 164% of the concession and nothing can grow.
-STORY_RSS_BYTES = 70_000_000
+#: story reads it against. One worker of these groups may hold HALF the
+#: concession: roomy while the day is ordinary; 100 MB, where the reception
+#: stands at 70% of its own ceiling against a cap of 30 and the growth is still
+#: afforded; 85 MB, where two processes hold 82% of the concession between them
+#: and the ceiling of a third would not fit, so nothing can grow.
+STORY_RSS_BYTES = 35_000_000
 GROWTH_CONCESSION_BYTES = 100_000_000
 FULL_CONCESSION_BYTES = 85_000_000
 
@@ -165,7 +167,7 @@ class ServerConfiguration(AsgiConfigBuilder):
         for name in ("{other_group}", "{base_group}"):
             groups.group(
                 name=name,
-                worker_memory_max_percent=100.0,
+                worker_memory_max_percent=50.0,
                 occupancy_max_percent=80.0,
                 restart_occupancy_max_percent=95.0,
                 reception_reserved_percent=50.0,

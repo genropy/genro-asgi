@@ -55,11 +55,19 @@ of the group's own quota. The worker share is usually not written at all:
 intuitive count of slots instead of a percentage — and the share is derived as
 ``100 / worker_max_number``. It is a divisor of the size and nothing else: the
 number of processes stays a reading, never a setting. An explicit
-``worker_memory_max_percent`` wins over the derivation. So the gate on the growth compares
-``memory_occupied_percent``, what the living workers hold read against the
-concession, with ``memory_max_percent``: percent against percent, never a byte
-count against a byte count. A concession nobody has measured makes every reading
-0, which leaves the growth ungated by construction rather than by a special case.
+``worker_memory_max_percent`` wins over the derivation. So the first gate on the
+growth compares ``memory_occupied_percent``, what the living workers hold read
+against the concession, PLUS the share one more worker may hold, with
+``memory_max_percent``: percent against percent, never a byte count against a
+byte count.
+
+The cascade knows only the workers, and a container holds more than them. So a
+second gate answers in bytes, on ``SpaCommander.memory_available_bytes``: the
+ceiling of the newborn must be free where the process will actually live —
+inside the cgroup when there is one, on the machine when there is not. The
+commander, the group templates and every other tenant of the container are
+counted there and nowhere else. Both gates hold or nobody is born; a machine
+that measures nothing refuses nothing.
 
 **The clock is the vertex's, the counting is the group's.** ``ping`` is this
 group's turn of the one round there is: it settles every process whose end has
@@ -523,6 +531,11 @@ class GroupHandler:
         return self.memory_concession_bytes * self.memory_max_percent / 100.0
 
     @property
+    def worker_memory_ceiling_bytes(self) -> float:
+        """What ONE worker of this group may hold: its share of the quota, in bytes."""
+        return self.memory_quota_bytes * self.worker_memory_max_percent / 100.0
+
+    @property
     def memory_occupied_percent(self) -> float:
         """What this group's living workers hold, as a share of the concession.
 
@@ -587,7 +600,7 @@ class GroupHandler:
             still, and what measures the same on platforms with no ``/proc``.
         """
         photo = worker_snapshot or {}
-        ceiling = self.memory_quota_bytes * self.worker_memory_max_percent / 100.0
+        ceiling = self.worker_memory_ceiling_bytes
         rss_bytes = photo.get("rss_bytes")
         components = [rss_bytes / ceiling] if rss_bytes is not None else []
         cpu_percent = photo.get("cpu_percent")
@@ -621,9 +634,9 @@ class GroupHandler:
 
         Raises:
             AssignmentRefused: the group gave up — nobody admits him, the group
-                may not grow (the quota, or ``worker_max_number``), or the
-                launch failed. The surrender and nothing before it is what the
-                front turns into a 503.
+                may not grow (its quota, or the memory the machine still has),
+                or the launch failed. The surrender and nothing before it is what
+                the front turns into a 503.
 
         The birth lives INSIDE the placement (owner, 2026-08-25): when no
         living worker admits him and the group may grow, this very call brings
@@ -801,11 +814,26 @@ class GroupHandler:
 
     @property
     def _may_grow(self) -> bool:
-        """Whether one more worker is allowed right now — the judge `_grow` obeys too."""
-        return (
-            self.spa_commander.state == "running"
-            and self.memory_occupied_percent <= self.memory_max_percent
-        )
+        """Whether one more worker is allowed right now — the judge `_grow` obeys too.
+
+        Two memory gates, and the growth passes BOTH. The first is the group's
+        quota, read PROSPECTIVELY: what its workers hold today plus the ceiling
+        of the one about to be born must still fit the quota — a worker born at
+        a quota already full is a worker born to be killed. The second is the
+        machine, read on ``memory_available_bytes``: the ceiling must be free
+        RIGHT NOW where the process will live. Only the second sees the
+        commander, the templates and everything else inside the container, so
+        the quota alone would let a fork walk into a cgroup that has no room
+        left for it. A machine that measures nothing — no ``/proc/meminfo`` and
+        no cgroup — does not refuse: what cannot be read is not judged.
+        """
+        if self.spa_commander.state != "running":
+            return False
+        ceiling_percent = self.memory_max_percent * self.worker_memory_max_percent / 100.0
+        if self.memory_occupied_percent + ceiling_percent > self.memory_max_percent:
+            return False
+        available_bytes = self.spa_commander.memory_available_bytes
+        return available_bytes is None or available_bytes >= self.worker_memory_ceiling_bytes
 
     @every(CHECK_OCCUPANCY_BEATS)
     async def check_occupancy(self) -> None:
@@ -1265,7 +1293,7 @@ class GroupHandler:
         return None
 
     async def _grow(self) -> None:
-        """Bring a worker into being if the memory affords it; the saturation when it does not.
+        """Bring a worker into being if both memory gates afford it; the saturation when not.
 
         Under the placement lock, like every other road to a birth: the caller
         decided on a picture that is stale by the time the lock is held, so the
@@ -1288,10 +1316,7 @@ class GroupHandler:
                 )
                 return
             occupied_percent = self.memory_occupied_percent
-            if (
-                self.spa_commander.state == "running"
-                and occupied_percent <= policy.memory_max_percent
-            ):
+            if self._may_grow:
                 if self._policy_held(policy, "grow"):
                     await self.start_worker()
                 return
@@ -1304,6 +1329,8 @@ class GroupHandler:
                 numbers={
                     "memory_occupied_percent": occupied_percent,
                     "memory_max_percent": policy.memory_max_percent,
+                    "worker_memory_ceiling_bytes": self.worker_memory_ceiling_bytes,
+                    "memory_available_bytes": self.spa_commander.memory_available_bytes,
                     "workers": len(picture),
                 },
                 outcome="saturated",

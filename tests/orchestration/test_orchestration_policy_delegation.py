@@ -27,7 +27,7 @@ import inspect
 from genro_asgi.spa.orchestration.group_handler import GroupHandler
 from genro_asgi.spa.orchestration.group_policy import GroupPolicy
 
-from .test_orchestration_group_handler import MEMORY_CEILING
+from .test_orchestration_group_handler import WORKER_CEILING
 from .test_orchestration_group_handler import commander  # noqa: F401
 from .test_orchestration_group_handler import group_settings  # noqa: F401
 from .test_orchestration_group_handler import instance_root  # noqa: F401
@@ -161,7 +161,7 @@ async def test_decision_binds_policy_snapshot(make_group):
 async def test_checkpoint_suppresses_effect_after_swap(make_group, caplog):
     # A group with no room left: its round would grow. The lock is held, so the
     # growth waits — and the policy is swapped while it waits.
-    group = make_group(rss_bytes=int(0.79 * MEMORY_CEILING))
+    group = make_group(rss_bytes=int(0.79 * WORKER_CEILING))
     await group.start_worker()
     await group._placement_lock.acquire()
     round_task = asyncio.create_task(group.check_occupancy(now=True))

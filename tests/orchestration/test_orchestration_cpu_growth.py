@@ -40,7 +40,11 @@ from .conftest import kill_process, wait_for
 
 # The stage of the group tests, reused whole: the scripted child, the vertex,
 # the group builder. Imported names are pytest fixtures and their dependencies.
-from .test_orchestration_group_handler import MEMORY_CEILING, known_at_the_vertex
+from .test_orchestration_group_handler import (
+    MEMORY_CEILING,
+    WORKER_CEILING,
+    known_at_the_vertex,
+)
 from .test_orchestration_group_handler import commander  # noqa: F401
 from .test_orchestration_group_handler import group_settings  # noqa: F401
 from .test_orchestration_group_handler import instance_root  # noqa: F401
@@ -228,7 +232,7 @@ async def test_two_open_workers_are_still_fullest_first(make_group, commander):
     second = await group.start_worker()
     declare_cpu(group.reception, 30.0)
     declare_cpu(second, 10.0)
-    group.reception.worker_snapshot["rss_bytes"] = int(0.3 * MEMORY_CEILING)
+    group.reception.worker_snapshot["rss_bytes"] = int(0.3 * WORKER_CEILING)
 
     assert await arrival(commander, group, "walkin") == "standard_0001"
 
@@ -380,7 +384,7 @@ async def test_a_crossing_and_a_placement_race_to_one_spawn(make_group, commande
 async def test_the_reactive_growth_and_a_placement_cannot_fork_twice(make_group, commander):
     group = make_group(reception_reserved_percent=0.0)
     await group.start_worker()
-    group.reception.worker_snapshot["rss_bytes"] = int(0.79 * MEMORY_CEILING)
+    group.reception.worker_snapshot["rss_bytes"] = int(0.79 * WORKER_CEILING)
     known_at_the_vertex(commander, "c_arriving", "arriving")
 
     _, home = await asyncio.gather(

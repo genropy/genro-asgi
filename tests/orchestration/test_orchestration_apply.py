@@ -31,7 +31,7 @@ from genro_asgi.orchestration_profile_store import OrchestrationProfileStore
 from genro_asgi.spa.orchestration.group_policy import GroupPolicyError
 from genro_asgi.spa.orchestration.spa_commander import SpaCommander
 
-from .test_orchestration_group_handler import MEMORY_CEILING, known_at_the_vertex
+from .test_orchestration_group_handler import WORKER_CEILING, known_at_the_vertex
 from .test_orchestration_group_handler import commander  # noqa: F401
 from .test_orchestration_group_handler import group_settings  # noqa: F401
 from .test_orchestration_group_handler import instance_root  # noqa: F401
@@ -42,7 +42,7 @@ VERTEX_LOGGER = "genro_asgi.spa.orchestration.spa_commander"
 
 #: The recipe level of these tests: what the groups here are really built with,
 #: so an apply that names nothing leaves those two setpoints where they are.
-RECIPE_SETTINGS = {"worker_memory_max_percent": 100.0, "worker_min_life_seconds": 0.0}
+RECIPE_SETTINGS = {"worker_memory_max_percent": 50.0, "worker_min_life_seconds": 0.0}
 
 
 @pytest.fixture
@@ -94,7 +94,7 @@ async def test_decision_snapshot_and_emitted_order_complete(
     # wf:contract: before the swap completes under its own generation and its
     # wf:contract: outcome is recorded; effects AFTER that completion are
     # wf:contract: suppressed when the policy is no longer current.
-    group = make_group(rss_bytes=int(0.96 * MEMORY_CEILING))
+    group = make_group(rss_bytes=int(0.96 * WORKER_CEILING))
     worker_handler = await group.start_worker()
 
     # The order that goes out BEFORE any swap: the worker is past the restart
@@ -111,7 +111,7 @@ async def test_decision_snapshot_and_emitted_order_complete(
     # past the restart setpoint but has no room left, so the round grows — and
     # the growth waits on the placement lock while the setpoints change under it.
     survivor = group.worker_handler_map[next(iter(group.worker_handler_map))]
-    survivor.worker_snapshot["rss_bytes"] = int(0.79 * MEMORY_CEILING)
+    survivor.worker_snapshot["rss_bytes"] = int(0.79 * WORKER_CEILING)
     await group._placement_lock.acquire()
     round_task = asyncio.create_task(group.check_occupancy(now=True))
     for _ in range(5):

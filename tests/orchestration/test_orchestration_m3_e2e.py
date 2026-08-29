@@ -100,8 +100,9 @@ GATE_DELAY = 0.3
 
 #: What every child of this story declares it holds. The concession it is read
 #: against is the machine's, and the story measures it when it wants the pool to
-#: feel full: 70 MB in 100 MB is 70% of a worker's ceiling.
-STORY_RSS_BYTES = 70_000_000
+#: feel full: one worker of this group may hold HALF the concession, so 35 MB
+#: against a tight 100 MB is 70% of that worker's ceiling.
+STORY_RSS_BYTES = 35_000_000
 TIGHT_CONCESSION_BYTES = 100_000_000
 ROOMY_CONCESSION_BYTES = 1_000_000_000
 
@@ -138,7 +139,7 @@ class ServerConfiguration(AsgiConfigBuilder):
         )
         commander.groups().group(
             name="{group}",
-            worker_memory_max_percent=100.0,
+            worker_memory_max_percent=50.0,
             occupancy_max_percent=80.0,
             restart_occupancy_max_percent=95.0,
             # The story's spare is closed seconds after its birth: the minimum

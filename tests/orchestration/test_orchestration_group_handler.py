@@ -190,10 +190,14 @@ asyncio.run(live())
 
 CHILD_MODULE = "scripted_group_child"
 
-#: What the machine concedes these groups. Their quota and what one worker of
-#: theirs may hold are both the whole of it by default, so this is also the
-#: ceiling every photo below is read against.
+#: What the machine concedes these groups. Their quota is the whole of it by
+#: default; what ONE worker of theirs may hold is half, so that a group of this
+#: file can hold two of them and still have room for a third to be born.
 MEMORY_CEILING = 1_000_000
+
+#: The ceiling every photo below is read against: an rss written as a fraction
+#: of THIS is that fraction of one worker's occupancy.
+WORKER_CEILING = MEMORY_CEILING // 2
 
 
 @pytest.fixture
@@ -219,9 +223,10 @@ def group_settings(instance_root):
         "instance_dir": instance_root / "i",
         "frozen_users_path": instance_root / "frozen_users",
         "entry_module": CHILD_MODULE,
-        # The scenarios of this file size ONE worker over the whole quota; the
-        # core default sizes a group for worker_max_number workers instead.
-        "worker_memory_max_percent": 100.0,
+        # The scenarios of this file size ONE worker over half the quota, so two
+        # of them fit it and a third may still be born; the core default sizes a
+        # group for worker_max_number workers instead.
+        "worker_memory_max_percent": 50.0,
         # Every worker here is newborn: the minimum life would exempt them all
         # from closure. The one test about the minimum life sets its own.
         "worker_min_life_seconds": 0.0,
@@ -312,7 +317,7 @@ async def test_the_first_worker_of_a_group_is_its_reception(make_group):
 
 
 async def test_a_group_where_nobody_admits_anybody_grows_at_its_check(make_group):
-    group = make_group(rss_bytes=int(0.79 * MEMORY_CEILING))
+    group = make_group(rss_bytes=int(0.79 * WORKER_CEILING))
     await group.start_worker()
 
     await group.check_occupancy(now=True)
@@ -334,27 +339,28 @@ async def test_a_group_of_one_closes_nobody(make_group):
 
 
 async def test_a_growth_the_quota_refuses_saturates_the_group_until_there_is_room(make_group):
-    # Half the concession is this group's, and one worker of it may hold that
-    # half whole: two of them at 79% of what they may hold stand together at 79%
-    # of the concession, which is over the group's own share of it.
+    # Half the concession is this group's, and one worker of it may hold half of
+    # that: two of them at 79% of what they may hold stand together at 39.5% of
+    # the concession, and a third one's ceiling would not fit the group's share.
     quota = MEMORY_CEILING // 2
-    group = make_group(rss_bytes=int(0.79 * quota), memory_max_percent=50.0)
+    ceiling = quota // 2
+    group = make_group(rss_bytes=int(0.79 * ceiling), memory_max_percent=50.0)
     reception = await group.start_worker()
     spare = await group.start_worker()
 
     await group.check_occupancy(now=True)
 
     assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
-    assert group.memory_occupied_percent == 79.0
+    assert group.memory_occupied_percent == 39.5
     assert group.state == "saturated"
 
     # Somebody left: the same reading admits again, and the crisis is over
     # without anybody having to say so.
-    reception.worker_snapshot = {"rss_bytes": quota // 5}
-    spare.worker_snapshot = {"rss_bytes": 3 * quota // 5}
+    reception.worker_snapshot = {"rss_bytes": ceiling // 5}
+    spare.worker_snapshot = {"rss_bytes": 3 * ceiling // 5}
     await group.check_occupancy(now=True)
 
-    assert group.memory_occupied_percent == 40.0
+    assert group.memory_occupied_percent == 20.0
     assert group.state == "running"
     assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
 
@@ -382,7 +388,7 @@ async def test_a_process_that_never_starts_breaks_the_group_until_one_does(make_
 async def test_a_worker_past_the_restart_setpoint_is_replaced_by_a_fresh_one(
     make_group, commander
 ):
-    group = make_group(rss_bytes=int(0.99 * MEMORY_CEILING), users=["mario"])
+    group = make_group(rss_bytes=int(0.99 * WORKER_CEILING), users=["mario"])
     known_at_the_vertex(commander, "cid-a", "mario")
     doomed = await group.start_worker()
     doomed.hosted_users.add("mario")
@@ -406,7 +412,7 @@ async def test_a_closure_that_would_eat_the_reserve_is_not_ordered(make_group):
     # the per-worker question keeps it. The closure threshold is lifted clear of
     # the 60 so the RESERVE is the question this test asks; it stays below
     # occupancy_max_percent, which the policy schema requires of it.
-    group = make_group(rss_bytes=int(0.30 * MEMORY_CEILING), close_occupancy_max_percent=79.0)
+    group = make_group(rss_bytes=int(0.30 * WORKER_CEILING), close_occupancy_max_percent=79.0)
     await group.start_worker()
     await group.start_worker()
 
@@ -513,7 +519,7 @@ async def test_a_closure_that_would_undo_a_growth_is_not_made(make_group):
     group = make_group()
     reception = await group.start_worker()
     spare = await group.start_worker()
-    reception.worker_snapshot = {"rss_bytes": int(0.78 * MEMORY_CEILING)}
+    reception.worker_snapshot = {"rss_bytes": int(0.78 * WORKER_CEILING)}
     spare.worker_snapshot = {"rss_bytes": 0}
 
     await group.check_occupancy(now=True)
@@ -542,7 +548,7 @@ async def test_a_closure_leaving_a_survivor_warm_is_not_ordered(make_group):
     # one threshold for both decisions would close here and grow the round
     # after (#36) — but over close_occupancy_max_percent, so the pool holds:
     # the band between the two thresholds is its normal state.
-    group = make_group(rss_bytes=int(0.35 * MEMORY_CEILING), reception_reserved_percent=0.0)
+    group = make_group(rss_bytes=int(0.35 * WORKER_CEILING), reception_reserved_percent=0.0)
     await group.start_worker()
     spare = await group.start_worker()
 
@@ -622,11 +628,11 @@ async def test_a_photo_past_the_restart_setpoint_brings_the_round_forward(make_g
     group.ping_now_event.clear()
 
     worker_handler.read_envelope(
-        {ENVELOPE_SLOT_WORKER_SNAPSHOT: {"rss_bytes": MEMORY_CEILING // 2}}
+        {ENVELOPE_SLOT_WORKER_SNAPSHOT: {"rss_bytes": WORKER_CEILING // 2}}
     )
     assert group.ping_now_event.is_set() is False
 
-    worker_handler.read_envelope({ENVELOPE_SLOT_WORKER_SNAPSHOT: {"rss_bytes": MEMORY_CEILING}})
+    worker_handler.read_envelope({ENVELOPE_SLOT_WORKER_SNAPSHOT: {"rss_bytes": WORKER_CEILING}})
 
     assert group.ping_now_event.is_set() is True
 

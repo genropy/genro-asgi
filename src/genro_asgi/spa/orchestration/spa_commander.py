@@ -122,6 +122,14 @@ ceiling, each as a percentage of the rung above. A machine that does not say how
 much memory it has leaves the whole cascade unmeasured, which is what an ungated
 pool honestly is.
 
+The machine is the CGROUP wherever there is one. A server in a container reads,
+through ``os.sysconf`` and ``/proc/meminfo``, the memory of the host holding the
+container — 64 GiB where it may take 2 — so the limit written under
+``/sys/fs/cgroup`` is read as well and stands in for both figures where it is
+smaller. ``memory_available_bytes`` is the second half of that reading: what is
+left free right now, everything charged to the cgroup counted, and the gate a
+group asks before forking a worker into it.
+
 **There is ONE clock in the machine, and it is here.** ``heartbeat_loop`` waits
 for its timer OR for any group's wake, whichever comes first: the timer gives a
 full round — every group a turn, and the vertex's own tasks each on its own count
@@ -236,6 +244,17 @@ STATE_KINDS = frozenset({"page_store", "user_store", "connection_store"})
 #: drain discards it instead of shipping it. One rule for all three species.
 EVENT_MAX_AGE_SECONDS = 300.0
 
+#: Where the container's own memory limit is written, cgroup v2 first and v1
+#: after: the limit file and the usage file of each layout. Outside a container
+#: none of them is there, and the host figures stand.
+CGROUP_MEMORY_FILES = (
+    ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current"),
+    (
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+        "/sys/fs/cgroup/memory/memory.usage_in_bytes",
+    ),
+)
+
 #: Where a soft quit writes its photo while it is being taken. Beside the
 #: working deposit, never inside it, so the sweep never meets it.
 REBOOT_TEMP_NAME = "reboot_temp"
@@ -245,6 +264,7 @@ REBOOT_TEMP_NAME = "reboot_temp"
 REBOOT_DATA_NAME = "reboot_data"
 
 __all__ = [
+    "CGROUP_MEMORY_FILES",
     "DESK_PATH_PREFIX",
     "EVENT_MAX_AGE_SECONDS",
     "GUEST_PREFIX",
@@ -789,6 +809,23 @@ class SpaCommander:
         """
         total = self._machine_memory_gauges()["MemTotal"]
         return int(total * self.memory_max_percent / 100.0)
+
+    @property
+    def memory_available_bytes(self) -> float | None:
+        """What the machine still has free, in bytes; None where it is not measurable.
+
+        Returns:
+            What is left of the cgroup this server runs in, or of the whole
+            machine when no cgroup limits it — None on a platform with no
+            ``/proc/meminfo`` and no cgroup, where nothing is judged.
+
+        The twin reading of ``memory_concession_bytes``, and the other half of
+        every growth: the concession says how much of the machine this server
+        MAY take, this says how much there IS. It counts everything charged to
+        the cgroup — this process, the templates, whatever else shares the
+        container — which the workers' own photos never see.
+        """
+        return self._machine_memory_gauges().get("MemAvailable")
 
     @property
     def default_group(self) -> str:
@@ -1875,6 +1912,21 @@ class SpaCommander:
         cascade of percentages is always anchored. ``MemAvailable`` is a
         capability only ``/proc/meminfo`` offers — where it lacks, how much of
         the machine is in use is simply not judged, which is not the same as full.
+
+        Both readings are the HOST's: neither ``os.sysconf`` nor
+        ``/proc/meminfo`` knows the cgroup this process runs in, so a server in
+        a container would read the memory of the machine hosting it and grow
+        until the kernel kills it. The limit of the cgroup is therefore read
+        too, and where it is smaller it takes the place of both: the whole
+        becomes the limit, and the available becomes what the limit still has
+        free — every process charged to the cgroup counted, this one included.
+        No cgroup, no limit, or a file that does not read as a number: the host
+        figures stand, exactly as they did.
+
+        A limit that reads and a charge that does not is the one case answered
+        CONSERVATIVELY: the available is 0. The machine is measurable, so the
+        silence is a gauge that failed, not a platform that has none — and what
+        is not proven free is not free.
         """
         gauges: dict[str, float] = {
             "MemTotal": float(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"))
@@ -1887,7 +1939,56 @@ class SpaCommander:
                         gauges[name] = float(value.split()[0]) * 1024
         except OSError:
             pass
+        limit, current = self._cgroup_memory_gauges(gauges["MemTotal"])
+        if limit is None:
+            return gauges
+        gauges["MemTotal"] = limit
+        if current is None:
+            # The limit is known and what is charged to it is not. NOTHING is
+            # proven free, so nothing is claimed: a growth that assumes the whole
+            # limit is its own is the growth that meets the kernel's killer.
+            gauges["MemAvailable"] = 0.0
+            return gauges
+        headroom = limit - current
+        available = min(gauges.get("MemAvailable", headroom), headroom)
+        gauges["MemAvailable"] = min(max(available, 0.0), limit)
         return gauges
+
+    def _cgroup_memory_gauges(self, host_total: float) -> tuple[float | None, float | None]:
+        """The container's memory limit and current charge in bytes; None where there is none.
+
+        Args:
+            host_total: the whole memory of the machine. A limit that reaches it
+                limits nothing — that is how cgroup v1 writes "unlimited", with
+                an enormous sentinel instead of a word.
+
+        Returns:
+            The limit and what is charged to it, the charge None when that file
+            alone does not answer with a count of bytes — missing, unreadable,
+            not a number or negative. Both None when no layout answers: outside
+            a container the files are not there, and an unlimited cgroup v2
+            writes ``max`` in ``memory.max``, which is not a number.
+        """
+        for limit_path, current_path in CGROUP_MEMORY_FILES:
+            limit = self._read_gauge_file(limit_path)
+            if limit is not None and 0 < limit < host_total:
+                current = self._read_gauge_file(current_path)
+                return limit, None if current is None or current < 0 else current
+        return None, None
+
+    def _read_gauge_file(self, path: str) -> float | None:
+        """The one count of bytes a cgroup file holds, or None when it holds no count.
+
+        A cgroup gauge is a whole number of bytes, so a whole number is what is
+        read: ``max``, an empty file, a fraction and every spelling of infinity
+        and not-a-number are all refused the same way, and nothing that is not a
+        count of bytes ever reaches the arithmetic below.
+        """
+        try:
+            with open(path, encoding="ascii") as gauge:
+                return float(int(gauge.read().strip()))
+        except (OSError, ValueError):
+            return None
 
     def _new_row(self) -> dict[str, Any]:
         """The row of an identity nobody knows anything about yet."""
