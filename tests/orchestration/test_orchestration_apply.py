@@ -130,41 +130,24 @@ async def test_decision_snapshot_and_emitted_order_complete(
     assert group.occupancy_max_percent == 75.0
 
 
-async def test_inflight_cpu_decision_suppressed(configured, make_group, caplog):  # noqa: F811
-    # wf:contract: T12 — a _grow_on_cpu waiting on the placement lock across the
-    # wf:contract: swap is suppressed at the pre-birth checkpoint: no worker is
-    # wf:contract: born on the old threshold and a suppression line is logged; a
-    # wf:contract: birth ALREADY STARTED completes and the next round judges it
-    # wf:contract: on the new policy.
+async def test_cpu_apply_and_scan_never_create_capacity(configured, make_group):  # noqa: F811
+    # Applying a threshold and judging a hot photo only reconcile admission.
+    # There is no in-flight CPU fork to coordinate with policy replacement.
     group = make_group(cpu_grow_percent=50.0, reception_reserved_percent=0.0)
     worker_handler = await group.start_worker()
     declare_cpu(worker_handler, 90.0)
 
-    await group._placement_lock.acquire()
-    round_task = asyncio.create_task(group._grow_on_cpu())
-    for _ in range(5):
-        await asyncio.sleep(0)
+    await configured.apply_group_settings(
+        profile={
+            "cpu_grow_percent": 95.0,
+            "cpu_grow_rearm_percent": 80.0,
+            "reception_reserved_percent": 0.0,
+        }
+    )
+    group._judge_cpu_admission()
 
-    with caplog.at_level("INFO", logger=ORDERS_LOGGER):
-        caplog.clear()
-        await configured.apply_group_settings(
-            profile={
-                "cpu_grow_percent": 95.0,
-                "cpu_grow_rearm_percent": 80.0,
-                "reception_reserved_percent": 0.0,
-            }
-        )
-        group._placement_lock.release()
-        grown = await round_task
-
-    assert grown is False
     assert list(group.worker_handler_map) == [worker_handler.name]
-    assert "cpu_grow" in caplog.text
-    assert "suppressed: policy changed while deciding" in caplog.text
-    # The latch was re-armed by the swap, so the NEW threshold is what the next
-    # round judges this worker on — and 90 no longer crosses it.
-    assert worker_handler.cpu_growth_armed is True
-    assert await group._grow_on_cpu() is False
+    assert worker_handler.cpu_admission_open is True
 
 
 async def test_no_admission_window_on_apply(configured, make_group):  # noqa: F811
@@ -193,9 +176,8 @@ async def test_cpu_reconciliation_six_outcomes(configured, make_group):  # noqa:
     # wf:contract: those under the new rearm; thresholds lowered close those
     # wf:contract: above the new grow; the intermediate band PRESERVES the
     # wf:contract: worker's current state (hysteresis memory, closed included);
-    # wf:contract: a missing snapshot means open. cpu_growth_armed is True for
-    # wf:contract: all at the swap; growth happens only at the anticipated round
-    # wf:contract: triggered by post-commit ping_now(), never in the swap.
+    # wf:contract: a missing snapshot means open. Applying never creates a
+    # wf:contract: worker; concrete placement is the sole demand-driven birth.
     group = make_group(reception_reserved_percent=0.0)
     hot = await group.start_worker()
     cool = await group.start_worker()
@@ -213,11 +195,6 @@ async def test_cpu_reconciliation_six_outcomes(configured, make_group):  # noqa:
         True,
         True,
     )
-    assert [handler.cpu_growth_armed for handler in group.worker_handler_map.values()] == [
-        True,
-        True,
-        True,
-    ]
     # No birth in the swap: the wake was rung, and no round has run.
     assert len(group.worker_handler_map) == 3
     assert group.ping_now_event.is_set()

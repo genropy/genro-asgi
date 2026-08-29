@@ -43,7 +43,6 @@ SNAPSHOT_DECISIONS = (
     "assign_user",
     "check_occupancy",
     "check_user_activity",
-    "_grow_on_cpu",
     "_grow",
     "_spare_worker",
 )
@@ -99,7 +98,6 @@ async def test_apply_policy_is_synchronous_assignments_only(make_group, caplog):
     group = make_group()
     worker_handler = await group.start_worker()
     worker_handler.cpu_admission_open = False
-    worker_handler.cpu_growth_armed = False
     new_policy = GroupPolicy.from_settings({"cpu_grow_percent": 70.0})
 
     assert not inspect.iscoroutinefunction(GroupHandler.apply_policy)
@@ -114,7 +112,6 @@ async def test_apply_policy_is_synchronous_assignments_only(make_group, caplog):
 
     assert group.policy is new_policy
     assert worker_handler.cpu_admission_open is True
-    assert worker_handler.cpu_growth_armed is True
     assert [record for record in caplog.records if record.name == ORDERS_LOGGER] == []
     assert list(group.worker_handler_map) == [worker_handler.name]
 

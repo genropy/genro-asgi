@@ -35,7 +35,6 @@ import pytest
 
 from genro_asgi.spa.orchestration import GroupHandler, SpaCommander
 from genro_asgi.spa.orchestration import spa_commander as spa_commander_module
-from genro_asgi.spa.orchestration.group_handler import CPU_GROW_QUOTA_REFUSAL
 
 MIB = 1024 * 1024
 
@@ -100,7 +99,6 @@ class WorkerStub:
         if cpu_percent is not None:
             self.worker_snapshot["cpu_percent"] = cpu_percent
         self.cpu_admission_open = True
-        self.cpu_growth_armed = True
 
 
 def build_group(commander, tmp_path, **settings: Any) -> GroupHandler:
@@ -321,34 +319,33 @@ async def test_the_ordinary_growth_saturates_the_group_when_the_container_is_ful
     assert len(group.worker_handler_map) == 1
 
 
-async def test_the_cpu_growth_is_refused_by_the_very_same_gate(commander, tmp_path, monkeypatch):
-    group = build_group(commander, tmp_path, worker_max_number=4, cpu_grow_percent=70.0)
-    worker = WorkerStub("standard_0001", rss_bytes=LIMIT_BYTES // 4, cpu_percent=90.0)
-    with_workers(group, worker)
-    with_available(monkeypatch, commander, 4 * MIB)
-
-    grown = await group._grow_on_cpu()
-
-    assert not grown
-    assert group._cpu_grow_refusal(worker) == CPU_GROW_QUOTA_REFUSAL
-    assert len(group.worker_handler_map) == 1
-
-
-async def test_a_container_that_fills_up_while_the_lock_is_awaited_stops_the_fork(
+def test_cpu_pressure_only_closes_admission_when_the_container_is_full(
     commander, tmp_path, monkeypatch
 ):
     group = build_group(commander, tmp_path, worker_max_number=4, cpu_grow_percent=70.0)
     worker = WorkerStub("standard_0001", rss_bytes=LIMIT_BYTES // 4, cpu_percent=90.0)
     with_workers(group, worker)
-    # Room at the first reading, none at the second: the answer is the second,
-    # which is the one taken with the placement lock held.
+    with_available(monkeypatch, commander, 4 * MIB)
+
+    group._judge_cpu_admission()
+
+    assert len(group.worker_handler_map) == 1
+    assert not worker.cpu_admission_open
+
+
+def test_cpu_scan_never_consults_changing_memory_to_fork(
+    commander, tmp_path, monkeypatch
+):
+    group = build_group(commander, tmp_path, worker_max_number=4, cpu_grow_percent=70.0)
+    worker = WorkerStub("standard_0001", rss_bytes=LIMIT_BYTES // 4, cpu_percent=90.0)
+    with_workers(group, worker)
+    # Memory availability may change, but a CPU scan never starts a fork.
     with_available(monkeypatch, commander, LIMIT_BYTES, 4 * MIB)
 
-    grown = await group._grow_on_cpu()
+    group._judge_cpu_admission()
 
-    assert not grown
     assert len(group.worker_handler_map) == 1
-    assert worker.cpu_growth_armed
+    assert not worker.cpu_admission_open
 
 
 # --- worker_max_number: a divisor of the size, and no cap on the count -------

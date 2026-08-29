@@ -247,19 +247,12 @@ class WorkerHandler:
         #: memory, load, counts, per-connection clocks. Filed by this handler's
         #: own layer of the chain.
         self.worker_snapshot: dict[str, Any] | None = None
-        #: The latch of the early CPU growth (#43): armed, a ``cpu_percent``
-        #: crossing above the group's threshold may fire once; the group
-        #: re-arms it below the rearm threshold. State only — the judge is
-        #: ``GroupHandler._grow_on_cpu``, this handler decides nothing with it.
-        self.cpu_growth_armed = True
         #: The soft CPU admission (#43): True, this worker is a candidate for
         #: NEW users. The group's judge writes False when the smoothed
         #: ``cpu_percent`` crosses above ``cpu_grow_percent`` — the placement
         #: then skips this worker — and True again below
-        #: ``cpu_grow_rearm_percent``. Deliberately distinct from the latch:
-        #: the latch says whether this worker may still FATHER a growth, the
-        #: admission says whether it still TAKES newcomers — over the
-        #: threshold it stays closed even after its one growth is spent.
+        #: ``cpu_grow_rearm_percent``. Over the threshold it stays closed;
+        #: capacity is born only when concrete demand finds no open candidate.
         #: Sticky users are untouched, the hard ``occupancy_max_percent``
         #: gate in ``assign_user`` stands apart, and the state dies with the
         #: handler. State only — this handler decides nothing with it.
@@ -601,4 +594,3 @@ class WorkerHandler:
             return False
         death.set_result(None)
         return True
-

@@ -12,17 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The early CPU growth of #43: the latch, the soft admission, the fallback, the wake.
+"""CPU soft admission and demand-driven worker birth.
 
 The stage is the one ``test_orchestration_group_handler`` builds — real child
 processes under a real group and a real vertex — and the CPU is DECLARED, not
 burned: ``cpu_percent`` is written straight into the photo the handler holds,
 which is exactly the field the judge reads. Implementation tests: they
-photograph the experimental policy and go with it. This file replaced the
-photograph of the one-shot preference when the Hetzner bench proved that
-preference a fixed point at two workers (2026-08-28): the soft admission —
-a worker over ``cpu_grow_percent`` is closed to NEW users until it falls
-below ``cpu_grow_rearm_percent`` — is what these tests photograph now.
+photograph the experimental policy and go with it. A CPU sample may open or
+close admission, but never forks. A concrete arrival that finds no open worker
+creates exactly one worker and becomes its first user.
 """
 
 from __future__ import annotations
@@ -35,7 +33,7 @@ import pytest
 
 from genro_asgi.spa.orchestration import AssignmentRefused
 from genro_asgi.spa.orchestration import group_handler as group_handler_module
-from genro_asgi.spa.orchestration.group_policy import GroupPolicy, GroupPolicyError
+from genro_asgi.spa.orchestration.group_policy import GroupPolicyError
 
 from .conftest import kill_process, wait_for
 
@@ -104,7 +102,7 @@ def arrival(commander, group, user: str):
     return group.assign_user(user)
 
 
-# --- the soft admission and the latch ---------------------------------------
+# --- CPU judges admission, never process count ------------------------------
 
 
 async def test_under_the_threshold_nothing_grows_and_admission_stays_open(make_group):
@@ -117,25 +115,21 @@ async def test_under_the_threshold_nothing_grows_and_admission_stays_open(make_g
     assert group.reception.cpu_admission_open is True
 
 
-async def test_a_crossing_blocks_the_worker_and_grows_once(make_group, caplog):
+async def test_a_crossing_blocks_the_worker_without_growing(make_group, caplog):
     group = await grown_group(make_group)
     declare_cpu(group.reception, 55.0)
 
     with caplog.at_level("INFO", logger=ORDERS_LOGGER):
         await group.check_occupancy(now=True)
 
-    assert len(group.worker_handler_map) == 2
+    assert len(group.worker_handler_map) == 1
     assert group.reception.cpu_admission_open is False
-    assert group.reception.cpu_growth_armed is False
     rows = [record.getMessage() for record in caplog.records]
     assert any("cpu_admission" in row and "blocked" in row for row in rows)
-    assert any(
-        "cpu_grow" in row and "grown standard_0002" in row and "spawn_seconds" in row
-        for row in rows
-    )
+    assert not any("cpu_grow" in row for row in rows)
 
 
-async def test_growth_decision_names_the_open_and_empty_capacity(make_group, caplog):
+async def test_admission_decision_names_the_closed_worker(make_group, caplog):
     group = await grown_group(make_group)
     declare_cpu(group.reception, 55.0)
 
@@ -147,150 +141,42 @@ async def test_growth_decision_names_the_open_and_empty_capacity(make_group, cap
         for record in caplog.records
         if record.name == DECISIONS_LOGGER
     ]
-    growth = [row for row in decisions if row["decision"] == "cpu_growth"][-1]
-    assert growth["reason"] == "armed_worker_over_cpu_threshold"
-    assert growth["outcome"] == "standard_0002"
-    assert growth["numbers"]["open_workers"] == 0
-    assert growth["numbers"]["empty_workers"] == 1
-    assert growth["candidates"][0]["name"] == "standard_0001"
-    assert growth["candidates"][0]["cpu_admission_open"] is False
+    scan = [row for row in decisions if row["decision"] == "cpu_admission_scan"][-1]
+    assert scan["reason"] == "cpu_admission_transitions"
+    assert scan["outcome"] == "updated"
+    assert scan["numbers"]["open_workers"] == 0
+    assert scan["numbers"]["empty_workers"] == 1
+    assert scan["candidates"][0]["name"] == "standard_0001"
+    assert scan["candidates"][0]["cpu_admission_open"] is False
 
 
-async def test_cpu_provisioned_capacity_wins_over_a_reopened_full_worker(
+async def test_the_journal_explains_a_reopened_full_worker_winning_placement(
     make_group, commander, caplog
 ):
     group = await grown_group(make_group)
     first = group.reception
     declare_cpu(first, 55.0)
     await group.check_occupancy(now=True)
-    second = group.worker_handler_map["standard_0002"]
     declare_cpu(first, 28.0)
-    declare_cpu(second, 0.0)
     await group.check_occupancy(now=True)
 
     with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
         placed = await arrival(commander, group, "mario")
 
-    assert placed == second.name
+    assert placed == first.name
     decisions = [
         json.loads(record.getMessage())
         for record in caplog.records
         if record.name == DECISIONS_LOGGER
     ]
     placement = [row for row in decisions if row["decision"] == "placement"][-1]
-    assert placement["outcome"] == second.name
-    assert placement["reason"] == "cpu_provisioned_capacity"
-    assert [candidate["name"] for candidate in placement["candidates"]] == [
-        second.name,
-        first.name,
-    ]
-    assert placement["candidates"][0]["cpu_provisioned"] is True
-    assert placement["candidates"][0]["users"] == 0
-    assert placement["candidates"][1]["cpu_percent"] == 28.0
-    assert group._cpu_provisioned_workers == set()
-
-
-async def test_consumed_cpu_capacity_returns_to_fullest_first(
-    make_group, commander, caplog
-):
-    group = await grown_group(make_group)
-    first = group.reception
-    declare_cpu(first, 55.0)
-    await group.check_occupancy(now=True)
-    second = group.worker_handler_map["standard_0002"]
-    declare_cpu(first, 28.0)
-    declare_cpu(second, 0.0)
-    await group.check_occupancy(now=True)
-    assert await arrival(commander, group, "mario") == second.name
-
-    # Once the CPU-provisioned worker has taken its first user, ordinary
-    # fullest-first resumes. The photos make the original worker the fullest.
-    first.worker_snapshot["rss_bytes"] = 4 * second.worker_snapshot["rss_bytes"]
-    with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
-        placed = await arrival(commander, group, "luigi")
-
-    assert placed == first.name
-    placement = [
-        json.loads(record.getMessage())
-        for record in caplog.records
-        if record.name == DECISIONS_LOGGER
-        and json.loads(record.getMessage())["decision"] == "placement"
-    ][-1]
+    assert placement["outcome"] == first.name
     assert placement["reason"] == "fullest_cpu_open_candidate"
+    assert [candidate["name"] for candidate in placement["candidates"]] == [first.name]
+    assert placement["candidates"][0]["cpu_percent"] == 28.0
 
 
-async def test_an_ordinary_empty_worker_does_not_override_fullest_first(
-    make_group, commander, caplog
-):
-    group = await grown_group(make_group)
-    first = group.reception
-    second = await group.start_worker()
-    first.worker_snapshot["rss_bytes"] = 4 * second.worker_snapshot["rss_bytes"]
-
-    with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
-        placed = await arrival(commander, group, "mario")
-
-    assert placed == first.name
-    placement = [
-        json.loads(record.getMessage())
-        for record in caplog.records
-        if record.name == DECISIONS_LOGGER
-        and json.loads(record.getMessage())["decision"] == "placement"
-    ][-1]
-    assert placement["reason"] == "fullest_cpu_open_candidate"
-    assert placement["candidates"][1]["name"] == second.name
-    assert placement["candidates"][1]["cpu_provisioned"] is False
-
-
-async def test_pending_cpu_capacity_suppresses_another_growth(
-    make_group, caplog
-):
-    group = await grown_group(make_group)
-    first = group.reception
-    declare_cpu(first, 55.0)
-    await group.check_occupancy(now=True)
-    second = group.worker_handler_map["standard_0002"]
-
-    # Rearm the parent without consuming the newborn, then cross again.
-    declare_cpu(first, 28.0)
-    declare_cpu(second, 0.0)
-    await group.check_occupancy(now=True)
-    declare_cpu(first, 55.0)
-    with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
-        await group.check_occupancy(now=True)
-
-    assert list(group.worker_handler_map) == [first.name, second.name]
-    assert first.cpu_growth_armed is True
-    decisions = [
-        json.loads(record.getMessage())
-        for record in caplog.records
-        if record.name == DECISIONS_LOGGER
-    ]
-    growth = [row for row in decisions if row["decision"] == "cpu_growth"][-1]
-    assert growth["outcome"] == "no_action"
-    assert growth["reason"] == "cpu_provisioned_capacity_pending"
-    assert growth["numbers"]["pending_cpu_capacity"] == 1
-    assert next(row for row in growth["candidates"] if row["name"] == second.name)[
-        "cpu_provisioned"
-    ] is True
-
-
-async def test_switching_cpu_policy_off_discards_provisioned_priority(make_group):
-    group = await grown_group(make_group)
-    declare_cpu(group.reception, 55.0)
-    await group.check_occupancy(now=True)
-    assert group._cpu_provisioned_workers == {"standard_0002"}
-
-    group.apply_policy(
-        GroupPolicy.from_settings({}),
-        [(worker.name, True) for worker in group.living_workers],
-    )
-
-    assert group.cpu_grow_percent is None
-    assert group._cpu_provisioned_workers == set()
-
-
-async def test_cpu_past_the_restart_setpoint_grows_without_restarting(make_group):
+async def test_cpu_past_the_restart_setpoint_blocks_without_restarting(make_group):
     group = await grown_group(make_group)
     original = group.reception
     declare_cpu(original, 96.0)
@@ -300,7 +186,7 @@ async def test_cpu_past_the_restart_setpoint_grows_without_restarting(make_group
     assert original.name in group.worker_handler_map
     assert original.state == "running"
     assert original.cpu_admission_open is False
-    assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
+    assert sorted(group.worker_handler_map) == ["standard_0001"]
 
 
 async def test_snapshots_that_stay_above_the_threshold_are_one_crossing(make_group):
@@ -311,7 +197,7 @@ async def test_snapshots_that_stay_above_the_threshold_are_one_crossing(make_gro
     for _ in range(3):
         await group.check_occupancy(now=True)
 
-    assert len(group.worker_handler_map) == 2
+    assert len(group.worker_handler_map) == 1
     assert group.reception.cpu_admission_open is False
 
 
@@ -325,11 +211,10 @@ async def test_inside_the_hysteresis_band_the_state_is_kept(make_group):
         await group.check_occupancy(now=True)
 
     assert group.reception.cpu_admission_open is False
-    assert group.reception.cpu_growth_armed is False
-    assert len(group.worker_handler_map) == 2
+    assert len(group.worker_handler_map) == 1
 
 
-async def test_below_the_rearm_threshold_the_worker_reopens_and_rearms(make_group, caplog):
+async def test_below_the_rearm_threshold_the_worker_reopens(make_group, caplog):
     group = await grown_group(make_group)
     declare_cpu(group.reception, 55.0)
     await group.check_occupancy(now=True)
@@ -339,14 +224,11 @@ async def test_below_the_rearm_threshold_the_worker_reopens_and_rearms(make_grou
         await group.check_occupancy(now=True)
 
     assert group.reception.cpu_admission_open is True
-    assert group.reception.cpu_growth_armed is True
     assert "reopened" in caplog.text
-    assert len(group.worker_handler_map) == 2
+    assert len(group.worker_handler_map) == 1
 
 
-async def test_a_new_crossing_after_the_rearm_grows_after_capacity_is_consumed(
-    make_group, commander
-):
+async def test_repeated_crossings_without_arrivals_never_create_workers(make_group):
     group = await grown_group(make_group)
     declare_cpu(group.reception, 55.0)
     await group.check_occupancy(now=True)
@@ -355,12 +237,8 @@ async def test_a_new_crossing_after_the_rearm_grows_after_capacity_is_consumed(
 
     declare_cpu(group.reception, 55.0)
     await group.check_occupancy(now=True)
-    assert len(group.worker_handler_map) == 2  # the empty newborn holds the growth
 
-    assert await arrival(commander, group, "mario") == "standard_0002"
-    await group.check_occupancy(now=True)
-
-    assert len(group.worker_handler_map) == 3
+    assert len(group.worker_handler_map) == 1
 
 
 async def test_with_the_policy_off_a_burning_worker_changes_nothing(make_group, commander):
@@ -373,7 +251,6 @@ async def test_with_the_policy_off_a_burning_worker_changes_nothing(make_group, 
     await group.check_occupancy(now=True)
 
     assert len(group.worker_handler_map) == 1
-    assert group.reception.cpu_growth_armed is True
     assert group.reception.cpu_admission_open is True
     assert await arrival(commander, group, "walkin") == "standard_0001"
 
@@ -381,14 +258,39 @@ async def test_with_the_policy_off_a_burning_worker_changes_nothing(make_group, 
 # --- the placement over the admission ----------------------------------------
 
 
-async def test_a_new_user_lands_on_the_open_worker_not_the_blocked_fullest(
+async def test_a_new_user_births_capacity_when_the_only_worker_is_blocked(
     make_group, commander
 ):
     group = await grown_group(make_group)
     declare_cpu(group.reception, 60.0)
     await group.check_occupancy(now=True)
-    # The reception is the FULLEST by far and blocked; the newborn is open.
+    # CPU created nothing; this concrete arrival creates and occupies worker 2.
     assert await arrival(commander, group, "first") == "standard_0002"
+    assert group.user_worker_map["first"] == "standard_0002"
+
+
+async def test_the_journal_ties_each_demand_birth_to_its_first_user(
+    make_group, commander, caplog
+):
+    group = await grown_group(make_group)
+    declare_cpu(group.reception, 60.0)
+    await group.check_occupancy(now=True)
+
+    with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
+        home = await arrival(commander, group, "first")
+
+    decisions = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == DECISIONS_LOGGER
+    ]
+    placement = [row for row in decisions if row["decision"] == "placement"][-1]
+    assert home == "standard_0002"
+    assert placement["subject"] == "first"
+    assert placement["outcome"] == home
+    assert placement["reason"] == "new_worker_created_for_placement"
+    newborn = next(row for row in placement["candidates"] if row["name"] == home)
+    assert newborn["users"] == 1
 
 
 async def test_the_newborn_takes_new_users_for_as_long_as_the_trigger_stays_hot(
@@ -424,14 +326,12 @@ async def test_sticky_users_stay_on_the_blocked_worker(make_group, commander):
 
 
 async def test_the_newborn_crossing_fathers_the_third_and_takes_over(make_group, commander):
-    # The whole desired sequence, end to end: worker 1 crosses -> blocked ->
-    # worker 2 born -> consecutive users land on 2 -> worker 2 crosses ->
-    # blocked -> worker 3 born -> new users on 3 -> sticky untouched.
+    # Every birth has a concrete first user: CPU only closes each hot worker.
     group = await grown_group(make_group)
     await arrival(commander, group, "resident")
     declare_cpu(group.reception, 60.0)
     await group.check_occupancy(now=True)
-    assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
+    assert sorted(group.worker_handler_map) == ["standard_0001"]
 
     assert await arrival(commander, group, "second_a") == "standard_0002"
     assert await arrival(commander, group, "second_b") == "standard_0002"
@@ -439,11 +339,7 @@ async def test_the_newborn_crossing_fathers_the_third_and_takes_over(make_group,
     second = group.worker_handler_map["standard_0002"]
     declare_cpu(second, 55.0)
     await group.check_occupancy(now=True)
-    assert sorted(group.worker_handler_map) == [
-        "standard_0001",
-        "standard_0002",
-        "standard_0003",
-    ]
+    assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
     assert second.cpu_admission_open is False
 
     assert await arrival(commander, group, "third_a") == "standard_0003"
@@ -456,6 +352,7 @@ async def test_nobody_open_and_growth_allowed_births_the_capacity(make_group, co
     group = await grown_group(make_group)
     declare_cpu(group.reception, 60.0)
     await group.check_occupancy(now=True)
+    assert await arrival(commander, group, "first") == "standard_0002"
     second = group.worker_handler_map["standard_0002"]
     declare_cpu(second, 60.0)
     await group.check_occupancy(now=True)
@@ -465,8 +362,8 @@ async def test_nobody_open_and_growth_allowed_births_the_capacity(make_group, co
 
     home = await arrival(commander, group, "walkin")
 
-    assert home not in ("standard_0001", "standard_0002")
-    assert len(group.worker_handler_map) >= 3
+    assert home == "standard_0003"
+    assert len(group.worker_handler_map) == 3
 
 
 async def test_nobody_open_and_growth_refused_falls_back_on_a_blocked_worker(
@@ -475,15 +372,14 @@ async def test_nobody_open_and_growth_refused_falls_back_on_a_blocked_worker(
     group = await grown_group(make_group)
     declare_cpu(group.reception, 60.0)
     await group.check_occupancy(now=True)
-    for worker_handler in group.living_workers:
-        worker_handler.cpu_admission_open = False
+    assert len(group.worker_handler_map) == 1
     commander.state = "quitting"  # the growth is refused: _may_grow is False
 
     with caplog.at_level("INFO", logger=ORDERS_LOGGER):
         home = await arrival(commander, group, "walkin")
     commander.state = "running"
 
-    assert home in ("standard_0001", "standard_0002")
+    assert home == "standard_0001"
     assert "placement_fallback" in caplog.text
     assert "over the soft limit" in caplog.text
 
@@ -492,7 +388,6 @@ async def test_a_blocked_worker_at_the_hard_limit_still_refuses(make_group, comm
     group = await grown_group(make_group)
     declare_cpu(group.reception, 85.0)  # over occupancy_max_percent: the hard gate
     await group.check_occupancy(now=True)
-    group.drop_worker("standard_0002")  # only the hot reception remains
     group.reception.cpu_admission_open = False
     commander.state = "quitting"
 
@@ -508,6 +403,9 @@ async def test_the_fallback_is_never_used_while_an_open_worker_admits(
     group = await grown_group(make_group)
     declare_cpu(group.reception, 60.0)
     await group.check_occupancy(now=True)
+
+    # Add an open worker explicitly: CPU sampling itself created none.
+    await group.start_worker()
 
     with caplog.at_level("INFO", logger=ORDERS_LOGGER):
         home = await arrival(commander, group, "walkin")
@@ -531,7 +429,7 @@ async def test_worker_max_users_still_gates_the_open_worker(make_group, commande
 # --- concurrency --------------------------------------------------------------
 
 
-async def test_two_concurrent_rounds_cannot_fork_twice_for_one_event(make_group, caplog):
+async def test_two_concurrent_cpu_rounds_never_fork(make_group, caplog):
     group = await grown_group(make_group)
     declare_cpu(group.reception, 55.0)
 
@@ -540,8 +438,8 @@ async def test_two_concurrent_rounds_cannot_fork_twice_for_one_event(make_group,
             group.check_occupancy(now=True), group.check_occupancy(now=True)
         )
 
-    assert len(group.worker_handler_map) == 2
-    assert "suppressed" in caplog.text
+    assert len(group.worker_handler_map) == 1
+    assert group.reception.cpu_admission_open is False
 
 
 async def test_a_crossing_and_a_placement_race_to_one_spawn(make_group, commander):
@@ -555,6 +453,19 @@ async def test_a_crossing_and_a_placement_race_to_one_spawn(make_group, commande
 
     assert len(group.worker_handler_map) == 2
     assert home == "standard_0002"
+
+
+async def test_concurrent_arrivals_share_one_demand_born_worker(make_group, commander):
+    group = await grown_group(make_group)
+    declare_cpu(group.reception, 60.0)
+    await group.check_occupancy(now=True)
+    known_at_the_vertex(commander, "c_one", "one")
+    known_at_the_vertex(commander, "c_two", "two")
+
+    homes = await asyncio.gather(group.assign_user("one"), group.assign_user("two"))
+
+    assert homes == ["standard_0002", "standard_0002"]
+    assert len(group.worker_handler_map) == 2
 
 
 async def test_the_reactive_growth_and_a_placement_cannot_fork_twice(make_group, commander):
@@ -572,43 +483,36 @@ async def test_the_reactive_growth_and_a_placement_cannot_fork_twice(make_group,
     assert group.user_worker_map["arriving"] == "standard_0002"
 
 
-async def test_two_workers_over_the_threshold_wait_for_spawned_capacity(
-    make_group, commander
-):
+async def test_two_workers_over_the_threshold_are_one_spawn_per_round(make_group):
     group = await grown_group(make_group)
     second = await group.start_worker()
     declare_cpu(group.reception, 60.0)
     declare_cpu(second, 60.0)
 
     await group.check_occupancy(now=True)
-    assert len(group.worker_handler_map) == 3
+    assert len(group.worker_handler_map) == 2
     assert group.reception.cpu_admission_open is False
     assert second.cpu_admission_open is False
 
-    # The next crossing cannot provision over capacity that is still empty.
+    # More CPU rounds only preserve admission; demand alone creates capacity.
     await group.check_occupancy(now=True)
-    assert len(group.worker_handler_map) == 3
-
-    # Once an arrival consumes that capacity, the other standing crossing is
-    # served by the next round, still one spawn at a time.
-    assert await arrival(commander, group, "mario") == "standard_0003"
-    await group.check_occupancy(now=True)
-    assert len(group.worker_handler_map) == 4
+    assert len(group.worker_handler_map) == 2
 
 
 async def test_a_blocked_worker_that_dies_takes_its_state_with_it(make_group, commander):
     group = await grown_group(make_group)
     declare_cpu(group.reception, 60.0)
     await group.check_occupancy(now=True)
+    assert await arrival(commander, group, "first") == "standard_0002"
     newborn = group.worker_handler_map["standard_0002"]
     declare_cpu(newborn, 60.0)
     await group.check_occupancy(now=True)
-    third = group.worker_handler_map["standard_0003"]
 
     group.drop_worker("standard_0002")
 
     assert "standard_0002" not in group.worker_handler_map
     assert await arrival(commander, group, "walkin") == "standard_0003"
+    third = group.worker_handler_map["standard_0003"]
 
     kill_process(newborn.process)
     await wait_for(lambda: not newborn.process.alive)
@@ -620,14 +524,12 @@ async def test_a_failed_spawn_leaves_the_fallback_available(make_group, commande
     group = await grown_group(make_group)
     declare_cpu(group.reception, 60.0)
     await group.check_occupancy(now=True)
-    for worker_handler in group.living_workers:
-        worker_handler.cpu_admission_open = False
     group.worker_settings["worker_kwargs"]["behaviour"] = "absent"
 
     with caplog.at_level("INFO", logger=ORDERS_LOGGER):
         home = await arrival(commander, group, "walkin")
 
-    assert home in ("standard_0001", "standard_0002")
+    assert home == "standard_0001"
     assert "placement_fallback" in caplog.text
     group.worker_settings["worker_kwargs"]["behaviour"] = "answer"
 
@@ -646,54 +548,38 @@ async def test_memory_refusing_the_growth_is_no_503_while_a_blocked_worker_has_r
         rss_bytes=int(0.2 * MEMORY_CEILING),
     )
     declare_cpu(group.reception, 60.0)
-    with caplog.at_level("INFO", logger=ORDERS_LOGGER):
-        await group.check_occupancy(now=True)
-    assert len(group.worker_handler_map) == 1  # the quota refused the growth
-    assert "suppressed: the quota or the server state refuses the growth" in caplog.text
+    await group.check_occupancy(now=True)
+    assert len(group.worker_handler_map) == 1  # CPU does not attempt growth
 
     home = await arrival(commander, group, "walkin")
 
     assert home == "standard_0001"
 
 
-async def test_permission_that_falls_while_waiting_for_the_lock_stops_the_spawn(
-    make_group, commander, caplog
-):
+async def test_permission_that_falls_before_demand_stops_the_spawn(make_group, commander):
     group = await grown_group(make_group)
     declare_cpu(group.reception, 55.0)
 
-    await group._placement_lock.acquire()
-    round_task = asyncio.create_task(group.check_occupancy(now=True))
-    for _ in range(5):
-        await asyncio.sleep(0)
+    await group.check_occupancy(now=True)
     commander.state = "quitting"
-    with caplog.at_level("INFO", logger=ORDERS_LOGGER):
-        group._placement_lock.release()
-        await round_task
+    home = await arrival(commander, group, "walkin")
     commander.state = "running"
 
     assert len(group.worker_handler_map) == 1
-    assert group.reception.cpu_growth_armed is True
-    assert "suppressed: the quota or the server state refuses the growth" in caplog.text
+    assert home == "standard_0001"  # soft fallback, not a birth
 
 
-async def test_a_trigger_worker_that_died_while_waiting_grows_nothing(
-    make_group, commander, caplog
-):
+async def test_a_dead_only_worker_is_replaced_by_the_availability_judge(make_group):
     group = await grown_group(make_group)
     declare_cpu(group.reception, 55.0)
 
-    await group._placement_lock.acquire()
-    round_task = asyncio.create_task(group.check_occupancy(now=True))
-    for _ in range(5):
-        await asyncio.sleep(0)
     group.reception.state = "quitted"
-    with caplog.at_level("INFO", logger=ORDERS_LOGGER):
-        group._placement_lock.release()
-        await round_task
+    await group.check_occupancy(now=True)
 
-    assert len(group.worker_handler_map) == 1
-    assert "suppressed: the trigger worker is gone" in caplog.text
+    # With no living worker, the ordinary availability/reserve judge restores
+    # a reception. This birth is not caused by the CPU scan.
+    assert len(group.worker_handler_map) == 2
+    assert group.worker_handler_map["standard_0002"].cpu_admission_open
 
 
 # --- the event-driven wake -----------------------------------------------------
@@ -761,6 +647,7 @@ async def test_the_band_between_the_thresholds_rings_nothing(make_group):
 
 async def test_the_newborn_is_not_retired_by_the_next_round(make_group):
     group = await grown_group(make_group, worker_min_life_seconds=60.0)
+    await group.start_worker()
     declare_cpu(group.reception, 55.0)
     await group.check_occupancy(now=True)
     declare_cpu(group.reception, 5.0)
@@ -774,9 +661,9 @@ async def test_after_the_descent_and_the_quiet_the_spare_worker_is_released(
     make_group, group_clock
 ):
     group = await grown_group(make_group, cpu_retirement_quiet_seconds=60.0)
+    newborn = await group.start_worker()
     declare_cpu(group.reception, 55.0)
     await group.check_occupancy(now=True)
-    newborn = group.worker_handler_map["standard_0002"]
 
     # The load is gone: the reception reopens — a CPU event, the quiet restarts.
     declare_cpu(group.reception, 5.0)
@@ -792,9 +679,9 @@ async def test_after_the_descent_and_the_quiet_the_spare_worker_is_released(
 
 async def test_no_spawn_close_spawn_cycle_without_new_load(make_group, group_clock):
     group = await grown_group(make_group, cpu_retirement_quiet_seconds=60.0)
+    newborn = await group.start_worker()
     declare_cpu(group.reception, 55.0)
     await group.check_occupancy(now=True)
-    newborn = group.worker_handler_map["standard_0002"]
 
     declare_cpu(group.reception, 5.0)
     declare_cpu(newborn, 1.0)
@@ -804,7 +691,7 @@ async def test_no_spawn_close_spawn_cycle_without_new_load(make_group, group_clo
         await group.check_occupancy(now=True)
         group_clock.advance(61.0)
 
-    assert len(group.worker_handler_map) == 2  # the spare quit, nobody respawned
+    assert len(group.worker_handler_map) == 2  # quitting handlers stay until death report
     assert newborn.state in ("quitting", "quitted")
 
 
@@ -870,9 +757,9 @@ async def test_a_cpu_closed_worker_suspends_the_retirement(make_group):
     # Even with a zero quiet, standing demand — a worker still closed — is
     # its own gate: the emptiest worker is not handed back to the hot one.
     group = await grown_group(make_group, cpu_retirement_quiet_seconds=0.0)
+    newborn = await group.start_worker()
     declare_cpu(group.reception, 55.0)
     await group.check_occupancy(now=True)
-    newborn = group.worker_handler_map["standard_0002"]
     declare_cpu(newborn, 1.0)
     declare_cpu(group.reception, 45.0)  # in the band: stays blocked
 
@@ -882,13 +769,13 @@ async def test_a_cpu_closed_worker_suspends_the_retirement(make_group):
     assert group.reception.cpu_admission_open is False
 
 
-async def test_a_fresh_growth_holds_the_retirement_for_the_whole_quiet(
+async def test_a_fresh_admission_transition_holds_retirement_for_the_whole_quiet(
     make_group, group_clock
 ):
     group = await grown_group(make_group, cpu_retirement_quiet_seconds=60.0)
+    newborn = await group.start_worker()
     declare_cpu(group.reception, 55.0)
-    await group.check_occupancy(now=True)  # blocked + grown: pressure spoke
-    newborn = group.worker_handler_map["standard_0002"]
+    await group.check_occupancy(now=True)  # blocked: pressure spoke
     declare_cpu(group.reception, 5.0)
     declare_cpu(newborn, 1.0)
     await group.check_occupancy(now=True)  # reopen: restarts the quiet
@@ -899,36 +786,32 @@ async def test_a_fresh_growth_holds_the_retirement_for_the_whole_quiet(
     assert newborn.state == "running"
 
 
-async def test_a_quota_refused_growth_is_pressure_too(
-    make_group, commander, group_clock, caplog
+async def test_a_blocked_admission_is_pressure_even_when_growth_is_impossible(
+    make_group, commander, group_clock
 ):
-    # A crossing the group cannot honour is UNMET demand: the retirement must
-    # not eat the capacity that demand is waiting for.
     group = await grown_group(make_group, cpu_retirement_quiet_seconds=60.0)
     second = await group.start_worker()
     declare_cpu(group.reception, 60.0)
     declare_cpu(second, 1.0)
     commander.state = "saturated"  # _may_grow says no: the growth is refused
 
-    with caplog.at_level("INFO", logger=ORDERS_LOGGER):
-        await group.check_occupancy(now=True)  # crossing, growth refused
+    await group.check_occupancy(now=True)
 
-    assert "suppressed: the quota or the server state refuses the growth" in caplog.text
     group_clock.advance(59.0)
     declare_cpu(group.reception, 45.0)  # the band: still blocked, but even if...
     group.reception.cpu_admission_open = True  # ...nobody is closed any more
     await group.check_occupancy(now=True)
 
-    assert second.state == "running"  # the refused demand still holds the quiet
+    assert second.state == "running"
 
 
 async def test_a_reopen_restarts_the_whole_quiet(make_group, group_clock):
     # The measured churn defect: a worker closed for LONGER than the quiet,
     # then reopened — the retirement must not meet it at the very next beat.
     group = await grown_group(make_group, cpu_retirement_quiet_seconds=60.0)
+    newborn = await group.start_worker()
     declare_cpu(group.reception, 55.0)
     await group.check_occupancy(now=True)
-    newborn = group.worker_handler_map["standard_0002"]
     declare_cpu(newborn, 1.0)
 
     group_clock.advance(120.0)  # closed for two whole quiets: pressure is old
@@ -949,16 +832,16 @@ async def test_a_reopen_restarts_the_whole_quiet(make_group, group_clock):
 
 async def test_new_pressure_during_the_quiet_restarts_it(make_group, group_clock):
     group = await grown_group(make_group, cpu_retirement_quiet_seconds=60.0)
+    newborn = await group.start_worker()
     declare_cpu(group.reception, 55.0)
     await group.check_occupancy(now=True)
-    newborn = group.worker_handler_map["standard_0002"]
     declare_cpu(group.reception, 5.0)
     declare_cpu(newborn, 1.0)
     await group.check_occupancy(now=True)  # reopen: quiet running
 
     group_clock.advance(50.0)
     declare_cpu(group.reception, 55.0)  # the CPU speaks again mid-quiet
-    await group.check_occupancy(now=True)  # blocked (+ a third is grown)
+    await group.check_occupancy(now=True)  # blocked; CPU creates no process
     declare_cpu(group.reception, 5.0)
     await group.check_occupancy(now=True)  # reopened: restarted again
 
@@ -976,9 +859,9 @@ async def test_a_worker_with_users_is_consolidated_after_the_quiet(
     # No absolute "a worker with users cannot close": after the descent and
     # the quiet, the spare's user is redistributed — the consolidation stands.
     group = await grown_group(make_group, cpu_retirement_quiet_seconds=60.0)
+    newborn = await group.start_worker()
     declare_cpu(group.reception, 55.0)
     await group.check_occupancy(now=True)
-    newborn = group.worker_handler_map["standard_0002"]
     resident = await arrival(commander, group, "resident")
     assert resident == "standard_0002"
 
@@ -995,9 +878,9 @@ async def test_sticky_users_stand_until_the_intentional_retirement(
     make_group, commander, group_clock
 ):
     group = await grown_group(make_group, cpu_retirement_quiet_seconds=60.0)
+    newborn = await group.start_worker()
     declare_cpu(group.reception, 55.0)
     await group.check_occupancy(now=True)
-    newborn = group.worker_handler_map["standard_0002"]
     home = await arrival(commander, group, "settler")
     assert home == "standard_0002"
 

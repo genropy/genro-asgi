@@ -264,15 +264,14 @@ class SpaApplicationGrammar(ApplicationGrammar):
         must always find room — the group grows at its own round before anybody
         is refused. ``user_idle_freeze_minutes`` is the silence past which the
         group parks a user in the freezer. ``cpu_grow_percent`` (experimental,
-        off when omitted) turns on the early CPU growth of #43: a worker whose
-        smoothed ``cpu_percent`` crosses above it fathers one worker ahead of
-        the demand, once per crossing — the latch re-arms below
-        ``cpu_grow_rearm_percent`` — the worker is closed to NEW users while
-        over the threshold, and the newborn, left the open candidate, takes
-        them. ``cpu_retirement_quiet_seconds`` is how long the CPU must stay
-        silent — no blocking, growth, quota refusal or reopening — before the
-        retirement judges again: the quiet of the GROUP, distinct from the age
-        of one worker, restarted whole by every CPU event.
+        off when omitted) turns on soft CPU admission: a worker above it is
+        closed to NEW users and reopens below ``cpu_grow_rearm_percent``. CPU
+        samples do not fork processes. When a concrete arrival finds no open
+        worker that can admit it, placement creates one worker and assigns that
+        same user. ``cpu_retirement_quiet_seconds`` is how long the CPU must
+        stay silent — no blocking or reopening — before retirement judges
+        again: the quiet of the GROUP, distinct from the age of one worker,
+        restarted whole by every CPU admission transition.
 
         The IDENTITY of the child: ``entry_module`` (what ``python -m`` runs),
         ``executable`` (the interpreter — a group is how two versions of a site

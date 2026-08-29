@@ -202,15 +202,25 @@ one without remounting the route. Routes: `POST apply`
 `cpu_retirement_quiet_seconds` (group setpoint, default 60.0, `>= 0`) is how
 long the CPU must stay silent before `check_occupancy` may close a worker again.
 `GroupHandler.record_cpu_pressure` stamps the clock on every CPU event — a
-crossing blocked, a growth landed, a growth the quota or the server state
-refused (`CPU_GROW_QUOTA_REFUSAL`, one constant with two readers), a worker
-reopened — and on an `apply_policy` that actually MOVES a worker's admission;
+worker blocked or reopened — and on an `apply_policy` that actually MOVES a
+worker's admission;
 an apply that moves nobody invents no cooldown. `get_retirement_suspension`
 answers the gate: a living worker still CPU-closed, or an event younger than the
 quiet. `_cpu_pressure_monotonic` is born `None`, so a boot imposes no cooldown,
 and with `cpu_grow_percent` off the gate is never consulted. Past the quiet
 `_spare_worker` and `_order_quit` are exactly what they always were —
 consolidation of a worker with users included.
+
+**CPU pressure gates admission; concrete demand births capacity (landed
+2026-08-29).** A CPU photo above `cpu_grow_percent` closes that worker to new
+users; one below `cpu_grow_rearm_percent` reopens it. The CPU judge never forks.
+When an arriving user finds no CPU-open worker that admits it, `assign_user`
+creates one worker under the placement lock and assigns that same user before
+returning. The measured template fork is short, so speculative empty workers
+buy little and amplify noisy samples. The periodic shape judge uses memory,
+not CPU, while this policy is on; otherwise CPU would still pre-fork through a
+second road. The journal ties every such birth to its first user with reason
+`new_worker_created_for_placement`.
 
 **Every orchestration decision carries its reason (landed 2026-08-29).**
 The human `orchestration_log_path` remains unchanged; beside it the commander
@@ -219,23 +229,12 @@ stdout. `SpaCommander.log_order` mirrors every issued order into that journal,
 while `log_decision` records calculations that deliberately issue no order.
 Each JSON row carries schema, process-local sequence, UTC timestamp, decider,
 decision, subject, outcome, a stable reason code, numbers and the candidates
-the judge saw. Group placement records every CPU-open candidate in its actual
-evaluation order; CPU growth records admission, armed trigger, open and empty
-worker counts; retirement records its suppression or the absence of an
+the judge saw. Group placement records every CPU-open candidate in
+fullest-first order; CPU admission scans record transitions, thresholds, open
+and empty worker counts; a demand-driven birth is recorded on the placement
+that immediately occupies it; retirement records its suppression or the absence of an
 absorbable spare. The journal observes policy — it never changes placement,
 growth, retirement or restart behaviour.
-
-**CPU-provisioned capacity is consumed before another birth (landed
-2026-08-29).** A worker born by `_grow_on_cpu` carries a transient, one-shot
-priority until its first placed user. While such a worker is open, running,
-empty and has room for a default newcomer, placement tries it before ordinary
-fullest-first and another CPU crossing is recorded as
-`cpu_provisioned_capacity_pending` instead of spawning over it. The successful
-placement is recorded as `cpu_provisioned_capacity`; after it, ordinary
-fullest-first resumes. A regular empty worker has no priority. The mark is
-discarded when its worker dies, when another path has placed a user there, or
-when the CPU policy is switched off. This coordinates capacity that CPU growth
-already paid for without changing thresholds, sticky users or retirement.
 
 **Not yet built (second pass).** The deliberate reboot command on `_server`
 (`reboot now`/`reboot wait N`, notify_user, the consumer service-message

@@ -73,9 +73,8 @@ class GroupStub:
         #: reading below turns it into the occupancy the chain judges.
         self.urgent_snapshots = False
         self.restart_occupancy_max_percent = 95.0
-        #: The early CPU growth stays OFF under this stub, as it is off on a
-        #: real group by default: the chain reads the threshold to decide
-        #: whether a photo's crossing rings the wake (#43).
+        #: CPU admission stays OFF under this stub, as on a real group by
+        #: default: the threshold decides whether a photo rings the wake (#43).
         self.cpu_grow_percent: float | None = None
         self.cpu_grow_rearm_percent = 40.0
         #: The handler under this group; the tests assign it after construction.

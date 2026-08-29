@@ -23,7 +23,7 @@ an invalid policy object cannot exist.
 
 ``null`` in a profile means unlimited or off: ``worker_max_users`` and
 ``user_idle_freeze_minutes`` become ``math.inf`` inside the policy,
-``cpu_grow_percent`` becomes ``None`` (CPU growth off) and
+``cpu_grow_percent`` becomes ``None`` (CPU admission policy off) and
 ``worker_memory_max_percent`` becomes the derivation
 ``100 / worker_max_number``.  ``to_settings`` translates all of that back, so
 its output always survives ``json.dumps(..., allow_nan=False)``.
