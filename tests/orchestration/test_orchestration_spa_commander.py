@@ -25,6 +25,7 @@ left on disk, and writing the account of every order.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import pickle
 
@@ -220,6 +221,60 @@ def test_every_order_leaves_its_row_on_the_file_of_the_orders(short_root):
     assert "outcome=quitted" in row
 
 
+def test_every_order_also_leaves_a_structured_decision(short_root):
+    log_path = short_root / "orchestration.log"
+    commander = SpaCommander(short_root / "frozen_users", orchestration_log_path=log_path)
+
+    commander.log_order(
+        "standard",
+        "quit_process",
+        WORKER_NAME,
+        numbers={"occupancy_percent": 12.0},
+        outcome="quitted",
+        reason="worker_was_ordered_away",
+    )
+
+    decision_path = log_path.with_suffix(".decisions.jsonl")
+    row = json.loads(decision_path.read_text())
+    assert row["schema"] == 1
+    assert row["decision_id"].endswith("-1")
+    assert row["decided_by"] == "standard"
+    assert row["decision"] == "quit_process"
+    assert row["subject"] == WORKER_NAME
+    assert row["outcome"] == "quitted"
+    assert row["reason"] == "worker_was_ordered_away"
+    assert row["numbers"] == {"occupancy_percent": 12.0}
+    assert row["candidates"] == []
+    assert row["timestamp"].endswith("+00:00")
+
+
+def test_a_calculation_can_be_recorded_without_inventing_an_order(short_root):
+    log_path = short_root / "orchestration.log"
+    commander = SpaCommander(short_root / "frozen_users", orchestration_log_path=log_path)
+
+    commander.log_decision(
+        "standard",
+        "placement_candidates",
+        "standard_0002",
+        reason="fullest_cpu_open_candidate",
+        subject="mario",
+        candidates=[
+            {"name": "standard_0001", "cpu_admission_open": False},
+            {"name": "standard_0002", "cpu_admission_open": True},
+        ],
+    )
+
+    assert log_path.read_text() == ""
+    row = json.loads(log_path.with_suffix(".decisions.jsonl").read_text())
+    assert row["decision"] == "placement_candidates"
+    assert row["outcome"] == "standard_0002"
+    assert row["reason"] == "fullest_cpu_open_candidate"
+    assert [candidate["name"] for candidate in row["candidates"]] == [
+        "standard_0001",
+        "standard_0002",
+    ]
+
+
 def test_one_process_has_one_vertex_and_the_log_is_its_own(short_root):
     first_path = short_root / "first.log"
     second_path = short_root / "second.log"
@@ -231,6 +286,8 @@ def test_one_process_has_one_vertex_and_the_log_is_its_own(short_root):
     assert len(logging.getLogger("genro_asgi.orchestration.orders").handlers) == 1
     assert "order=quit_process" in second_path.read_text()
     assert first_path.read_text() == ""
+    assert "quit_process" in second_path.with_suffix(".decisions.jsonl").read_text()
+    assert first_path.with_suffix(".decisions.jsonl").read_text() == ""
 
 
 def test_the_machine_starts_running_and_holds_the_master_of_the_store(commander):

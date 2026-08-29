@@ -220,6 +220,11 @@ SECONDS_PER_MINUTE = 60.0
 #: capacity that demand is waiting for.
 CPU_GROW_QUOTA_REFUSAL = "suppressed: the quota or the server state refuses the growth"
 
+#: The other two CPU-growth refusals, shared by the human order and the stable
+#: reason-code translation. The journal never parses prose to understand them.
+CPU_GROW_TRIGGER_GONE_REFUSAL = "suppressed: the trigger worker is gone"
+CPU_GROW_CAPACITY_ARRIVED_REFUSAL = "suppressed: capacity arrived while waiting for the lock"
+
 #: How long the group waits for the confirmation of ONE ordered departure — a
 #: freeze or a drop — before giving up, releasing the hold and leaving the user
 #: where he is. A beat: the round that sends the order is the group's own, and a
@@ -720,22 +725,44 @@ class GroupHandler:
         policy = self.policy
         async with self._placement_lock:
             worker_handler = self._placement_candidate(user)
+            placement_reason = "fullest_cpu_open_candidate"
             if worker_handler is None and self._may_grow and self._policy_held(policy, "grow", user):
                 worker_handler = await self.start_worker()
                 if worker_handler is not None:
                     try:
                         worker_handler.assign_user(user, self._expected_occupancy(user))
+                        placement_reason = "new_worker_created_for_placement"
                     except AssignmentRefused:
                         worker_handler = None
             if worker_handler is None:
                 worker_handler = self._fallback_candidate(user)
+                placement_reason = "cpu_closed_hard_cap_fallback"
             if worker_handler is None:
                 # The surrender still rings the wake: the next round is what
                 # writes ``saturated`` where the front can read it.
                 self.ping_now()
+                self.spa_commander.log_decision(
+                    self.name,
+                    "placement",
+                    "refused",
+                    reason="no_worker_could_admit_user",
+                    subject=user,
+                    numbers={"workers": len(self.living_workers)},
+                    candidates=self._placement_decision_rows(),
+                )
                 raise AssignmentRefused(user, f"{self.name} cannot allocate him")
             self.user_worker_map[user] = worker_handler.name
             self.spa_commander.record_user_group(user, self.name)
+            if placement_reason != "fullest_cpu_open_candidate":
+                self.spa_commander.log_decision(
+                    self.name,
+                    "placement",
+                    worker_handler.name,
+                    reason=placement_reason,
+                    subject=user,
+                    numbers={"expected_occupancy_percent": self._expected_occupancy(user)},
+                    candidates=self._placement_decision_rows(),
+                )
             return worker_handler.name
 
     def _placement_candidate(self, user: str) -> WorkerHandler | None:
@@ -760,14 +787,63 @@ class GroupHandler:
             ),
             key=lambda worker_handler: -self.get_occupancy_percent(worker_handler.worker_snapshot),
         )
+        decision_rows = [self._get_worker_decision_row(candidate) for candidate in candidates]
         for worker_handler in candidates:
             try:
                 worker_handler.assign_user(user, occupancy_percent)
             except AssignmentRefused as refusal:
                 self._logger.debug("Group %s: %s", self.name, refusal)
+                next(
+                    row for row in decision_rows if row["name"] == worker_handler.name
+                )["refusal"] = str(refusal)
                 continue
+            self.spa_commander.log_decision(
+                self.name,
+                "placement",
+                worker_handler.name,
+                reason="fullest_cpu_open_candidate",
+                subject=user,
+                numbers={"expected_occupancy_percent": occupancy_percent},
+                candidates=decision_rows,
+            )
             return worker_handler
+        self.spa_commander.log_decision(
+            self.name,
+            "placement_candidates",
+            "none",
+            reason="no_cpu_open_candidate_admitted_user",
+            subject=user,
+            numbers={"expected_occupancy_percent": occupancy_percent},
+            candidates=decision_rows,
+        )
         return None
+
+    def _get_worker_decision_row(self, worker_handler: WorkerHandler) -> dict[str, Any]:
+        """The facts a placement or growth judge sees for one worker."""
+        photo = worker_handler.worker_snapshot or {}
+        return {
+            "name": worker_handler.name,
+            "state": worker_handler.state,
+            "users": sum(
+                1 for name in self.user_worker_map.values() if name == worker_handler.name
+            ),
+            "cpu_admission_open": worker_handler.cpu_admission_open,
+            "cpu_growth_armed": worker_handler.cpu_growth_armed,
+            "cpu_percent": photo.get("cpu_percent"),
+            "occupancy_percent": self.get_occupancy_percent(photo),
+            "memory_occupancy_percent": self.get_memory_occupancy_percent(photo),
+            "worker_cap": self.get_worker_cap(worker_handler),
+        }
+
+    def _placement_decision_rows(self) -> list[dict[str, Any]]:
+        """The whole living pool, in the order placement considers it."""
+        return [
+            self._get_worker_decision_row(worker_handler)
+            for worker_handler in sorted(
+                self.living_workers,
+                key=lambda handler: -self.get_occupancy_percent(handler.worker_snapshot),
+            )
+        ]
 
     def _fallback_candidate(self, user: str) -> WorkerHandler | None:
         """The fullest CPU-closed worker that still admits *user* under its hard cap.
@@ -809,6 +885,7 @@ class GroupHandler:
                     "workers": len(self.living_workers),
                 },
                 outcome=f"{user} placed over the soft limit: no open worker, no growth",
+                reason="cpu_closed_hard_cap_fallback",
             )
             return worker_handler
         return None
@@ -937,10 +1014,27 @@ class GroupHandler:
                 self._logger.debug(
                     "Group %s: retirement suspended — %s", self.name, suspension
                 )
+                self.spa_commander.log_decision(
+                    self.name,
+                    "retirement",
+                    "no_action",
+                    reason="cpu_pressure_holds_retirement",
+                    numbers={"detail": suspension, "workers": len(picture)},
+                    candidates=self._placement_decision_rows(),
+                )
                 return
         spare = self._spare_worker(picture, policy)
         if spare is not None and self._policy_held(policy, "close_worker", spare.name):
             await self._order_quit(spare, "close_worker")
+            return
+        self.spa_commander.log_decision(
+            self.name,
+            "retirement",
+            "no_action",
+            reason="no_absorbable_spare_worker",
+            numbers={"workers": len(picture)},
+            candidates=self._placement_decision_rows(),
+        )
 
     @every(CHECK_USER_ACTIVITY_BEATS)
     async def check_user_activity(self) -> None:
@@ -1196,6 +1290,13 @@ class GroupHandler:
         """
         policy = self.policy
         if policy.cpu_grow_percent is None:
+            self.spa_commander.log_decision(
+                self.name,
+                "cpu_growth",
+                "no_action",
+                reason="cpu_policy_disabled",
+                candidates=self._placement_decision_rows(),
+            )
             return False
         worker_count = len(self.worker_handler_map)
         trigger: tuple[WorkerHandler, float] | None = None
@@ -1213,6 +1314,7 @@ class GroupHandler:
                         worker_handler.name,
                         numbers={"cpu_percent": cpu_percent},
                         outcome="blocked: over the growth threshold",
+                        reason="cpu_over_growth_threshold",
                     )
                 if worker_handler.cpu_growth_armed and trigger is None:
                     trigger = (worker_handler, cpu_percent)
@@ -1226,9 +1328,26 @@ class GroupHandler:
                         worker_handler.name,
                         numbers={"cpu_percent": cpu_percent},
                         outcome="reopened: below the rearm threshold",
+                        reason="cpu_below_rearm_threshold",
                     )
                 worker_handler.cpu_growth_armed = True
+        decision_rows = self._placement_decision_rows()
+        decision_numbers = {
+            "workers": len(decision_rows),
+            "open_workers": sum(
+                1 for row in decision_rows if row["cpu_admission_open"]
+            ),
+            "empty_workers": sum(1 for row in decision_rows if row["users"] == 0),
+        }
         if trigger is None:
+            self.spa_commander.log_decision(
+                self.name,
+                "cpu_growth",
+                "no_action",
+                reason="no_armed_worker_over_cpu_threshold",
+                numbers=decision_numbers,
+                candidates=decision_rows,
+            )
             return False
         worker_handler, cpu_percent = trigger
         numbers = {
@@ -1239,13 +1358,29 @@ class GroupHandler:
                 for name, handler in self.worker_handler_map.items()
             },
             "workers": len(self.living_workers),
+            "open_workers": decision_numbers["open_workers"],
+            "empty_workers": decision_numbers["empty_workers"],
         }
         refusal = self._cpu_grow_refusal(worker_handler)
         if refusal is not None:
             if refusal == CPU_GROW_QUOTA_REFUSAL:
                 self.record_cpu_pressure()
             self.spa_commander.log_order(
-                self.name, "cpu_grow", worker_handler.name, numbers=numbers, outcome=refusal
+                self.name,
+                "cpu_grow",
+                worker_handler.name,
+                numbers=numbers,
+                outcome=refusal,
+                reason=self._get_cpu_growth_reason(refusal),
+            )
+            self.spa_commander.log_decision(
+                self.name,
+                "cpu_growth",
+                "suppressed",
+                reason=self._get_cpu_growth_reason(refusal),
+                subject=worker_handler.name,
+                numbers=numbers,
+                candidates=decision_rows,
             )
             return False
         async with self._placement_lock:
@@ -1253,12 +1388,26 @@ class GroupHandler:
             # the same questions again, on what is there NOW.
             refusal = self._cpu_grow_refusal(worker_handler)
             if refusal is None and len(self.worker_handler_map) != worker_count:
-                refusal = "suppressed: capacity arrived while waiting for the lock"
+                refusal = CPU_GROW_CAPACITY_ARRIVED_REFUSAL
             if refusal is not None:
                 if refusal == CPU_GROW_QUOTA_REFUSAL:
                     self.record_cpu_pressure()
                 self.spa_commander.log_order(
-                    self.name, "cpu_grow", worker_handler.name, numbers=numbers, outcome=refusal
+                    self.name,
+                    "cpu_grow",
+                    worker_handler.name,
+                    numbers=numbers,
+                    outcome=refusal,
+                    reason=self._get_cpu_growth_reason(refusal),
+                )
+                self.spa_commander.log_decision(
+                    self.name,
+                    "cpu_growth",
+                    "suppressed",
+                    reason=self._get_cpu_growth_reason(refusal),
+                    subject=worker_handler.name,
+                    numbers=numbers,
+                    candidates=decision_rows,
                 )
                 return False
             if not self._policy_held(policy, "cpu_grow", worker_handler.name):
@@ -1276,8 +1425,28 @@ class GroupHandler:
                 worker_handler.name,
                 numbers=numbers,
                 outcome=f"grown {newborn.name}",
+                reason="armed_worker_over_cpu_threshold",
+            )
+            self.spa_commander.log_decision(
+                self.name,
+                "cpu_growth",
+                newborn.name,
+                reason="armed_worker_over_cpu_threshold",
+                subject=worker_handler.name,
+                numbers=numbers,
+                candidates=decision_rows,
             )
         return True
+
+    def _get_cpu_growth_reason(self, refusal: str) -> str:
+        """The stable reason code for a CPU-growth refusal."""
+        if refusal == CPU_GROW_QUOTA_REFUSAL:
+            return "memory_or_server_refused_growth"
+        if refusal == CPU_GROW_TRIGGER_GONE_REFUSAL:
+            return "trigger_worker_gone"
+        if refusal == CPU_GROW_CAPACITY_ARRIVED_REFUSAL:
+            return "capacity_arrived_while_waiting"
+        return "cpu_growth_refused"
 
     def record_cpu_pressure(self) -> None:
         """Stamp NOW as the instant the CPU last spoke — the retirement's quiet restarts.
@@ -1352,9 +1521,9 @@ class GroupHandler:
             self.worker_handler_map.get(worker_handler.name) is not worker_handler
             or worker_handler.state != "running"
         ):
-            return "suppressed: the trigger worker is gone"
+            return CPU_GROW_TRIGGER_GONE_REFUSAL
         if not worker_handler.cpu_growth_armed:
-            return "suppressed: capacity arrived while waiting for the lock"
+            return CPU_GROW_CAPACITY_ARRIVED_REFUSAL
         return None
 
     async def _grow(self) -> None:

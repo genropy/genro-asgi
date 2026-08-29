@@ -28,6 +28,7 @@ below ``cpu_grow_rearm_percent`` — is what these tests photograph now.
 from __future__ import annotations
 
 import asyncio
+import json
 import time as real_time
 
 import pytest
@@ -51,6 +52,7 @@ from .test_orchestration_group_handler import instance_root  # noqa: F401
 from .test_orchestration_group_handler import make_group  # noqa: F401
 
 ORDERS_LOGGER = "genro_asgi.orchestration.orders"
+DECISIONS_LOGGER = "genro_asgi.orchestration.decisions"
 
 
 async def grown_group(make_group, **policies):
@@ -131,6 +133,59 @@ async def test_a_crossing_blocks_the_worker_and_grows_once(make_group, caplog):
         "cpu_grow" in row and "grown standard_0002" in row and "spawn_seconds" in row
         for row in rows
     )
+
+
+async def test_growth_decision_names_the_open_and_empty_capacity(make_group, caplog):
+    group = await grown_group(make_group)
+    declare_cpu(group.reception, 55.0)
+
+    with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
+        await group.check_occupancy(now=True)
+
+    decisions = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == DECISIONS_LOGGER
+    ]
+    growth = [row for row in decisions if row["decision"] == "cpu_growth"][-1]
+    assert growth["reason"] == "armed_worker_over_cpu_threshold"
+    assert growth["outcome"] == "standard_0002"
+    assert growth["numbers"]["open_workers"] == 0
+    assert growth["numbers"]["empty_workers"] == 1
+    assert growth["candidates"][0]["name"] == "standard_0001"
+    assert growth["candidates"][0]["cpu_admission_open"] is False
+
+
+async def test_the_journal_explains_a_reopened_full_worker_winning_placement(
+    make_group, commander, caplog
+):
+    group = await grown_group(make_group)
+    first = group.reception
+    declare_cpu(first, 55.0)
+    await group.check_occupancy(now=True)
+    second = group.worker_handler_map["standard_0002"]
+    declare_cpu(first, 28.0)
+    declare_cpu(second, 0.0)
+    await group.check_occupancy(now=True)
+
+    with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
+        placed = await arrival(commander, group, "mario")
+
+    assert placed == first.name
+    decisions = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == DECISIONS_LOGGER
+    ]
+    placement = [row for row in decisions if row["decision"] == "placement"][-1]
+    assert placement["outcome"] == first.name
+    assert placement["reason"] == "fullest_cpu_open_candidate"
+    assert [candidate["name"] for candidate in placement["candidates"]] == [
+        first.name,
+        second.name,
+    ]
+    assert placement["candidates"][0]["cpu_percent"] == 28.0
+    assert placement["candidates"][1]["users"] == 0
 
 
 async def test_cpu_past_the_restart_setpoint_grows_without_restarting(make_group):

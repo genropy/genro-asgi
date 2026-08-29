@@ -212,6 +212,19 @@ and with `cpu_grow_percent` off the gate is never consulted. Past the quiet
 `_spare_worker` and `_order_quit` are exactly what they always were —
 consolidation of a worker with users included.
 
+**Every orchestration decision carries its reason (landed 2026-08-29).**
+The human `orchestration_log_path` remains unchanged; beside it the commander
+writes `<stem>.decisions.jsonl`, independently rotated and never mixed with
+stdout. `SpaCommander.log_order` mirrors every issued order into that journal,
+while `log_decision` records calculations that deliberately issue no order.
+Each JSON row carries schema, process-local sequence, UTC timestamp, decider,
+decision, subject, outcome, a stable reason code, numbers and the candidates
+the judge saw. Group placement records every CPU-open candidate in
+fullest-first order; CPU growth records admission, armed trigger, open and empty
+worker counts; retirement records its suppression or the absence of an
+absorbable spare. The journal observes policy — it never changes placement,
+growth, retirement or restart behaviour.
+
 **Not yet built (second pass).** The deliberate reboot command on `_server`
 (`reboot now`/`reboot wait N`, notify_user, the consumer service-message
 lane); the single-group reboot (needs no photo — the commander survives) and

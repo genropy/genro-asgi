@@ -105,11 +105,12 @@ touches the freezer is when nobody below can: pruning the traces of a wild death
 counted) and reaping what expired. Both go through the ``FreezeHandler``, which
 is the only thing in the project that talks to the filesystem.
 
-**Every order leaves a row.** ``log_order`` writes who decided, what, on whom,
-with which numbers in front of them, and how it ended — one line per order, on a
-file of its own, because the day something goes wrong that file is the only
-account of what the machine chose to do. A wild death gets a row too, and it is
-nobody's decision.
+**Every order leaves a row; every decision leaves its reason.** ``log_order``
+writes the compact human account. ``log_decision`` writes JSONL beside it: the
+decision, its stable reason, the candidates the judge saw and the outcome. An
+order is mirrored there automatically; calculations that issue no order write
+directly. The two files rotate independently and never share stdout. A wild
+death gets an order row too, and it is nobody's decision.
 
 **The counters are aggregate, so they are here.** How many parcels were
 discarded, how much was waiting for somebody who is gone: numbers the level below
@@ -195,6 +196,10 @@ GUEST_PREFIX = "guest_"
 #: attached to it.
 ORDERS_LOGGER_NAME = "genro_asgi.orchestration.orders"
 
+#: The logger of the structured decision journal. Its records are JSON objects,
+#: one per line, separate from both stdout and the human order log.
+DECISIONS_LOGGER_NAME = "genro_asgi.orchestration.decisions"
+
 #: Seconds between two beats of the one clock — the twin of
 #: ``PROCESS_PING_INTERVAL``, which is the cadence a single process is beaten at.
 HEARTBEAT_SECONDS = 5.0
@@ -265,6 +270,7 @@ REBOOT_DATA_NAME = "reboot_data"
 
 __all__ = [
     "CGROUP_MEMORY_FILES",
+    "DECISIONS_LOGGER_NAME",
     "DESK_PATH_PREFIX",
     "EVENT_MAX_AGE_SECONDS",
     "GUEST_PREFIX",
@@ -759,7 +765,13 @@ class SpaCommander:
         self._default_group = default_group
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._logger = logging.getLogger(__name__)
+        self._decision_sequence = 0
         self._orders_logger = self._build_orders_logger(
+            orchestration_log_path,
+            orchestration_log_max_bytes,
+            orchestration_log_backup_count,
+        )
+        self._decisions_logger = self._build_decisions_logger(
             orchestration_log_path,
             orchestration_log_max_bytes,
             orchestration_log_backup_count,
@@ -1414,6 +1426,7 @@ class SpaCommander:
         *,
         numbers: dict[str, Any] | None = None,
         outcome: str | None = None,
+        reason: str = "order_issued",
     ) -> None:
         """Write one row of the orchestration log: an order, and what came of it.
 
@@ -1423,6 +1436,7 @@ class SpaCommander:
             subject: on whom or on what.
             numbers: what the decider had in front of it when it decided.
             outcome: how it ended.
+            reason: the stable reason code carried by the structured journal.
         """
         self._orders_logger.info(
             "decided_by=%s order=%s subject=%s numbers=%s outcome=%s",
@@ -1431,6 +1445,48 @@ class SpaCommander:
             subject,
             numbers,
             outcome,
+        )
+        self.log_decision(
+            decided_by,
+            order,
+            outcome or "ordered",
+            reason=reason,
+            subject=subject,
+            numbers=numbers,
+        )
+
+    def log_decision(
+        self,
+        decided_by: str,
+        decision: str,
+        outcome: str,
+        *,
+        reason: str,
+        subject: str | None = None,
+        numbers: dict[str, Any] | None = None,
+        candidates: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Write one structured judgment, including a stable reason code.
+
+        A decision may issue no order: candidate selection, suppression and a
+        deliberate no-op belong here too. Records are JSONL so a monitor can
+        filter and correlate them without parsing prose.
+        """
+        self._decision_sequence += 1
+        record = {
+            "schema": 1,
+            "decision_id": f"{os.getpid()}-{self._decision_sequence}",
+            "timestamp": datetime.now(UTC).isoformat(),
+            "decided_by": decided_by,
+            "decision": decision,
+            "subject": subject,
+            "outcome": outcome,
+            "reason": reason,
+            "numbers": numbers or {},
+            "candidates": candidates or [],
+        }
+        self._decisions_logger.info(
+            json.dumps(record, sort_keys=True, separators=(",", ":"), default=str)
         )
 
     @property
@@ -2031,4 +2087,25 @@ class SpaCommander:
         handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
         logger.addHandler(handler)
         logger.setLevel(logging.INFO)
+        return logger
+
+    def _build_decisions_logger(
+        self, path: str | Path | None, max_bytes: int, backup_count: int
+    ) -> logging.Logger:
+        """The JSONL journal beside the human orchestration log."""
+        logger = logging.getLogger(DECISIONS_LOGGER_NAME)
+        for attached in list(logger.handlers):
+            logger.removeHandler(attached)
+            attached.close()
+        if path is None:
+            logger.propagate = True
+            return logger
+        decision_path = Path(path).with_suffix(".decisions.jsonl")
+        handler = RotatingFileHandler(
+            decision_path, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"
+        )
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
         return logger
