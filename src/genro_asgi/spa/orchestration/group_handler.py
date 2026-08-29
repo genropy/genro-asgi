@@ -383,6 +383,14 @@ class GroupHandler:
         #: system. What it says is which group rang it.
         self.ping_now_event = asyncio.Event()
         self._placement_lock = asyncio.Lock()
+        #: Workers born specifically because another worker crossed the CPU
+        #: threshold and which have not hosted their first user yet. Placement
+        #: consumes this capacity before returning to ordinary fullest-first;
+        #: CPU growth does not provision another worker while one of these is
+        #: already open and usable. The name dies with the worker or when the
+        #: CPU policy is switched off — it is transient coordination state, not
+        #: configuration and not sticky placement state.
+        self._cpu_provisioned_workers: set[str] = set()
         #: When the CPU last spoke (#43): a crossing blocked, a growth landed
         #: or was refused by the quota, a worker reopened — an apply that
         #: actually moves a worker's admission included. None from birth — no
@@ -488,6 +496,8 @@ class GroupHandler:
         """
         cpu_policy_on = new_policy.cpu_grow_percent is not None
         self.policy = new_policy
+        if not cpu_policy_on:
+            self._cpu_provisioned_workers.clear()
         for name, admission_open in reconciliation:
             worker_handler = self.worker_handler_map[name]
             if cpu_policy_on and worker_handler.cpu_admission_open != admission_open:
@@ -685,7 +695,7 @@ class GroupHandler:
         return self.occupancy_max_percent
 
     async def assign_user(self, user: str) -> str:
-        """Place a user: the fullest worker that admits him, or one born for him.
+        """Place a user: CPU-provisioned capacity, fullest worker, or a newborn.
 
         Args:
             user: the identity to place; his row at the vertex says what he is
@@ -708,8 +718,10 @@ class GroupHandler:
         parked and never sent away to come back: it waits right here.
 
         Three levels, each tried only when the one before surrendered. First
-        the CPU-open workers, fullest-first (``_placement_candidate``). Then
-        the birth. LAST, when the growth was refused or failed, a CPU-closed
+        the CPU-open workers: a still-empty worker born for CPU pressure has
+        one-shot priority, then ordinary candidates remain fullest-first
+        (``_placement_candidate``). Then the birth. LAST, when the growth was
+        refused or failed, a CPU-closed
         worker still under its hard cap takes him (``_fallback_candidate``) —
         the soft closure shapes the pool, it must never cost a 503 the hard
         limit would not have cost; the fallback is logged, never silent, and
@@ -766,26 +778,35 @@ class GroupHandler:
             return worker_handler.name
 
     def _placement_candidate(self, user: str) -> WorkerHandler | None:
-        """The fullest CPU-open living worker that admits *user* right now, or None.
+        """The CPU-provisioned or fullest open worker that admits *user*, or None.
 
         The choice is a CALCULATION of the group (owner, 2026-08-25) — the
         numbers are all here: the photos, the caps, the counts. Each worker's
         own judgment (``WorkerHandler.assign_user``) stays the single gate a
         placement passes, so choosing and admitting cannot drift apart. A
         worker the CPU judge closed (``cpu_admission_open`` False) is not in
-        the running: fullest-first is applied AMONG THE OPEN ONLY — walking a
-        new user back onto the worker whose crossing just fathered capacity is
-        the fixed point the bench measured. With the policy off nobody is ever
-        closed, and this is fullest-first over everybody, as it always was.
+        the running. A worker born from CPU pressure is tried first until it
+        takes its first user: otherwise a reopened hot parent wins
+        fullest-first, crosses again and fathers another empty process — the
+        fixed point the decision journal measured. Once that one-shot capacity
+        is consumed, fullest-first is applied AMONG THE OPEN ONLY. With the
+        policy off nobody carries that priority and placement is fullest-first
+        over everybody, as it always was.
         """
         occupancy_percent = self._expected_occupancy(user)
+        cpu_provisioned = {
+            worker_handler.name for worker_handler in self._pending_cpu_capacity()
+        }
         candidates = sorted(
             (
                 worker_handler
                 for worker_handler in self.living_workers
                 if worker_handler.cpu_admission_open
             ),
-            key=lambda worker_handler: -self.get_occupancy_percent(worker_handler.worker_snapshot),
+            key=lambda worker_handler: (
+                0 if worker_handler.name in cpu_provisioned else 1,
+                -self.get_occupancy_percent(worker_handler.worker_snapshot),
+            ),
         )
         decision_rows = [self._get_worker_decision_row(candidate) for candidate in candidates]
         for worker_handler in candidates:
@@ -797,11 +818,18 @@ class GroupHandler:
                     row for row in decision_rows if row["name"] == worker_handler.name
                 )["refusal"] = str(refusal)
                 continue
+            selected_cpu_capacity = worker_handler.name in cpu_provisioned
+            if selected_cpu_capacity:
+                self._cpu_provisioned_workers.discard(worker_handler.name)
             self.spa_commander.log_decision(
                 self.name,
                 "placement",
                 worker_handler.name,
-                reason="fullest_cpu_open_candidate",
+                reason=(
+                    "cpu_provisioned_capacity"
+                    if selected_cpu_capacity
+                    else "fullest_cpu_open_candidate"
+                ),
                 subject=user,
                 numbers={"expected_occupancy_percent": occupancy_percent},
                 candidates=decision_rows,
@@ -829,6 +857,7 @@ class GroupHandler:
             ),
             "cpu_admission_open": worker_handler.cpu_admission_open,
             "cpu_growth_armed": worker_handler.cpu_growth_armed,
+            "cpu_provisioned": worker_handler.name in self._cpu_provisioned_workers,
             "cpu_percent": photo.get("cpu_percent"),
             "occupancy_percent": self.get_occupancy_percent(photo),
             "memory_occupancy_percent": self.get_memory_occupancy_percent(photo),
@@ -843,6 +872,28 @@ class GroupHandler:
                 self.living_workers,
                 key=lambda handler: -self.get_occupancy_percent(handler.worker_snapshot),
             )
+        ]
+
+    def _pending_cpu_capacity(self) -> list[WorkerHandler]:
+        """Open, empty workers whose CPU-provisioned first placement is pending.
+
+        Stale names and workers that acquired a user through another path are
+        forgotten here. Closed workers retain their mark for a later reopen but
+        do not suppress growth while they cannot accept a newcomer.
+        """
+        placed_workers = {name for name in self.user_worker_map.values() if name is not None}
+        self._cpu_provisioned_workers.intersection_update(self.worker_handler_map)
+        self._cpu_provisioned_workers.difference_update(placed_workers)
+        return [
+            worker_handler
+            for worker_handler in self.living_workers
+            if worker_handler.name in self._cpu_provisioned_workers
+            and worker_handler.cpu_admission_open
+            and worker_handler.state == "running"
+            and self.worker_max_users > 0
+            and self.get_occupancy_percent(worker_handler.worker_snapshot)
+            + self.new_user_occupancy_percent
+            <= self.get_worker_cap(worker_handler)
         ]
 
     def _fallback_candidate(self, user: str) -> WorkerHandler | None:
@@ -1179,6 +1230,7 @@ class GroupHandler:
         with it here — no per-name state survives a dropped worker.
         """
         worker_handler = self.worker_handler_map.pop(name)
+        self._cpu_provisioned_workers.discard(name)
         closing = asyncio.get_running_loop().create_task(worker_handler.connector.stop())
         self._closing_wires.add(closing)
         closing.add_done_callback(self._closing_wires.discard)
@@ -1283,10 +1335,10 @@ class GroupHandler:
         The spawn runs under the placement lock, so the snapshot road and the
         placement road cannot fork twice for one event; a worker that appeared
         while waiting for the lock IS the answer, and the latch stays armed.
-        The newborn needs no preference: born open while its father is closed,
-        it is what fullest-first finds — and when it crosses the threshold
-        itself, its own latch fathers the next one. The latch is consumed only
-        by the growth that actually happened.
+        A newborn is recorded as CPU-provisioned capacity. Until its first user
+        consumes that one-shot priority, placement tries it before ordinary
+        fullest-first and another CPU crossing does not provision over it. The
+        latch is consumed only by the growth that actually happened.
         """
         policy = self.policy
         if policy.cpu_grow_percent is None:
@@ -1331,6 +1383,7 @@ class GroupHandler:
                         reason="cpu_below_rearm_threshold",
                     )
                 worker_handler.cpu_growth_armed = True
+        pending_cpu_capacity = self._pending_cpu_capacity()
         decision_rows = self._placement_decision_rows()
         decision_numbers = {
             "workers": len(decision_rows),
@@ -1338,6 +1391,7 @@ class GroupHandler:
                 1 for row in decision_rows if row["cpu_admission_open"]
             ),
             "empty_workers": sum(1 for row in decision_rows if row["users"] == 0),
+            "pending_cpu_capacity": len(pending_cpu_capacity),
         }
         if trigger is None:
             self.spa_commander.log_decision(
@@ -1360,7 +1414,19 @@ class GroupHandler:
             "workers": len(self.living_workers),
             "open_workers": decision_numbers["open_workers"],
             "empty_workers": decision_numbers["empty_workers"],
+            "pending_cpu_capacity": decision_numbers["pending_cpu_capacity"],
         }
+        if decision_numbers["pending_cpu_capacity"]:
+            self.spa_commander.log_decision(
+                self.name,
+                "cpu_growth",
+                "no_action",
+                reason="cpu_provisioned_capacity_pending",
+                subject=worker_handler.name,
+                numbers=numbers,
+                candidates=self._placement_decision_rows(),
+            )
+            return False
         refusal = self._cpu_grow_refusal(worker_handler)
         if refusal is not None:
             if refusal == CPU_GROW_QUOTA_REFUSAL:
@@ -1416,6 +1482,7 @@ class GroupHandler:
             newborn = await self.start_worker()
             if newborn is None:
                 return False
+            self._cpu_provisioned_workers.add(newborn.name)
             worker_handler.cpu_growth_armed = False
             self.record_cpu_pressure()
             numbers["spawn_seconds"] = round(time.monotonic() - spawn_started, 3)

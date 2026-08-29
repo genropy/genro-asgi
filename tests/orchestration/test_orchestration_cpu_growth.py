@@ -35,7 +35,7 @@ import pytest
 
 from genro_asgi.spa.orchestration import AssignmentRefused
 from genro_asgi.spa.orchestration import group_handler as group_handler_module
-from genro_asgi.spa.orchestration.group_policy import GroupPolicyError
+from genro_asgi.spa.orchestration.group_policy import GroupPolicy, GroupPolicyError
 
 from .conftest import kill_process, wait_for
 
@@ -156,7 +156,7 @@ async def test_growth_decision_names_the_open_and_empty_capacity(make_group, cap
     assert growth["candidates"][0]["cpu_admission_open"] is False
 
 
-async def test_the_journal_explains_a_reopened_full_worker_winning_placement(
+async def test_cpu_provisioned_capacity_wins_over_a_reopened_full_worker(
     make_group, commander, caplog
 ):
     group = await grown_group(make_group)
@@ -171,21 +171,123 @@ async def test_the_journal_explains_a_reopened_full_worker_winning_placement(
     with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
         placed = await arrival(commander, group, "mario")
 
-    assert placed == first.name
+    assert placed == second.name
     decisions = [
         json.loads(record.getMessage())
         for record in caplog.records
         if record.name == DECISIONS_LOGGER
     ]
     placement = [row for row in decisions if row["decision"] == "placement"][-1]
-    assert placement["outcome"] == first.name
-    assert placement["reason"] == "fullest_cpu_open_candidate"
+    assert placement["outcome"] == second.name
+    assert placement["reason"] == "cpu_provisioned_capacity"
     assert [candidate["name"] for candidate in placement["candidates"]] == [
-        first.name,
         second.name,
+        first.name,
     ]
-    assert placement["candidates"][0]["cpu_percent"] == 28.0
-    assert placement["candidates"][1]["users"] == 0
+    assert placement["candidates"][0]["cpu_provisioned"] is True
+    assert placement["candidates"][0]["users"] == 0
+    assert placement["candidates"][1]["cpu_percent"] == 28.0
+    assert group._cpu_provisioned_workers == set()
+
+
+async def test_consumed_cpu_capacity_returns_to_fullest_first(
+    make_group, commander, caplog
+):
+    group = await grown_group(make_group)
+    first = group.reception
+    declare_cpu(first, 55.0)
+    await group.check_occupancy(now=True)
+    second = group.worker_handler_map["standard_0002"]
+    declare_cpu(first, 28.0)
+    declare_cpu(second, 0.0)
+    await group.check_occupancy(now=True)
+    assert await arrival(commander, group, "mario") == second.name
+
+    # Once the CPU-provisioned worker has taken its first user, ordinary
+    # fullest-first resumes. The photos make the original worker the fullest.
+    first.worker_snapshot["rss_bytes"] = 4 * second.worker_snapshot["rss_bytes"]
+    with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
+        placed = await arrival(commander, group, "luigi")
+
+    assert placed == first.name
+    placement = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == DECISIONS_LOGGER
+        and json.loads(record.getMessage())["decision"] == "placement"
+    ][-1]
+    assert placement["reason"] == "fullest_cpu_open_candidate"
+
+
+async def test_an_ordinary_empty_worker_does_not_override_fullest_first(
+    make_group, commander, caplog
+):
+    group = await grown_group(make_group)
+    first = group.reception
+    second = await group.start_worker()
+    first.worker_snapshot["rss_bytes"] = 4 * second.worker_snapshot["rss_bytes"]
+
+    with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
+        placed = await arrival(commander, group, "mario")
+
+    assert placed == first.name
+    placement = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == DECISIONS_LOGGER
+        and json.loads(record.getMessage())["decision"] == "placement"
+    ][-1]
+    assert placement["reason"] == "fullest_cpu_open_candidate"
+    assert placement["candidates"][1]["name"] == second.name
+    assert placement["candidates"][1]["cpu_provisioned"] is False
+
+
+async def test_pending_cpu_capacity_suppresses_another_growth(
+    make_group, caplog
+):
+    group = await grown_group(make_group)
+    first = group.reception
+    declare_cpu(first, 55.0)
+    await group.check_occupancy(now=True)
+    second = group.worker_handler_map["standard_0002"]
+
+    # Rearm the parent without consuming the newborn, then cross again.
+    declare_cpu(first, 28.0)
+    declare_cpu(second, 0.0)
+    await group.check_occupancy(now=True)
+    declare_cpu(first, 55.0)
+    with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
+        await group.check_occupancy(now=True)
+
+    assert list(group.worker_handler_map) == [first.name, second.name]
+    assert first.cpu_growth_armed is True
+    decisions = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == DECISIONS_LOGGER
+    ]
+    growth = [row for row in decisions if row["decision"] == "cpu_growth"][-1]
+    assert growth["outcome"] == "no_action"
+    assert growth["reason"] == "cpu_provisioned_capacity_pending"
+    assert growth["numbers"]["pending_cpu_capacity"] == 1
+    assert next(row for row in growth["candidates"] if row["name"] == second.name)[
+        "cpu_provisioned"
+    ] is True
+
+
+async def test_switching_cpu_policy_off_discards_provisioned_priority(make_group):
+    group = await grown_group(make_group)
+    declare_cpu(group.reception, 55.0)
+    await group.check_occupancy(now=True)
+    assert group._cpu_provisioned_workers == {"standard_0002"}
+
+    group.apply_policy(
+        GroupPolicy.from_settings({}),
+        [(worker.name, True) for worker in group.living_workers],
+    )
+
+    assert group.cpu_grow_percent is None
+    assert group._cpu_provisioned_workers == set()
 
 
 async def test_cpu_past_the_restart_setpoint_grows_without_restarting(make_group):
@@ -242,7 +344,9 @@ async def test_below_the_rearm_threshold_the_worker_reopens_and_rearms(make_grou
     assert len(group.worker_handler_map) == 2
 
 
-async def test_a_new_crossing_after_the_rearm_grows_again(make_group):
+async def test_a_new_crossing_after_the_rearm_grows_after_capacity_is_consumed(
+    make_group, commander
+):
     group = await grown_group(make_group)
     declare_cpu(group.reception, 55.0)
     await group.check_occupancy(now=True)
@@ -250,6 +354,10 @@ async def test_a_new_crossing_after_the_rearm_grows_again(make_group):
     await group.check_occupancy(now=True)
 
     declare_cpu(group.reception, 55.0)
+    await group.check_occupancy(now=True)
+    assert len(group.worker_handler_map) == 2  # the empty newborn holds the growth
+
+    assert await arrival(commander, group, "mario") == "standard_0002"
     await group.check_occupancy(now=True)
 
     assert len(group.worker_handler_map) == 3
@@ -464,7 +572,9 @@ async def test_the_reactive_growth_and_a_placement_cannot_fork_twice(make_group,
     assert group.user_worker_map["arriving"] == "standard_0002"
 
 
-async def test_two_workers_over_the_threshold_are_one_spawn_per_round(make_group):
+async def test_two_workers_over_the_threshold_wait_for_spawned_capacity(
+    make_group, commander
+):
     group = await grown_group(make_group)
     second = await group.start_worker()
     declare_cpu(group.reception, 60.0)
@@ -475,7 +585,13 @@ async def test_two_workers_over_the_threshold_are_one_spawn_per_round(make_group
     assert group.reception.cpu_admission_open is False
     assert second.cpu_admission_open is False
 
-    # The second armed crossing is served by the NEXT round, one at a time.
+    # The next crossing cannot provision over capacity that is still empty.
+    await group.check_occupancy(now=True)
+    assert len(group.worker_handler_map) == 3
+
+    # Once an arrival consumes that capacity, the other standing crossing is
+    # served by the next round, still one spawn at a time.
+    assert await arrival(commander, group, "mario") == "standard_0003"
     await group.check_occupancy(now=True)
     assert len(group.worker_handler_map) == 4
 

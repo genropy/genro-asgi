@@ -219,11 +219,23 @@ stdout. `SpaCommander.log_order` mirrors every issued order into that journal,
 while `log_decision` records calculations that deliberately issue no order.
 Each JSON row carries schema, process-local sequence, UTC timestamp, decider,
 decision, subject, outcome, a stable reason code, numbers and the candidates
-the judge saw. Group placement records every CPU-open candidate in
-fullest-first order; CPU growth records admission, armed trigger, open and empty
+the judge saw. Group placement records every CPU-open candidate in its actual
+evaluation order; CPU growth records admission, armed trigger, open and empty
 worker counts; retirement records its suppression or the absence of an
 absorbable spare. The journal observes policy — it never changes placement,
 growth, retirement or restart behaviour.
+
+**CPU-provisioned capacity is consumed before another birth (landed
+2026-08-29).** A worker born by `_grow_on_cpu` carries a transient, one-shot
+priority until its first placed user. While such a worker is open, running,
+empty and has room for a default newcomer, placement tries it before ordinary
+fullest-first and another CPU crossing is recorded as
+`cpu_provisioned_capacity_pending` instead of spawning over it. The successful
+placement is recorded as `cpu_provisioned_capacity`; after it, ordinary
+fullest-first resumes. A regular empty worker has no priority. The mark is
+discarded when its worker dies, when another path has placed a user there, or
+when the CPU policy is switched off. This coordinates capacity that CPU growth
+already paid for without changing thresholds, sticky users or retirement.
 
 **Not yet built (second pass).** The deliberate reboot command on `_server`
 (`reboot now`/`reboot wait N`, notify_user, the consumer service-message
@@ -239,4 +251,4 @@ commits, still to be entered in the register). Decision registers:
 
 **All general policies are inherited from the parent document: [meta-genro-modules CLAUDE.md](https://github.com/softwellsrl/meta-genro-modules/blob/main/CLAUDE.md)**
 
-**Last Updated**: 2026-08-28
+**Last Updated**: 2026-08-29
