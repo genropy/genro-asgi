@@ -111,7 +111,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
     <a href="#cancello">GenroPy non si tocca</a>
     <a href="#cambia">Che cosa cambia davvero</a>
     <a href="#comparatore">Il comparatore</a>
-    <a href="#benchmark">I benchmark</a>
+    <a href="#benchmark">Le misure</a>
     <a href="#stato">Dove siamo</a>
   </div>
 </nav>
@@ -229,10 +229,10 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
 
 <section id="benchmark">
   <div class="prose">
-    <h2><span class="kicker">Le misure</span>I benchmark, e perché non c'è ancora un numero</h2>
-    <p>La domanda che tutti fanno per prima è quanto va più veloce. La risposta onesta, oggi, è che <strong>non è stata ancora misurata</strong> — e non per dimenticanza: è un ordine deciso.</p>
+    <h2><span class="kicker">Le misure</span>I benchmark: il metodo, e le prime misure</h2>
+    <p>La domanda che tutti fanno per prima è quanto va più veloce. Le prime misure esistono, sono del 27 agosto 2026, e stanno in un rapporto allegato a questo libro con i loro dati grezzi. Prima dei numeri, però, va detto l'ordine in cui il lavoro è stato condotto — perché è l'ordine a rendere i numeri credibili.</p>
     <p>Il programma ha tre fasi. Le prime due riguardano la <strong>fedeltà</strong>: che il ponte faccia le stesse cose dello stack classico. La terza riguarda la <strong>velocità</strong>. Sono in quest'ordine per una ragione che si vede subito appena si prova a invertirlo: gli strumenti che dimostrano la fedeltà registrano ogni scambio e ogni chiamata al registro, e una misura di velocità presa con quella registrazione accesa non misura il sistema, misura lo strumento.</p>
-    <p>Quindi durante le prime due fasi la strumentazione può essere pesante quanto le serve, e i tempi non si leggono. La terza fase parte con la raccolta spenta, e allora i tempi contano.</p>
+    <p>Quindi durante le prime due fasi la strumentazione può essere pesante quanto le serve, e i tempi non si leggono. Le misure si prendono con la raccolta spenta, su strumenti dedicati — ed è così che sono state prese quelle allegate.</p>
 
     <h3>La scala delle misure</h3>
     <p>Gli strumenti ci sono già, e sono costruiti in modo che un rallentamento si possa <em>attribuire</em> invece che indovinare. Ogni gradino isola uno strato in più.</p>
@@ -247,12 +247,23 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
     </table></div>
     <p>Ogni gradino si può puntare anche sullo stack classico, con lo stesso comando: è così che i due diventano confrontabili invece che raccontabili.</p>
 
-    <h3>La memoria prima della velocità</h3>
-    <p>La terza fase comincia dalla memoria, non dai tempi, e anche questo è deliberato. La risorsa che si esaurisce per prima in un sistema che tiene stato è la memoria, non la CPU: la si misura su tutto lo stack, a parità di processi, da fermo e sotto carico. I tempi vengono dopo.</p>
+    <h3>Le prime misure: la sessione intera, sui due stack</h3>
+    <p>Il 27 agosto 2026, su una macchina di laboratorio dedicata (Hetzner ccx43), il gradino della sessione intera è stato puntato sui due stack: la stessa sessione registrata da un browser — login, pagine, le letture pesanti, 117 chiamate per giro — rigiocata da popolazioni crescenti di utenti, prima con ingressi scaglionati e poi con ricambio continuo. Stack classico (gunicorn + gnrdaemon) e ponte, stesso sito, stessa sessione, stesso comando.</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>utenti</th><th>gunicorn + gnrdaemon</th><th>genropy-asgi</th><th>differenza</th></tr></thead>
+      <tbody>
+        <tr><td>1 (baseline)</td><td>3.697 ms</td><td>2.633 ms</td><td>−29%</td></tr>
+        <tr><td>8</td><td>4.951 ms</td><td>2.915 ms</td><td>−41%</td></tr>
+        <tr><td>16</td><td>6.048 ms</td><td>3.512 ms</td><td>−42%</td></tr>
+        <tr><td>32</td><td>9.213 ms</td><td>4.026 ms</td><td>−56%</td></tr>
+      </tbody>
+    </table></div>
+    <p>La grandezza è la mediana per utente dell'attesa totale del giro — la somma dei tempi di risposta delle 117 chiamate di un utente. Nessuna chiamata fallita in nessuna delle prove a ingressi scaglionati. La lettura che conta è la seconda colonna di distanza: il vantaggio <em>cresce con la folla</em>. A parità di forma fissa (4 processi × 16 thread) lo stack classico degrada da +34% a +149% mentre la popolazione sale; il pool, che nasce con un processo e cresce quando serve, degrada da +11% a +53%. Ciò che separa i due stack non è il costo della singola chiamata: è la coda che la folla induce.</p>
+    <p>Il rapporto allegato porta, per ogni prova, le condizioni dichiarate e i dati grezzi — le chiamate una per una, i campioni al secondo, i consumi dei processi — e le viste per macchina da cui sono tratti i grafici. La memoria è misurata insieme ai tempi, su tutto lo stack e sotto carico: in un sistema che tiene stato è la risorsa che si esaurisce per prima, e un numero di velocità senza il suo costo di memoria racconta metà della storia.</p>
 
     <div class="note warn">
-      <span class="label">Quello che questo documento non dice</span>
-      <p>Non c'è, in queste pagine, nessun confronto di prestazioni fra i due stack, e non va dedotto: gli strumenti per produrlo esistono, il confronto non è ancora stato eseguito. Chi deve decidere sulla base di numeri deve aspettare la terza fase, che parte quando la fedeltà è chiusa.</p>
+      <span class="label">Come vanno letti questi numeri</span>
+      <p>Sono le prime misure, non le ultime: un gradino su quattro, una macchina, una sessione di riferimento. Dicono la forma del confronto — chi degrada e come, al crescere della folla — non il numero definitivo di nessuna installazione. E la fedeltà resta il lavoro in corso: la seconda fase del banco di confronto non è chiusa, e i numeri di velocità non la sostituiscono.</p>
       <p>Le condizioni di ogni misura vengono dichiarate insieme al risultato — quante persone, quali processi, quale versione e quale modo di esecuzione da entrambe le parti — perché un numero senza le sue condizioni non è confrontabile con nessun altro numero. E c'è un caso peggiore del numero senza condizioni: il numero le cui condizioni sono <em>dichiarate</em> e non sono state <em>imposte</em>. È successo, e vale la pena raccontarlo: i due stack venivano avviati leggendo il modo di esecuzione da una riga di comando, mentre il sito lo leggeva dalla propria configurazione. Per un tratto del lavoro uno dei due ha girato in modalità di sviluppo mentre la riga che descriveva quella prova dichiarava il contrario, e nessuno poteva accorgersene guardando i risultati. Da allora entrambe le letture passano dalla stessa fonte, e una riga che dichiara una condizione che nessuno ha imposto è considerata un difetto di categoria, non un incidente singolo.</p>
     </div>
   </div>
@@ -262,7 +273,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
   <h2><span class="kicker">Appendice</span>Dove siamo oggi</h2>
   <div class="prose">
     <p>Questo documento descrive il ponte nella sua forma compiuta. Lo stato di avanzamento vive in un documento suo: <a href="stato_attuale.html">stato attuale</a>, voce per voce, con la prova accanto a ciascuna. La voce che riguarda questo capitolo è <a href="stato_attuale.html#v-bridge">il contratto del bridge</a>.</p>
-    <p>Due cose vanno dette qui e non lasciate dedurre. Il ponte pubblicato oggi è agganciato alla versione precedente del nucleo e non è ancora stato portato su questa: finché non lo è, il contratto descritto in queste pagine non è mai stato esercitato da un sito vero su questo core. E il banco di confronto sta lavorando alla seconda delle tre fasi — la sessione di riferimento riprodotta sul ponte senza divergenze inspiegate.</p>
+    <p>Due cose vanno dette qui e non lasciate dedurre. Il ponte pubblicato oggi è agganciato alla versione precedente del nucleo e non è ancora stato portato su questa: finché non lo è, il contratto descritto in queste pagine non è mai stato esercitato da un sito vero su questo core. E il banco di confronto sta lavorando alla seconda delle tre fasi — la sessione di riferimento riprodotta sul ponte senza divergenze inspiegate; le prime misure di velocità, prese a parte su strumenti dedicati, sono nel rapporto allegato.</p>
   </div>
 </section>
 

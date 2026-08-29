@@ -340,7 +340,7 @@ server = AsgiServer(config=ServerConfiguration)</pre>
   <div class="prose">
     <p>Un <strong>server</strong> possiede il runtime: il loop, la catena dei middleware, il pool per il lavoro bloccante, il ciclo di vita, il registro delle richieste, e l'insieme delle applicazioni che serve. Un'<strong>applicazione</strong> possiede il comportamento e non sa nulla di porte o middleware.</p>
     <p>Ogni applicazione porta due metà della propria identità: il <strong>codice</strong>, che è il suo nome, e il <strong>mount</strong>, che è il prefisso di URL sotto cui risponde. Sono distinti, quindi la stessa classe può essere servita due volte sotto nomi diversi. Un mount vuoto è la radice del sito.</p>
-    <p>Lo smistamento ha una sola regola, uguale su ogni server: primo segmento del percorso verso l'applicazione montata lì; altrimenti quella sulla radice; altrimenti, per <code>/</code> con un default dichiarato, un redirect; altrimenti 404.</p>
+    <p>Lo smistamento ha una sola regola, uguale su ogni server: primo segmento del percorso verso l'applicazione montata lì; altrimenti quella sulla radice; altrimenti, per <code>/</code> con un default dichiarato, un redirect; altrimenti, sulla radice scoperta, un indice del sito — i collegamenti alle applicazioni montate, disattivabile dalla configurazione in favore del 404.</p>
     <h3>Le classi che erediti</h3>
   </div>
 
@@ -685,7 +685,7 @@ server = AsgiServer(config=ServerConfiguration)</pre>
     <p>Per i flussi lunghi c'è la risposta a blocchi, e sopra di essa gli eventi inviati dal server già inquadrati — la via naturale per l'avanzamento di un lavoro o per una notifica.</p>
     <p>Le eccezioni HTTP si sollevano da qualunque punto del codice e trovano risposta nel middleware più esterno: non passi codici di stato lungo la catena delle chiamate.</p>
     <h3>La catena dei middleware</h3>
-    <p>Sette middleware pronti — errori, CORS, autenticazione, sessione, log di accesso, filtro dei percorsi di sonda — ordinati da un <em>numero</em>, non da una gerarchia di classi: il più piccolo è il più esterno, e inserire il tuo significa scegliere una posizione. Solo la gestione degli errori è attiva di default; le altre si armano quando configuri la capacità corrispondente.</p>
+    <p>Sei middleware pronti — errori, CORS, autenticazione, sessione, log di accesso, filtro dei percorsi di sonda — ordinati da un <em>numero</em>, non da una gerarchia di classi: il più piccolo è il più esterno, e inserire il tuo significa scegliere una posizione. Solo la gestione degli errori è attiva di default; le altre si armano quando configuri la capacità corrispondente.</p>
   </div>
 
   <h3>Due trasporti, un solo motore</h3>
