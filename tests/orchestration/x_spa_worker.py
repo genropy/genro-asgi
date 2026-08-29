@@ -47,6 +47,11 @@ class X_SpaWorker(SpaWorker):
         """What this process declares it holds, in bytes."""
         return self.declared_rss_bytes
 
+    @property
+    def pss_bytes(self) -> None:
+        """Leave PSS unavailable so the portable RSS fallback is exercised."""
+        return None
+
     def site(self, environ: dict[str, Any], start_response: Any) -> list[bytes]:
         """The WSGI callable of the story this child belongs to.
 

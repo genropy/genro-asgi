@@ -42,9 +42,10 @@ cheaper than a lock.
 its last photo the way the pool has always read it: one clamped component per
 measurable gauge, the FULLEST of them wins, and the answer is a percentage — so
 the memory of a process, the cost of a user and the setpoint of a worker are all
-the same number and can be added. Today the photo carries one such gauge, the
-resident memory against what a worker of this group may hold; a photo carrying
-none reads 0, which is what a worker nobody has measured yet honestly is.
+the same number and can be added. On Linux the memory component is PSS, which
+divides prefork-shared pages among the processes mapping them; RSS remains the
+conservative fallback wherever PSS is unavailable. A photo carrying neither
+reads 0, which is what a worker nobody has measured yet honestly is.
 
 **The memory is a CASCADE of percentages, and only the bottom of it is bytes.**
 One total is always handed in — ``memory_concession_bytes``, what the machine
@@ -540,15 +541,58 @@ class GroupHandler:
         """What this group's living workers hold, as a share of the concession.
 
         Returns:
-            The summed resident memory of their last photos over the concession,
-            in percent. Read against ``memory_max_percent``, so the gate on the
-            growth is percent against percent.
+            The summed accounted memory of their last photos over the
+            concession, in percent. PSS is used where Linux reports it; RSS is
+            the conservative fallback elsewhere. Read against
+            ``memory_max_percent``, so the growth gate compares percent with
+            percent without counting prefork-shared pages once per worker.
         """
-        rss_bytes = sum(
-            (worker_handler.worker_snapshot or {}).get("rss_bytes") or 0
+        accounted_bytes = sum(
+            self.get_memory_accounting(worker_handler.worker_snapshot)[0] or 0
             for worker_handler in self.living_workers
         )
-        return 100.0 * rss_bytes / self.memory_concession_bytes
+        return 100.0 * accounted_bytes / self.memory_concession_bytes
+
+    @staticmethod
+    def get_memory_accounting(
+        worker_snapshot: dict[str, Any] | None,
+    ) -> tuple[float | None, str]:
+        """Choose the memory gauge a worker decision may account.
+
+        Args:
+            worker_snapshot: the worker's latest photo, or ``None``.
+
+        Returns:
+            ``(bytes, kind)``. A finite non-negative PSS wins; otherwise a
+            finite non-negative RSS is the conservative portable fallback.
+            With neither, the worker is ``unmeasured`` and contributes no
+            invented number, preserving the pre-existing no-photo semantics.
+        """
+        photo = worker_snapshot or {}
+        for field, kind in (("pss_bytes", "pss"), ("rss_bytes", "rss_fallback")):
+            value = photo.get(field)
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                continue
+            try:
+                numeric = float(value)
+            except OverflowError:
+                continue
+            if math.isfinite(numeric) and numeric >= 0:
+                return numeric, kind
+        return None, "unmeasured"
+
+    @property
+    def memory_accounting_kind(self) -> str:
+        """How the living workers' memory is accounted in this group."""
+        kinds = {
+            self.get_memory_accounting(worker.worker_snapshot)[1]
+            for worker in self.living_workers
+        }
+        if not kinds:
+            return "unmeasured"
+        if len(kinds) == 1:
+            return kinds.pop()
+        return "mixed"
 
     def ping_now(self) -> None:
         """Ring this group's wake: its round comes now instead of at its cadence."""
@@ -593,16 +637,16 @@ class GroupHandler:
 
         Returns:
             The fullest of the components the photo carries, each clamped to its
-            own full — 0.0 when nothing in it is measurable. Two components
-            today: the RSS against this worker's share of the memory quota, and
-            ``cpu_percent``, the share of one core burned between the last two
-            photos (#38) — what sees a GIL-saturated worker whose memory stands
-            still, and what measures the same on platforms with no ``/proc``.
+            own full — 0.0 when nothing in it is measurable. Memory is PSS
+            against this worker's share of the quota, with RSS as its portable
+            conservative fallback. ``cpu_percent`` is the share of one core
+            burned between the last two photos (#38), which sees a GIL-saturated
+            worker whose memory stands still.
         """
         photo = worker_snapshot or {}
         ceiling = self.worker_memory_ceiling_bytes
-        rss_bytes = photo.get("rss_bytes")
-        components = [rss_bytes / ceiling] if rss_bytes is not None else []
+        accounted_bytes, _kind = self.get_memory_accounting(photo)
+        components = [accounted_bytes / ceiling] if accounted_bytes is not None else []
         cpu_percent = photo.get("cpu_percent")
         if cpu_percent is not None:
             components.append(cpu_percent / 100.0)

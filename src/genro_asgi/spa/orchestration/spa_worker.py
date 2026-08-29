@@ -613,6 +613,31 @@ class SpaWorker:
         return None
 
     @property
+    def pss_bytes(self) -> int | None:
+        """The proportional set size of this process, in bytes.
+
+        Returns:
+            The ``Pss`` total from Linux ``smaps_rollup``. Shared pages are
+            divided among the processes mapping them, unlike RSS, so summing
+            this gauge across prefork workers does not charge the template's
+            pages once per child. ``None`` is the honest answer on platforms
+            without the rollup file or when the kernel refuses the reading.
+        """
+        try:
+            with open("/proc/self/smaps_rollup", encoding="ascii") as rollup:
+                for line in rollup:
+                    if not line.startswith("Pss:"):
+                        continue
+                    fields = line.split()
+                    if len(fields) != 3 or fields[2] != "kB":
+                        return None
+                    kilobytes = int(fields[1])
+                    return kilobytes * 1024 if kilobytes >= 0 else None
+        except (OSError, ValueError):
+            return None
+        return None
+
+    @property
     def worker_snapshot(self) -> dict[str, Any]:
         """What this process honestly knows of itself, ready for the wire.
 
@@ -629,6 +654,7 @@ class SpaWorker:
                 "name": self.name,
                 "group": self.group,
                 "rss_bytes": self.rss_bytes,
+                "pss_bytes": self.pss_bytes,
                 "cpu_seconds": self.cpu_seconds,
                 "user_count": len(self.user_register),
                 "connection_count": len(self.connection_register),

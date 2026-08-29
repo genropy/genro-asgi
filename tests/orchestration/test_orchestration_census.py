@@ -70,6 +70,25 @@ async def test_the_pool_census_carries_the_user_on_both_sides(populated_lane):
     assert "guest_a1b2" in worker_census["user_register"]
 
 
+async def test_the_pool_census_declares_how_worker_memory_was_accounted(populated_lane):
+    group = populated_lane.commander.group_map["standard"]
+    worker = populated_lane.worker_handler
+    worker.worker_snapshot = {"rss_bytes": 900, "pss_bytes": 300}
+
+    census = await populated_lane.commander.get_pool_census()
+
+    summary = census["groups"]["standard"]
+    assert summary["memory_accounting"] == "pss"
+    worker_summary = summary["workers"][worker.name]
+    assert worker_summary["rss_bytes"] == 900
+    assert worker_summary["pss_bytes"] == 300
+    assert worker_summary["accounted_memory_bytes"] == 300.0
+    assert worker_summary["memory_accounting"] == "pss"
+    assert worker_summary["occupancy_percent"] == pytest.approx(
+        100.0 * 300 / group.worker_memory_ceiling_bytes
+    )
+
+
 async def test_the_whole_census_is_json(populated_lane):
     census = await populated_lane.commander.get_pool_census()
 

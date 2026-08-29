@@ -85,10 +85,18 @@ def host_gauges(commander, monkeypatch):
 class WorkerStub:
     """A worker as the memory gates read it: its state, its last photo, its latches."""
 
-    def __init__(self, name: str, rss_bytes: int, cpu_percent: float | None = None) -> None:
+    def __init__(
+        self,
+        name: str,
+        rss_bytes: int,
+        cpu_percent: float | None = None,
+        pss_bytes: int | None = None,
+    ) -> None:
         self.name = name
         self.state = "running"
         self.worker_snapshot: dict[str, Any] = {"rss_bytes": rss_bytes}
+        if pss_bytes is not None:
+            self.worker_snapshot["pss_bytes"] = pss_bytes
         if cpu_percent is not None:
             self.worker_snapshot["cpu_percent"] = cpu_percent
         self.cpu_admission_open = True
@@ -218,6 +226,39 @@ def test_a_group_with_room_for_one_more_worker_may_grow(commander, tmp_path, mon
     with_available(monkeypatch, commander, LIMIT_BYTES // 2)
 
     assert group._may_grow
+
+
+def test_prefork_shared_pages_are_not_charged_once_per_worker(
+    commander, tmp_path, monkeypatch
+):
+    group = build_group(commander, tmp_path, worker_max_number=6)
+    with_workers(
+        group,
+        *(
+            WorkerStub(
+                f"standard_{index:04d}",
+                rss_bytes=LIMIT_BYTES // 3,
+                pss_bytes=LIMIT_BYTES // 100,
+            )
+            for index in range(1, 7)
+        ),
+    )
+    with_available(monkeypatch, commander, LIMIT_BYTES // 2)
+
+    assert group.memory_accounting_kind == "pss"
+    assert group.memory_occupied_percent == pytest.approx(6.0, abs=0.01)
+    assert group._may_grow
+
+
+def test_a_worker_without_pss_keeps_the_conservative_rss_fallback(
+    commander, tmp_path, monkeypatch
+):
+    group = build_group(commander, tmp_path, worker_max_number=4)
+    with_workers(group, WorkerStub("standard_0001", rss_bytes=3 * LIMIT_BYTES // 4 + 1))
+    with_available(monkeypatch, commander, LIMIT_BYTES)
+
+    assert group.memory_accounting_kind == "rss_fallback"
+    assert not group._may_grow
 
 
 def test_a_quota_with_no_room_for_the_newborn_refuses_the_growth(

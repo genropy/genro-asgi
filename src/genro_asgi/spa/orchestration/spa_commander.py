@@ -1095,6 +1095,7 @@ class SpaCommander:
                     worker_handler.name for worker_handler in group_handler.living_workers
                 ],
                 "memory_occupied_percent": group_handler.memory_occupied_percent,
+                "memory_accounting": group_handler.memory_accounting_kind,
                 "worker_max_number": group_handler.worker_max_number,
                 "workers": {
                     worker_handler.name: {
@@ -1102,6 +1103,14 @@ class SpaCommander:
                         "occupancy_percent": group_handler.get_occupancy_percent(
                             worker_handler.worker_snapshot
                         ),
+                        "rss_bytes": (worker_handler.worker_snapshot or {}).get("rss_bytes"),
+                        "pss_bytes": (worker_handler.worker_snapshot or {}).get("pss_bytes"),
+                        "accounted_memory_bytes": group_handler.get_memory_accounting(
+                            worker_handler.worker_snapshot
+                        )[0],
+                        "memory_accounting": group_handler.get_memory_accounting(
+                            worker_handler.worker_snapshot
+                        )[1],
                         "worker_cap": group_handler.get_worker_cap(worker_handler),
                     }
                     for worker_handler in group_handler.living_workers

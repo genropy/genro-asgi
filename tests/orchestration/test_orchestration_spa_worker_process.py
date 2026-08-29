@@ -362,6 +362,8 @@ async def test_the_presentation_carries_the_first_photo_and_brings_the_store_hom
 
     photo = dict(wire.handler.worker_snapshot)
     assert photo.pop("cpu_seconds") >= 0.0
+    pss_bytes = photo.pop("pss_bytes")
+    assert pss_bytes is None or pss_bytes >= 0
     assert photo == {
         "pid": os.getpid(),
         "name": WORKER_NAME,

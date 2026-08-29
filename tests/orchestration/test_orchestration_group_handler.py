@@ -406,6 +406,17 @@ async def test_a_worker_past_the_restart_setpoint_is_replaced_by_a_fresh_one(
     assert group.state == "running"
 
 
+async def test_shared_rss_does_not_restart_a_worker_whose_pss_is_small(make_group):
+    group = make_group(rss_bytes=int(0.99 * WORKER_CEILING))
+    worker = await group.start_worker()
+    worker.worker_snapshot["pss_bytes"] = int(0.20 * WORKER_CEILING)
+
+    await group.check_occupancy(now=True)
+
+    assert list(group.worker_handler_map) == ["standard_0001"]
+    assert worker.state == "running"
+
+
 async def test_a_closure_that_would_eat_the_reserve_is_not_ordered(make_group):
     # Both at 30%: the spare's share would put the reception at 60, past its own
     # cap (80 less the 50 it reserves) — the flat-average reading would close it,
