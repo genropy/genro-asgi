@@ -281,14 +281,14 @@ async def test_boot_failure_invalid_profile(tmp_path, caplog):
     # wf:contract: violation on the named profile: on_startup raises, the
     # wf:contract: violations are in the message on the spa app module logger.
     folder = tmp_path / "profiles"
-    written(folder, "wrong", {"occupancy_max_percent": 200.0, "newcomer_reserve_count": -1})
+    written(folder, "wrong", {"occupancy_max_percent": 200.0})
     server = pool_server(tmp_path, profiles_path=folder, profile_name="wrong")
 
     with caplog.at_level(logging.ERROR, logger="genro_asgi.applications.spa_app"):
         with pytest.raises(GroupPolicyError) as refused:
             await boot(server)
 
-    assert len(refused.value.violations) == 2
+    assert len(refused.value.violations) == 1
     said = caplog.text
     for violation in refused.value.violations:
         assert violation in said
@@ -440,7 +440,7 @@ async def test_profile_level_replacement(tmp_path):
         tmp_path,
         profiles_path=folder,
         control_enabled=True,
-        env_settings={"newcomer_reserve_count": 2},
+        env_settings={"worker_max_users": 16},
     )
     await boot(server)
     reload_path = f"/{ORCHESTRATION_ROOT}/reload"
@@ -456,7 +456,7 @@ async def test_profile_level_replacement(tmp_path):
     # ...P2's own key is in force...
     assert second["effective_settings"]["worker_min_life_seconds"] == 30.0
     # ...the environment still wins on its key...
-    assert second["effective_settings"]["newcomer_reserve_count"] == 2
+    assert second["effective_settings"]["worker_max_users"] == 16
     # ...and a key nobody ever named is the default.
     assert second["effective_settings"]["close_occupancy_max_percent"] == 40.0
     assert second["active_profile"] == "p2"

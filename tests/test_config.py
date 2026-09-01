@@ -727,7 +727,7 @@ class SpaPoolConfig(AsgiConfigBuilder):
             restart_occupancy_max_percent=90.0,
             reception_reserved_percent=30.0,
             new_user_occupancy_percent=4.0,
-            newcomer_reserve_count=2,
+            worker_min_life_seconds=120.0,
             worker_max_users=16,
             cpu_retirement_quiet_seconds=75.0,
             user_idle_freeze_minutes=45.0,
@@ -830,7 +830,7 @@ class TestCommanderSection:
             "restart_occupancy_max_percent": 90.0,
             "reception_reserved_percent": 30.0,
             "new_user_occupancy_percent": 4.0,
-            "newcomer_reserve_count": 2,
+            "worker_min_life_seconds": 120.0,
             "worker_max_users": 16,
             # The retirement's quiet is a policy of the GROUP (#43): how long
             # the CPU must stay silent before the closure judge resumes.
@@ -892,7 +892,7 @@ class TestCommanderSection:
         assert group.restart_occupancy_max_percent == 90.0
         assert group.reception_reserved_percent == 30.0
         assert group.new_user_occupancy_percent == 4.0
-        assert group.newcomer_reserve_count == 2
+        assert group.policy.worker_min_life_seconds == 120.0
         assert group.worker_max_users == 16
         assert group.memory_max_percent == 80.0
         assert group.worker_memory_max_percent == 40.0

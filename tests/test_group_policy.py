@@ -26,7 +26,6 @@ def test_defaults_materialized_from_empty_settings():
     assert policy.worker_min_life_seconds == 60.0
     assert policy.reception_reserved_percent == 50.0
     assert policy.new_user_occupancy_percent == 5.0
-    assert policy.newcomer_reserve_count == 1
     assert policy.worker_max_users == math.inf
     assert policy.user_idle_freeze_minutes == math.inf
     assert policy.memory_max_percent == 100.0
@@ -62,7 +61,7 @@ def test_validation_rejects_and_lists_all_violations():
                 "reception_reserved_percent": 120.0,
                 "memory_max_percent": 0.0,
                 "worker_min_life_seconds": -1.0,
-                "newcomer_reserve_count": 1.5,
+                "worker_max_users": 1.5,
                 "worker_max_number": 0,
             }
         )
@@ -78,12 +77,12 @@ def test_validation_rejects_and_lists_all_violations():
         "reception_reserved_percent",
         "memory_max_percent",
         "worker_min_life_seconds",
-        "newcomer_reserve_count",
+        "worker_max_users",
         "worker_max_number",
     ):
         assert any(v.startswith(f"{key}:") for v in violations), reported
     assert "occupancy_max_percent: expected a number, got bool" in violations
-    assert "newcomer_reserve_count: expected an integer, got float" in violations
+    assert "worker_max_users: expected an integer, got float" in violations
 
     with pytest.raises(GroupPolicyError) as caught:
         GroupPolicy.from_settings({"memory_max_percent": 100.5})

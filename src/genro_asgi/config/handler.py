@@ -396,7 +396,6 @@ class ConfigurationHandler(ConfigHandler):
                 "worker_min_life_seconds",
                 "reception_reserved_percent",
                 "new_user_occupancy_percent",
-                "newcomer_reserve_count",
                 "worker_max_users",
                 "user_idle_freeze_minutes",
                 "entry_module",

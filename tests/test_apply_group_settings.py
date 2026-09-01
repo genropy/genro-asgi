@@ -19,7 +19,7 @@ def commander(tmp_path):
         tmp_path / "frozen_users",
         profiles_path=tmp_path / "profiles",
         recipe_settings={"occupancy_max_percent": 70.0, "worker_max_number": 3},
-        env_settings={"newcomer_reserve_count": 2},
+        env_settings={"worker_max_users": 16},
     )
     GroupHandler(
         spa_commander,
@@ -27,7 +27,7 @@ def commander(tmp_path):
         memory_concession_bytes=MEMORY_CEILING,
         occupancy_max_percent=70.0,
         worker_max_number=3,
-        newcomer_reserve_count=2,
+        worker_max_users=16,
         instance_dir=tmp_path / "i",
         frozen_users_path=tmp_path / "frozen_users",
     )
@@ -52,7 +52,7 @@ async def test_recompute_independent_of_previous_profile(commander):
     # level still wins over the recipe on its own key.
     assert after_both["effective_settings"]["occupancy_max_percent"] == 70.0
     assert after_both["effective_settings"]["worker_min_life_seconds"] == 9.0
-    assert after_both["effective_settings"]["newcomer_reserve_count"] == 2
+    assert after_both["effective_settings"]["worker_max_users"] == 16
     # A key nobody names anywhere is the dataclass default.
     assert after_both["effective_settings"]["close_occupancy_max_percent"] == 40.0
 

@@ -84,12 +84,14 @@ runs is given another one.
 **The shape is decided on ONE picture, and one step per round.**
 ``check_occupancy`` takes the occupancy of every living worker once and then does
 the FIRST thing that reading calls for: restart the worker whose MEMORY is past
-``restart_occupancy_max_percent`` (it will not get better on its own), bring one
-into being when nobody has room left for a newcomer, or close one whose share
-keeps every survivor under ``close_occupancy_max_percent`` — a threshold
-distinctly below the growth's, because reading both decisions against the same
-number made each one create the condition for its own reversal (#36): the band
-between the two is the pool's normal state. A worker younger than
+``restart_occupancy_max_percent`` (it will not get better on its own), give a
+group with no living worker its reception back, or close one whose share keeps
+every survivor under ``close_occupancy_max_percent`` — a threshold distinctly
+below the admission close setpoint, because reading both decisions against the
+same number made each one create the condition for its own reversal (#36): the
+band between the two is the pool's normal state. It births nothing for a user
+who is not there yet: the reception of an empty group is the only birth here,
+every other one happens inside ``assign_user`` for the user who needs it. A worker younger than
 ``worker_min_life_seconds`` is never the one closed, and a closure is refused
 when the survivors lack room BY HEADS for the spare's placed users. The next
 round re-reads: a decision is never carried over.
@@ -159,8 +161,8 @@ before.
 **Both crises are a polite 503.** ``saturated`` says the memory quota is full and
 somebody has to leave before anybody else comes in; ``broken`` says a process
 could not be started at all. Residents are served as ever in either; newcomers
-and the woken get a 503 with a ``Retry-After``. A saturation ends the moment the
-group has room again; a broken group is closed by the first process that starts.
+and the woken get a 503 with a ``Retry-After``. A saturation is written by the placement that was
+refused and lifted by the next check, once the quota affords a birth again; a broken group is closed by the first process that starts.
 A user never changes group: there is no fallback and no policy key.
 
 **Putting one user to sleep is the group's own move, in one order.**
@@ -278,9 +280,6 @@ class GroupHandler:
             only it has; its own placement setpoint is the difference.
         new_user_occupancy_percent: what a user nobody has ever measured is
             expected to cost.
-        newcomer_reserve_count: how many newcomers of that size must ALWAYS find
-            room — the group grows at its own round before anybody is refused,
-            and no closure may eat into it.
         user_idle_freeze_minutes: the silence, IN MINUTES, past which this group
             parks a user in the freezer; with nothing said, silence never parks
             anybody. Minutes because it is a policy of the installation, and the
@@ -315,7 +314,6 @@ class GroupHandler:
         worker_min_life_seconds: float = 60.0,
         reception_reserved_percent: float = 50.0,
         new_user_occupancy_percent: float = 5.0,
-        newcomer_reserve_count: int = 1,
         worker_max_users: float = math.inf,
         user_idle_freeze_minutes: float = math.inf,
         memory_concession_bytes: int,
@@ -351,7 +349,6 @@ class GroupHandler:
                 "worker_min_life_seconds": worker_min_life_seconds,
                 "reception_reserved_percent": reception_reserved_percent,
                 "new_user_occupancy_percent": new_user_occupancy_percent,
-                "newcomer_reserve_count": newcomer_reserve_count,
                 "worker_max_users": None if worker_max_users == math.inf else worker_max_users,
                 "user_idle_freeze_minutes": (
                     None if user_idle_freeze_minutes == math.inf else user_idle_freeze_minutes
@@ -445,10 +442,6 @@ class GroupHandler:
     @property
     def new_user_occupancy_percent(self) -> float:
         return self.policy.new_user_occupancy_percent
-
-    @property
-    def newcomer_reserve_count(self) -> int:
-        return self.policy.newcomer_reserve_count
 
     @property
     def worker_max_users(self) -> float:
@@ -754,8 +747,23 @@ class GroupHandler:
                 worker_handler = self._fallback_candidate(user)
                 placement_reason = "cpu_closed_hard_cap_fallback"
             if worker_handler is None:
-                # The surrender still rings the wake: the next round is what
-                # writes ``saturated`` where the front can read it.
+                if not self._may_grow:
+                    # The refusal itself writes ``saturated`` where the front
+                    # can read it; the next check lifts it when the quota
+                    # affords a birth again.
+                    self.state = "saturated"
+                    self.spa_commander.log_order(
+                        self.name,
+                        "grow",
+                        numbers={
+                            "memory_occupied_percent": self.memory_occupied_percent,
+                            "memory_max_percent": policy.memory_max_percent,
+                            "worker_memory_ceiling_bytes": self.worker_memory_ceiling_bytes,
+                            "memory_available_bytes": self.spa_commander.memory_available_bytes,
+                            "workers": len(self.living_workers),
+                        },
+                        outcome="saturated",
+                    )
                 self.ping_now()
                 self.spa_commander.log_decision(
                     self.name,
@@ -972,7 +980,7 @@ class GroupHandler:
 
     @property
     def _may_grow(self) -> bool:
-        """Whether one more worker is allowed right now — the judge `_grow` obeys too.
+        """Whether one more worker is allowed right now — every birth obeys it.
 
         Two memory gates, and the growth passes BOTH. The first is the group's
         quota, read PROSPECTIVELY: what its workers hold today plus the ceiling
@@ -998,10 +1006,12 @@ class GroupHandler:
         """Read the group once and take the ONE step that reading calls for.
 
         Acts on the group: restart when MEMORY is past the restart setpoint,
-        update soft CPU admission, grow when nobody has occupancy room left,
-        close a worker the others can absorb — and update ``state`` when the
-        memory quota refuses growth. CPU never creates or condemns a process;
-        a concrete placement creates capacity when all open workers refuse it.
+        update soft CPU admission, give an empty group its reception back,
+        close a worker the others can absorb — and lift ``saturated`` once the
+        memory quota affords a birth again. No worker is born here for a user
+        who is not there yet: the only birth is the reception of a group with
+        no living worker, every other one happens inside ``assign_user`` for
+        the user who needs it.
         """
         policy = self.policy
         snapshots = {
@@ -1016,11 +1026,6 @@ class GroupHandler:
                 if self._policy_held(policy, "restart_worker", name):
                     await self.restart_worker(self.worker_handler_map[name])
                 return
-        # With CPU admission enabled, CPU has one job only: open or close the
-        # worker to newcomers. Feeding the same CPU number into the periodic
-        # reserve judge would still pre-fork capacity before any user arrived,
-        # merely through another road. Memory remains a legitimate occupancy
-        # signal here; concrete placement is the only CPU-related birth.
         occupancy_reader = (
             self.get_memory_occupancy_percent
             if policy.cpu_admission_close_percent is not None
@@ -1028,10 +1033,12 @@ class GroupHandler:
         )
         picture = {name: occupancy_reader(photo) for name, photo in snapshots.items()}
         self._judge_cpu_admission()
-        if not self._has_room(picture):
-            await self._grow()
+        if not self.living_workers:
+            # A group must always have a reception: this is the ONE birth
+            # nobody asked for by arriving.
+            await self.start_worker()
             return
-        if self.state == "saturated":
+        if self.state == "saturated" and self._may_grow:
             self.state = "running"
         if policy.cpu_admission_close_percent is not None:
             # The retirement stands aside while the CPU policy is under
@@ -1434,44 +1441,17 @@ class GroupHandler:
             self.name, "drop_worker", name, outcome=worker_handler.state
         )
 
-    def _has_room(self, picture: dict[str, float]) -> bool:
-        """Whether the standing reserve of newcomers is still whole."""
-        return self._placeable_newcomers(picture) >= self.newcomer_reserve_count
-
-    def _placeable_newcomers(self, picture: dict[str, float]) -> int:
-        """How many newcomers of the default size this picture still takes.
-
-        Args:
-            picture: occupancy percent by worker name.
-
-        Returns:
-            The count, summed worker by worker against each one's own cap — a
-            newcomer lands on ONE worker, so room split across many is not room.
-            A worker in ``quitting`` counts zero: it refuses everybody on its way
-            out. One in ``starting`` counts: it is capacity arriving, and
-            counting it keeps the group from growing twice.
-        """
-        placeable = 0
-        for name, occupancy_percent in picture.items():
-            worker_handler = self.worker_handler_map[name]
-            if worker_handler.state == "quitting":
-                continue
-            room = self.get_worker_cap(worker_handler) - occupancy_percent
-            placeable += max(0, int(room / self.new_user_occupancy_percent))
-        return placeable
-
     def _spare_worker(
         self, picture: dict[str, float], policy: GroupPolicy
     ) -> WorkerHandler | None:
         """The emptiest worker whose closure leaves the pool cool; None when there is none.
 
         The remaining workers are read as if they shared what this one holds,
-        then asked THREE questions in order: every survivor under
-        ``close_occupancy_max_percent`` — distinctly below the growth setpoint,
-        so a closure can never create the condition for the next growth (#36) —
-        the newcomer reserve still whole, and, the occupancy settled, room BY
-        HEADS for the spare's placed users within each survivor's
-        ``worker_max_users``. A worker younger than ``worker_min_life_seconds``
+        then asked TWO questions in order: every survivor under
+        ``close_occupancy_max_percent`` — distinctly below the admission close
+        setpoint, so a closure can never create the condition for the next
+        birth (#36) — and, the occupancy settled, room BY HEADS for the spare's
+        placed users within each survivor's ``worker_max_users``. A worker younger than ``worker_min_life_seconds``
         is no candidate: its occupancy measures its own birth.
         """
         # A quitting worker is nobody's spare — its closure is already
@@ -1496,8 +1476,6 @@ class GroupHandler:
         shared = picture[spare.name] / len(remaining)
         after = {name: pct + shared for name, pct in remaining.items()}
         if max(after.values()) > policy.close_occupancy_max_percent:
-            return None
-        if self._placeable_newcomers(after) < policy.newcomer_reserve_count:
             return None
         placed = Counter(self.user_worker_map.values())
         head_room = sum(max(0, policy.worker_max_users - placed[name]) for name in remaining)
@@ -1636,55 +1614,6 @@ class GroupHandler:
                 f"{policy.cpu_retirement_quiet_seconds:.1f}s"
             )
         return None
-
-    async def _grow(self) -> None:
-        """Bring a worker into being if both memory gates afford it; the saturation when not.
-
-        Under the placement lock, like every other road to a birth: the caller
-        decided on a picture that is stale by the time the lock is held, so the
-        room is read AGAIN on what is there now — a worker the placement
-        fathered in the meantime IS the capacity that was missing, and growing
-        on the old picture would fork twice for one need.
-        """
-        policy = self.policy
-        async with self._placement_lock:
-            occupancy_reader = (
-                self.get_memory_occupancy_percent
-                if policy.cpu_admission_close_percent is not None
-                else self.get_occupancy_percent
-            )
-            picture = {
-                worker_handler.name: occupancy_reader(worker_handler.worker_snapshot)
-                for worker_handler in self.living_workers
-            }
-            if self._has_room(picture):
-                self.spa_commander.log_order(
-                    self.name,
-                    "grow",
-                    numbers={"workers": len(picture)},
-                    outcome="suppressed: another road already created the capacity",
-                )
-                return
-            occupied_percent = self.memory_occupied_percent
-            if self._may_grow:
-                if self._policy_held(policy, "grow"):
-                    await self.start_worker()
-                return
-            if not self._policy_held(policy, "grow"):
-                return
-            self.state = "saturated"
-            self.spa_commander.log_order(
-                self.name,
-                "grow",
-                numbers={
-                    "memory_occupied_percent": occupied_percent,
-                    "memory_max_percent": policy.memory_max_percent,
-                    "worker_memory_ceiling_bytes": self.worker_memory_ceiling_bytes,
-                    "memory_available_bytes": self.spa_commander.memory_available_bytes,
-                    "workers": len(picture),
-                },
-                outcome="saturated",
-            )
 
     async def quit_all(self, freezer_path: str) -> None:
         """Block the users of every process of this group, then tell each one to leave.

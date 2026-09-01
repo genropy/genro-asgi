@@ -82,7 +82,6 @@ class GroupPolicy:
         "worker_min_life_seconds": (False, False, 0.0, False, None),
         "reception_reserved_percent": (False, False, 0.0, False, 100.0),
         "new_user_occupancy_percent": (False, False, 0.0, True, None),
-        "newcomer_reserve_count": (True, False, 0, False, None),
         "worker_max_users": (True, True, 1, False, None),
         "user_idle_freeze_minutes": (False, True, 0.0, True, None),
         "memory_max_percent": (False, False, 0.0, True, 100.0),
@@ -100,7 +99,6 @@ class GroupPolicy:
     worker_min_life_seconds: float = 60.0
     reception_reserved_percent: float = 50.0
     new_user_occupancy_percent: float = 5.0
-    newcomer_reserve_count: int = 1
     worker_max_users: float = math.inf
     user_idle_freeze_minutes: float = math.inf
     memory_max_percent: float = 100.0

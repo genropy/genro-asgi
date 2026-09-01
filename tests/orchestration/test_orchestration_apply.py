@@ -29,6 +29,7 @@ import time
 import pytest
 
 from genro_asgi.orchestration_profile_store import OrchestrationProfileStore
+from genro_asgi.spa.orchestration import AssignmentRefused
 from genro_asgi.spa.orchestration.group_policy import GroupPolicyError
 from genro_asgi.spa.orchestration.spa_commander import SpaCommander
 
@@ -111,13 +112,14 @@ async def test_decision_snapshot_and_emitted_order_complete(
     assert "restart_worker" in caplog.text
     assert "suppressed" not in caplog.text
 
-    # The next round's effect meets the swap instead: the survivor is no longer
-    # past the restart setpoint but has no room left, so the round grows — and
-    # the growth waits on the placement lock while the setpoints change under it.
+    # A placement's effect meets the swap instead: the survivor has no room
+    # left, so the arrival would father a worker — and the birth waits on the
+    # placement lock while the setpoints change under it.
     survivor = group.worker_handler_map[next(iter(group.worker_handler_map))]
     survivor.worker_snapshot["rss_bytes"] = int(0.79 * WORKER_CEILING)
+    known_at_the_vertex(configured, "cid_0", "gino")
     await group._placement_lock.acquire()
-    round_task = asyncio.create_task(group.check_occupancy(now=True))
+    placement = asyncio.create_task(group.assign_user("gino"))
     for _ in range(5):
         await asyncio.sleep(0)
 
@@ -125,7 +127,8 @@ async def test_decision_snapshot_and_emitted_order_complete(
         caplog.clear()
         payload = await configured.apply_group_settings(profile={"occupancy_max_percent": 75.0})
         group._placement_lock.release()
-        await round_task
+        with pytest.raises(AssignmentRefused):
+            await placement
 
     assert len(group.worker_handler_map) == 1
     assert "suppressed: policy changed while deciding" in caplog.text

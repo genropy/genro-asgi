@@ -79,6 +79,8 @@ from typing import Any
 
 import pytest
 
+from genro_asgi.spa.orchestration import AssignmentRefused
+
 from genro_asgi import AsgiServer
 from genro_asgi.applications.spa_app import SPA_CONNECTION_ID_COOKIE
 from genro_asgi.spa.orchestration import FreezeHandler, GroupHandler
@@ -384,8 +386,7 @@ async def test_a_day_of_the_site_from_the_front_to_the_child(server):
     # nobody, while the memory still affords one more process.
     group.memory_concession_bytes = GROWTH_CONCESSION_BYTES
 
-    await group.check_occupancy(now=True)
-    spare = group.worker_handler_map[f"{BASE_GROUP}_0002"]
+    spare = await group.start_worker()
 
     assert group.get_occupancy_percent(reception.worker_snapshot) == 70.0
     assert group.get_worker_cap(reception) == 30.0
@@ -434,7 +435,12 @@ async def test_a_day_of_the_site_from_the_front_to_the_child(server):
     # growth is refused instead of ordered.
     group.memory_concession_bytes = FULL_CONCESSION_BYTES
 
-    await group.check_occupancy(now=True)
+    # The saturation is written by the placement that was refused: nobody
+    # admits this identity and the quota refuses the worker that would.
+    vertex.connection_user_map["cid-late"] = "late"
+    vertex.resolve_user("cid-late")
+    with pytest.raises(AssignmentRefused):
+        await group.assign_user("late")
     refused = await browse(server, "/catalog")
     resident = await browse(server, "/orders/11", second_cid)
 
@@ -480,8 +486,7 @@ async def test_a_death_where_nothing_of_his_is_left_does_not_take_him(server, st
     # the reception with nothing measured on him, he is placed on the spare —
     # the reception stands at 70% against a cap of 30 and takes nobody back.
     group.memory_concession_bytes = GROWTH_CONCESSION_BYTES
-    await group.check_occupancy(now=True)
-    spare = group.worker_handler_map[f"{BASE_GROUP}_0002"]
+    spare = await group.start_worker()
 
     await browse(server, f"{LOGIN_PATH}mario", cid)
     settled = await browse(server, "/orders", cid)

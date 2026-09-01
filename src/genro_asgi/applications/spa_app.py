@@ -223,7 +223,6 @@ class SpaApplicationGrammar(ApplicationGrammar):
         worker_min_life_seconds: float | BagResolver = None,
         reception_reserved_percent: float | BagResolver = None,
         new_user_occupancy_percent: float | BagResolver = None,
-        newcomer_reserve_count: int | BagResolver = None,
         worker_max_users: int | BagResolver = None,
         user_idle_freeze_minutes: float | BagResolver = None,
         entry_module: str = None,
@@ -261,9 +260,7 @@ class SpaApplicationGrammar(ApplicationGrammar):
         which a worker is no closure candidate; ``reception_reserved_percent`` is
         what the reception keeps free for the trade only it has;
         ``new_user_occupancy_percent`` is what a user nobody has ever measured is
-        expected to cost, and ``newcomer_reserve_count`` how many of that size
-        must always find room — the group grows at its own round before anybody
-        is refused. ``user_idle_freeze_minutes`` is the silence past which the
+        expected to cost. ``user_idle_freeze_minutes`` is the silence past which the
         group parks a user in the freezer. ``cpu_admission_close_percent`` (experimental,
         off when omitted) turns on soft CPU admission: a worker above it is
         closed to NEW users and reopens below ``cpu_admission_reopen_percent``. CPU

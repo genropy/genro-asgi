@@ -376,9 +376,7 @@ process is replaced rather than kept; `reception_reserved_percent` is what the
 reception keeps free for the one job only it has (receiving whoever arrives
 unplaced), so its own admission setpoint is the difference;
 `new_user_occupancy_percent` is what somebody nobody has ever measured is
-expected to cost, and `newcomer_reserve_count` is how many of that size must
-always find room: the group grows at its own round before anybody is refused,
-and no closure may eat into that reserve (default 1).
+expected to cost.
 
 **The CPU keys are the soft admission, and its brake.** `cpu_admission_close_percent`
 (experimental, off when omitted) is the smoothed CPU above which a worker stops

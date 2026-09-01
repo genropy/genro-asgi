@@ -308,19 +308,6 @@ def test_a_vertex_that_is_not_running_refuses_the_growth(commander, tmp_path, mo
     assert not group._may_grow
 
 
-async def test_the_ordinary_growth_saturates_the_group_when_the_container_is_full(
-    commander, tmp_path, monkeypatch
-):
-    group = build_group(commander, tmp_path, worker_max_number=4)
-    with_workers(group, WorkerStub("standard_0001", rss_bytes=LIMIT_BYTES // 4))
-    with_available(monkeypatch, commander, 4 * MIB)
-
-    await group._grow()
-
-    assert group.state == "saturated"
-    assert len(group.worker_handler_map) == 1
-
-
 def test_cpu_pressure_only_closes_admission_when_the_container_is_full(
     commander, tmp_path, monkeypatch
 ):
