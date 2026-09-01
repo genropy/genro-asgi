@@ -1146,7 +1146,7 @@ class SpaCommander:
                         "memory_accounting": group_handler.get_memory_accounting(
                             worker_handler.worker_snapshot
                         )[1],
-                        "worker_cap": group_handler.get_worker_cap(worker_handler),
+                        "worker_cap": group_handler.occupancy_max_percent,
                         "cpu_temperature_percent": (
                             worker_handler.cpu_temperature_percent
                         ),

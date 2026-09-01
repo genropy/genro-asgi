@@ -80,7 +80,6 @@ class GroupPolicy:
         "cpu_offload_percent": (False, True, 0.0, False, 100.0),
         "cpu_retirement_quiet_seconds": (False, False, 0.0, False, None),
         "worker_min_life_seconds": (False, False, 0.0, False, None),
-        "reception_reserved_percent": (False, False, 0.0, False, 100.0),
         "new_user_occupancy_percent": (False, False, 0.0, True, None),
         "worker_max_users": (True, True, 1, False, None),
         "user_idle_freeze_minutes": (False, True, 0.0, True, None),
@@ -97,7 +96,6 @@ class GroupPolicy:
     cpu_offload_percent: float | None = None
     cpu_retirement_quiet_seconds: float = 60.0
     worker_min_life_seconds: float = 60.0
-    reception_reserved_percent: float = 50.0
     new_user_occupancy_percent: float = 5.0
     worker_max_users: float = math.inf
     user_idle_freeze_minutes: float = math.inf
@@ -202,11 +200,6 @@ class GroupPolicy:
             violations.append(
                 f"occupancy_max_percent ({self.occupancy_max_percent}) must not exceed "
                 f"restart_occupancy_max_percent ({self.restart_occupancy_max_percent})"
-            )
-        if self.reception_reserved_percent >= self.occupancy_max_percent:
-            violations.append(
-                f"reception_reserved_percent ({self.reception_reserved_percent}) must stay "
-                f"below occupancy_max_percent ({self.occupancy_max_percent})"
             )
         if self.cpu_admission_close_percent is not None and not (
             0.0 <= self.cpu_admission_reopen_percent < self.cpu_admission_close_percent <= 100.0

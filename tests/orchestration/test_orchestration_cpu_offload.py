@@ -56,7 +56,6 @@ async def offload_group(make_group, commander, users, **policies):
     flag is read at the vertex as a hold), and every identity is known at the
     vertex before the child registers.
     """
-    policies.setdefault("reception_reserved_percent", 0.0)
     group = make_group(
         users=list(users),
         transfer_flag=None,

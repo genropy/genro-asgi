@@ -528,7 +528,7 @@ async def test_a_closure_leaving_a_survivor_warm_is_not_ordered(make_group):
     # one threshold for both decisions would close here and grow the round
     # after (#36) — but over close_occupancy_max_percent, so the pool holds:
     # the band between the two thresholds is its normal state.
-    group = make_group(rss_bytes=int(0.35 * WORKER_CEILING), reception_reserved_percent=0.0)
+    group = make_group(rss_bytes=int(0.35 * WORKER_CEILING))
     await group.start_worker()
     spare = await group.start_worker()
 

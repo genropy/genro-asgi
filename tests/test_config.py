@@ -725,7 +725,6 @@ class SpaPoolConfig(AsgiConfigBuilder):
             worker_memory_max_percent=40.0,
             occupancy_max_percent=70.0,
             restart_occupancy_max_percent=90.0,
-            reception_reserved_percent=30.0,
             new_user_occupancy_percent=4.0,
             worker_min_life_seconds=120.0,
             worker_max_users=16,
@@ -828,7 +827,6 @@ class TestCommanderSection:
             "worker_memory_max_percent": 40.0,
             "occupancy_max_percent": 70.0,
             "restart_occupancy_max_percent": 90.0,
-            "reception_reserved_percent": 30.0,
             "new_user_occupancy_percent": 4.0,
             "worker_min_life_seconds": 120.0,
             "worker_max_users": 16,
@@ -890,7 +888,6 @@ class TestCommanderSection:
         assert attached.backupCount == 3
         assert group.occupancy_max_percent == 70.0
         assert group.restart_occupancy_max_percent == 90.0
-        assert group.reception_reserved_percent == 30.0
         assert group.new_user_occupancy_percent == 4.0
         assert group.policy.worker_min_life_seconds == 120.0
         assert group.worker_max_users == 16

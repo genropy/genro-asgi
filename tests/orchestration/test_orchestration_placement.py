@@ -151,17 +151,6 @@ async def test_what_he_cost_where_he_was_is_what_he_is_expected_to_cost_here(gro
     assert await group.assign_user(user) == "standard_0002"
 
 
-async def test_the_reception_keeps_its_reserve_and_takes_less_than_the_others(group, commander):
-    reception = worker_at(group, "standard_0001", 28.0)
-    worker_at(group, "standard_0002", 28.0)
-    user = newcomer(commander)
-
-    # Both stand at 28, but the reception's own setpoint is the difference
-    # between the group's and its reserve: 80 - 50 = 30, and 28 + 5 is over it.
-    assert group.get_worker_cap(reception) == 30.0
-    assert await group.assign_user(user) == "standard_0002"
-
-
 async def test_two_placements_in_a_row_are_judged_on_the_same_photo(group, commander):
     worker_at(group, "standard_0001", 0.0)
     worker_at(group, "standard_0002", 70.0)

@@ -24,7 +24,6 @@ def test_defaults_materialized_from_empty_settings():
     assert policy.cpu_admission_reopen_percent == 40.0
     assert policy.cpu_retirement_quiet_seconds == 60.0
     assert policy.worker_min_life_seconds == 60.0
-    assert policy.reception_reserved_percent == 50.0
     assert policy.new_user_occupancy_percent == 5.0
     assert policy.worker_max_users == math.inf
     assert policy.user_idle_freeze_minutes == math.inf
@@ -48,7 +47,7 @@ def test_validation_rejects_and_lists_all_violations():
     # wf:contract: counts; worker_max_number <= 0; a broken CPU band
     # wf:contract: (rearm >= grow); cross rules on the COMPLETE resulting policy:
     # wf:contract: close_occupancy >= occupancy, occupancy > restart_occupancy,
-    # wf:contract: reception_reserved >= occupancy, new_user_occupancy <= 0.
+    # wf:contract: new_user_occupancy <= 0.
     # wf:contract: A single violation means NO policy object is produced.
     with pytest.raises(GroupPolicyError) as caught:
         GroupPolicy.from_settings(
@@ -58,7 +57,6 @@ def test_validation_rejects_and_lists_all_violations():
                 "occupancy_max_percent": True,
                 "restart_occupancy_max_percent": float("nan"),
                 "close_occupancy_max_percent": float("inf"),
-                "reception_reserved_percent": 120.0,
                 "memory_max_percent": 0.0,
                 "worker_min_life_seconds": -1.0,
                 "worker_max_users": 1.5,
@@ -66,7 +64,7 @@ def test_validation_rejects_and_lists_all_violations():
             }
         )
     violations = caught.value.violations
-    assert len(violations) == 10
+    assert len(violations) == 9
     reported = " | ".join(violations)
     assert "nonsense_percent: unknown setpoint" in violations
     assert "engine_factory: structural, not a profile key" in violations
@@ -74,7 +72,6 @@ def test_validation_rejects_and_lists_all_violations():
         "occupancy_max_percent",
         "restart_occupancy_max_percent",
         "close_occupancy_max_percent",
-        "reception_reserved_percent",
         "memory_max_percent",
         "worker_min_life_seconds",
         "worker_max_users",
@@ -107,10 +104,6 @@ def test_validation_rejects_and_lists_all_violations():
         GroupPolicy.from_settings({"occupancy_max_percent": 96.0})
     assert len(caught.value.violations) == 1
     assert "restart_occupancy_max_percent" in caught.value.violations[0]
-
-    with pytest.raises(GroupPolicyError) as caught:
-        GroupPolicy.from_settings({"reception_reserved_percent": 80.0})
-    assert "reception_reserved_percent" in caught.value.violations[0]
 
     # A per-key violation stops before the policy exists: no partial object.
     with pytest.raises(GroupPolicyError):

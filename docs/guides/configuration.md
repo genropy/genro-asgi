@@ -372,9 +372,7 @@ of it is IN USE (a `/proc/meminfo` capability) simply alarms nobody.
 
 **The occupancy keys are how full is full.** `occupancy_max_percent` is where a
 worker stops admitting new users; `restart_occupancy_max_percent` is where a
-process is replaced rather than kept; `reception_reserved_percent` is what the
-reception keeps free for the one job only it has (receiving whoever arrives
-unplaced), so its own admission setpoint is the difference;
+process is replaced rather than kept;
 `new_user_occupancy_percent` is what somebody nobody has ever measured is
 expected to cost.
 

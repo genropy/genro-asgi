@@ -69,7 +69,6 @@ async def test_setpoint_attributes_delegate_to_policy(make_group):
             "cpu_admission_close_percent": 55.0,
             "cpu_admission_reopen_percent": 30.0,
             "worker_min_life_seconds": 12.0,
-            "reception_reserved_percent": 15.0,
             "new_user_occupancy_percent": 4.0,
             "worker_max_users": 9,
             "user_idle_freeze_minutes": 45.0,
@@ -134,19 +133,17 @@ async def test_decision_binds_policy_snapshot(make_group):
     second = await group.start_worker()
     picture = {first.name: 30.0, second.name: 30.0}
     group.apply_policy(
-        GroupPolicy.from_settings({"reception_reserved_percent": 0.0, "worker_min_life_seconds": 0.0}),
+        GroupPolicy.from_settings({"worker_min_life_seconds": 0.0}),
         [],
     )
     cold = GroupPolicy.from_settings(
         {
-            "reception_reserved_percent": 0.0,
             "worker_min_life_seconds": 0.0,
             "close_occupancy_max_percent": 79.0,
         }
     )
     hot = GroupPolicy.from_settings(
         {
-            "reception_reserved_percent": 0.0,
             "worker_min_life_seconds": 0.0,
             "close_occupancy_max_percent": 10.0,
         }

@@ -394,7 +394,6 @@ class ConfigurationHandler(ConfigHandler):
                 "cpu_offload_percent",
                 "cpu_retirement_quiet_seconds",
                 "worker_min_life_seconds",
-                "reception_reserved_percent",
                 "new_user_occupancy_percent",
                 "worker_max_users",
                 "user_idle_freeze_minutes",

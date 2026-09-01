@@ -364,7 +364,7 @@ class WorkerHandler:
             self.group_handler.get_occupancy_percent(self.worker_snapshot, self)
             + occupancy_percent
         )
-        if projected > self.group_handler.get_worker_cap(self):
+        if projected > self.group_handler.occupancy_max_percent:
             raise NoRoomError(user, f"{self.name} would stand at {projected:.1f}%")
 
     def get_process_cpu_reading(self) -> tuple[float, float] | None:

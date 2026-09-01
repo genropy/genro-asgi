@@ -62,8 +62,7 @@ Example profile:
   "cpu_admission_close_percent": 50,
   "cpu_admission_reopen_percent": 40,
   "cpu_retirement_quiet_seconds": 60,
-  "occupancy_max_percent": 80,
-  "reception_reserved_percent": 0
+  "occupancy_max_percent": 80
 }
 ```
 

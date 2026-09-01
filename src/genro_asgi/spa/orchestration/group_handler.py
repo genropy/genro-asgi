@@ -276,8 +276,6 @@ class GroupHandler:
             (measured, churn 2026-08-28).
         worker_min_life_seconds: a worker is no closure candidate before this
             age — younger, its occupancy measures its own birth, not its work.
-        reception_reserved_percent: what the reception keeps free for the trade
-            only it has; its own placement setpoint is the difference.
         new_user_occupancy_percent: what a user nobody has ever measured is
             expected to cost.
         user_idle_freeze_minutes: the silence, IN MINUTES, past which this group
@@ -312,7 +310,6 @@ class GroupHandler:
         cpu_offload_percent: float | None = None,
         cpu_retirement_quiet_seconds: float = 60.0,
         worker_min_life_seconds: float = 60.0,
-        reception_reserved_percent: float = 50.0,
         new_user_occupancy_percent: float = 5.0,
         worker_max_users: float = math.inf,
         user_idle_freeze_minutes: float = math.inf,
@@ -347,7 +344,6 @@ class GroupHandler:
                 "cpu_offload_percent": cpu_offload_percent,
                 "cpu_retirement_quiet_seconds": cpu_retirement_quiet_seconds,
                 "worker_min_life_seconds": worker_min_life_seconds,
-                "reception_reserved_percent": reception_reserved_percent,
                 "new_user_occupancy_percent": new_user_occupancy_percent,
                 "worker_max_users": None if worker_max_users == math.inf else worker_max_users,
                 "user_idle_freeze_minutes": (
@@ -434,10 +430,6 @@ class GroupHandler:
     @property
     def worker_min_life_seconds(self) -> float:
         return self.policy.worker_min_life_seconds
-
-    @property
-    def reception_reserved_percent(self) -> float:
-        return self.policy.reception_reserved_percent
 
     @property
     def new_user_occupancy_percent(self) -> float:
@@ -680,19 +672,6 @@ class GroupHandler:
             return 0.0
         return 100.0 * min(accounted_bytes / self.worker_memory_ceiling_bytes, 1.0)
 
-    def get_worker_cap(self, worker_handler: WorkerHandler) -> float:
-        """How full a worker of this group takes users up to, in percent.
-
-        Args:
-            worker_handler: the worker being judged.
-
-        Returns:
-            The setpoint, less the reserve when that worker is the reception.
-        """
-        if worker_handler is self.reception:
-            return self.occupancy_max_percent - self.reception_reserved_percent
-        return self.occupancy_max_percent
-
     async def assign_user(self, user: str) -> str:
         """Place a user: the fullest worker that admits him, or one born for him.
 
@@ -857,7 +836,7 @@ class GroupHandler:
             "cpu_temperature_percent": worker_handler.get_cpu_temperature_percent(),
             "occupancy_percent": self.get_occupancy_percent(photo, worker_handler),
             "memory_occupancy_percent": self.get_memory_occupancy_percent(photo),
-            "worker_cap": self.get_worker_cap(worker_handler),
+            "worker_cap": self.occupancy_max_percent,
         }
 
     def _placement_decision_rows(self) -> list[dict[str, Any]]:
