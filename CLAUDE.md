@@ -226,18 +226,26 @@ second road. The journal ties every such birth to its first user with reason
 `cpu_offload_percent` (group setpoint, off by default; requires
 `cpu_grow_percent` and sits above it — rearm < grow < offload) arms
 `GroupHandler.check_cpu_offload`, run at EVERY heartbeat on fresh photos: the
-hottest CPU-closed `running` worker past the threshold cedes ONE active user
-through `freeze_hosted_user` — the least busy of the last interval (no call in
-flight first, then least `recent_service_seconds`, then least
-`recent_call_count`, then name). The source is closed, so his next request is
-placed elsewhere or births capacity (demand-driven); light users leave one per
-beat and the load's owner stays — a single active user is never transferred,
-journaled once as `single_user_overload`. A cession stamps
-`record_cpu_pressure`; standing conditions are journaled once per
-(condition, subject) via a marker on the handler, never every beat. Reason
+hottest CPU-closed `running` worker past the threshold cedes ONE user through
+`freeze_hosted_user`. WHO is judged against the window itself: a MATERIAL
+contributor holds at least half the fair share of the interval's service time
+(`s >= S/(2N)`, S = summed `recent_service_seconds` of the active users, N
+their count) or has a call in flight; negligible activity is never a
+candidate. The cession takes the least busy material contributor WITHOUT
+calls in flight (least `recent_service_seconds`, then least
+`recent_call_count`, then name) — a user mid-call is never transferred, and
+material contributors all busy defer the cession to the next beat. The source
+is closed, so his next request is placed elsewhere or births capacity
+(demand-driven); light contributors leave one per beat and the load's owner
+stays — a single material contributor is never transferred, journaled once as
+`single_user_overload`. A cession stamps `record_cpu_pressure`; standing
+conditions are journaled once per (condition, subject) via a marker on the
+handler, never every beat, and every row carries the numbers that rebuild the
+judgment (CPU, S, N, threshold, active/material/cedible counts). Reason
 codes: `cpu_offload_threshold`, `cpu_offload_user_selected`,
 `cpu_offload_completed`, `cpu_offload_refused`,
-`cpu_offload_no_active_candidate`, `single_user_overload`.
+`cpu_offload_no_active_candidate`, `cpu_offload_deferred_pending_calls`,
+`single_user_overload`.
 
 **The photo counts each user's service (landed 2026-09-01).** Every user row
 carries three counters written by the worker — ``served_call_count`` and

@@ -90,7 +90,7 @@ async def test_below_the_threshold_nobody_is_ceded(make_group, commander):
     group, worker_handler = await offload_group(make_group, commander, ["mario", "lucia"])
     worker_handler.worker_snapshot["cpu_percent"] = 60.0
     declare_service(worker_handler, "mario", seconds=5.0, calls=3)
-    declare_service(worker_handler, "lucia", seconds=0.5, calls=1)
+    declare_service(worker_handler, "lucia", seconds=3.0, calls=1)
 
     await group.check_cpu_offload()
 
@@ -101,7 +101,7 @@ async def test_below_the_threshold_nobody_is_ceded(make_group, commander):
 async def test_with_the_policy_off_the_judge_is_inert(make_group, commander, caplog):
     group, worker_handler = await offload_group(make_group, commander, ["mario", "lucia"])
     declare_service(worker_handler, "mario", seconds=5.0, calls=3)
-    declare_service(worker_handler, "lucia", seconds=0.5, calls=1)
+    declare_service(worker_handler, "lucia", seconds=3.0, calls=1)
     group.apply_policy(
         GroupPolicy.from_settings(group.policy.to_settings() | {"cpu_offload_percent": None}),
         [],
@@ -115,23 +115,37 @@ async def test_with_the_policy_off_the_judge_is_inert(make_group, commander, cap
     assert offload_decisions(caplog) == []
 
 
-async def test_one_beat_cedes_the_least_busy_active_alone(make_group, commander, caplog):
+async def test_one_beat_cedes_the_least_busy_material_alone(make_group, commander, caplog):
     group, worker_handler = await offload_group(
         make_group, commander, ["mario", "lucia", "pia"]
     )
     declare_service(worker_handler, "mario", seconds=5.0, calls=9)
-    declare_service(worker_handler, "lucia", seconds=0.5, calls=2)
+    declare_service(worker_handler, "lucia", seconds=1.5, calls=2)
     declare_service(worker_handler, "pia", seconds=2.0, calls=4)
 
     with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
         await group.check_cpu_offload()
 
+    # S=8.5, N=3, threshold ~1.417: all three material, lucia the least busy.
     assert commander.user_is_frozen("lucia") is True
     assert group.user_worker_map["lucia"] is None
     assert group.user_worker_map["mario"] == worker_handler.name
     assert group.user_worker_map["pia"] == worker_handler.name
-    reasons = [row["reason"] for row in offload_decisions(caplog)]
+    rows = offload_decisions(caplog)
+    reasons = [row["reason"] for row in rows]
     assert reasons == ["cpu_offload_threshold", "cpu_offload_user_selected", "cpu_offload_completed"]
+    # Every row carries the numbers that rebuild the judgment.
+    threshold_row = rows[0]
+    assert threshold_row["numbers"]["cpu_percent"] == 80.0
+    assert threshold_row["numbers"]["window_service_seconds"] == pytest.approx(8.5)
+    assert threshold_row["numbers"]["active_users"] == 3
+    assert threshold_row["numbers"]["material_threshold"] == pytest.approx(8.5 / 6)
+    assert threshold_row["numbers"]["material_contributors"] == 3
+    assert threshold_row["numbers"]["cedible_contributors"] == 3
+    selected_row = rows[1]
+    assert selected_row["numbers"]["recent_service_seconds"] == 1.5
+    assert selected_row["numbers"]["recent_call_count"] == 2
+    assert selected_row["numbers"]["pending_call_count"] == 0
 
 
 async def test_a_call_in_flight_keeps_a_user_from_the_head(make_group, commander):
@@ -149,14 +163,37 @@ async def test_a_call_in_flight_keeps_a_user_from_the_head(make_group, commander
     assert group.user_worker_map["lucia"] == worker_handler.name
 
 
-async def test_all_with_calls_in_flight_the_least_busy_still_leaves(make_group, commander):
+async def test_all_material_busy_defers_and_nobody_is_frozen(make_group, commander, caplog):
     group, worker_handler = await offload_group(make_group, commander, ["mario", "lucia"])
-    declare_service(worker_handler, "mario", seconds=10.0, calls=9, pending=2)
-    declare_service(worker_handler, "lucia", seconds=0.5, calls=1, pending=1)
+    declare_service(worker_handler, "mario", seconds=6.0, calls=5, pending=1)
+    declare_service(worker_handler, "lucia", seconds=4.0, calls=3, pending=1)
 
+    with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
+        await group.check_cpu_offload()
+        await group.check_cpu_offload()
+
+    # Both material, both mid-call: no freeze at all, one deferred row (dedup).
+    assert commander.user_is_frozen("mario") is False
+    assert commander.user_is_frozen("lucia") is False
+    assert group.user_worker_map["lucia"] == worker_handler.name
+    rows = offload_decisions(caplog)
+    assert [row["reason"] for row in rows] == ["cpu_offload_deferred_pending_calls"]
+    assert rows[0]["numbers"]["material_contributors"] == 2
+    assert rows[0]["numbers"]["cedible_contributors"] == 0
+
+
+async def test_the_next_beat_cedes_the_contributor_that_came_free(make_group, commander):
+    group, worker_handler = await offload_group(make_group, commander, ["mario", "lucia"])
+    declare_service(worker_handler, "mario", seconds=6.0, calls=5, pending=1)
+    declare_service(worker_handler, "lucia", seconds=4.0, calls=3, pending=1)
+    await group.check_cpu_offload()
+    assert commander.user_is_frozen("lucia") is False
+
+    declare_service(worker_handler, "lucia", seconds=4.0, calls=3, pending=0)
     await group.check_cpu_offload()
 
     assert commander.user_is_frozen("lucia") is True
+    assert group.user_worker_map["mario"] == worker_handler.name
 
 
 async def test_the_inactive_user_is_no_candidate(make_group, commander, caplog):
@@ -171,6 +208,40 @@ async def test_the_inactive_user_is_no_candidate(make_group, commander, caplog):
     assert commander.user_is_frozen("lucia") is False
     assert commander.user_is_frozen("mario") is False
     assert [row["reason"] for row in offload_decisions(caplog)] == ["single_user_overload"]
+
+
+async def test_negligible_activity_never_makes_a_candidate(make_group, commander, caplog):
+    """Noise-level users are alive but immaterial: the dominant one stays alone."""
+    group, worker_handler = await offload_group(
+        make_group, commander, ["mario", "lucia", "pia"]
+    )
+    declare_service(worker_handler, "mario", seconds=10.0, calls=9)
+    declare_service(worker_handler, "lucia", seconds=0.05, calls=1)
+    declare_service(worker_handler, "pia", seconds=0.05, calls=1)
+
+    with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
+        await group.check_cpu_offload()
+
+    # S=10.1, N=3, threshold ~1.68: only mario is material.
+    assert commander.user_is_frozen("lucia") is False
+    assert commander.user_is_frozen("pia") is False
+    rows = offload_decisions(caplog)
+    assert [row["reason"] for row in rows] == ["single_user_overload"]
+    assert rows[0]["subject"] == "mario"
+    assert rows[0]["numbers"]["active_users"] == 3
+    assert rows[0]["numbers"]["material_contributors"] == 1
+
+
+async def test_exact_equality_with_the_threshold_is_material(make_group, commander):
+    """s == S/(2N) is material: a strict comparison would leave mario alone."""
+    group, worker_handler = await offload_group(make_group, commander, ["mario", "lucia"])
+    declare_service(worker_handler, "mario", seconds=3.0, calls=3)
+    declare_service(worker_handler, "lucia", seconds=1.0, calls=1)
+
+    await group.check_cpu_offload()
+
+    # S=4, N=2, threshold exactly 1.0: lucia is material and the least busy.
+    assert commander.user_is_frozen("lucia") is True
 
 
 # --- the black sheep and the journal's silence -------------------------------
@@ -234,7 +305,7 @@ async def test_a_refused_freeze_releases_the_hold_and_says_so(
         make_group, commander, ["mario", "lucia"], freeze_refused=True
     )
     declare_service(worker_handler, "mario", seconds=5.0, calls=3)
-    declare_service(worker_handler, "lucia", seconds=0.5, calls=1)
+    declare_service(worker_handler, "lucia", seconds=3.0, calls=1)
 
     with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
         await group.check_cpu_offload()
@@ -250,7 +321,7 @@ async def test_the_offloaded_user_cannot_return_to_the_closed_worker(
 ):
     group, worker_handler = await offload_group(make_group, commander, ["mario", "lucia"])
     declare_service(worker_handler, "mario", seconds=5.0, calls=3)
-    declare_service(worker_handler, "lucia", seconds=0.5, calls=1)
+    declare_service(worker_handler, "lucia", seconds=3.0, calls=1)
     await group.check_cpu_offload()
     assert group.user_worker_map["lucia"] is None
 
@@ -263,7 +334,7 @@ async def test_the_offloaded_user_cannot_return_to_the_closed_worker(
 async def test_the_hottest_of_the_closed_workers_is_the_target(make_group, commander):
     group, first = await offload_group(make_group, commander, ["mario", "lucia"])
     declare_service(first, "mario", seconds=5.0, calls=3)
-    declare_service(first, "lucia", seconds=0.5, calls=1)
+    declare_service(first, "lucia", seconds=3.0, calls=1)
     second = await group.start_worker()
     for user in ("carla", "nino"):
         known_at_the_vertex(commander, f"c_{user}", user)
@@ -276,7 +347,7 @@ async def test_the_hottest_of_the_closed_workers_is_the_target(make_group, comma
         user: {"transfer_flag": None, "item": {"state": "active"}} for user in ("carla", "nino")
     }
     declare_service(second, "carla", seconds=4.0, calls=2)
-    declare_service(second, "nino", seconds=1.0, calls=1)
+    declare_service(second, "nino", seconds=2.0, calls=1)
 
     await group.check_cpu_offload()
 
@@ -290,7 +361,7 @@ async def test_a_cession_stamps_the_cpu_pressure_clock(make_group, commander):
     while a worker is CPU-closed; the stamp keeps the quiet after it true."""
     group, worker_handler = await offload_group(make_group, commander, ["mario", "lucia"])
     declare_service(worker_handler, "mario", seconds=5.0, calls=3)
-    declare_service(worker_handler, "lucia", seconds=0.5, calls=1)
+    declare_service(worker_handler, "lucia", seconds=3.0, calls=1)
     group._cpu_pressure_monotonic = None
 
     await group.check_cpu_offload()
@@ -304,7 +375,7 @@ async def test_a_cession_stamps_the_cpu_pressure_clock(make_group, commander):
 async def test_the_offload_threshold_applies_live(make_group, commander):
     group, worker_handler = await offload_group(make_group, commander, ["mario", "lucia"])
     declare_service(worker_handler, "mario", seconds=5.0, calls=3)
-    declare_service(worker_handler, "lucia", seconds=0.5, calls=1)
+    declare_service(worker_handler, "lucia", seconds=3.0, calls=1)
     group.apply_policy(
         GroupPolicy.from_settings(group.policy.to_settings() | {"cpu_offload_percent": 90.0}),
         [],

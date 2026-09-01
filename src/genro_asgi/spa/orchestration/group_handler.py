@@ -121,12 +121,17 @@ reopen included. After it, the retirement is exactly what it always was.
 ``cpu_offload_percent`` set — above ``cpu_grow_percent``, since the offload
 stands on the admission closure — ``check_cpu_offload`` runs at EVERY beat on
 the fresh photos: the hottest CPU-closed ``running`` worker past the threshold
-cedes ONE active user, the least busy of the last interval (no call in flight
-first, then least ``recent_service_seconds``, then least ``recent_call_count``,
-then name), through the same ``freeze_hosted_user`` road as every departure.
-The source is closed, so his next request is placed elsewhere or births the
-capacity it needs; the light users leave one per beat and the heavy one stays —
-a single active user is never transferred, journaled once as
+cedes ONE user through the same ``freeze_hosted_user`` road as every departure.
+WHO is judged against the window itself: a MATERIAL contributor holds at least
+half the fair share of the interval's service time (``s >= S/(2N)``) or has a
+call in flight; negligible activity is never a candidate. The cession takes
+the least busy material contributor WITHOUT calls in flight (least
+``recent_service_seconds``, then least ``recent_call_count``, then name) — a
+user mid-call is never transferred, and material contributors all busy defer
+the cession to the next beat (``cpu_offload_deferred_pending_calls``). The
+source is closed, so his next request is placed elsewhere or births the
+capacity it needs; the light contributors leave one per beat and the heavy one
+stays — a single material contributor is never transferred, journaled once as
 ``single_user_overload``, the worker de facto dedicated to him. A cession
 stamps the CPU pressure clock; the standing conditions are journaled once per
 (condition, subject), never every beat.
@@ -1046,31 +1051,46 @@ class GroupHandler:
 
     @every(1)
     async def check_cpu_offload(self) -> None:
-        """Slim ONE CPU-hot worker by one user: the least busy of its actives.
+        """Slim ONE CPU-hot worker by one user: the least busy MATERIAL contributor.
 
         Acts on the group at EVERY beat, on the freshest photos: among the
         living ``running`` workers already CPU-closed and past
-        ``cpu_offload_percent``, the hottest one cedes its least busy active
-        user through ``freeze_hosted_user`` — the ordered departure, timeout
-        and hold release included. One cession per beat and per group; the
-        next beat re-reads everything, so nothing is planned ahead.
+        ``cpu_offload_percent``, the hottest one cedes one user through
+        ``freeze_hosted_user`` — the ordered departure, timeout and hold
+        release included. One cession per beat and per group; the next beat
+        re-reads everything, so nothing is planned ahead.
 
-        The worker being closed is what keeps the user from coming back: his
-        next request goes through the ordinary placement, which skips
+        WHO counts is decided against the window itself, with no absolute
+        threshold: over the active users (recent work or a call in flight),
+        ``S`` their summed ``recent_service_seconds`` and ``N`` their count, a
+        MATERIAL contributor is one with ``s >= S/(2N)`` — half the fair share
+        of the window, the full share would disqualify anybody under the mean —
+        or with a call in flight, which is load present whatever its delta
+        reads. Negligible activity is never a candidate: it belongs to the
+        idle-freeze judgment. The cession takes the least busy material
+        contributor WITHOUT calls in flight (least ``recent_service_seconds``,
+        then least ``recent_call_count``, then name): a user mid-call is never
+        transferred — material contributors all busy means the cession is
+        DEFERRED to the next beat, journaled as
+        ``cpu_offload_deferred_pending_calls``, and no freeze is ordered.
+
+        The worker being closed is what keeps the ceded user from coming back:
+        his next request goes through the ordinary placement, which skips
         CPU-closed workers and, when no open one admits him, births the
         capacity on the spot — the demand-driven road. Progressively the light
-        users leave and the one generating the load stays: a single active
-        user is never transferred, the condition is journaled as
-        ``single_user_overload`` and the worker is de facto dedicated to him.
+        contributors leave and the one generating the load stays: a single
+        material contributor is never transferred, the condition is journaled
+        as ``single_user_overload`` and the worker is de facto dedicated to him.
 
-        The two standing conditions — one active user, no active candidate —
-        would repeat every 5 seconds for as long as they hold, so they are
-        journaled ONCE per (condition, subject) through the marker on the
-        handler, cleared when the worker leaves the offload picture. An
-        actual cession is an action, journaled every time, and it stamps
-        ``record_cpu_pressure``: not to shield the destination — the
-        retirement is already suspended while a worker is CPU-closed — but so
-        the pressure history and the quiet after it stay coherent.
+        The three standing conditions — one material contributor, none at all,
+        all of them mid-call — would repeat every 5 seconds for as long as
+        they hold, so they are journaled ONCE per (condition, subject) through
+        the marker on the handler, cleared when the worker leaves the offload
+        picture. An actual cession is an action, journaled every time with the
+        numbers that rebuild the judgment (S, N, the threshold, the counts),
+        and it stamps ``record_cpu_pressure``: not to shield the destination —
+        the retirement is already suspended while a worker is CPU-closed — but
+        so the pressure history and the quiet after it stay coherent.
         """
         policy = self.policy
         if policy.cpu_offload_percent is None:
@@ -1092,7 +1112,38 @@ class GroupHandler:
             over,
             key=lambda handler: (handler.worker_snapshot or {}).get("cpu_percent") or 0.0,
         )
-        candidates = self._offload_candidates(target)
+        actives = self._active_user_rows(target)
+        window_service_seconds = sum(
+            item.get("recent_service_seconds", 0.0) for _, item in actives
+        )
+        material_threshold = (
+            window_service_seconds / (2 * len(actives)) if actives else 0.0
+        )
+        # Material ⟺ s >= S/(2N) or a call in flight. A window that measured
+        # no work at all (S == 0) has no material service contributor: the
+        # degenerate threshold of 0 would call everybody material, so there
+        # the calls in flight are the only material fact.
+        material = [
+            (user, item)
+            for user, item in actives
+            if (
+                window_service_seconds > 0.0
+                and item.get("recent_service_seconds", 0.0) >= material_threshold
+            )
+            or item.get("pending_call_count", 0)
+        ]
+        cedible = sorted(
+            (
+                (user, item)
+                for user, item in material
+                if not item.get("pending_call_count", 0)
+            ),
+            key=lambda pair: (
+                pair[1].get("recent_service_seconds", 0.0),
+                pair[1].get("recent_call_count", 0),
+                pair[0],
+            ),
+        )
         numbers = {
             "cpu_percent": (target.worker_snapshot or {}).get("cpu_percent"),
             "cpu_offload_percent": policy.cpu_offload_percent,
@@ -1101,21 +1152,30 @@ class GroupHandler:
             "resident_users": sum(
                 1 for name in self.user_worker_map.values() if name == target.name
             ),
-            "active_candidates": [user for user, _ in candidates],
+            "window_service_seconds": window_service_seconds,
+            "active_users": len(actives),
+            "material_threshold": material_threshold,
+            "material_contributors": len(material),
+            "cedible_contributors": len(cedible),
             "workers": len(self.living_workers),
         }
-        if not candidates:
+        if not material:
             self._note_offload_condition(
                 target, "cpu_offload_no_active_candidate", None, numbers
             )
             return
-        if len(candidates) == 1:
+        if len(material) == 1:
             self._note_offload_condition(
-                target, "single_user_overload", candidates[0][0], numbers
+                target, "single_user_overload", material[0][0], numbers
+            )
+            return
+        if not cedible:
+            self._note_offload_condition(
+                target, "cpu_offload_deferred_pending_calls", None, numbers
             )
             return
         target.cpu_offload_condition = None
-        user, item = candidates[0]
+        user, item = cedible[0]
         if not self._policy_held(policy, "cpu_offload", user):
             return
         self.record_cpu_pressure()
@@ -1134,7 +1194,8 @@ class GroupHandler:
             user,
             reason="cpu_offload_user_selected",
             subject=user,
-            numbers={
+            numbers=numbers
+            | {
                 "recent_service_seconds": item.get("recent_service_seconds", 0.0),
                 "recent_call_count": item.get("recent_call_count", 0),
                 "pending_call_count": item.get("pending_call_count", 0),
@@ -1150,46 +1211,32 @@ class GroupHandler:
             reason="cpu_offload_completed" if frozen else "cpu_offload_refused",
         )
 
-    def _offload_candidates(
+    def _active_user_rows(
         self, worker_handler: WorkerHandler
     ) -> list[tuple[str, dict[str, Any]]]:
-        """The active users of this worker, least busy first.
+        """The users of this worker with any activity in the last interval.
 
         Args:
             worker_handler: the CPU-hot worker being slimmed.
 
         Returns:
-            ``(user, photo item)`` pairs, ordered as the cession wants them:
-            users with no call in flight first — a call just begun reads zero
-            recent seconds and must not put its owner at the head — then by
-            recent service seconds, then by recent call count, then by name.
-
-        Active means judged from the deltas: at least one call completed in
-        the interval, or one in flight right now. Whoever shows neither
-        belongs to the idle-freeze judgment, not to this one. Only users this
-        group still places on that worker are candidates, so a photo that has
-        not caught up with a departure names nobody.
+            ``(user, photo item)`` pairs: state ``active``, still placed here,
+            and showing recent work or a call in flight. Whoever shows neither
+            belongs to the idle-freeze judgment, not to this one; a photo that
+            has not caught up with a departure names nobody.
         """
         photo = worker_handler.worker_snapshot or {}
-        candidates = []
-        for user, row in (photo.get("users") or {}).items():
-            item = row["item"]
-            if item["state"] != "active":
-                continue
-            if self.user_worker_map.get(user) != worker_handler.name:
-                continue
-            if not item.get("recent_call_count", 0) and not item.get("pending_call_count", 0):
-                continue
-            candidates.append((user, item))
-        candidates.sort(
-            key=lambda pair: (
-                1 if pair[1].get("pending_call_count", 0) else 0,
-                pair[1].get("recent_service_seconds", 0.0),
-                pair[1].get("recent_call_count", 0),
-                pair[0],
+        return [
+            (user, row["item"])
+            for user, row in (photo.get("users") or {}).items()
+            if row["item"]["state"] == "active"
+            and self.user_worker_map.get(user) == worker_handler.name
+            and (
+                row["item"].get("recent_service_seconds", 0.0)
+                or row["item"].get("recent_call_count", 0)
+                or row["item"].get("pending_call_count", 0)
             )
-        )
-        return candidates
+        ]
 
     def _note_offload_condition(
         self,

@@ -218,7 +218,7 @@ class SpaApplicationGrammar(ApplicationGrammar):
         close_occupancy_max_percent: float | BagResolver = None,
         cpu_grow_percent: float | BagResolver = None,
         cpu_grow_rearm_percent: float | BagResolver = None,
-        cpu_offload_percent: float | BagResolver = None,
+        cpu_offload_percent: float | BagResolver | None = None,
         cpu_retirement_quiet_seconds: float | BagResolver | None = None,
         worker_min_life_seconds: float | BagResolver = None,
         reception_reserved_percent: float | BagResolver = None,
