@@ -172,7 +172,7 @@ front declared without either does not boot (`FatalBootError` →
 `lifespan.startup.failed`) — wanting no pool means declaring no spa front. At
 boot `boot_group_settings` composes `defaults ⊕ recipe_settings ⊕ profile ⊕ env_settings` through
 `GroupPolicy.from_settings` — the frozen dataclass in
-`spa/orchestration/group_policy.py` that holds the 16 setpoints, IS the
+`spa/orchestration/group_policy.py` that holds the 14 setpoints, IS the
 validation and collects every violation — BEFORE the vertex is built; the recipe
 and env levels stay separate dicts, so every later apply recomposes from them.
 A missing or invalid profile raises `FatalBootError` (`lifespan.py`): the one

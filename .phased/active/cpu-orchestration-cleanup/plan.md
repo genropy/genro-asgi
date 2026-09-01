@@ -93,7 +93,11 @@ Prepare the CPU orchestration rework on `feat/cpu-orchestration`: one CPU source
     4. `ruff check src/ tests/`, `pytest tests/ -q`.
   - Done: `git grep -nE 'reception_reserved_percent|get_worker_cap' -- src tests docs internals CLAUDE.md` prints nothing; `pytest tests/orchestration/test_orchestration_no_reception_reserve.py tests/test_group_policy.py tests/orchestration/test_orchestration_placement.py tests/orchestration/test_orchestration_apply.py -q` passes; the in-tree copy of the phase-4 contract test is byte-identical to the plan copy; `ruff check src/ tests/` zero errors; `pytest tests/ -q` has no failure that is not also failing on the parent commit.
 
-- [ ] **Phase 5**: Coherence review and auto-fix (final, mandatory)
+- [x] **Phase 5**: Coherence review and auto-fix (final, mandatory)
+  > Done: `review.md` written with its three sections — two mechanical corrections auto-fixed (the "16 setpoints" count in `CLAUDE.md` and the profiles README, now 14), nine stale sentences flagged for the owner, and the checks that found nothing recorded. `ruff check` clean on the file set, full suite 1781 passed.
+  > Files: .phased/active/cpu-orchestration-cleanup/review.md, .phased/active/cpu-orchestration-cleanup/notes.md, .phased/active/cpu-orchestration-cleanup/verify.md, CLAUDE.md, internals/10_server/020_applications/configuration_profiles/README.md
+  > Review: prose describing a deleted mechanism was reported and not rewritten — the phase's Decisions route that category to `review.md`, and the sentences live in the areas the next plan reworks. The phase-1 in-tree contract test still diverges from its plan copy (a trailing comment the Phase 2 rename falsified); a contract test is read-only here, so it was flagged, not edited.
+  > Verify: now — read `review.md` → *Flagged for human*: nine docstrings and comments still describe the periodic growth, the reception's reserve, `/proc`/Linux or the `rearm` name. Each rewrite is the owner's wording, and each sits in code the next plan reopens.
   - Pattern reference: same as Phases 1..4 (cross-check against them)
   - Files: only the files written by Phases 1..4 (collect them from their `Files:` fields). Never touch a pre-existing file they did not modify.
   - Decisions:

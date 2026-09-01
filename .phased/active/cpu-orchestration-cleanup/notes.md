@@ -38,3 +38,26 @@ Decision register of the rework: `temp/scheda_ragioni_cpu_orchestration_2026-09-
   is declared as a grammar kwarg on `commander` in `spa_app.py` but is absent
   from the key list in `config/handler.py:commander_kwargs`, so a recipe that
   declares it is silently ignored. Left as found — out of this phase's scope.
+
+## Phase 5
+
+- Stale prose about a deleted mechanism was REPORTED, not rewritten. The
+  phase's Decisions list two categories to auto-fix (tool-fixable lint,
+  formatting, trivially mechanical) and then say separately to report in
+  `review.md` every docstring or `CLAUDE.md` sentence still describing the
+  reserve, the periodic growth, the reception's reserve, `/proc` or the old
+  threshold names. That third instruction says report, not fix, and the
+  sentences sit in the areas the next (interactive) plan reworks — rewriting
+  them here would be written twice and read once. Nine such sentences are in
+  `review.md` under *Flagged for human*, each with the line and a suggestion.
+- The two counts corrected in `CLAUDE.md` and the profiles README ("16
+  setpoints" → 14) were treated as mechanical instead: the number is verified
+  by counting `GroupPolicy.SETPOINTS`, it describes no mechanism, and Phases 3
+  and 4 falsified it in files they owned.
+- `ruff format` was NOT run. `ruff format --check src/ tests/` would reformat
+  102 of 219 files repo-wide, so the project's gate is `ruff check` alone;
+  formatting the phase's file set would have produced a diff belonging to
+  nobody's decision.
+- The plan's Notes expect `test_orchestration_apply.py::test_no_admission_window_on_apply`
+  to fail on the parent commit. It does not fail here — the suite is fully
+  green (1781) before and after this phase, as Phase 1's note already recorded.
