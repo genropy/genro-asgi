@@ -172,6 +172,10 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
         self.group_envelope_handler = group_envelope_handler
         self._last_cpu: tuple[float, float] | None = None
         self._cpu_percent = 0.0
+        #: The previous photo's cumulative service counters, per user:
+        #: ``(service_seconds, served_call_count)``. Rebuilt at every photo, so
+        #: a user the photo no longer carries costs no memory here.
+        self._user_service_read: dict[str, tuple[float, int]] = {}
 
     def __call__(self, envelope: dict[str, Any]) -> dict[str, Any]:
         """Work on the envelope for this handler, then hand it up; returns what goes down."""
@@ -237,6 +241,13 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
         is read over less than ``CPU_WINDOW_MIN_SECONDS`` of wall clock:
         photos closer than that carry the standing value forward. Policies
         to tune by trials, not by taste.
+
+        The user rows get the same treatment: their cumulative service
+        counters become ``recent_call_count`` and ``recent_service_seconds``,
+        the work done since the previous photo. A user first seen reads 0 —
+        nothing to compare against, like the first CPU photo — and a counter
+        that went backwards (a row reborn after a freeze) is clamped to 0
+        rather than invented negative.
         """
         cpu_seconds = photo.get("cpu_seconds")
         now = time.monotonic()
@@ -252,8 +263,34 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
                     self._cpu_percent += CPU_SMOOTHING_FACTOR * (sample - self._cpu_percent)
                     self._last_cpu = (cpu_seconds, now)
                 photo["cpu_percent"] = self._cpu_percent
+        self._derive_user_service(photo)
         self.worker_handler.worker_snapshot = photo
         self._signal_cpu_crossing(photo)
+
+    def _derive_user_service(self, photo: dict[str, Any]) -> None:
+        """Turn each user row's cumulative counters into this interval's deltas.
+
+        Args:
+            photo: the photo being filed; its user items gain
+                ``recent_call_count`` and ``recent_service_seconds``.
+
+        Acts on ``_user_service_read``, rebuilt from this photo alone: whoever
+        left the process stops costing memory here the moment his row is gone.
+        """
+        previous_reads = self._user_service_read
+        self._user_service_read = {}
+        for user, row in (photo.get("users") or {}).items():
+            item = row.get("item") or {}
+            service_seconds = item.get("service_seconds")
+            served_call_count = item.get("served_call_count")
+            if service_seconds is None or served_call_count is None:
+                continue
+            read_seconds, read_count = previous_reads.get(
+                user, (service_seconds, served_call_count)
+            )
+            item["recent_service_seconds"] = max(0.0, service_seconds - read_seconds)
+            item["recent_call_count"] = max(0, served_call_count - read_count)
+            self._user_service_read[user] = (service_seconds, served_call_count)
 
     def _signal_cpu_crossing(self, photo: dict[str, Any]) -> None:
         """Ring the group's wake when this photo crosses a CPU admission threshold.

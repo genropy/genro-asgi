@@ -646,7 +646,13 @@ class SpaWorker:
             clocks, and one pair per user — his projected item and the
             ``transfer_flag`` the last photo decided, ``None`` when he is going
             nowhere. Scalars only: the stores and the working fields are the
-            application's business, never the observer's.
+            application's business, never the observer's. Each user row carries
+            his cumulative service counters — ``served_call_count``,
+            ``service_seconds``, ``pending_call_count`` — raw readings the
+            envelope layer turns into per-interval deltas, exactly as
+            ``cpu_seconds`` becomes ``cpu_percent`` there. The counters live in
+            the register item and never reach a frozen parcel: the freeze
+            persists the store and the connections, not the row itself.
         """
         with self.dispatch_lock:
             return {
@@ -668,7 +674,7 @@ class SpaWorker:
                 },
                 "users": {
                     user: {
-                        "item": self._user_row(item),
+                        "item": self._user_row(user, item),
                         "transfer_flag": self._transfer_flags.get(user),
                     }
                     for user, item in self._get_register_rows(self.user_register)
@@ -2486,10 +2492,17 @@ class SpaWorker:
         try:
             await self._resolve_row(user, cid, payload)
             seam = WsgiSeam(self.wsgi_app)
-            served = await self._run_in_pool(
-                self.traffic_pool,
-                functools.partial(self._serve_on_thread, seam, payload),
-            )
+            service_started = time.monotonic()
+            try:
+                served = await self._run_in_pool(
+                    self.traffic_pool,
+                    functools.partial(self._serve_on_thread, seam, payload),
+                )
+            finally:
+                # Counted whatever the stitching did: a call that failed or ran
+                # long is exactly the one the measure must not lose.
+                if user is not None:
+                    self._record_service(user, time.monotonic() - service_started)
             return served
         finally:
             if user is not None:
@@ -2527,6 +2540,24 @@ class SpaWorker:
         await self.adopt_connection(user, cid)
         self._stamp_request(user, cid)
 
+    def _record_service(self, user: str, seconds: float) -> None:
+        """Add one served call to the user's cumulative counters.
+
+        Args:
+            user: whom the call belonged to.
+            seconds: how long the stitching held a traffic thread for it.
+
+        Acts on his register item: ``served_call_count`` and ``service_seconds``
+        grow monotonically, raw readings for the envelope layer's deltas. A user
+        whose row is gone — dropped mid-call — is counted nowhere, silently.
+        """
+        with self.dispatch_lock:
+            item = self.user_register.get(user)
+            if item is None:
+                return
+            item["served_call_count"] = item.get("served_call_count", 0) + 1
+            item["service_seconds"] = item.get("service_seconds", 0.0) + seconds
+
     def _stamp_request(self, user: str, cid: str) -> None:
         """Stamp the user a request came in for, and his connection under it.
 
@@ -2552,11 +2583,24 @@ class SpaWorker:
                 item[clock] = now
         return now
 
-    def _user_row(self, item: dict[str, Any]) -> dict[str, Any]:
-        """One user item projected for the photo: his state, his clocks, his size."""
+    def _user_row(self, user: str, item: dict[str, Any]) -> dict[str, Any]:
+        """One user item projected for the photo: state, clocks, service counters.
+
+        Args:
+            user: whose row it is — the pendings are keyed by him, not by the item.
+            item: his user register item.
+
+        Returns:
+            The scalar projection: his state, his connection count, his three
+            clocks, and the three service counters — the two cumulatives the
+            calls of his wrote (0 before his first), plus how many are open now.
+        """
         row: dict[str, Any] = {
             "state": item["state"],
             "connection_count": len(item["connections"]),
+            "served_call_count": item.get("served_call_count", 0),
+            "service_seconds": item.get("service_seconds", 0.0),
+            "pending_call_count": self._pendings.get(user, 0),
         }
         row.update({clock: item[clock] for clock in CLOCK_NAMES})
         return row
