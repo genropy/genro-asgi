@@ -15,3 +15,26 @@ Decision register of the rework: `temp/scheda_ragioni_cpu_orchestration_2026-09-
   `AssignmentRefused` after the fallback also failed, and `check_occupancy` lifts it
   when `_may_grow` is true again. Same reader as today: `SpaCommander.serve_request`
   refuses the anonymous stranger while the group is saturated.
+
+## Phase 1
+
+- The baseline was red on arrival for an environment reason, not a code one:
+  `genro-asgi` 0.37.0 was installed non-editable in the interpreter, so the
+  suite imported `site-packages/genro_asgi` instead of this worktree's `src/`
+  (63 failures). `pip install -e . --no-deps` — the install the phase
+  prescribes anyway — restored the intended baseline: 1769 passed, including
+  `test_no_admission_window_on_apply`, which the plan's Notes expected to fail
+  on macOS. It does not.
+- `tests/orchestration/test_orchestration_m4_e2e.py` was not in the phase's
+  `Files:` and had to be touched. Reading the CPU clock through psutil makes
+  the thermometer live on macOS too, and `get_occupancy_percent` takes the max
+  of memory and CPU: a freshly forked worker under the e2e load then refuses
+  placement and the front answers 503. The two stories are about identity,
+  placement and deaths; their `server` fixture already neutralises the periodic
+  judges, so it now also patches `WorkerHandler.get_process_cpu_reading` to
+  return None. The tests were green on macOS only because the platform had no
+  CPU source — they would have failed on Linux before this phase.
+- The recipe route was tried first and rejected: `cpu_temperature_sample_seconds`
+  is declared as a grammar kwarg on `commander` in `spa_app.py` but is absent
+  from the key list in `config/handler.py:commander_kwargs`, so a recipe that
+  declares it is silently ignored. Left as found — out of this phase's scope.

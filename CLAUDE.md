@@ -225,8 +225,8 @@ second road. The journal ties every such birth to its first user with reason
 `new_worker_created_for_placement`.
 
 **Worker CPU temperature is a separate measurement channel (landed
-2026-09-01).** One commander-side task reads each Linux worker's cumulative
-process CPU clock at `cpu_temperature_sample_seconds` (100 ms by default), and
+2026-09-01).** One commander-side task reads each worker's cumulative
+process CPU clock through psutil at `cpu_temperature_sample_seconds` (100 ms by default), and
 derives the share of one core burned over the real interval. It sends no worker
 RPC and writes no worker photo: the pool census exposes the temperature, sample
 width and age alongside each worker. The sampling pass reconciles admission;
@@ -297,4 +297,4 @@ commits, still to be entered in the register). Decision registers:
 
 **All general policies are inherited from the parent document: [meta-genro-modules CLAUDE.md](https://github.com/softwellsrl/meta-genro-modules/blob/main/CLAUDE.md)**
 
-**Last Updated**: 2026-08-29
+**Last Updated**: 2026-09-01

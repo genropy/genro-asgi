@@ -82,6 +82,7 @@ import pytest
 from genro_asgi import AsgiServer
 from genro_asgi.applications.spa_app import SPA_CONNECTION_ID_COOKIE
 from genro_asgi.spa.orchestration import FreezeHandler, GroupHandler
+from genro_asgi.spa.orchestration.worker_handler import WorkerHandler
 from genro_asgi.spa.orchestration.spa_commander import GUEST_PREFIX
 
 from ..conftest import LifespanRunner, ask_app, get_answer_header
@@ -298,6 +299,10 @@ async def server(story_root, monkeypatch):
     """The server of the recipe, up through its own lifespan and down after."""
     # The beat stays alive; only the reading of the SHAPE is taken out of its
     # hands, so the two chapters that need a shape step ask for it themselves.
+    # The thermometer reads nothing either: this story is about identity,
+    # placement and deaths, and the real CPU of a freshly forked worker is not
+    # part of it.
+    monkeypatch.setattr(WorkerHandler, "get_process_cpu_reading", lambda self: None)
     monkeypatch.setattr(GroupHandler.check_occupancy, "every_beats", 10_000)
     monkeypatch.setattr(GroupHandler.check_user_activity, "every_beats", 10_000)
     asgi_server = AsgiServer(config=story_root / "pool_config.py")

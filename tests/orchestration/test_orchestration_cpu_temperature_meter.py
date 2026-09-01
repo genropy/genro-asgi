@@ -14,8 +14,8 @@
 
 """The commander-side CPU thermometer: cheap, observation-only process readings.
 
-Implementation tests.  The meter reads the kernel's cumulative process clock;
-two readings make one temperature.  It never asks the worker for a photo and
+Implementation tests.  The meter reads the process's cumulative CPU clock
+through psutil; two readings make one temperature.  It never asks the worker for a photo and
 none of its fields is consumed by orchestration.
 """
 
@@ -37,23 +37,10 @@ from .test_orchestration_group_handler import make_group  # noqa: F401
 
 
 class ProcessDouble:
-    """A live process identity for a handler whose kernel row is under test."""
+    """A live process identity for a handler whose CPU clock is under test."""
 
     def __init__(self, pid: int) -> None:
         self.pid = pid
-
-
-def write_process_stat(root, pid: int, *, user_ticks: int, system_ticks: int, born: int) -> None:
-    """Write the fields the meter reads, including a hostile process name."""
-    fields = ["S", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0"]
-    fields.extend([str(user_ticks), str(system_ticks)])
-    fields.extend(["0"] * 6)
-    fields.append(str(born))
-    folder = root / str(pid)
-    folder.mkdir(parents=True, exist_ok=True)
-    (folder / "stat").write_text(
-        f"{pid} (worker ) with spaces) {' '.join(fields)}\n", encoding="ascii"
-    )
 
 
 def handler_double() -> WorkerHandler:
@@ -72,15 +59,6 @@ def handler_double() -> WorkerHandler:
     handler.state = "running"
     handler.worker_snapshot = {"cpu_percent": 7.0}
     return handler
-
-
-def test_the_kernel_clock_is_read_by_pid_even_when_comm_has_parentheses(tmp_path, monkeypatch):
-    handler = handler_double()
-    write_process_stat(tmp_path, 1234, user_ticks=120, system_ticks=30, born=900)
-    monkeypatch.setattr(worker_handler_module, "PROCESS_STAT_ROOT", tmp_path)
-    monkeypatch.setattr(worker_handler_module, "PROCESS_CLOCK_TICKS", 100)
-
-    assert handler.get_process_cpu_reading() == (900, 1.5)
 
 
 def test_two_readings_make_separate_temperature_telemetry():

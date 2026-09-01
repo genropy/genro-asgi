@@ -12,7 +12,10 @@ Must not break: the journal (`log_order` / `log_decision`) keeps every existing 
 Prepare the CPU orchestration rework on `feat/cpu-orchestration`: one CPU source on every platform (psutil), setpoint names that say what they do, and no mechanism left that births a worker before a user asks for it or treats the reception as a special case. Every phase removes readers before it removes the thing they read; the decisive rework (filter, gate, retirement) is the next plan and is NOT in scope here.
 
 ## Work Plan
-- [ ] **Phase 1**: Read the worker CPU clock through psutil on every platform
+- [x] **Phase 1**: Read the worker CPU clock through psutil on every platform
+  > Done: `get_process_cpu_reading` reads `(create_time, cpu seconds)` through a per-pid cached `psutil.Process` probe; the `/proc/<pid>/stat` parser and its two constants are gone; `psutil>=6.0` is a manifest dependency.
+  > Files: pyproject.toml, src/genro_asgi/spa/orchestration/worker_handler.py, tests/orchestration/test_orchestration_cpu_meter_psutil.py, tests/orchestration/test_orchestration_cpu_temperature_meter.py, tests/orchestration/test_orchestration_m4_e2e.py, CLAUDE.md, .phased/active/cpu-orchestration-cleanup/notes.md
+  > Review: `cpu_temperature_sample_seconds` is a grammar kwarg on `commander` that `config/handler.py:commander_kwargs` never reads, so a recipe declaring it is silently ignored. Found while fixing the m4 e2e stories; left as found.
   - Pattern reference: `src/genro_asgi/spa/orchestration/worker_handler.py:get_process_cpu_reading` (the function being replaced; keep its contract), `tests/orchestration/test_orchestration_cpu_temperature_meter.py:test_a_reused_pid_starts_a_new_measurement_instead_of_inventing_cpu` (the test style for the meter)
   - Files: `pyproject.toml`, `src/genro_asgi/spa/orchestration/worker_handler.py`, `tests/orchestration/test_orchestration_cpu_temperature_meter.py`, `CLAUDE.md`
   - Decisions:

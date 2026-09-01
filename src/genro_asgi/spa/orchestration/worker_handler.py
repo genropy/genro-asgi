@@ -76,7 +76,8 @@ one holding none of it.
 process sent — filed by its own layer of the chain from whatever envelope carried
 it, so a live process has one from its very presentation: the gauges the judge
 reads are all in there EXCEPT CPU: the commander reads this process's cumulative
-kernel clock through the handler and keeps the two-reading anchor here. That
+kernel clock through the handler, through psutil, and keeps the two-reading
+anchor here. That
 temperature travels on no envelope. Aggregate counters still belong to the
 Commander, which is also the one that decides the orders worth counting.
 
@@ -106,6 +107,8 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+
+import psutil
 
 from .envelope_handler import WorkerEnvelopeHandler
 from .exceptions import (
@@ -170,13 +173,6 @@ PROCESS_PING_TIMEOUT = 10.0
 # How often the wait for an OS death re-reads the process: nothing signals that,
 # so it polls. The wait for the end of the wire does not — that one is a future.
 WAIT_POLL_INTERVAL = 0.05
-
-#: Linux's process table: the commander reads one worker's cumulative CPU clock
-#: here without asking that worker to build or send a full photo.
-PROCESS_STAT_ROOT = Path("/proc")
-
-#: The unit of the cumulative CPU fields in ``/proc/<pid>/stat``.
-PROCESS_CLOCK_TICKS = os.sysconf("SC_CLK_TCK")
 
 #: A temperature older than three intended samples is unavailable. One second
 #: is the floor, so a brief event-loop delay cannot withdraw a healthy gauge.
@@ -272,7 +268,8 @@ class WorkerHandler:
         #: The last lightweight kernel reading as ``(process birth, cpu seconds,
         #: sample instant)``. The birth distinguishes a live worker from an
         #: unrelated process that later reused its pid.
-        self._cpu_meter_reading: tuple[int, float, float] | None = None
+        self._process_probe: psutil.Process | None = None
+        self._cpu_meter_reading: tuple[float, float, float] | None = None
         #: The worker's real CPU share over the last meter interval. None until
         #: two readings of the same process exist; the full photo remains the
         #: portable fallback on platforms without Linux's process table.
@@ -370,33 +367,28 @@ class WorkerHandler:
         if projected > self.group_handler.get_worker_cap(self):
             raise NoRoomError(user, f"{self.name} would stand at {projected:.1f}%")
 
-    def get_process_cpu_reading(self) -> tuple[int, float] | None:
-        """Read this worker's process birth and cumulative CPU seconds on Linux.
+    def get_process_cpu_reading(self) -> tuple[float, float] | None:
+        """Read this worker's process birth and cumulative CPU seconds through psutil.
 
         Returns:
-            ``(start ticks, cpu seconds)`` for the pid this handler owns, or
-            None when the process table is unavailable or the row is invalid.
+            ``(create time, cpu seconds)`` for the pid this handler owns, or
+            None when there is no process or psutil cannot see it.
 
-        The process name in ``stat`` may contain spaces and parentheses, so the
-        scalar fields begin after its LAST closing parenthesis. No command is
-        spawned and no message is sent to the worker.
+        The ``psutil.Process`` probe is built once per pid and reused. No
+        command is spawned and no message is sent to the worker.
         """
         if self.process is None:
             return None
         try:
-            stat = (PROCESS_STAT_ROOT / str(self.process.pid) / "stat").read_text(
-                encoding="ascii"
-            )
-            fields = stat[stat.rindex(")") + 2 :].split()
-            user_ticks = int(fields[11])
-            system_ticks = int(fields[12])
-            start_ticks = int(fields[19])
-        except (OSError, ValueError, IndexError):
+            if self._process_probe is None or self._process_probe.pid != self.process.pid:
+                self._process_probe = psutil.Process(self.process.pid)
+            times = self._process_probe.cpu_times()
+            return self._process_probe.create_time(), times.user + times.system
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             return None
-        return start_ticks, (user_ticks + system_ticks) / PROCESS_CLOCK_TICKS
 
     def record_cpu_reading(
-        self, reading: tuple[int, float] | None, *, sampled_at: float
+        self, reading: tuple[float, float] | None, *, sampled_at: float
     ) -> float | None:
         """Turn two lightweight process readings into this worker's temperature.
 
@@ -411,10 +403,10 @@ class WorkerHandler:
             self.cpu_temperature_sampled_at = None
             self.cpu_temperature_interval_seconds = None
             return None
-        start_ticks, cpu_seconds = reading
+        created_at, cpu_seconds = reading
         previous = self._cpu_meter_reading
-        self._cpu_meter_reading = (start_ticks, cpu_seconds, sampled_at)
-        if previous is None or previous[0] != start_ticks:
+        self._cpu_meter_reading = (created_at, cpu_seconds, sampled_at)
+        if previous is None or previous[0] != created_at:
             self.cpu_temperature_percent = None
             self.cpu_temperature_sampled_at = None
             self.cpu_temperature_interval_seconds = None
