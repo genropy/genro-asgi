@@ -85,7 +85,11 @@ class GroupStub:
         self.wakes.append(self.worker_handler.state)
         self.users_on_board.append(set(self.worker_handler.hosted_users))
 
-    def get_occupancy_percent(self, worker_snapshot: dict[str, Any] | None) -> float:
+    def get_occupancy_percent(
+        self,
+        worker_snapshot: dict[str, Any] | None,
+        worker_handler: Any | None = None,
+    ) -> float:
         """How full the worker of this photo is: full when the tests want it urgent."""
         return 100.0 if self.urgent_snapshots else 0.0
 

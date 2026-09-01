@@ -212,8 +212,10 @@ and with `cpu_grow_percent` off the gate is never consulted. Past the quiet
 consolidation of a worker with users included.
 
 **CPU pressure gates admission; concrete demand births capacity (landed
-2026-08-29).** A CPU photo above `cpu_grow_percent` closes that worker to new
-users; one below `cpu_grow_rearm_percent` reopens it. The CPU judge never forks.
+2026-08-29; thermometer channel 2026-09-01).** A fresh commander-side worker
+temperature above `cpu_grow_percent` closes that worker to new users; one below
+`cpu_grow_rearm_percent` reopens it. A photo's `cpu_percent` is not an
+orchestration input. The CPU judge never forks.
 When an arriving user finds no CPU-open worker that admits it, `assign_user`
 creates one worker under the placement lock and assigns that same user before
 returning. The measured template fork is short, so speculative empty workers
@@ -221,6 +223,16 @@ buy little and amplify noisy samples. The periodic shape judge uses memory,
 not CPU, while this policy is on; otherwise CPU would still pre-fork through a
 second road. The journal ties every such birth to its first user with reason
 `new_worker_created_for_placement`.
+
+**Worker CPU temperature is a separate measurement channel (landed
+2026-09-01).** One commander-side task reads each Linux worker's cumulative
+process CPU clock at `cpu_temperature_sample_seconds` (100 ms by default), and
+derives the share of one core burned over the real interval. It sends no worker
+RPC and writes no worker photo: the pool census exposes the temperature, sample
+width and age alongside each worker. The sampling pass reconciles admission;
+placement uses that gate and temperature occupancy, and heartbeat offload uses
+the same fresh value. Memory, per-user activity and every non-CPU decision stay
+on their existing channels.
 
 **A CPU-hot worker slims one user per beat (landed 2026-09-01).**
 `cpu_offload_percent` (group setpoint, off by default; requires

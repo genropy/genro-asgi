@@ -265,7 +265,6 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
                 photo["cpu_percent"] = self._cpu_percent
         self._derive_user_service(photo)
         self.worker_handler.worker_snapshot = photo
-        self._signal_cpu_crossing(photo)
 
     def _derive_user_service(self, photo: dict[str, Any]) -> None:
         """Turn each user row's cumulative counters into this interval's deltas.
@@ -291,41 +290,6 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
             item["recent_service_seconds"] = max(0.0, service_seconds - read_seconds)
             item["recent_call_count"] = max(0, served_call_count - read_count)
             self._user_service_read[user] = (service_seconds, served_call_count)
-
-    def _signal_cpu_crossing(self, photo: dict[str, Any]) -> None:
-        """Ring the group's wake when this photo crosses a CPU admission threshold.
-
-        Args:
-            photo: the photo just filed, ``cpu_percent`` already smoothed.
-
-        A SIGNAL and nothing more: the judge, the spawn and the admission
-        writes all stay in ``GroupHandler`` — this layer only says the shape
-        of the pool deserves a look NOW instead of at the shape's own cadence,
-        which is what a 30-second cadence cost the bench when the load climbed
-        in seconds (#43). The edge is read against ``cpu_admission_open``, the
-        very state the judge writes: an OPEN worker photographed above the
-        growth threshold is a crossing, a CLOSED one photographed below the
-        rearm threshold is the other — and a worker already judged rings
-        nothing, however many photos arrive on the same plateau, so a steady
-        load is one wake, not a storm. Policy off (no ``cpu_grow_percent``),
-        no CPU wake at all. ``ping_now`` is idempotent besides.
-        """
-        group_handler = self.worker_handler.group_handler
-        if group_handler.cpu_grow_percent is None:
-            return
-        cpu_percent = photo.get("cpu_percent")
-        if cpu_percent is None:
-            return
-        crossed_above = (
-            self.worker_handler.cpu_admission_open
-            and cpu_percent > group_handler.cpu_grow_percent
-        )
-        crossed_below = (
-            not self.worker_handler.cpu_admission_open
-            and cpu_percent < group_handler.cpu_grow_rearm_percent
-        )
-        if crossed_above or crossed_below:
-            group_handler.ping_now()
 
     def on_new_user(self, worker_event: dict[str, Any]) -> None:
         """A user is in this process now: he is one of this handler's own."""
@@ -356,9 +320,9 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
                 or self.worker_handler.worker_snapshot
                 or {}
             )
-            estimate = self.worker_handler.group_handler.get_occupancy_percent(photo) / (
-                len(photo.get("users") or {}) + leavers
-            )
+            estimate = self.worker_handler.group_handler.get_occupancy_percent(
+                photo, self.worker_handler
+            ) / (len(photo.get("users") or {}) + leavers)
             for worker_event in worker_events:
                 if worker_event["op"] == "user_frozen":
                     worker_event["occupancy_percent"] = estimate

@@ -16,9 +16,9 @@
 
 The stage is the one ``test_orchestration_group_handler`` builds — real child
 processes under a real group and a real vertex — and the CPU is DECLARED, not
-burned: ``cpu_percent`` is written straight into the photo the handler holds,
-which is exactly the field the judge reads. Implementation tests: they
-photograph the experimental policy and go with it. A CPU sample may open or
+burned: the fresh commander-side temperature is written on the handler, which
+is exactly the channel the judge reads. Implementation tests exercise the
+experimental policy directly. A CPU sample may open or
 close admission, but never forks. A concrete arrival that finds no open worker
 creates exactly one worker and becomes its first user.
 """
@@ -62,8 +62,11 @@ async def grown_group(make_group, **policies):
 
 
 def declare_cpu(worker_handler, cpu_percent: float) -> None:
-    """Write the smoothed CPU into the photo the judge reads."""
-    worker_handler.worker_snapshot["cpu_percent"] = cpu_percent
+    """Declare the CPU channel directly; policy tests do not test its clock."""
+    worker_handler.cpu_temperature_percent = cpu_percent
+    worker_handler.cpu_temperature_sampled_at = real_time.monotonic()
+    worker_handler.cpu_temperature_interval_seconds = 0.1
+    worker_handler.get_cpu_temperature_percent = lambda: cpu_percent
 
 
 class ControlledTime:
@@ -173,7 +176,7 @@ async def test_the_journal_explains_a_reopened_full_worker_winning_placement(
     assert placement["outcome"] == first.name
     assert placement["reason"] == "fullest_cpu_open_candidate"
     assert [candidate["name"] for candidate in placement["candidates"]] == [first.name]
-    assert placement["candidates"][0]["cpu_percent"] == 28.0
+    assert placement["candidates"][0]["cpu_temperature_percent"] == 28.0
 
 
 async def test_cpu_past_the_restart_setpoint_blocks_without_restarting(make_group):
@@ -580,66 +583,6 @@ async def test_a_dead_only_worker_is_replaced_by_the_availability_judge(make_gro
     # a reception. This birth is not caused by the CPU scan.
     assert len(group.worker_handler_map) == 2
     assert group.worker_handler_map["standard_0002"].cpu_admission_open
-
-
-# --- the event-driven wake -----------------------------------------------------
-
-
-async def test_a_photo_crossing_above_rings_the_wake(make_group):
-    group = await grown_group(make_group)
-    group.ping_now_event.clear()
-
-    group.reception.envelope_handler.on_worker_snapshot({"cpu_percent": 55.0})
-
-    assert group.ping_now_event.is_set()
-    assert len(group.worker_handler_map) == 1  # the wake decided NOTHING
-
-
-async def test_a_plateau_already_judged_rings_nothing(make_group):
-    group = await grown_group(make_group)
-    declare_cpu(group.reception, 55.0)
-    await group.check_occupancy(now=True)  # judged: the reception is blocked now
-    group.ping_now_event.clear()
-
-    group.reception.envelope_handler.on_worker_snapshot({"cpu_percent": 60.0})
-
-    assert not group.ping_now_event.is_set()
-
-
-async def test_with_the_policy_off_no_photo_rings_the_cpu_wake(make_group):
-    group = make_group(reception_reserved_percent=0.0)
-    await group.start_worker()
-    group.ping_now_event.clear()
-
-    group.reception.envelope_handler.on_worker_snapshot({"cpu_percent": 99.0})
-
-    assert not group.ping_now_event.is_set()
-
-
-async def test_the_descent_below_the_rearm_threshold_rings_the_wake(make_group):
-    group = await grown_group(make_group)
-    declare_cpu(group.reception, 55.0)
-    await group.check_occupancy(now=True)
-    group.ping_now_event.clear()
-
-    group.reception.envelope_handler.on_worker_snapshot({"cpu_percent": 35.0})
-    assert group.ping_now_event.is_set()
-
-    # Judged reopened, a NEW crossing rings again: a fresh plateau, not a storm.
-    declare_cpu(group.reception, 35.0)
-    await group.check_occupancy(now=True)
-    group.ping_now_event.clear()
-    group.reception.envelope_handler.on_worker_snapshot({"cpu_percent": 55.0})
-    assert group.ping_now_event.is_set()
-
-
-async def test_the_band_between_the_thresholds_rings_nothing(make_group):
-    group = await grown_group(make_group)
-    group.ping_now_event.clear()
-
-    group.reception.envelope_handler.on_worker_snapshot({"cpu_percent": 45.0})
-
-    assert not group.ping_now_event.is_set()
 
 
 # --- the retirement stands apart ----------------------------------------------

@@ -305,6 +305,7 @@ class SpaApplicationGrammar(ApplicationGrammar):
         orchestration_log_backup_count: int | BagResolver = None,
         user_expiry_hours: float | BagResolver = None,
         guest_expiry_hours: float | BagResolver = None,
+            cpu_temperature_sample_seconds: float | BagResolver | None = None,
     ) -> None:
         """The SPA pool: the vertex's own policies, and the groups under it.
 
@@ -312,6 +313,10 @@ class SpaApplicationGrammar(ApplicationGrammar):
         group: ``frozen_users_path`` is the freezer root — the vertex reads what a
         worker wrote there, so it is one root for the whole machine — and
         ``instance_dir`` holds the sockets.
+
+        ``cpu_temperature_sample_seconds`` is the cadence of commander-side,
+        traffic-independent worker CPU measurement. CPU admission, occupancy
+        and offload use this channel; omit it for the 100 ms default.
 
         ``memory_max_percent`` is what this server may hold OF THE MACHINE (the
         concession; omitted, all of it), and every percentage below is a share of

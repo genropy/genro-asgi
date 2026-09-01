@@ -72,12 +72,13 @@ the wire writes what it is handed. The one thing that answer carries today is th
 global store, whole, and only to a process presenting itself — which is the only
 one holding none of it.
 
-**No counters here.** The handler holds ``worker_snapshot``, the last photo its
+**No worker-owned counters here.** The handler holds ``worker_snapshot``, the last photo its
 process sent — filed by its own layer of the chain from whatever envelope carried
 it, so a live process has one from its very presentation: the gauges the judge
-reads are all in there. Counters are
-aggregate and belong to the Commander, which is also the one that decides the
-orders worth counting.
+reads are all in there EXCEPT CPU: the commander reads this process's cumulative
+kernel clock through the handler and keeps the two-reading anchor here. That
+temperature travels on no envelope. Aggregate counters still belong to the
+Commander, which is also the one that decides the orders worth counting.
 
 **The beat has no clock of its own.** ``ping_process`` is one beat and
 ``process_ping_interval`` is the cadence it is meant to be called at; the clock
@@ -170,6 +171,17 @@ PROCESS_PING_TIMEOUT = 10.0
 # so it polls. The wait for the end of the wire does not — that one is a future.
 WAIT_POLL_INTERVAL = 0.05
 
+#: Linux's process table: the commander reads one worker's cumulative CPU clock
+#: here without asking that worker to build or send a full photo.
+PROCESS_STAT_ROOT = Path("/proc")
+
+#: The unit of the cumulative CPU fields in ``/proc/<pid>/stat``.
+PROCESS_CLOCK_TICKS = os.sysconf("SC_CLK_TCK")
+
+#: A temperature older than three intended samples is unavailable. One second
+#: is the floor, so a brief event-loop delay cannot withdraw a healthy gauge.
+CPU_TEMPERATURE_MIN_STALE_SECONDS = 1.0
+
 __all__ = [
     "CENSUS_OP_PATH",
     "DROP_CONNECTION_OP_PATH",
@@ -257,6 +269,18 @@ class WorkerHandler:
         #: gate in ``assign_user`` stands apart, and the state dies with the
         #: handler. State only — this handler decides nothing with it.
         self.cpu_admission_open = True
+        #: The last lightweight kernel reading as ``(process birth, cpu seconds,
+        #: sample instant)``. The birth distinguishes a live worker from an
+        #: unrelated process that later reused its pid.
+        self._cpu_meter_reading: tuple[int, float, float] | None = None
+        #: The worker's real CPU share over the last meter interval. None until
+        #: two readings of the same process exist; the full photo remains the
+        #: portable fallback on platforms without Linux's process table.
+        self.cpu_temperature_percent: float | None = None
+        #: When the temperature above was sampled, on the commander's monotonic
+        #: clock, and the real width of the interval that produced it.
+        self.cpu_temperature_sampled_at: float | None = None
+        self.cpu_temperature_interval_seconds: float | None = None
         #: The offload condition last journaled for this worker, as
         #: ``(reason, subject)`` — ``single_user_overload`` and
         #: ``cpu_offload_no_active_candidate`` would otherwise repeat every
@@ -340,10 +364,82 @@ class WorkerHandler:
         if placed >= policy.worker_max_users:
             raise NoRoomError(user, f"{self.name} already hosts {placed} placed user(s)")
         projected = (
-            self.group_handler.get_occupancy_percent(self.worker_snapshot) + occupancy_percent
+            self.group_handler.get_occupancy_percent(self.worker_snapshot, self)
+            + occupancy_percent
         )
         if projected > self.group_handler.get_worker_cap(self):
             raise NoRoomError(user, f"{self.name} would stand at {projected:.1f}%")
+
+    def get_process_cpu_reading(self) -> tuple[int, float] | None:
+        """Read this worker's process birth and cumulative CPU seconds on Linux.
+
+        Returns:
+            ``(start ticks, cpu seconds)`` for the pid this handler owns, or
+            None when the process table is unavailable or the row is invalid.
+
+        The process name in ``stat`` may contain spaces and parentheses, so the
+        scalar fields begin after its LAST closing parenthesis. No command is
+        spawned and no message is sent to the worker.
+        """
+        if self.process is None:
+            return None
+        try:
+            stat = (PROCESS_STAT_ROOT / str(self.process.pid) / "stat").read_text(
+                encoding="ascii"
+            )
+            fields = stat[stat.rindex(")") + 2 :].split()
+            user_ticks = int(fields[11])
+            system_ticks = int(fields[12])
+            start_ticks = int(fields[19])
+        except (OSError, ValueError, IndexError):
+            return None
+        return start_ticks, (user_ticks + system_ticks) / PROCESS_CLOCK_TICKS
+
+    def record_cpu_reading(
+        self, reading: tuple[int, float] | None, *, sampled_at: float
+    ) -> float | None:
+        """Turn two lightweight process readings into this worker's temperature.
+
+        A missing row or a changed process birth clears the unfinished measure;
+        neither invents a zero. The result is separate commander-side telemetry:
+        it never changes the full photo, while CPU orchestration reads this
+        channel explicitly.
+        """
+        if reading is None:
+            self._cpu_meter_reading = None
+            self.cpu_temperature_percent = None
+            self.cpu_temperature_sampled_at = None
+            self.cpu_temperature_interval_seconds = None
+            return None
+        start_ticks, cpu_seconds = reading
+        previous = self._cpu_meter_reading
+        self._cpu_meter_reading = (start_ticks, cpu_seconds, sampled_at)
+        if previous is None or previous[0] != start_ticks:
+            self.cpu_temperature_percent = None
+            self.cpu_temperature_sampled_at = None
+            self.cpu_temperature_interval_seconds = None
+            return None
+        elapsed = sampled_at - previous[2]
+        if elapsed <= 0.0:
+            return None
+        burned = max(0.0, cpu_seconds - previous[1])
+        temperature = 100.0 * min(burned / elapsed, 1.0)
+        self.cpu_temperature_percent = temperature
+        self.cpu_temperature_sampled_at = sampled_at
+        self.cpu_temperature_interval_seconds = elapsed
+        return temperature
+
+    def get_cpu_temperature_percent(self) -> float | None:
+        """Return the fresh commander-side temperature, never a stale value."""
+        temperature = self.cpu_temperature_percent
+        sampled_at = self.cpu_temperature_sampled_at
+        cadence = self.group_handler.spa_commander.cpu_temperature_sample_seconds
+        if temperature is None or sampled_at is None or cadence is None:
+            return None
+        stale_after = max(CPU_TEMPERATURE_MIN_STALE_SECONDS, 3.0 * cadence)
+        if time.monotonic() - sampled_at > stale_after:
+            return None
+        return temperature
 
     def read_envelope(self, envelope: dict[str, Any]) -> dict[str, Any]:
         """Hand an envelope that arrived from the process to the chain.

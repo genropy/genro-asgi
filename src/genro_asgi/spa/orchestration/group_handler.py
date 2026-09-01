@@ -95,10 +95,12 @@ when the survivors lack room BY HEADS for the spare's placed users. The next
 round re-reads: a decision is never carried over.
 
 **CPU admission and demand-driven birth (#43, experimental, off by default).**
-With ``cpu_grow_percent`` set, a worker whose smoothed ``cpu_percent`` crosses
-above it is CLOSED to new users (``cpu_admission_open``). It reopens only below
+With ``cpu_grow_percent`` set, the commander's process thermometer samples each
+worker independently of traffic. A fresh ``cpu_temperature_percent`` above the
+threshold CLOSES it to new users (``cpu_admission_open``); it reopens only below
 ``cpu_grow_rearm_percent``; between the two thresholds it keeps its state — the
-band is hysteresis. The CPU picture never creates a process by itself. When a
+band is hysteresis. A photo's historical ``cpu_percent`` is not an orchestration
+input. The thermometer never creates a process by itself. When a
 real user arrives, placement first tries the CPU-open workers; only when none
 admits that user does the same placement, under its lock, fork one worker and
 place that same user on it. A transient sample therefore cannot leave empty
@@ -106,9 +108,8 @@ capacity behind, while the template fork keeps the demand path short. Sticky
 users are never moved. If memory or server state refuses the birth, a closed
 worker still under the hard ``occupancy_max_percent`` takes the user as a
 LOGGED fallback — the soft closure shapes the pool, never at the price of a
-premature 503. The crossing is judged within a beat: the envelope layer rings
-``ping_now`` when a fresh photo crosses a threshold, and the wake anticipates
-the group's round. The RETIREMENT STANDS ASIDE while the CPU speaks: a living
+premature 503. Admission is reconciled in the sampling pass, without waiting for
+the heartbeat. The RETIREMENT STANDS ASIDE while the CPU speaks: a living
 worker still CPU-closed, or any CPU event younger than
 ``cpu_retirement_quiet_seconds`` — a blocking or a reopening — suspends the
 closure judge, because
@@ -119,8 +120,8 @@ reopen included. After it, the retirement is exactly what it always was.
 
 **A CPU-hot worker slims one user at a beat (#43, off by default).** With
 ``cpu_offload_percent`` set — above ``cpu_grow_percent``, since the offload
-stands on the admission closure — ``check_cpu_offload`` runs at EVERY beat on
-the fresh photos: the hottest CPU-closed ``running`` worker past the threshold
+stands on the admission closure — ``check_cpu_offload`` runs at EVERY beat using
+the latest fresh temperature: the hottest CPU-closed ``running`` worker past the threshold
 cedes ONE user through the same ``freeze_hosted_user`` road as every departure.
 WHO is judged against the window itself: a MATERIAL contributor holds at least
 half the fair share of the interval's service time (``s >= S/(2N)``) or has a
@@ -252,12 +253,12 @@ class GroupHandler:
             pool's normal state and never a condition to correct. One threshold
             for both made every growth the evidence for its own reversal (#36).
         cpu_grow_percent: the soft-admission threshold (#43, experimental): a
-            worker whose smoothed ``cpu_percent`` crosses above it stops taking
-            new users. CPU sampling never creates a worker; concrete placement
+            worker whose fresh commander-side CPU temperature crosses above it
+            stops taking new users. CPU sampling never creates a worker; concrete placement
             does. None, the default, leaves the policy off.
         cpu_grow_rearm_percent: below this the worker's admission reopens. The
             band between the two is hysteresis: the previous state is retained.
-        cpu_offload_percent: past this smoothed ``cpu_percent`` a CPU-closed
+        cpu_offload_percent: past this fresh CPU temperature a CPU-closed
             worker must slim: at every beat the group orders ONE of its active
             users — the least busy in the last interval — into the freezer, and
             the next request of his lands elsewhere, since this worker is
@@ -642,7 +643,11 @@ class GroupHandler:
         ]
         await asyncio.gather(*beats, return_exceptions=True)
 
-    def get_occupancy_percent(self, worker_snapshot: dict[str, Any] | None) -> float:
+    def get_occupancy_percent(
+        self,
+        worker_snapshot: dict[str, Any] | None,
+        worker_handler: WorkerHandler | None = None,
+    ) -> float:
         """How full the worker of this photo is, in percent.
 
         Args:
@@ -652,13 +657,17 @@ class GroupHandler:
             The fullest of the components the photo carries, each clamped to its
             own full — 0.0 when nothing in it is measurable. Memory is PSS
             against this worker's share of the quota, with RSS as its portable
-            conservative fallback. ``cpu_percent`` is the share of one core
-            burned between the last two photos (#38), which sees a GIL-saturated
-            worker whose memory stands still.
+            conservative fallback. CPU comes only from the commander's separate
+            process thermometer when ``worker_handler`` is supplied; a photo's
+            historical ``cpu_percent`` is never an orchestration input.
         """
         photo = worker_snapshot or {}
         components = [self.get_memory_occupancy_percent(photo) / 100.0]
-        cpu_percent = photo.get("cpu_percent")
+        cpu_percent = (
+            None
+            if worker_handler is None
+            else worker_handler.get_cpu_temperature_percent()
+        )
         if cpu_percent is not None:
             components.append(cpu_percent / 100.0)
         return 100.0 * min(max(components, default=0.0), 1.0)
@@ -792,7 +801,9 @@ class GroupHandler:
                 for worker_handler in self.living_workers
                 if worker_handler.cpu_admission_open
             ),
-            key=lambda worker_handler: -self.get_occupancy_percent(worker_handler.worker_snapshot),
+            key=lambda worker_handler: -self.get_occupancy_percent(
+                worker_handler.worker_snapshot, worker_handler
+            ),
         )
         decision_rows = [self._get_worker_decision_row(candidate) for candidate in candidates]
         for worker_handler in candidates:
@@ -835,8 +846,8 @@ class GroupHandler:
                 1 for name in self.user_worker_map.values() if name == worker_handler.name
             ),
             "cpu_admission_open": worker_handler.cpu_admission_open,
-            "cpu_percent": photo.get("cpu_percent"),
-            "occupancy_percent": self.get_occupancy_percent(photo),
+            "cpu_temperature_percent": worker_handler.get_cpu_temperature_percent(),
+            "occupancy_percent": self.get_occupancy_percent(photo, worker_handler),
             "memory_occupancy_percent": self.get_memory_occupancy_percent(photo),
             "worker_cap": self.get_worker_cap(worker_handler),
         }
@@ -847,7 +858,9 @@ class GroupHandler:
             self._get_worker_decision_row(worker_handler)
             for worker_handler in sorted(
                 self.living_workers,
-                key=lambda handler: -self.get_occupancy_percent(handler.worker_snapshot),
+                key=lambda handler: -self.get_occupancy_percent(
+                    handler.worker_snapshot, handler
+                ),
             )
         ]
 
@@ -874,7 +887,9 @@ class GroupHandler:
                 for worker_handler in self.living_workers
                 if not worker_handler.cpu_admission_open
             ),
-            key=lambda worker_handler: -self.get_occupancy_percent(worker_handler.worker_snapshot),
+            key=lambda worker_handler: -self.get_occupancy_percent(
+                worker_handler.worker_snapshot, worker_handler
+            ),
         )
         for worker_handler in candidates:
             try:
@@ -887,7 +902,9 @@ class GroupHandler:
                 "placement_fallback",
                 worker_handler.name,
                 numbers={
-                    "cpu_percent": (worker_handler.worker_snapshot or {}).get("cpu_percent"),
+                    "cpu_temperature_percent": (
+                        worker_handler.get_cpu_temperature_percent()
+                    ),
                     "workers": len(self.living_workers),
                 },
                 outcome=f"{user} placed over the soft limit: no open worker, no growth",
@@ -1100,7 +1117,7 @@ class GroupHandler:
             for worker_handler in self.living_workers
             if worker_handler.state == "running"
             and not worker_handler.cpu_admission_open
-            and ((worker_handler.worker_snapshot or {}).get("cpu_percent") or 0.0)
+            and (worker_handler.get_cpu_temperature_percent() or 0.0)
             > policy.cpu_offload_percent
         ]
         for worker_handler in self.living_workers:
@@ -1110,7 +1127,7 @@ class GroupHandler:
             return
         target = max(
             over,
-            key=lambda handler: (handler.worker_snapshot or {}).get("cpu_percent") or 0.0,
+            key=lambda handler: handler.get_cpu_temperature_percent() or 0.0,
         )
         actives = self._active_user_rows(target)
         window_service_seconds = sum(
@@ -1145,7 +1162,7 @@ class GroupHandler:
             ),
         )
         numbers = {
-            "cpu_percent": (target.worker_snapshot or {}).get("cpu_percent"),
+            "cpu_temperature_percent": target.get_cpu_temperature_percent(),
             "cpu_offload_percent": policy.cpu_offload_percent,
             "cpu_grow_percent": policy.cpu_grow_percent,
             "cpu_grow_rearm_percent": policy.cpu_grow_rearm_percent,
@@ -1488,7 +1505,7 @@ class GroupHandler:
             return None
         return spare
 
-    def _judge_cpu_admission(self) -> None:
+    def _judge_cpu_admission(self, *, log_scan: bool = True) -> None:
         """Open or close workers to newcomers from the CPU hysteresis.
 
         Off unless ``cpu_grow_percent`` is set. The smoothed CPU photo controls
@@ -1513,7 +1530,7 @@ class GroupHandler:
             return
         transitions = 0
         for worker_handler in self.living_workers:
-            cpu_percent = (worker_handler.worker_snapshot or {}).get("cpu_percent")
+            cpu_percent = worker_handler.get_cpu_temperature_percent()
             if cpu_percent is None:
                 continue
             if cpu_percent > policy.cpu_grow_percent:
@@ -1525,7 +1542,7 @@ class GroupHandler:
                         self.name,
                         "cpu_admission",
                         worker_handler.name,
-                        numbers={"cpu_percent": cpu_percent},
+                        numbers={"cpu_temperature_percent": cpu_percent},
                         outcome="blocked: over the growth threshold",
                         reason="cpu_over_growth_threshold",
                     )
@@ -1538,10 +1555,12 @@ class GroupHandler:
                         self.name,
                         "cpu_admission",
                         worker_handler.name,
-                        numbers={"cpu_percent": cpu_percent},
+                        numbers={"cpu_temperature_percent": cpu_percent},
                         outcome="reopened: below the rearm threshold",
                         reason="cpu_below_rearm_threshold",
                     )
+        if not log_scan:
+            return
         decision_rows = self._placement_decision_rows()
         self.spa_commander.log_decision(
             self.name,
@@ -1554,8 +1573,8 @@ class GroupHandler:
                 "transitions": transitions,
                 "cpu_grow_percent": policy.cpu_grow_percent,
                 "cpu_grow_rearm_percent": policy.cpu_grow_rearm_percent,
-                "worker_cpu": {
-                    name: (handler.worker_snapshot or {}).get("cpu_percent")
+                "worker_cpu_temperature": {
+                    name: handler.get_cpu_temperature_percent()
                     for name, handler in self.worker_handler_map.items()
                 },
                 "workers": len(decision_rows),
@@ -1720,11 +1739,15 @@ class GroupHandler:
             order,
             worker_handler.name,
             numbers={
-                "occupancy_percent": self.get_occupancy_percent(worker_handler.worker_snapshot),
+                "occupancy_percent": self.get_occupancy_percent(
+                    worker_handler.worker_snapshot, worker_handler
+                ),
                 "memory_occupancy_percent": self.get_memory_occupancy_percent(
                     worker_handler.worker_snapshot
                 ),
-                "cpu_percent": (worker_handler.worker_snapshot or {}).get("cpu_percent"),
+                "cpu_temperature_percent": (
+                    worker_handler.get_cpu_temperature_percent()
+                ),
                 "workers": len(self.living_workers),
             },
         )

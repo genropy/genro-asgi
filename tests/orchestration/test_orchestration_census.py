@@ -28,7 +28,13 @@ class XT_MuteWorkerHandler:
         self.name = name
         self.state = "running"
         self.worker_snapshot = None
+        self.cpu_temperature_percent = None
+        self.cpu_temperature_interval_seconds = None
+        self.cpu_temperature_sampled_at = None
         self.connector = self
+
+    def get_cpu_temperature_percent(self):
+        return None
 
     async def call(self, path: str, data: dict) -> dict:
         raise ConnectionError("the wire is gone")

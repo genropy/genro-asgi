@@ -131,7 +131,8 @@ smaller. ``memory_available_bytes`` is the second half of that reading: what is
 left free right now, everything charged to the cgroup counted, and the gate a
 group asks before forking a worker into it.
 
-**There is ONE clock in the machine, and it is here.** ``heartbeat_loop`` waits
+**There is ONE orchestration clock in the machine, and it is here.**
+``heartbeat_loop`` waits
 for its timer OR for any group's wake, whichever comes first: the timer gives a
 full round — every group a turn, and the vertex's own tasks each on its own count
 of beats — while a wake gives an anticipated round on THAT group alone, which is
@@ -142,6 +143,12 @@ still open is skipped rather than given a second one, so a mute process delays
 its own group and never the machine; every turn is awaited, an exception is a
 value and not a cancellation, and a round that fails is written down and
 followed by the next beat.
+
+Observation has a second, deliberately narrower cadence. ``cpu_meter_loop``
+reads two scalar counters from each governed Linux process at the configured
+cadence (100 ms by default). It sends no worker RPC and builds no photo; the same
+pass reconciles only CPU admission. Placement observes that gate, while offload
+reads the latest temperature on the ordinary heartbeat.
 
 **Three tasks are the vertex's own, because nobody below can do them.** The
 frozen whose age ran out have no process to notice them, so ``drop_expired_users``
@@ -203,6 +210,9 @@ DECISIONS_LOGGER_NAME = "genro_asgi.orchestration.decisions"
 #: Seconds between two beats of the one clock — the twin of
 #: ``PROCESS_PING_INTERVAL``, which is the cadence a single process is beaten at.
 HEARTBEAT_SECONDS = 5.0
+
+#: Default cadence of the observation-only Linux worker CPU thermometer.
+CPU_TEMPERATURE_SAMPLE_SECONDS = 0.1
 
 # Beats between two rounds of each task of the vertex — the cadences, each where
 # its own knowledge is: an expiry is hours away, so the frozen are read every few
@@ -716,12 +726,19 @@ class SpaCommander:
         recipe_settings: dict[str, Any] | None = None,
         env_settings: dict[str, Any] | None = None,
         active_profile: str | None = None,
+        cpu_temperature_sample_seconds: float | None = CPU_TEMPERATURE_SAMPLE_SECONDS,
     ) -> None:
         self.freeze_handler = FreezeHandler(frozen_users_path)
         self.user_expiry_hours = user_expiry_hours
         self.guest_expiry_hours = guest_expiry_hours
         self.machine_memory_alarm_percent = machine_memory_alarm_percent
         self.memory_max_percent = memory_max_percent
+        if (
+            cpu_temperature_sample_seconds is not None
+            and cpu_temperature_sample_seconds <= 0.0
+        ):
+            raise ValueError("cpu_temperature_sample_seconds must be greater than zero")
+        self.cpu_temperature_sample_seconds = cpu_temperature_sample_seconds
         #: The global store itself: not a master over replicas any more, the
         #: ONLY copy there is. Every read and every write of the hosted sites
         #: reaches it as a CALL on the lane, answered once it has landed.
@@ -764,6 +781,7 @@ class SpaCommander:
         self.user_hold_event_map: dict[str, asyncio.Event] = {}
         self._default_group = default_group
         self._heartbeat_task: asyncio.Task[None] | None = None
+        self._cpu_meter_task: asyncio.Task[None] | None = None
         self._logger = logging.getLogger(__name__)
         self._decision_sequence = 0
         self._orders_logger = self._build_orders_logger(
@@ -1113,7 +1131,7 @@ class SpaCommander:
                     worker_handler.name: {
                         "state": worker_handler.state,
                         "occupancy_percent": group_handler.get_occupancy_percent(
-                            worker_handler.worker_snapshot
+                            worker_handler.worker_snapshot, worker_handler
                         ),
                         "memory_occupancy_percent": (
                             group_handler.get_memory_occupancy_percent(
@@ -1129,14 +1147,42 @@ class SpaCommander:
                             worker_handler.worker_snapshot
                         )[1],
                         "worker_cap": group_handler.get_worker_cap(worker_handler),
+                        "cpu_temperature_percent": (
+                            worker_handler.cpu_temperature_percent
+                        ),
+                        "cpu_temperature_interval_seconds": (
+                            worker_handler.cpu_temperature_interval_seconds
+                        ),
+                        "cpu_temperature_age_seconds": (
+                            None
+                            if worker_handler.cpu_temperature_sampled_at is None
+                            else max(
+                                0.0,
+                                time.monotonic()
+                                - worker_handler.cpu_temperature_sampled_at,
+                            )
+                        ),
                     }
                     for worker_handler in group_handler.living_workers
                 },
             }
             for worker_handler in group_handler.living_workers:
-                census["workers"][worker_handler.name] = await self._get_worker_census(
-                    worker_handler
+                worker_census = await self._get_worker_census(worker_handler)
+                worker_census["cpu_temperature_percent"] = (
+                    worker_handler.cpu_temperature_percent
                 )
+                worker_census["cpu_temperature_interval_seconds"] = (
+                    worker_handler.cpu_temperature_interval_seconds
+                )
+                worker_census["cpu_temperature_age_seconds"] = (
+                    None
+                    if worker_handler.cpu_temperature_sampled_at is None
+                    else max(
+                        0.0,
+                        time.monotonic() - worker_handler.cpu_temperature_sampled_at,
+                    )
+                )
+                census["workers"][worker_handler.name] = worker_census
         return census
 
     async def _get_worker_census(self, worker_handler: Any) -> dict[str, Any]:
@@ -1646,7 +1692,7 @@ class SpaCommander:
         """
         reconciliation = []
         for worker_handler in group.worker_handler_map.values():
-            cpu_percent = (worker_handler.worker_snapshot or {}).get("cpu_percent")
+            cpu_percent = worker_handler.get_cpu_temperature_percent()
             if policy.cpu_grow_percent is None or cpu_percent is None:
                 admission_open = True
             elif cpu_percent > policy.cpu_grow_percent:
@@ -1752,6 +1798,8 @@ class SpaCommander:
         await asyncio.to_thread(self.adopt_frozen_registers)
         await self.drop_expired_users(now=True)
         await self.group_map[self.default_group].start_worker()
+        if self.cpu_temperature_sample_seconds is not None:
+            self._cpu_meter_task = asyncio.ensure_future(self.cpu_meter_loop())
         self._heartbeat_task = asyncio.ensure_future(self.heartbeat_loop())
 
     @property
@@ -1780,6 +1828,9 @@ class SpaCommander:
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
             self._heartbeat_task = None
+        if self._cpu_meter_task is not None:
+            self._cpu_meter_task.cancel()
+            self._cpu_meter_task = None
         photo = FreezeHandler(self.reboot_temp_path)
         for group_handler in list(self.group_map.values()):
             await group_handler.quit_all(str(photo.root_path))
@@ -1827,8 +1878,44 @@ class SpaCommander:
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
             self._heartbeat_task = None
+        if self._cpu_meter_task is not None:
+            self._cpu_meter_task.cancel()
+            self._cpu_meter_task = None
         for group_handler in list(self.group_map.values()):
             await group_handler.stop()
+
+    async def cpu_meter_loop(self) -> None:
+        """Continuously refresh every group's CPU telemetry without worker traffic.
+
+        One task serves the whole vertex. Unavailable process rows are an absent
+        gauge rather than a failed observation. The only judge called here is
+        CPU admission; no placement, offload or shape round runs on this clock.
+        """
+        while True:
+            sampled_at = time.monotonic()
+            self.sample_cpu_temperatures(sampled_at=sampled_at)
+            elapsed = time.monotonic() - sampled_at
+            interval = self.cpu_temperature_sample_seconds
+            if interval is None:
+                return
+            await asyncio.sleep(max(0.0, interval - elapsed))
+
+    def sample_cpu_temperatures(self, *, sampled_at: float | None = None) -> None:
+        """Read every living worker's local process clock for observation only."""
+        instant = time.monotonic() if sampled_at is None else sampled_at
+        for group_handler in list(self.group_map.values()):
+            for worker_handler in group_handler.living_workers:
+                try:
+                    worker_handler.record_cpu_reading(
+                        worker_handler.get_process_cpu_reading(), sampled_at=instant
+                    )
+                except Exception:
+                    self._logger.exception(
+                        "Vertex: worker %s CPU temperature failed",
+                        worker_handler.name,
+                    )
+            if group_handler.cpu_grow_percent is not None:
+                group_handler._judge_cpu_admission(log_scan=False)
 
     async def heartbeat_loop(self) -> None:
         """The one clock: a round at every beat, and never a death by a bad round.

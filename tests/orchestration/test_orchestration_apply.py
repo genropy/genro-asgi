@@ -17,13 +17,14 @@
 The stage is the one ``test_orchestration_group_handler`` builds — real child
 processes under a real group and a real vertex — and the CPU is DECLARED, not
 burned, exactly as ``test_orchestration_cpu_growth`` declares it. Implementation
-tests: they photograph how one apply lands, and go with it.
+tests: they declare the separate temperature channel and inspect how apply lands.
 """
 
 from __future__ import annotations
 
 import asyncio
 import inspect
+import time
 
 import pytest
 
@@ -55,8 +56,11 @@ def configured(commander, instance_root):  # noqa: F811
 
 
 def declare_cpu(worker_handler, cpu_percent: float | None) -> None:
-    """Write the smoothed CPU into the photo the judge reads."""
-    worker_handler.worker_snapshot["cpu_percent"] = cpu_percent
+    """Declare the CPU channel directly; policy tests do not test its clock."""
+    worker_handler.cpu_temperature_percent = cpu_percent
+    worker_handler.cpu_temperature_sampled_at = time.monotonic()
+    worker_handler.cpu_temperature_interval_seconds = 0.1
+    worker_handler.get_cpu_temperature_percent = lambda: cpu_percent
 
 
 async def test_concurrent_applies_serialize_on_the_lock(configured, make_group):  # noqa: F811

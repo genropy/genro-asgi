@@ -96,9 +96,11 @@ class WorkerStub:
         self.worker_snapshot: dict[str, Any] = {"rss_bytes": rss_bytes}
         if pss_bytes is not None:
             self.worker_snapshot["pss_bytes"] = pss_bytes
-        if cpu_percent is not None:
-            self.worker_snapshot["cpu_percent"] = cpu_percent
+        self.cpu_temperature_percent = cpu_percent
         self.cpu_admission_open = True
+
+    def get_cpu_temperature_percent(self) -> float | None:
+        return self.cpu_temperature_percent
 
 
 def build_group(commander, tmp_path, **settings: Any) -> GroupHandler:

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import builtins
 import io
+from types import SimpleNamespace
 
 import pytest
 
@@ -94,9 +95,11 @@ def test_valid_pss_wins_over_a_much_larger_rss(tmp_path):
 def test_cpu_is_capacity_but_never_memory_occupancy(tmp_path):
     subject = group(tmp_path)
     photo = {"rss_bytes": 900_000, "pss_bytes": 200_000, "cpu_percent": 96.0}
+    thermometer = SimpleNamespace(get_cpu_temperature_percent=lambda: 96.0)
 
     assert subject.get_memory_occupancy_percent(photo) == 20.0
-    assert subject.get_occupancy_percent(photo) == 96.0
+    assert subject.get_occupancy_percent(photo, thermometer) == 96.0
+    assert subject.get_occupancy_percent(photo) == 20.0
 
 
 @pytest.mark.parametrize(

@@ -441,7 +441,7 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
         f"std order=close_worker subject={GROUP}_0002 "
         f"numbers={{'occupancy_percent': {closed_occupancy}, "
         f"'memory_occupancy_percent': {closed_occupancy}, "
-        "'cpu_percent': 0.0, 'workers': 2} outcome=None"
+            "'cpu_temperature_percent': None, 'workers': 2} outcome=None"
     ]
     assert [row for row in orders if "order=drop_worker" in row] == [
         f"std order=drop_worker subject={GROUP}_0002 numbers=None outcome=quitted",
