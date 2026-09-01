@@ -326,6 +326,9 @@ def applications_section(self, cfg):
     groups = commander.groups()
     groups.group(name="stable", occupancy_max_percent=80.0,
                  user_idle_freeze_minutes=60.0,
+                 cpu_grow_rearm_percent=30.0,   # below this a worker admits again
+                 cpu_grow_percent=50.0,         # above this it stops taking new users
+                 cpu_offload_percent=75.0,      # above this it cedes one user per beat
                  entry_module="genro_asgi.spa.orchestration.worker_entry",
                  worker_class="myshop.app:ShopWorker",
                  worker_kwargs={"site_path": "/srv/shop"})
@@ -377,17 +380,61 @@ expected to cost, and `newcomer_reserve_count` is how many of that size must
 always find room: the group grows at its own round before anybody is refused,
 and no closure may eat into that reserve (default 1).
 
-**The CPU keys are the early provision, and its brake.** `cpu_grow_percent`
-(experimental, off when omitted) is the smoothed CPU above which a worker
-fathers one worker ahead of the demand — once per crossing, the latch re-arming
-below `cpu_grow_rearm_percent`, and the worker closed to NEW users while it sits
-above. `cpu_retirement_quiet_seconds` (default 60) is the other half: how long
-the CPU must stay SILENT — nothing blocked, grown, quota-refused or reopened —
-before the closure judge resumes. It is the quiet of the whole GROUP, not the
-age of one worker (that is `worker_min_life_seconds`), and every CPU event
-restarts it whole. Without it, closing the emptiest worker while demand still
-stands hands its users back to the hot one, which regrows seconds later. With
-the CPU policy off the brake does not exist at all.
+**The CPU keys are the soft admission, and its brake.** `cpu_grow_percent`
+(experimental, off when omitted) is the smoothed CPU above which a worker stops
+taking NEW users; it reopens below `cpu_grow_rearm_percent`, and between the two
+it keeps the state it had — the band is hysteresis. A CPU sample never forks a
+process: capacity is created by a concrete arrival that no open worker can
+admit. `cpu_retirement_quiet_seconds` (default 60) is the other half: how long
+the CPU must stay SILENT — nobody blocked, nobody reopened — before the closure
+judge resumes. It is the quiet of the whole GROUP, not the age of one worker
+(that is `worker_min_life_seconds`), and every CPU event restarts it whole.
+Without it, closing the emptiest worker while demand still stands hands its
+users back to the hot one, which regrows seconds later. With the CPU policy off
+the brake does not exist at all.
+
+**`cpu_offload_percent` is what makes a hot worker slim down.** Closing the
+admission protects the workers to come; it does nothing for the users already
+placed on a process that is burning CPU. This key (nullable, `None` by default —
+omitted, no user is ever offloaded) is the smoothed CPU above which the group
+takes at most ONE user per heartbeat off that worker and puts him in the
+freezer. It requires `cpu_grow_percent`, and the thresholds are ordered:
+
+    cpu_grow_rearm_percent < cpu_grow_percent < cpu_offload_percent <= 100
+
+An offload declared without the admission key, or out of order, is refused at
+boot — the ordering is not decoration: the worker must already be closed to new
+users, or the ordinary placement could put the offloaded user straight back on
+it.
+
+WHO leaves is judged against the interval itself, so there is no absolute
+threshold to tune. Over the users with activity in the last interval, with `S`
+their summed recent service time and `N` their count, a **material contributor**
+is one holding at least half the fair share (`s >= S/(2N)`) or having a request
+in flight. Users that are idle or whose activity is negligible against the
+window are never candidates — the idle ones belong to `user_idle_freeze_minutes`
+instead. Among the material contributors, the one ceded is the least busy of
+those with NO request in flight: a user mid-call is never transferred. His next
+request goes through the ordinary placement, which skips CPU-closed workers and
+creates capacity when no open one can take him. **CPU pressure never restarts a
+process** — that remains memory's business alone
+(`restart_occupancy_max_percent`).
+
+Two standing conditions are recorded instead of acted on: when only one material
+contributor is left the worker is de facto dedicated to him and the group logs
+`single_user_overload` rather than moving him; when every material contributor
+has requests in flight the cession is postponed to the next heartbeat and logged
+as `cpu_offload_deferred_pending_calls`.
+
+**What each user costs is measured, and it is observation only.** Every worker
+keeps three cumulative counters per user — `served_call_count` and
+`service_seconds`, both stamped whatever the request did (a call that failed or
+ran long is exactly the one worth counting), plus `pending_call_count`, the
+requests open right now — and puts them in its photo. The group derives from two
+consecutive photos the recent deltas the offload judgment reads. These numbers
+serve observability and the pool's decisions; they are **not** part of a user's
+frozen application state, so a user parked in the freezer and woken elsewhere
+carries his store and his connections, never his counters.
 
 **The ages are the vertex's.** `user_expiry_hours` / `guest_expiry_hours` on
 `commander` are how long a FROZEN user is kept before the machine forgets him
@@ -424,6 +471,27 @@ decided_by=vertex order=drop_user subject=mario numbers={'had_state': False} out
 
 Omit the path and the rows stay on the `genro_asgi.orchestration.orders` logger,
 which is what a test wants.
+
+Beside that human log the commander writes a machine-readable **decision
+journal**, `<stem>.decisions.jsonl`: one JSON row per judgment, carrying a stable
+reason code and the numbers the judge had in front of it. The offload adds its
+own codes, and reading them in order is enough to reconstruct why a user moved
+or why none did:
+
+| Reason code | What it says |
+|---|---|
+| `cpu_offload_threshold` | this worker is past `cpu_offload_percent` and a cession was decided |
+| `cpu_offload_user_selected` | who is leaving, with his recent deltas |
+| `cpu_offload_completed` | the freeze confirmed; he is in the deposit |
+| `cpu_offload_refused` | the ordered departure did not happen; he stays where he was |
+| `cpu_offload_no_active_candidate` | nobody on that worker contributes materially |
+| `cpu_offload_deferred_pending_calls` | every material contributor has a request in flight; the next heartbeat tries again |
+| `single_user_overload` | one material contributor left; the worker is dedicated to him and nobody is moved |
+
+Each row carries the worker's CPU, the window's summed service time and the
+number of active users, the computed material threshold, and how many
+contributors were material and cedible. The two standing conditions are written
+once when they begin, not at every heartbeat.
 
 ## A complete recipe
 
