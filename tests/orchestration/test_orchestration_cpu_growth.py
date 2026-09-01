@@ -54,7 +54,7 @@ DECISIONS_LOGGER = "genro_asgi.orchestration.decisions"
 
 
 async def grown_group(make_group, **policies):
-    """One group with the policy on, its reception unreserved as the experiment runs it."""
+    """One group with the CPU admission policy on, as the experiment runs it."""
     group = make_group(cpu_admission_close_percent=50.0, **policies)
     await group.start_worker()
     return group
@@ -578,7 +578,7 @@ async def test_a_dead_only_worker_is_replaced_by_the_availability_judge(make_gro
     group.reception.state = "quitted"
     await group.check_occupancy(now=True)
 
-    # With no living worker, the ordinary availability/reserve judge restores
+    # With no living worker, the empty-group branch of check_occupancy restores
     # a reception. This birth is not caused by the CPU scan.
     assert len(group.worker_handler_map) == 2
     assert group.worker_handler_map["standard_0002"].cpu_admission_open

@@ -65,8 +65,7 @@ def handler_double() -> WorkerHandler:
     """One handler without a wire: only its process clock belongs to this story."""
     group = SimpleNamespace()
     group.envelope_handler = lambda envelope: envelope
-    group.cpu_grow_percent = None  # the name before Phase 2
-    group.cpu_admission_close_percent = None  # the name after it
+    group.cpu_admission_close_percent = None
     handler = WorkerHandler(
         group,
         "standard_0001",

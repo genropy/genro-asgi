@@ -1,0 +1,3 @@
+✓ Phase 5 completed: Coherence review and auto-fix (final, mandatory)
+
+`review.md` carries the three sections: two mechanical corrections applied (the "16 setpoints" count in `CLAUDE.md:175` and `internals/.../configuration_profiles/README.md:86`, now 14 — Phases 3 and 4 each deleted one), nine stale sentences flagged for the owner, and the clean checks recorded. `ruff check` passed on the file set and the full suite ran green at 1781 passed both before and after the edits; the flagged prose was reported rather than rewritten, per the phase's own Decisions, and the two `Verify: now` items are in `verify.md`. No `foreman.json` exists for this workflow, so no outcome message was sent; all five phases are now `[x]`.

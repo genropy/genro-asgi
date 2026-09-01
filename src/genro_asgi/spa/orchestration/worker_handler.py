@@ -265,14 +265,16 @@ class WorkerHandler:
         #: gate in ``assign_user`` stands apart, and the state dies with the
         #: handler. State only — this handler decides nothing with it.
         self.cpu_admission_open = True
-        #: The last lightweight kernel reading as ``(process birth, cpu seconds,
+        #: The ``psutil.Process`` of the pid this handler owns, built once and
+        #: rebuilt when the pid changes.
+        self._process_probe: psutil.Process | None = None
+        #: The last lightweight process reading as ``(process birth, cpu seconds,
         #: sample instant)``. The birth distinguishes a live worker from an
         #: unrelated process that later reused its pid.
-        self._process_probe: psutil.Process | None = None
         self._cpu_meter_reading: tuple[float, float, float] | None = None
         #: The worker's real CPU share over the last meter interval. None until
-        #: two readings of the same process exist; the full photo remains the
-        #: portable fallback on platforms without Linux's process table.
+        #: two readings of the same process exist: the first interval has no
+        #: temperature yet.
         self.cpu_temperature_percent: float | None = None
         #: When the temperature above was sampled, on the commander's monotonic
         #: clock, and the real width of the interval that produced it.

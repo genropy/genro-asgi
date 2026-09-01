@@ -39,9 +39,8 @@ The day, in order:
 4. **Her next request wakes her**, lazily: the vertex says frozen, the group says
    where, and the call carries the verdict that authorises the trip home.
 5. **The pool grows on demand.** The machine's concession is measured at last and
-   the reception reads full: a newcomer nobody admits rings the wake, the round
-   brings a second process into being, and his retry lands on it — the reception
-   refuses him with the reserve it keeps for the trade only it has.
+   the reception reads full: a newcomer nobody admits fathers a second process
+   inside his own placement and lands on it — no retry, no round in between.
 6. **The pool shrinks by waste.** The machine grew, so what the second one holds
    the reception can absorb and still admit: the closure runs its six steps over
    the real child, and the round that reads its ended state takes it out.

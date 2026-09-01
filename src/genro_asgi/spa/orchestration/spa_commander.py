@@ -145,7 +145,7 @@ value and not a cancellation, and a round that fails is written down and
 followed by the next beat.
 
 Observation has a second, deliberately narrower cadence. ``cpu_meter_loop``
-reads two scalar counters from each governed Linux process at the configured
+reads each governed process's cumulative CPU clock through psutil at the configured
 cadence (100 ms by default). It sends no worker RPC and builds no photo; the same
 pass reconciles only CPU admission. Placement observes that gate, while offload
 reads the latest temperature on the ordinary heartbeat.
@@ -211,7 +211,7 @@ DECISIONS_LOGGER_NAME = "genro_asgi.orchestration.decisions"
 #: ``PROCESS_PING_INTERVAL``, which is the cadence a single process is beaten at.
 HEARTBEAT_SECONDS = 5.0
 
-#: Default cadence of the observation-only Linux worker CPU thermometer.
+#: Default cadence of the observation-only worker CPU thermometer.
 CPU_TEMPERATURE_SAMPLE_SECONDS = 0.1
 
 # Beats between two rounds of each task of the vertex — the cadences, each where
