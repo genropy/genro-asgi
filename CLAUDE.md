@@ -172,7 +172,7 @@ front declared without either does not boot (`FatalBootError` →
 `lifespan.startup.failed`) — wanting no pool means declaring no spa front. At
 boot `boot_group_settings` composes `defaults ⊕ recipe_settings ⊕ profile ⊕ env_settings` through
 `GroupPolicy.from_settings` — the frozen dataclass in
-`spa/orchestration/group_policy.py` that holds the 15 setpoints, IS the
+`spa/orchestration/group_policy.py` that holds the 16 setpoints, IS the
 validation and collects every violation — BEFORE the vertex is built; the recipe
 and env levels stay separate dicts, so every later apply recomposes from them.
 A missing or invalid profile raises `FatalBootError` (`lifespan.py`): the one
@@ -221,6 +221,23 @@ buy little and amplify noisy samples. The periodic shape judge uses memory,
 not CPU, while this policy is on; otherwise CPU would still pre-fork through a
 second road. The journal ties every such birth to its first user with reason
 `new_worker_created_for_placement`.
+
+**A CPU-hot worker slims one user per beat (landed 2026-09-01).**
+`cpu_offload_percent` (group setpoint, off by default; requires
+`cpu_grow_percent` and sits above it — rearm < grow < offload) arms
+`GroupHandler.check_cpu_offload`, run at EVERY heartbeat on fresh photos: the
+hottest CPU-closed `running` worker past the threshold cedes ONE active user
+through `freeze_hosted_user` — the least busy of the last interval (no call in
+flight first, then least `recent_service_seconds`, then least
+`recent_call_count`, then name). The source is closed, so his next request is
+placed elsewhere or births capacity (demand-driven); light users leave one per
+beat and the load's owner stays — a single active user is never transferred,
+journaled once as `single_user_overload`. A cession stamps
+`record_cpu_pressure`; standing conditions are journaled once per
+(condition, subject) via a marker on the handler, never every beat. Reason
+codes: `cpu_offload_threshold`, `cpu_offload_user_selected`,
+`cpu_offload_completed`, `cpu_offload_refused`,
+`cpu_offload_no_active_candidate`, `single_user_overload`.
 
 **The photo counts each user's service (landed 2026-09-01).** Every user row
 carries three counters written by the worker — ``served_call_count`` and

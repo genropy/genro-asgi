@@ -117,6 +117,20 @@ hot one, which regrows seconds later (the close→grow cycle the bench measured,
 churn 2026-08-28). The quiet is CONTINUOUS: every event restarts it whole, the
 reopen included. After it, the retirement is exactly what it always was.
 
+**A CPU-hot worker slims one user at a beat (#43, off by default).** With
+``cpu_offload_percent`` set — above ``cpu_grow_percent``, since the offload
+stands on the admission closure — ``check_cpu_offload`` runs at EVERY beat on
+the fresh photos: the hottest CPU-closed ``running`` worker past the threshold
+cedes ONE active user, the least busy of the last interval (no call in flight
+first, then least ``recent_service_seconds``, then least ``recent_call_count``,
+then name), through the same ``freeze_hosted_user`` road as every departure.
+The source is closed, so his next request is placed elsewhere or births the
+capacity it needs; the light users leave one per beat and the heavy one stays —
+a single active user is never transferred, journaled once as
+``single_user_overload``, the worker de facto dedicated to him. A cession
+stamps the CPU pressure clock; the standing conditions are journaled once per
+(condition, subject), never every beat.
+
 **The closure is the departure of a whole worker, in six steps.** The group
 orders the quit; the worker answers AT ONCE with the photo of everybody flagged
 for the freezer, so the vertex parks them; it then drains, freezing one user at a
@@ -238,6 +252,12 @@ class GroupHandler:
             does. None, the default, leaves the policy off.
         cpu_grow_rearm_percent: below this the worker's admission reopens. The
             band between the two is hysteresis: the previous state is retained.
+        cpu_offload_percent: past this smoothed ``cpu_percent`` a CPU-closed
+            worker must slim: at every beat the group orders ONE of its active
+            users — the least busy in the last interval — into the freezer, and
+            the next request of his lands elsewhere, since this worker is
+            closed. None, the default, offloads nobody. Set, it requires
+            ``cpu_grow_percent`` and sits above it: rearm < grow < offload.
         cpu_retirement_quiet_seconds: how long the CPU must stay SILENT — no
             worker blocked or reopened — before retirement judges again, with
             the policy on.
@@ -284,6 +304,7 @@ class GroupHandler:
         close_occupancy_max_percent: float = 40.0,
         cpu_grow_percent: float | None = None,
         cpu_grow_rearm_percent: float = 40.0,
+        cpu_offload_percent: float | None = None,
         cpu_retirement_quiet_seconds: float = 60.0,
         worker_min_life_seconds: float = 60.0,
         reception_reserved_percent: float = 50.0,
@@ -319,6 +340,7 @@ class GroupHandler:
                 "close_occupancy_max_percent": close_occupancy_max_percent,
                 "cpu_grow_percent": cpu_grow_percent,
                 "cpu_grow_rearm_percent": cpu_grow_rearm_percent,
+                "cpu_offload_percent": cpu_offload_percent,
                 "cpu_retirement_quiet_seconds": cpu_retirement_quiet_seconds,
                 "worker_min_life_seconds": worker_min_life_seconds,
                 "reception_reserved_percent": reception_reserved_percent,
@@ -397,6 +419,10 @@ class GroupHandler:
     @property
     def cpu_grow_rearm_percent(self) -> float:
         return self.policy.cpu_grow_rearm_percent
+
+    @property
+    def cpu_offload_percent(self) -> float | None:
+        return self.policy.cpu_offload_percent
 
     @property
     def cpu_retirement_quiet_seconds(self) -> float:
@@ -595,6 +621,7 @@ class GroupHandler:
                 worker_handler.envelope_handler.report_death()
         await self.ping_workers()
         await self.check_occupancy(now=woken)
+        await self.check_cpu_offload()
         await self.check_user_activity()
 
     async def ping_workers(self) -> None:
@@ -1015,6 +1042,180 @@ class GroupHandler:
             reason="no_absorbable_spare_worker",
             numbers={"workers": len(picture)},
             candidates=self._placement_decision_rows(),
+        )
+
+    @every(1)
+    async def check_cpu_offload(self) -> None:
+        """Slim ONE CPU-hot worker by one user: the least busy of its actives.
+
+        Acts on the group at EVERY beat, on the freshest photos: among the
+        living ``running`` workers already CPU-closed and past
+        ``cpu_offload_percent``, the hottest one cedes its least busy active
+        user through ``freeze_hosted_user`` — the ordered departure, timeout
+        and hold release included. One cession per beat and per group; the
+        next beat re-reads everything, so nothing is planned ahead.
+
+        The worker being closed is what keeps the user from coming back: his
+        next request goes through the ordinary placement, which skips
+        CPU-closed workers and, when no open one admits him, births the
+        capacity on the spot — the demand-driven road. Progressively the light
+        users leave and the one generating the load stays: a single active
+        user is never transferred, the condition is journaled as
+        ``single_user_overload`` and the worker is de facto dedicated to him.
+
+        The two standing conditions — one active user, no active candidate —
+        would repeat every 5 seconds for as long as they hold, so they are
+        journaled ONCE per (condition, subject) through the marker on the
+        handler, cleared when the worker leaves the offload picture. An
+        actual cession is an action, journaled every time, and it stamps
+        ``record_cpu_pressure``: not to shield the destination — the
+        retirement is already suspended while a worker is CPU-closed — but so
+        the pressure history and the quiet after it stay coherent.
+        """
+        policy = self.policy
+        if policy.cpu_offload_percent is None:
+            return
+        over = [
+            worker_handler
+            for worker_handler in self.living_workers
+            if worker_handler.state == "running"
+            and not worker_handler.cpu_admission_open
+            and ((worker_handler.worker_snapshot or {}).get("cpu_percent") or 0.0)
+            > policy.cpu_offload_percent
+        ]
+        for worker_handler in self.living_workers:
+            if worker_handler not in over:
+                worker_handler.cpu_offload_condition = None
+        if not over:
+            return
+        target = max(
+            over,
+            key=lambda handler: (handler.worker_snapshot or {}).get("cpu_percent") or 0.0,
+        )
+        candidates = self._offload_candidates(target)
+        numbers = {
+            "cpu_percent": (target.worker_snapshot or {}).get("cpu_percent"),
+            "cpu_offload_percent": policy.cpu_offload_percent,
+            "cpu_grow_percent": policy.cpu_grow_percent,
+            "cpu_grow_rearm_percent": policy.cpu_grow_rearm_percent,
+            "resident_users": sum(
+                1 for name in self.user_worker_map.values() if name == target.name
+            ),
+            "active_candidates": [user for user, _ in candidates],
+            "workers": len(self.living_workers),
+        }
+        if not candidates:
+            self._note_offload_condition(
+                target, "cpu_offload_no_active_candidate", None, numbers
+            )
+            return
+        if len(candidates) == 1:
+            self._note_offload_condition(
+                target, "single_user_overload", candidates[0][0], numbers
+            )
+            return
+        target.cpu_offload_condition = None
+        user, item = candidates[0]
+        if not self._policy_held(policy, "cpu_offload", user):
+            return
+        self.record_cpu_pressure()
+        self.spa_commander.log_decision(
+            self.name,
+            "cpu_offload",
+            target.name,
+            reason="cpu_offload_threshold",
+            subject=user,
+            numbers=numbers,
+            candidates=[self._get_worker_decision_row(target)],
+        )
+        self.spa_commander.log_decision(
+            self.name,
+            "cpu_offload",
+            user,
+            reason="cpu_offload_user_selected",
+            subject=user,
+            numbers={
+                "recent_service_seconds": item.get("recent_service_seconds", 0.0),
+                "recent_call_count": item.get("recent_call_count", 0),
+                "pending_call_count": item.get("pending_call_count", 0),
+            },
+        )
+        frozen = await self.freeze_hosted_user(user)
+        self.spa_commander.log_order(
+            self.name,
+            "cpu_offload",
+            user,
+            numbers=numbers,
+            outcome="completed" if frozen else "refused: the departure did not happen",
+            reason="cpu_offload_completed" if frozen else "cpu_offload_refused",
+        )
+
+    def _offload_candidates(
+        self, worker_handler: WorkerHandler
+    ) -> list[tuple[str, dict[str, Any]]]:
+        """The active users of this worker, least busy first.
+
+        Args:
+            worker_handler: the CPU-hot worker being slimmed.
+
+        Returns:
+            ``(user, photo item)`` pairs, ordered as the cession wants them:
+            users with no call in flight first — a call just begun reads zero
+            recent seconds and must not put its owner at the head — then by
+            recent service seconds, then by recent call count, then by name.
+
+        Active means judged from the deltas: at least one call completed in
+        the interval, or one in flight right now. Whoever shows neither
+        belongs to the idle-freeze judgment, not to this one. Only users this
+        group still places on that worker are candidates, so a photo that has
+        not caught up with a departure names nobody.
+        """
+        photo = worker_handler.worker_snapshot or {}
+        candidates = []
+        for user, row in (photo.get("users") or {}).items():
+            item = row["item"]
+            if item["state"] != "active":
+                continue
+            if self.user_worker_map.get(user) != worker_handler.name:
+                continue
+            if not item.get("recent_call_count", 0) and not item.get("pending_call_count", 0):
+                continue
+            candidates.append((user, item))
+        candidates.sort(
+            key=lambda pair: (
+                1 if pair[1].get("pending_call_count", 0) else 0,
+                pair[1].get("recent_service_seconds", 0.0),
+                pair[1].get("recent_call_count", 0),
+                pair[0],
+            )
+        )
+        return candidates
+
+    def _note_offload_condition(
+        self,
+        worker_handler: WorkerHandler,
+        condition: str,
+        subject: str | None,
+        numbers: dict[str, Any],
+    ) -> None:
+        """Journal a standing offload condition once, until it changes.
+
+        Args:
+            worker_handler: the worker the condition stands on.
+            condition: the stable reason code.
+            subject: on whom, when the condition names somebody.
+            numbers: what the judge had in front of it.
+        """
+        if worker_handler.cpu_offload_condition == (condition, subject):
+            return
+        worker_handler.cpu_offload_condition = (condition, subject)
+        self.spa_commander.log_decision(
+            self.name,
+            "cpu_offload",
+            "no_action",
+            reason=condition,
+            subject=subject or worker_handler.name,
+            numbers=numbers,
         )
 
     @every(CHECK_USER_ACTIVITY_BEATS)

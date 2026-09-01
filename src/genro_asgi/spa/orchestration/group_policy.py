@@ -23,7 +23,9 @@ an invalid policy object cannot exist.
 
 ``null`` in a profile means unlimited or off: ``worker_max_users`` and
 ``user_idle_freeze_minutes`` become ``math.inf`` inside the policy,
-``cpu_grow_percent`` becomes ``None`` (CPU admission policy off) and
+``cpu_grow_percent`` becomes ``None`` (CPU admission policy off),
+``cpu_offload_percent`` becomes ``None`` (no user is ever offloaded for CPU;
+set, it requires ``cpu_grow_percent`` and must sit above it) and
 ``worker_memory_max_percent`` becomes the derivation
 ``100 / worker_max_number``.  ``to_settings`` translates all of that back, so
 its output always survives ``json.dumps(..., allow_nan=False)``.
@@ -75,6 +77,7 @@ class GroupPolicy:
         "close_occupancy_max_percent": (False, False, 0.0, False, 100.0),
         "cpu_grow_percent": (False, True, 0.0, False, 100.0),
         "cpu_grow_rearm_percent": (False, False, 0.0, False, 100.0),
+        "cpu_offload_percent": (False, True, 0.0, False, 100.0),
         "cpu_retirement_quiet_seconds": (False, False, 0.0, False, None),
         "worker_min_life_seconds": (False, False, 0.0, False, None),
         "reception_reserved_percent": (False, False, 0.0, False, 100.0),
@@ -92,6 +95,7 @@ class GroupPolicy:
     close_occupancy_max_percent: float = 40.0
     cpu_grow_percent: float | None = None
     cpu_grow_rearm_percent: float = 40.0
+    cpu_offload_percent: float | None = None
     cpu_retirement_quiet_seconds: float = 60.0
     worker_min_life_seconds: float = 60.0
     reception_reserved_percent: float = 50.0
@@ -213,3 +217,14 @@ class GroupPolicy:
                 f"cpu_grow_rearm_percent ({self.cpu_grow_rearm_percent}) must sit below "
                 f"cpu_grow_percent ({self.cpu_grow_percent}), both inside 0-100"
             )
+        if self.cpu_offload_percent is not None:
+            if self.cpu_grow_percent is None:
+                violations.append(
+                    f"cpu_offload_percent ({self.cpu_offload_percent}) requires "
+                    "cpu_grow_percent: the offload stands on the CPU admission closure"
+                )
+            elif not (self.cpu_grow_percent < self.cpu_offload_percent <= 100.0):
+                violations.append(
+                    f"cpu_offload_percent ({self.cpu_offload_percent}) must sit above "
+                    f"cpu_grow_percent ({self.cpu_grow_percent}), inside 0-100"
+                )

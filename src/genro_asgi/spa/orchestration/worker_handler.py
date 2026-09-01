@@ -257,6 +257,13 @@ class WorkerHandler:
         #: gate in ``assign_user`` stands apart, and the state dies with the
         #: handler. State only — this handler decides nothing with it.
         self.cpu_admission_open = True
+        #: The offload condition last journaled for this worker, as
+        #: ``(reason, subject)`` — ``single_user_overload`` and
+        #: ``cpu_offload_no_active_candidate`` would otherwise repeat every
+        #: beat for as long as they stand. Deduplication of the journal only,
+        #: cleared when the worker leaves the offload picture; it dies with
+        #: the handler and decides nothing.
+        self.cpu_offload_condition: tuple[str, str | None] | None = None
         self.envelope_handler = WorkerEnvelopeHandler(self, group_handler.envelope_handler)
         self.connector = WorkerConnector(self, self.instance_dir / f"{name}.sock")
         self._logger = logging.getLogger(__name__)

@@ -215,3 +215,32 @@ def test_the_retirement_quiet_is_a_non_negative_duration():
     written = GroupPolicy.from_settings({"cpu_retirement_quiet_seconds": 12.5}).to_settings()
     assert written["cpu_retirement_quiet_seconds"] == 12.5
     assert json.dumps(written, allow_nan=False)
+
+
+def test_the_offload_threshold_stands_on_the_admission_closure():
+    # cpu_offload_percent off by default; set, it requires cpu_grow_percent
+    # and must sit ABOVE it: the offload relies on the source being closed to
+    # new users, or the offloaded user could be placed right back.
+    assert GroupPolicy.from_settings({}).cpu_offload_percent is None
+    assert GroupPolicy.from_settings({"cpu_offload_percent": None}).cpu_offload_percent is None
+
+    policy = GroupPolicy.from_settings(
+        {"cpu_grow_rearm_percent": 30.0, "cpu_grow_percent": 50.0, "cpu_offload_percent": 75.0}
+    )
+    assert policy.cpu_offload_percent == 75.0
+    assert policy.to_settings()["cpu_offload_percent"] == 75.0
+
+    with pytest.raises(GroupPolicyError) as caught:
+        GroupPolicy.from_settings({"cpu_offload_percent": 75.0})
+    assert "requires cpu_grow_percent" in caught.value.violations[0]
+
+    for refused in (50.0, 40.0):
+        with pytest.raises(GroupPolicyError) as caught:
+            GroupPolicy.from_settings(
+                {"cpu_grow_percent": 50.0, "cpu_offload_percent": refused}
+            )
+        assert "must sit above cpu_grow_percent" in caught.value.violations[0]
+
+    with pytest.raises(GroupPolicyError) as caught:
+        GroupPolicy.from_settings({"cpu_grow_percent": 50.0, "cpu_offload_percent": 101.0})
+    assert "out of range" in caught.value.violations[0]

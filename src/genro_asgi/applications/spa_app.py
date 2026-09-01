@@ -218,6 +218,7 @@ class SpaApplicationGrammar(ApplicationGrammar):
         close_occupancy_max_percent: float | BagResolver = None,
         cpu_grow_percent: float | BagResolver = None,
         cpu_grow_rearm_percent: float | BagResolver = None,
+        cpu_offload_percent: float | BagResolver = None,
         cpu_retirement_quiet_seconds: float | BagResolver | None = None,
         worker_min_life_seconds: float | BagResolver = None,
         reception_reserved_percent: float | BagResolver = None,
@@ -268,7 +269,11 @@ class SpaApplicationGrammar(ApplicationGrammar):
         closed to NEW users and reopens below ``cpu_grow_rearm_percent``. CPU
         samples do not fork processes. When a concrete arrival finds no open
         worker that can admit it, placement creates one worker and assigns that
-        same user. ``cpu_retirement_quiet_seconds`` is how long the CPU must
+        same user. ``cpu_offload_percent`` (off when omitted; requires
+        ``cpu_grow_percent`` and sits above it) makes a CPU-closed worker past
+        it slim itself: one active user per beat — the least busy — is parked
+        in the freezer, and his next request lands on an open worker or births
+        one. ``cpu_retirement_quiet_seconds`` is how long the CPU must
         stay silent — no blocking or reopening — before retirement judges
         again: the quiet of the GROUP, distinct from the age of one worker,
         restarted whole by every CPU admission transition.
