@@ -101,7 +101,7 @@ Prepare the CPU orchestration rework on `feat/cpu-orchestration`: one CPU source
 | Phase | Effort | Model |
 |-------|--------|-------|
 | Phase 1 | medium | opus |
-| Phase 2 | low | opus |
+| Phase 2 | medium | opus |
 | Phase 3 | medium | opus |
-| Phase 4 | low | opus |
+| Phase 4 | medium | opus |
 | Phase 5 | xhigh | opus |
