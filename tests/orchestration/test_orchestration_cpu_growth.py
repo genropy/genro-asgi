@@ -56,7 +56,7 @@ DECISIONS_LOGGER = "genro_asgi.orchestration.decisions"
 async def grown_group(make_group, **policies):
     """One group with the policy on, its reception unreserved as the experiment runs it."""
     policies.setdefault("reception_reserved_percent", 0.0)
-    group = make_group(cpu_grow_percent=50.0, **policies)
+    group = make_group(cpu_admission_close_percent=50.0, **policies)
     await group.start_worker()
     return group
 
@@ -129,7 +129,7 @@ async def test_a_crossing_blocks_the_worker_without_growing(make_group, caplog):
     assert group.reception.cpu_admission_open is False
     rows = [record.getMessage() for record in caplog.records]
     assert any("cpu_admission" in row and "blocked" in row for row in rows)
-    assert not any("cpu_grow" in row for row in rows)
+    assert not any("order=grow" in row for row in rows)
 
 
 async def test_admission_decision_names_the_closed_worker(make_group, caplog):
@@ -641,10 +641,10 @@ async def test_no_spawn_close_spawn_cycle_without_new_load(make_group, group_clo
 async def test_the_thresholds_must_leave_a_hysteresis_band(make_group):
     for grow, rearm in ((50.0, 60.0), (50.0, 50.0), (110.0, 40.0), (50.0, -1.0)):
         with pytest.raises(ValueError, match="hysteresis"):
-            make_group(cpu_grow_percent=grow, cpu_grow_rearm_percent=rearm)
+            make_group(cpu_admission_close_percent=grow, cpu_admission_reopen_percent=rearm)
 
-    make_group(cpu_grow_percent=50.0, cpu_grow_rearm_percent=40.0)
-    make_group(cpu_grow_rearm_percent=60.0)  # policy off: the band is nobody's business
+    make_group(cpu_admission_close_percent=50.0, cpu_admission_reopen_percent=40.0)
+    make_group(cpu_admission_reopen_percent=60.0)  # policy off: the band is nobody's business
 
 
 # --- the retirement stands aside while the CPU speaks ---------------------------

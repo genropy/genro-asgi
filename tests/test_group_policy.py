@@ -20,8 +20,8 @@ def test_defaults_materialized_from_empty_settings():
     assert policy.occupancy_max_percent == 80.0
     assert policy.restart_occupancy_max_percent == 95.0
     assert policy.close_occupancy_max_percent == 40.0
-    assert policy.cpu_grow_percent is None
-    assert policy.cpu_grow_rearm_percent == 40.0
+    assert policy.cpu_admission_close_percent is None
+    assert policy.cpu_admission_reopen_percent == 40.0
     assert policy.cpu_retirement_quiet_seconds == 60.0
     assert policy.worker_min_life_seconds == 60.0
     assert policy.reception_reserved_percent == 50.0
@@ -97,8 +97,8 @@ def test_validation_rejects_and_lists_all_violations():
     assert len(caught.value.violations) == 1
 
     with pytest.raises(GroupPolicyError) as caught:
-        GroupPolicy.from_settings({"cpu_grow_percent": 30.0, "cpu_grow_rearm_percent": 30.0})
-    assert "cpu_grow_rearm_percent" in caught.value.violations[0]
+        GroupPolicy.from_settings({"cpu_admission_close_percent": 30.0, "cpu_admission_reopen_percent": 30.0})
+    assert "cpu_admission_reopen_percent" in caught.value.violations[0]
 
     with pytest.raises(GroupPolicyError) as caught:
         GroupPolicy.from_settings({"close_occupancy_max_percent": 80.0})
@@ -121,24 +121,24 @@ def test_validation_rejects_and_lists_all_violations():
 def test_null_means_unlimited_or_off():
     # wf:contract: T17 — worker_max_users null becomes math.inf internally and
     # wf:contract: null again in to_settings(); user_idle_freeze_minutes null the
-    # wf:contract: same; cpu_grow_percent null becomes None (policy off);
+    # wf:contract: same; cpu_admission_close_percent null becomes None (policy off);
     # wf:contract: to_settings() output is JSON-safe: json.dumps(...,
     # wf:contract: allow_nan=False) never raises on it.
     policy = GroupPolicy.from_settings(
         {
             "worker_max_users": None,
             "user_idle_freeze_minutes": None,
-            "cpu_grow_percent": None,
+            "cpu_admission_close_percent": None,
         }
     )
     assert policy.worker_max_users == math.inf
     assert policy.user_idle_freeze_minutes == math.inf
-    assert policy.cpu_grow_percent is None
+    assert policy.cpu_admission_close_percent is None
 
     settings = policy.to_settings()
     assert settings["worker_max_users"] is None
     assert settings["user_idle_freeze_minutes"] is None
-    assert settings["cpu_grow_percent"] is None
+    assert settings["cpu_admission_close_percent"] is None
     assert json.loads(json.dumps(settings, allow_nan=False)) == settings
 
     bounded = GroupPolicy.from_settings({"worker_max_users": 12, "user_idle_freeze_minutes": 30.0})
@@ -218,29 +218,29 @@ def test_the_retirement_quiet_is_a_non_negative_duration():
 
 
 def test_the_offload_threshold_stands_on_the_admission_closure():
-    # cpu_offload_percent off by default; set, it requires cpu_grow_percent
+    # cpu_offload_percent off by default; set, it requires cpu_admission_close_percent
     # and must sit ABOVE it: the offload relies on the source being closed to
     # new users, or the offloaded user could be placed right back.
     assert GroupPolicy.from_settings({}).cpu_offload_percent is None
     assert GroupPolicy.from_settings({"cpu_offload_percent": None}).cpu_offload_percent is None
 
     policy = GroupPolicy.from_settings(
-        {"cpu_grow_rearm_percent": 30.0, "cpu_grow_percent": 50.0, "cpu_offload_percent": 75.0}
+        {"cpu_admission_reopen_percent": 30.0, "cpu_admission_close_percent": 50.0, "cpu_offload_percent": 75.0}
     )
     assert policy.cpu_offload_percent == 75.0
     assert policy.to_settings()["cpu_offload_percent"] == 75.0
 
     with pytest.raises(GroupPolicyError) as caught:
         GroupPolicy.from_settings({"cpu_offload_percent": 75.0})
-    assert "requires cpu_grow_percent" in caught.value.violations[0]
+    assert "requires cpu_admission_close_percent" in caught.value.violations[0]
 
     for refused in (50.0, 40.0):
         with pytest.raises(GroupPolicyError) as caught:
             GroupPolicy.from_settings(
-                {"cpu_grow_percent": 50.0, "cpu_offload_percent": refused}
+                {"cpu_admission_close_percent": 50.0, "cpu_offload_percent": refused}
             )
-        assert "must sit above cpu_grow_percent" in caught.value.violations[0]
+        assert "must sit above cpu_admission_close_percent" in caught.value.violations[0]
 
     with pytest.raises(GroupPolicyError) as caught:
-        GroupPolicy.from_settings({"cpu_grow_percent": 50.0, "cpu_offload_percent": 101.0})
+        GroupPolicy.from_settings({"cpu_admission_close_percent": 50.0, "cpu_offload_percent": 101.0})
     assert "out of range" in caught.value.violations[0]

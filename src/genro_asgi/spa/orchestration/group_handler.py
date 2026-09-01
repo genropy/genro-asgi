@@ -95,10 +95,10 @@ when the survivors lack room BY HEADS for the spare's placed users. The next
 round re-reads: a decision is never carried over.
 
 **CPU admission and demand-driven birth (#43, experimental, off by default).**
-With ``cpu_grow_percent`` set, the commander's process thermometer samples each
+With ``cpu_admission_close_percent`` set, the commander's process thermometer samples each
 worker independently of traffic. A fresh ``cpu_temperature_percent`` above the
 threshold CLOSES it to new users (``cpu_admission_open``); it reopens only below
-``cpu_grow_rearm_percent``; between the two thresholds it keeps its state — the
+``cpu_admission_reopen_percent``; between the two thresholds it keeps its state — the
 band is hysteresis. A photo's historical ``cpu_percent`` is not an orchestration
 input. The thermometer never creates a process by itself. When a
 real user arrives, placement first tries the CPU-open workers; only when none
@@ -119,7 +119,7 @@ churn 2026-08-28). The quiet is CONTINUOUS: every event restarts it whole, the
 reopen included. After it, the retirement is exactly what it always was.
 
 **A CPU-hot worker slims one user at a beat (#43, off by default).** With
-``cpu_offload_percent`` set — above ``cpu_grow_percent``, since the offload
+``cpu_offload_percent`` set — above ``cpu_admission_close_percent``, since the offload
 stands on the admission closure — ``check_cpu_offload`` runs at EVERY beat using
 the latest fresh temperature: the hottest CPU-closed ``running`` worker past the threshold
 cedes ONE user through the same ``freeze_hosted_user`` road as every departure.
@@ -252,18 +252,18 @@ class GroupHandler:
             below ``occupancy_max_percent``, so the band between the two is the
             pool's normal state and never a condition to correct. One threshold
             for both made every growth the evidence for its own reversal (#36).
-        cpu_grow_percent: the soft-admission threshold (#43, experimental): a
+        cpu_admission_close_percent: the soft-admission threshold (#43, experimental): a
             worker whose fresh commander-side CPU temperature crosses above it
             stops taking new users. CPU sampling never creates a worker; concrete placement
             does. None, the default, leaves the policy off.
-        cpu_grow_rearm_percent: below this the worker's admission reopens. The
+        cpu_admission_reopen_percent: below this the worker's admission reopens. The
             band between the two is hysteresis: the previous state is retained.
         cpu_offload_percent: past this fresh CPU temperature a CPU-closed
             worker must slim: at every beat the group orders ONE of its active
             users — the least busy in the last interval — into the freezer, and
             the next request of his lands elsewhere, since this worker is
             closed. None, the default, offloads nobody. Set, it requires
-            ``cpu_grow_percent`` and sits above it: rearm < grow < offload.
+            ``cpu_admission_close_percent`` and sits above it: reopen < close < offload.
         cpu_retirement_quiet_seconds: how long the CPU must stay SILENT — no
             worker blocked or reopened — before retirement judges again, with
             the policy on.
@@ -308,8 +308,8 @@ class GroupHandler:
         occupancy_max_percent: float = 80.0,
         restart_occupancy_max_percent: float = 95.0,
         close_occupancy_max_percent: float = 40.0,
-        cpu_grow_percent: float | None = None,
-        cpu_grow_rearm_percent: float = 40.0,
+        cpu_admission_close_percent: float | None = None,
+        cpu_admission_reopen_percent: float = 40.0,
         cpu_offload_percent: float | None = None,
         cpu_retirement_quiet_seconds: float = 60.0,
         worker_min_life_seconds: float = 60.0,
@@ -326,12 +326,12 @@ class GroupHandler:
         engine_kwargs: dict[str, Any] | None = None,
         **worker_settings: Any,
     ) -> None:
-        if cpu_grow_percent is not None and not (
-            0.0 <= cpu_grow_rearm_percent < cpu_grow_percent <= 100.0
+        if cpu_admission_close_percent is not None and not (
+            0.0 <= cpu_admission_reopen_percent < cpu_admission_close_percent <= 100.0
         ):
             raise ValueError(
-                f"Group {name}: cpu_grow_rearm_percent ({cpu_grow_rearm_percent}) must sit "
-                f"below cpu_grow_percent ({cpu_grow_percent}), both inside 0-100 — the band "
+                f"Group {name}: cpu_admission_reopen_percent ({cpu_admission_reopen_percent}) must sit "
+                f"below cpu_admission_close_percent ({cpu_admission_close_percent}), both inside 0-100 — the band "
                 "between them is the hysteresis; without it a steady worker respawns forever"
             )
         self.spa_commander = spa_commander
@@ -344,8 +344,8 @@ class GroupHandler:
                 "occupancy_max_percent": occupancy_max_percent,
                 "restart_occupancy_max_percent": restart_occupancy_max_percent,
                 "close_occupancy_max_percent": close_occupancy_max_percent,
-                "cpu_grow_percent": cpu_grow_percent,
-                "cpu_grow_rearm_percent": cpu_grow_rearm_percent,
+                "cpu_admission_close_percent": cpu_admission_close_percent,
+                "cpu_admission_reopen_percent": cpu_admission_reopen_percent,
                 "cpu_offload_percent": cpu_offload_percent,
                 "cpu_retirement_quiet_seconds": cpu_retirement_quiet_seconds,
                 "worker_min_life_seconds": worker_min_life_seconds,
@@ -419,12 +419,12 @@ class GroupHandler:
         return self.policy.close_occupancy_max_percent
 
     @property
-    def cpu_grow_percent(self) -> float | None:
-        return self.policy.cpu_grow_percent
+    def cpu_admission_close_percent(self) -> float | None:
+        return self.policy.cpu_admission_close_percent
 
     @property
-    def cpu_grow_rearm_percent(self) -> float:
-        return self.policy.cpu_grow_rearm_percent
+    def cpu_admission_reopen_percent(self) -> float:
+        return self.policy.cpu_admission_reopen_percent
 
     @property
     def cpu_offload_percent(self) -> float | None:
@@ -494,7 +494,7 @@ class GroupHandler:
         speaking, and stamping them would leave a cooldown behind for whoever
         switches the policy back on.
         """
-        cpu_policy_on = new_policy.cpu_grow_percent is not None
+        cpu_policy_on = new_policy.cpu_admission_close_percent is not None
         self.policy = new_policy
         for name, admission_open in reconciliation:
             worker_handler = self.worker_handler_map[name]
@@ -1023,7 +1023,7 @@ class GroupHandler:
         # signal here; concrete placement is the only CPU-related birth.
         occupancy_reader = (
             self.get_memory_occupancy_percent
-            if policy.cpu_grow_percent is not None
+            if policy.cpu_admission_close_percent is not None
             else self.get_occupancy_percent
         )
         picture = {name: occupancy_reader(photo) for name, photo in snapshots.items()}
@@ -1033,7 +1033,7 @@ class GroupHandler:
             return
         if self.state == "saturated":
             self.state = "running"
-        if policy.cpu_grow_percent is not None:
+        if policy.cpu_admission_close_percent is not None:
             # The retirement stands aside while the CPU policy is under
             # pressure (#43): closing the emptiest worker while demand stands
             # hands its users back to the hot one, which regrows seconds later
@@ -1164,8 +1164,8 @@ class GroupHandler:
         numbers = {
             "cpu_temperature_percent": target.get_cpu_temperature_percent(),
             "cpu_offload_percent": policy.cpu_offload_percent,
-            "cpu_grow_percent": policy.cpu_grow_percent,
-            "cpu_grow_rearm_percent": policy.cpu_grow_rearm_percent,
+            "cpu_admission_close_percent": policy.cpu_admission_close_percent,
+            "cpu_admission_reopen_percent": policy.cpu_admission_reopen_percent,
             "resident_users": sum(
                 1 for name in self.user_worker_map.values() if name == target.name
             ),
@@ -1508,9 +1508,9 @@ class GroupHandler:
     def _judge_cpu_admission(self, *, log_scan: bool = True) -> None:
         """Open or close workers to newcomers from the CPU hysteresis.
 
-        Off unless ``cpu_grow_percent`` is set. The smoothed CPU photo controls
-        admission only: above the grow threshold a worker stops taking NEW
-        users, below the rearm threshold it takes them again, and inside the
+        Off unless ``cpu_admission_close_percent`` is set. The smoothed CPU photo controls
+        admission only: above the close threshold a worker stops taking NEW
+        users, below the reopen threshold it takes them again, and inside the
         band it keeps its state. Sticky users never move.
 
         No process is born here. The template fork is cheap enough that demand
@@ -1519,7 +1519,7 @@ class GroupHandler:
         a concrete first user and a quiet interval creates no empty process.
         """
         policy = self.policy
-        if policy.cpu_grow_percent is None:
+        if policy.cpu_admission_close_percent is None:
             self.spa_commander.log_decision(
                 self.name,
                 "cpu_admission_scan",
@@ -1533,7 +1533,7 @@ class GroupHandler:
             cpu_percent = worker_handler.get_cpu_temperature_percent()
             if cpu_percent is None:
                 continue
-            if cpu_percent > policy.cpu_grow_percent:
+            if cpu_percent > policy.cpu_admission_close_percent:
                 if worker_handler.cpu_admission_open:
                     worker_handler.cpu_admission_open = False
                     transitions += 1
@@ -1543,10 +1543,10 @@ class GroupHandler:
                         "cpu_admission",
                         worker_handler.name,
                         numbers={"cpu_temperature_percent": cpu_percent},
-                        outcome="blocked: over the growth threshold",
-                        reason="cpu_over_growth_threshold",
+                        outcome="blocked: over the close threshold",
+                        reason="cpu_over_close_threshold",
                     )
-            elif cpu_percent < policy.cpu_grow_rearm_percent:
+            elif cpu_percent < policy.cpu_admission_reopen_percent:
                 if not worker_handler.cpu_admission_open:
                     worker_handler.cpu_admission_open = True
                     transitions += 1
@@ -1556,8 +1556,8 @@ class GroupHandler:
                         "cpu_admission",
                         worker_handler.name,
                         numbers={"cpu_temperature_percent": cpu_percent},
-                        outcome="reopened: below the rearm threshold",
-                        reason="cpu_below_rearm_threshold",
+                        outcome="reopened: below the reopen threshold",
+                        reason="cpu_below_reopen_threshold",
                     )
         if not log_scan:
             return
@@ -1571,8 +1571,8 @@ class GroupHandler:
             ),
             numbers={
                 "transitions": transitions,
-                "cpu_grow_percent": policy.cpu_grow_percent,
-                "cpu_grow_rearm_percent": policy.cpu_grow_rearm_percent,
+                "cpu_admission_close_percent": policy.cpu_admission_close_percent,
+                "cpu_admission_reopen_percent": policy.cpu_admission_reopen_percent,
                 "worker_cpu_temperature": {
                     name: handler.get_cpu_temperature_percent()
                     for name, handler in self.worker_handler_map.items()
@@ -1589,8 +1589,8 @@ class GroupHandler:
     def record_cpu_pressure(self) -> None:
         """Stamp NOW as the instant the CPU last spoke — the retirement's quiet restarts.
 
-        Called on every CPU event: a worker blocked over the growth threshold,
-        a worker reopened below the rearm threshold — and an apply that actually
+        Called on every CPU event: a worker blocked over the close threshold,
+        a worker reopened below the reopen threshold — and an apply that actually
         moves a worker's admission, which is the same fact said by a
         reconfiguration instead of a photo.
 
@@ -1613,7 +1613,7 @@ class GroupHandler:
             run.
 
         Two reasons, in the order they are asked. The policy off is no reason at
-        all: with no ``cpu_grow_percent`` this is never consulted and the
+        all: with no ``cpu_admission_close_percent`` this is never consulted and the
         retirement is exactly what it always was. A living worker still
         CPU-closed is standing demand — its load has nowhere to consolidate
         INTO. And a CPU event younger than ``cpu_retirement_quiet_seconds``
@@ -1650,7 +1650,7 @@ class GroupHandler:
         async with self._placement_lock:
             occupancy_reader = (
                 self.get_memory_occupancy_percent
-                if policy.cpu_grow_percent is not None
+                if policy.cpu_admission_close_percent is not None
                 else self.get_occupancy_percent
             )
             picture = {

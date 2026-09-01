@@ -324,7 +324,7 @@ async def test_the_ordinary_growth_saturates_the_group_when_the_container_is_ful
 def test_cpu_pressure_only_closes_admission_when_the_container_is_full(
     commander, tmp_path, monkeypatch
 ):
-    group = build_group(commander, tmp_path, worker_max_number=4, cpu_grow_percent=70.0)
+    group = build_group(commander, tmp_path, worker_max_number=4, cpu_admission_close_percent=70.0)
     worker = WorkerStub("standard_0001", rss_bytes=LIMIT_BYTES // 4, cpu_percent=90.0)
     with_workers(group, worker)
     with_available(monkeypatch, commander, 4 * MIB)
@@ -338,7 +338,7 @@ def test_cpu_pressure_only_closes_admission_when_the_container_is_full(
 def test_cpu_scan_never_consults_changing_memory_to_fork(
     commander, tmp_path, monkeypatch
 ):
-    group = build_group(commander, tmp_path, worker_max_number=4, cpu_grow_percent=70.0)
+    group = build_group(commander, tmp_path, worker_max_number=4, cpu_admission_close_percent=70.0)
     worker = WorkerStub("standard_0001", rss_bytes=LIMIT_BYTES // 4, cpu_percent=90.0)
     with_workers(group, worker)
     # Memory availability may change, but a CPU scan never starts a fork.

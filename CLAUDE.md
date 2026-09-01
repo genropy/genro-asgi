@@ -207,14 +207,14 @@ worker's admission;
 an apply that moves nobody invents no cooldown. `get_retirement_suspension`
 answers the gate: a living worker still CPU-closed, or an event younger than the
 quiet. `_cpu_pressure_monotonic` is born `None`, so a boot imposes no cooldown,
-and with `cpu_grow_percent` off the gate is never consulted. Past the quiet
+and with `cpu_admission_close_percent` off the gate is never consulted. Past the quiet
 `_spare_worker` and `_order_quit` are exactly what they always were —
 consolidation of a worker with users included.
 
 **CPU pressure gates admission; concrete demand births capacity (landed
 2026-08-29; thermometer channel 2026-09-01).** A fresh commander-side worker
-temperature above `cpu_grow_percent` closes that worker to new users; one below
-`cpu_grow_rearm_percent` reopens it. A photo's `cpu_percent` is not an
+temperature above `cpu_admission_close_percent` closes that worker to new users; one below
+`cpu_admission_reopen_percent` reopens it. A photo's `cpu_percent` is not an
 orchestration input. The CPU judge never forks.
 When an arriving user finds no CPU-open worker that admits it, `assign_user`
 creates one worker under the placement lock and assigns that same user before
@@ -236,7 +236,7 @@ on their existing channels.
 
 **A CPU-hot worker slims one user per beat (landed 2026-09-01).**
 `cpu_offload_percent` (group setpoint, off by default; requires
-`cpu_grow_percent` and sits above it — rearm < grow < offload) arms
+`cpu_admission_close_percent` and sits above it — reopen < close < offload) arms
 `GroupHandler.check_cpu_offload`, run at EVERY heartbeat on fresh photos: the
 hottest CPU-closed `running` worker past the threshold cedes ONE user through
 `freeze_hosted_user`. WHO is judged against the window itself: a MATERIAL

@@ -47,7 +47,7 @@ def handler_double() -> WorkerHandler:
     """One handler without a wire: only its process clock belongs to this story."""
     group = SimpleNamespace()
     group.envelope_handler = lambda envelope: envelope
-    group.cpu_grow_percent = None
+    group.cpu_admission_close_percent = None
     handler = WorkerHandler(
         group,
         "standard_0001",
@@ -94,7 +94,7 @@ def test_a_full_photo_and_the_temperature_remain_independent():
 def test_fresh_temperature_closes_and_reopens_cpu_admission(
     commander, make_group, monkeypatch
 ):
-    group = make_group(cpu_grow_percent=50.0, cpu_grow_rearm_percent=30.0)
+    group = make_group(cpu_admission_close_percent=50.0, cpu_admission_reopen_percent=30.0)
     handler = handler_double()
     handler.process = None
     handler.group_handler = group
@@ -117,7 +117,7 @@ def test_fresh_temperature_closes_and_reopens_cpu_admission(
 def test_temperature_is_observed_even_when_the_cpu_policy_is_off(
     commander, make_group, monkeypatch
 ):
-    group = make_group(cpu_grow_percent=None)
+    group = make_group(cpu_admission_close_percent=None)
     handler = handler_double()
     handler.process = None
     handler.group_handler = group
@@ -139,7 +139,7 @@ def test_temperature_is_observed_even_when_the_cpu_policy_is_off(
 def test_an_unreadable_process_does_not_rejudge_a_stale_photo(
     commander, make_group, monkeypatch
 ):
-    group = make_group(cpu_grow_percent=50.0, cpu_grow_rearm_percent=30.0)
+    group = make_group(cpu_admission_close_percent=50.0, cpu_admission_reopen_percent=30.0)
     handler = handler_double()
     handler.process = None
     handler.group_handler = group
@@ -155,7 +155,7 @@ def test_an_unreadable_process_does_not_rejudge_a_stale_photo(
 def test_a_stale_temperature_is_not_an_orchestration_input(
     commander, make_group, monkeypatch
 ):
-    group = make_group(cpu_grow_percent=50.0, cpu_grow_rearm_percent=30.0)
+    group = make_group(cpu_admission_close_percent=50.0, cpu_admission_reopen_percent=30.0)
     handler = handler_double()
     handler.process = None
     handler.group_handler = group

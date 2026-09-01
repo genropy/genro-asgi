@@ -137,14 +137,14 @@ async def test_decision_snapshot_and_emitted_order_complete(
 async def test_cpu_apply_and_scan_never_create_capacity(configured, make_group):  # noqa: F811
     # Applying a threshold and judging a hot photo only reconcile admission.
     # There is no in-flight CPU fork to coordinate with policy replacement.
-    group = make_group(cpu_grow_percent=50.0, reception_reserved_percent=0.0)
+    group = make_group(cpu_admission_close_percent=50.0, reception_reserved_percent=0.0)
     worker_handler = await group.start_worker()
     declare_cpu(worker_handler, 90.0)
 
     await configured.apply_group_settings(
         profile={
-            "cpu_grow_percent": 95.0,
-            "cpu_grow_rearm_percent": 80.0,
+            "cpu_admission_close_percent": 95.0,
+            "cpu_admission_reopen_percent": 80.0,
             "reception_reserved_percent": 0.0,
         }
     )
@@ -166,7 +166,7 @@ async def test_no_admission_window_on_apply(configured, make_group):  # noqa: F8
     known_at_the_vertex(configured, "cid_1", "mario")
 
     await configured.apply_group_settings(
-        profile={"cpu_grow_percent": 50.0, "reception_reserved_percent": 0.0}
+        profile={"cpu_admission_close_percent": 50.0, "reception_reserved_percent": 0.0}
     )
 
     assert hot.cpu_admission_open is False
@@ -189,7 +189,7 @@ async def test_cpu_reconciliation_six_outcomes(configured, make_group):  # noqa:
     declare_cpu(hot, 90.0)
     declare_cpu(cool, 10.0)
     blind.worker_snapshot = None
-    band = {"cpu_grow_percent": 50.0, "cpu_grow_rearm_percent": 20.0}
+    band = {"cpu_admission_close_percent": 50.0, "cpu_admission_reopen_percent": 20.0}
 
     # 1) Activation: the one above the new threshold is closed at the swap, the
     # one below the rearm stays open, the one with no photo is open.
@@ -213,13 +213,13 @@ async def test_cpu_reconciliation_six_outcomes(configured, make_group):  # noqa:
     # 3) Thresholds raised: 35 is now under the new rearm, so the closed one
     # reopens.
     await configured.apply_group_settings(
-        profile={"cpu_grow_percent": 80.0, "cpu_grow_rearm_percent": 40.0}
+        profile={"cpu_admission_close_percent": 80.0, "cpu_admission_reopen_percent": 40.0}
     )
     assert (hot.cpu_admission_open, cool.cpu_admission_open) == (True, True)
 
     # 4) Thresholds lowered: 35 is now above the new grow, so both close.
     await configured.apply_group_settings(
-        profile={"cpu_grow_percent": 30.0, "cpu_grow_rearm_percent": 10.0}
+        profile={"cpu_admission_close_percent": 30.0, "cpu_admission_reopen_percent": 10.0}
     )
     assert (hot.cpu_admission_open, cool.cpu_admission_open) == (False, False)
 
@@ -362,7 +362,7 @@ async def test_a_foreign_apply_during_the_quiet_leaves_it_running(
 ):
     # A change that has nothing to do with the CPU neither clears nor renews the
     # stamp: the time already elapsed stays elapsed.
-    group = make_group(reception_reserved_percent=0.0, cpu_grow_percent=50.0)
+    group = make_group(reception_reserved_percent=0.0, cpu_admission_close_percent=50.0)
     worker = await group.start_worker()
     declare_cpu(worker, 10.0)
     group.record_cpu_pressure()
@@ -384,10 +384,10 @@ async def test_switching_the_policy_on_without_a_transition_is_no_pressure(
     declare_cpu(worker, 10.0)
 
     await configured.apply_group_settings(
-        profile={"cpu_grow_percent": 50.0, "cpu_grow_rearm_percent": 20.0}
+        profile={"cpu_admission_close_percent": 50.0, "cpu_admission_reopen_percent": 20.0}
     )
 
-    assert group.cpu_grow_percent == 50.0
+    assert group.cpu_admission_close_percent == 50.0
     assert worker.cpu_admission_open is True
     assert group._cpu_pressure_monotonic is None
     assert group.get_retirement_suspension(group.policy) is None
@@ -402,8 +402,8 @@ async def test_an_apply_that_closes_a_worker_is_pressure(configured, make_group)
 
     await configured.apply_group_settings(
         profile={
-            "cpu_grow_percent": 50.0,
-            "cpu_grow_rearm_percent": 20.0,
+            "cpu_admission_close_percent": 50.0,
+            "cpu_admission_reopen_percent": 20.0,
             "cpu_retirement_quiet_seconds": 60.0,
         }
     )
@@ -421,14 +421,14 @@ async def test_an_apply_that_reopens_a_worker_is_pressure(configured, make_group
     hot = await group.start_worker()
     declare_cpu(hot, 90.0)
     await configured.apply_group_settings(
-        profile={"cpu_grow_percent": 50.0, "cpu_grow_rearm_percent": 20.0}
+        profile={"cpu_admission_close_percent": 50.0, "cpu_admission_reopen_percent": 20.0}
     )
     group._cpu_pressure_monotonic = None  # forget the close: judge the reopen alone
 
     await configured.apply_group_settings(
         profile={
-            "cpu_grow_percent": 95.0,
-            "cpu_grow_rearm_percent": 92.0,
+            "cpu_admission_close_percent": 95.0,
+            "cpu_admission_reopen_percent": 92.0,
             "cpu_retirement_quiet_seconds": 60.0,
         }
     )
@@ -446,7 +446,7 @@ async def test_switching_the_policy_off_frees_the_retirement_at_once(
     # policy left behind holds nothing back.
     group = make_group(
         reception_reserved_percent=0.0,
-        cpu_grow_percent=50.0,
+        cpu_admission_close_percent=50.0,
         cpu_retirement_quiet_seconds=3600.0,
     )
     reception = await group.start_worker()
@@ -460,7 +460,7 @@ async def test_switching_the_policy_off_frees_the_retirement_at_once(
     stamped = group._cpu_pressure_monotonic
     await configured.apply_group_settings(profile={})  # the policy off
 
-    assert group.cpu_grow_percent is None
+    assert group.cpu_admission_close_percent is None
     # The reopenings this apply performed are the gate being dismantled, not the
     # CPU speaking: the clock stays exactly where the last real event left it.
     assert group._cpu_pressure_monotonic == stamped
@@ -478,7 +478,7 @@ async def test_a_refused_apply_moves_neither_policy_nor_clock(configured, make_g
     # Stage one refuses before anything moves: no policy, no admission, no stamp.
     group = make_group(
         reception_reserved_percent=0.0,
-        cpu_grow_percent=50.0,
+        cpu_admission_close_percent=50.0,
         cpu_retirement_quiet_seconds=60.0,
     )
     hot = await group.start_worker()
@@ -530,8 +530,8 @@ async def test_off_then_on_again_leaves_no_cooldown_behind(configured, make_grou
     declare_cpu(hot, 90.0)
     declare_cpu(spare, 1.0)
     band = {
-        "cpu_grow_percent": 50.0,
-        "cpu_grow_rearm_percent": 20.0,
+        "cpu_admission_close_percent": 50.0,
+        "cpu_admission_reopen_percent": 20.0,
         "cpu_retirement_quiet_seconds": 3600.0,
     }
 
@@ -545,7 +545,7 @@ async def test_off_then_on_again_leaves_no_cooldown_behind(configured, make_grou
     # 2) The policy off reopens him, and the clock does not move: the gate is
     # gone, so the retirement is free at once despite the huge quiet.
     await configured.apply_group_settings(profile={"cpu_retirement_quiet_seconds": 3600.0})
-    assert group.cpu_grow_percent is None
+    assert group.cpu_admission_close_percent is None
     assert hot.cpu_admission_open is True
     assert group._cpu_pressure_monotonic == closed_at
 
@@ -565,6 +565,6 @@ async def test_off_then_on_again_leaves_no_cooldown_behind(configured, make_grou
         declare_cpu(worker_handler, 1.0)
     await configured.apply_group_settings(profile=band)
 
-    assert group.cpu_grow_percent == 50.0
+    assert group.cpu_admission_close_percent == 50.0
     assert all(w.cpu_admission_open for w in group.living_workers)
     assert group._cpu_pressure_monotonic == closed_at

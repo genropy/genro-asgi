@@ -92,11 +92,11 @@ async def test_page_and_rest_crud(
         method="POST",
         query=b"name=fast",
         headers=[(b"content-type", b"application/json")],
-        body=b'{"cpu_grow_percent": 50}',
+        body=b'{"cpu_admission_close_percent": 50}',
     )
     assert response_status(saved) == 200
     assert json.loads(response_body(saved))["name"] == "fast"
-    assert json.loads((folder / "fast.json").read_text()) == {"cpu_grow_percent": 50}
+    assert json.loads((folder / "fast.json").read_text()) == {"cpu_admission_close_percent": 50}
 
     listing = await drive(server, "/_sysop/configuration/profiles")
     assert [item["name"] for item in json.loads(response_body(listing))["profiles"]] == [
@@ -104,7 +104,7 @@ async def test_page_and_rest_crud(
     ]
 
     read = await drive(server, "/_sysop/configuration/read", query=b"name=fast.json")
-    assert json.loads(response_body(read))["profile"] == {"cpu_grow_percent": 50}
+    assert json.loads(response_body(read))["profile"] == {"cpu_admission_close_percent": 50}
 
     deleted = await drive(
         server,
@@ -152,7 +152,7 @@ async def test_save_overwrites_atomically_and_leaves_no_temporaries(
 ) -> None:
     folder = tmp_path / "profiles"
     server = profile_server(folder)
-    for payload in (b'{"cpu_grow_percent": 50}', b'{"cpu_grow_percent": 70}'):
+    for payload in (b'{"cpu_admission_close_percent": 50}', b'{"cpu_admission_close_percent": 70}'):
         await drive(
             server,
             "/_sysop/configuration/save",
@@ -162,7 +162,7 @@ async def test_save_overwrites_atomically_and_leaves_no_temporaries(
             body=payload,
         )
     read = await drive(server, "/_sysop/configuration/read", query=b"name=fast")
-    assert json.loads(response_body(read))["profile"] == {"cpu_grow_percent": 70}
+    assert json.loads(response_body(read))["profile"] == {"cpu_admission_close_percent": 70}
     assert [path.name for path in folder.iterdir()] == ["fast.json"]
 
 
@@ -282,7 +282,7 @@ async def test_mcp_lists_and_calls_profile_tools(
             "method": "tools/call",
             "params": {
                 "name": "save",
-                "arguments": {"name": "cpu50", "body_data": {"cpu_grow_percent": 50}},
+                "arguments": {"name": "cpu50", "body_data": {"cpu_admission_close_percent": 50}},
             },
         }
     )
@@ -297,7 +297,7 @@ async def test_mcp_lists_and_calls_profile_tools(
         }
     )
     assert read["result"]["structuredContent"]["profile"] == {
-        "cpu_grow_percent": 50
+        "cpu_admission_close_percent": 50
     }
 
     deleted = await mcp(

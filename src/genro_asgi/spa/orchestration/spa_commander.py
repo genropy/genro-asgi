@@ -1693,11 +1693,11 @@ class SpaCommander:
         reconciliation = []
         for worker_handler in group.worker_handler_map.values():
             cpu_percent = worker_handler.get_cpu_temperature_percent()
-            if policy.cpu_grow_percent is None or cpu_percent is None:
+            if policy.cpu_admission_close_percent is None or cpu_percent is None:
                 admission_open = True
-            elif cpu_percent > policy.cpu_grow_percent:
+            elif cpu_percent > policy.cpu_admission_close_percent:
                 admission_open = False
-            elif cpu_percent < policy.cpu_grow_rearm_percent:
+            elif cpu_percent < policy.cpu_admission_reopen_percent:
                 admission_open = True
             else:
                 admission_open = worker_handler.cpu_admission_open
@@ -1914,7 +1914,7 @@ class SpaCommander:
                         "Vertex: worker %s CPU temperature failed",
                         worker_handler.name,
                     )
-            if group_handler.cpu_grow_percent is not None:
+            if group_handler.cpu_admission_close_percent is not None:
                 group_handler._judge_cpu_admission(log_scan=False)
 
     async def heartbeat_loop(self) -> None:

@@ -64,8 +64,8 @@ async def test_setpoint_attributes_delegate_to_policy(make_group):
             "occupancy_max_percent": 70.0,
             "restart_occupancy_max_percent": 90.0,
             "close_occupancy_max_percent": 25.0,
-            "cpu_grow_percent": 55.0,
-            "cpu_grow_rearm_percent": 30.0,
+            "cpu_admission_close_percent": 55.0,
+            "cpu_admission_reopen_percent": 30.0,
             "worker_min_life_seconds": 12.0,
             "reception_reserved_percent": 15.0,
             "new_user_occupancy_percent": 4.0,
@@ -98,7 +98,7 @@ async def test_apply_policy_is_synchronous_assignments_only(make_group, caplog):
     group = make_group()
     worker_handler = await group.start_worker()
     worker_handler.cpu_admission_open = False
-    new_policy = GroupPolicy.from_settings({"cpu_grow_percent": 70.0})
+    new_policy = GroupPolicy.from_settings({"cpu_admission_close_percent": 70.0})
 
     assert not inspect.iscoroutinefunction(GroupHandler.apply_policy)
     body = decision_source("apply_policy")
