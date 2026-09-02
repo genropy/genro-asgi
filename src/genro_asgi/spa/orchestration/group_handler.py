@@ -1036,6 +1036,23 @@ class GroupHandler:
             return
         if self.state == "saturated" and self._may_grow:
             self.state = "running"
+        missing = sorted(
+            worker_handler.name
+            for worker_handler in self.living_workers
+            if worker_handler.get_cpu_temperature_percent() is None
+        )
+        if missing:
+            # The retirement is a judgment on temperature: a worker without one
+            # yet makes it unmakeable, and this is the ONLY retirement row of
+            # the round — neither the suspension nor the absent spare follows.
+            self.spa_commander.log_decision(
+                self.name,
+                "retirement",
+                "no_action",
+                reason="cpu_temperature_missing",
+                numbers={"workers": len(self.living_workers), "missing": missing},
+            )
+            return
         if policy.cpu_admission_close_percent is not None:
             # The retirement stands aside while the CPU policy is under
             # pressure (#43): closing the emptiest worker while demand stands
@@ -1444,9 +1461,8 @@ class GroupHandler:
             policy: the setpoints this round decided on.
 
         Returns:
-            The worker to close, or None — nobody, or a judgment that could not
-            be made: a living worker with no temperature yet is journaled as
-            ``cpu_temperature_missing`` and nothing is closed this round.
+            The worker to close, or None when there is none. Every living
+            worker has a temperature: the caller guarantees it.
 
         The CPU decides, the memory vetoes. Candidates: not the reception, not
         on their way out, older than ``worker_min_life_seconds``. The spare is
@@ -1458,20 +1474,10 @@ class GroupHandler:
         ``worker_memory_admission_percent``; and, LAST, room BY HEADS for the
         spare's placed users within each survivor's ``worker_max_users``.
         """
-        temperatures = {
+        temperatures: dict[str, float] = {
             worker_handler.name: worker_handler.get_cpu_temperature_percent()
             for worker_handler in self.living_workers
         }
-        missing = sorted(name for name, value in temperatures.items() if value is None)
-        if missing:
-            self.spa_commander.log_decision(
-                self.name,
-                "retirement",
-                "no_action",
-                reason="cpu_temperature_missing",
-                numbers={"workers": len(temperatures), "missing": missing},
-            )
-            return None
         candidates = [
             worker_handler
             for worker_handler in self.living_workers

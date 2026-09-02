@@ -214,7 +214,8 @@ them under `cpu_close_percent` (`null` by default = the reopen threshold itself;
 set while the admission policy is on, `<= cpu_admission_reopen_percent`; it
 replaces the memory-based close setpoint), its memory shared the same way must keep every
 survivor under `worker_memory_admission_percent`, then the heads; a living worker
-with no temperature yet is journaled `cpu_temperature_missing` and nothing
+with no temperature yet is journaled `cpu_temperature_missing` — one row, and no
+other retirement row that round — and nothing
 closes. Consolidation of a worker with users included, as before.
 
 **The CPU picks the worker; the memory only refuses (landed 2026-09-02).** A
