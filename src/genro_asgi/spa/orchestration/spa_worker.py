@@ -583,18 +583,6 @@ class SpaWorker:
         return self._exited
 
     @property
-    def cpu_seconds(self) -> float:
-        """The CPU time this process has consumed, user plus system, in seconds.
-
-        Returns:
-            What ``os.times()`` says — a scalar every platform measures the same
-            way, unlike the RSS. The reader upstairs turns two of these into a
-            rate: how much of one core this process is burning.
-        """
-        times = os.times()
-        return times.user + times.system
-
-    @property
     def rss_bytes(self) -> int | None:
         """The resident set size of this process, in bytes.
 
@@ -649,8 +637,8 @@ class SpaWorker:
             application's business, never the observer's. Each user row carries
             his cumulative service counters — ``served_call_count``,
             ``service_seconds``, ``pending_call_count`` — raw readings the
-            envelope layer turns into per-interval deltas, exactly as
-            ``cpu_seconds`` becomes ``cpu_percent`` there. The counters live in
+            envelope layer turns into per-interval deltas. The CPU is measured
+            by the commander through psutil, never by this photo. The counters live in
             the register item and never reach a frozen parcel: the freeze
             persists the store and the connections, not the row itself.
         """
@@ -661,7 +649,6 @@ class SpaWorker:
                 "group": self.group,
                 "rss_bytes": self.rss_bytes,
                 "pss_bytes": self.pss_bytes,
-                "cpu_seconds": self.cpu_seconds,
                 "user_count": len(self.user_register),
                 "connection_count": len(self.connection_register),
                 "page_count": len(self.page_register),

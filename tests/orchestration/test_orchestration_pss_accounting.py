@@ -93,7 +93,7 @@ def test_valid_pss_wins_over_a_much_larger_rss(tmp_path):
 
 def test_cpu_never_enters_memory_occupancy(tmp_path):
     subject = group(tmp_path)
-    photo = {"rss_bytes": 900_000, "pss_bytes": 200_000, "cpu_percent": 96.0}
+    photo = {"rss_bytes": 900_000, "pss_bytes": 200_000}
 
     assert subject.get_memory_occupancy_percent(photo) == 20.0
     assert subject.get_memory_occupancy_percent(photo) == 20.0

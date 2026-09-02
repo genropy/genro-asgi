@@ -60,7 +60,7 @@ def handler_double() -> WorkerHandler:
     )
     handler.process = ProcessDouble(1234)
     handler.state = "running"
-    handler.worker_snapshot = {"cpu_percent": 7.0}
+    handler.worker_snapshot = {"rss_bytes": 7}
     return handler
 
 
@@ -72,7 +72,7 @@ def test_two_readings_make_separate_temperature_telemetry():
     assert handler.cpu_temperature_percent == pytest.approx(80.0)
     assert handler.cpu_temperature_interval_seconds == pytest.approx(0.1)
     assert handler.cpu_temperature_sampled_at == pytest.approx(10.1)
-    assert handler.worker_snapshot["cpu_percent"] == 7.0
+    assert handler.worker_snapshot["rss_bytes"] == 7
 
 
 def test_a_reused_pid_starts_a_new_measurement_instead_of_inventing_cpu():
@@ -88,9 +88,9 @@ def test_a_full_photo_and_the_temperature_remain_independent():
     handler = handler_double()
     handler.cpu_temperature_percent = 72.0
 
-    handler.envelope_handler.on_worker_snapshot({"cpu_percent": 11.0})
+    handler.envelope_handler.on_worker_snapshot({"rss_bytes": 11})
 
-    assert handler.worker_snapshot["cpu_percent"] == 11.0
+    assert handler.worker_snapshot["rss_bytes"] == 11
     assert handler.cpu_temperature_percent == 72.0
 
 
@@ -114,7 +114,7 @@ def test_fresh_temperature_closes_and_reopens_cpu_admission(
     commander.sample_cpu_temperatures(sampled_at=started + 0.1)
     assert handler.cpu_temperature_percent == pytest.approx(80.0)
     assert handler.cpu_admission_open is False
-    assert handler.worker_snapshot["cpu_percent"] == 7.0
+    assert handler.worker_snapshot["rss_bytes"] == 7
 
     # One idle sample no longer reopens: it cools the filter by ~2% over 100 ms.
     commander.sample_cpu_temperatures(sampled_at=started + 0.2)
@@ -193,7 +193,7 @@ def test_an_unreadable_process_does_not_rejudge_a_stale_photo(
     handler = handler_double()
     handler.process = None
     handler.group_handler = group
-    handler.worker_snapshot["cpu_percent"] = 90.0
+    handler.worker_snapshot["rss_bytes"] = 90
     group.worker_handler_map[handler.name] = handler
     monkeypatch.setattr(handler, "get_process_cpu_reading", lambda: None)
 
@@ -272,4 +272,4 @@ async def test_pool_census_exposes_temperature_without_putting_it_in_the_photo(
     assert group_row["cpu_temperature_sample_percent"] == 3.0
     assert group_row["cpu_temperature_interval_seconds"] == 0.1
     assert group_row["cpu_temperature_age_seconds"] == 0.25
-    assert handler.worker_snapshot == {"cpu_percent": 7.0}
+    assert handler.worker_snapshot == {"rss_bytes": 7}

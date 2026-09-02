@@ -281,8 +281,8 @@ carries three counters written by the worker — ``served_call_count`` and
 ``service_seconds`` cumulated in the ``finally`` of the actual stitching
 (failed and slow calls counted like any other), ``pending_call_count`` read
 off the pendings — and two derived by ``WorkerEnvelopeHandler`` between two
-photos, ``recent_call_count`` / ``recent_service_seconds``, the same road
-``cpu_seconds`` takes to ``cpu_percent``. The worker keeps no window and takes
+photos, ``recent_call_count`` / ``recent_service_seconds``, derived between
+two photos by the fold. The worker keeps no window and takes
 no decision; the counters live in the register item and never reach a frozen
 parcel (the freeze persists store and connections, not the row).
 

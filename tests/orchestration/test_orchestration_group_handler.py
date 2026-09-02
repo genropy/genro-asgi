@@ -397,7 +397,6 @@ async def test_a_worker_past_the_restart_setpoint_is_replaced_by_a_fresh_one(
     known_at_the_vertex(commander, "cid-a", "mario")
     doomed = await group.start_worker()
     doomed.worker_snapshot["pss_bytes"] = int(0.99 * WORKER_CEILING)
-    doomed.worker_snapshot["cpu_percent"] = 10.0
     doomed.hosted_users.add("mario")
     group.user_worker_map["mario"] = doomed.name
 
@@ -635,7 +634,6 @@ async def test_a_photo_past_the_restart_setpoint_brings_the_round_forward(make_g
         {
             ENVELOPE_SLOT_WORKER_SNAPSHOT: {
                 "rss_bytes": WORKER_CEILING // 5,
-                "cpu_percent": 96.0,
             }
         }
     )
