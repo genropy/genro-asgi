@@ -984,16 +984,14 @@ class GroupHandler:
         RIGHT NOW where the process will live. Only the second sees the
         commander, the templates and everything else inside the container, so
         the quota alone would let a fork walk into a cgroup that has no room
-        left for it. A machine that measures nothing — no ``/proc/meminfo`` and
-        no cgroup — does not refuse: what cannot be read is not judged.
+        left for it.
         """
         if self.spa_commander.state != "running":
             return False
         ceiling_percent = self.memory_max_percent * self.worker_memory_max_percent / 100.0
         if self.memory_occupied_percent + ceiling_percent > self.memory_max_percent:
             return False
-        available_bytes = self.spa_commander.memory_available_bytes
-        return available_bytes is None or available_bytes >= self.worker_memory_ceiling_bytes
+        return self.spa_commander.memory_available_bytes >= self.worker_memory_ceiling_bytes
 
     @every(CHECK_OCCUPANCY_BEATS)
     async def check_occupancy(self) -> None:

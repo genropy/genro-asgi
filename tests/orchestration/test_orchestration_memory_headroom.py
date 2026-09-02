@@ -135,7 +135,7 @@ def with_workers(group: GroupHandler, *workers: WorkerStub) -> None:
         group.worker_handler_map[worker.name] = worker
 
 
-def with_available(monkeypatch, commander, *readings: float | None) -> None:
+def with_available(monkeypatch, commander, *readings: float) -> None:
     """Make the machine answer these readings in order, the last one for ever after."""
     answers = list(readings)
     monkeypatch.setattr(
@@ -303,14 +303,6 @@ def test_a_group_under_its_quota_may_not_grow_into_a_container_with_no_room(
 
     assert group.memory_occupied_percent < group.memory_max_percent
     assert not group._may_grow
-
-
-def test_a_machine_that_measures_nothing_refuses_no_growth(commander, tmp_path, monkeypatch):
-    group = build_group(commander, tmp_path, worker_max_number=4)
-    with_workers(group, WorkerStub("standard_0001", rss_bytes=LIMIT_BYTES // 4))
-    with_available(monkeypatch, commander, None)
-
-    assert group._may_grow
 
 
 def test_a_vertex_that_is_not_running_refuses_the_growth(commander, tmp_path, monkeypatch):

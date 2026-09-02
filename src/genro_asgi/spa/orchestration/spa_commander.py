@@ -841,13 +841,12 @@ class SpaCommander:
         return int(total * self.memory_max_percent / 100.0)
 
     @property
-    def memory_available_bytes(self) -> float | None:
-        """What the machine still has free, in bytes; None where it is not measurable.
+    def memory_available_bytes(self) -> float:
+        """What the machine still has free, in bytes.
 
         Returns:
             What is left of the cgroup this server runs in, or of the whole
-            machine when no cgroup limits it — None on a platform with no
-            ``/proc/meminfo`` and no cgroup, where nothing is judged.
+            machine when no cgroup limits it.
 
         The twin reading of ``memory_concession_bytes``, and the other half of
         every growth: the concession says how much of the machine this server
@@ -855,7 +854,7 @@ class SpaCommander:
         the cgroup — this process, the templates, whatever else shares the
         container — which the workers' own photos never see.
         """
-        return self._machine_memory_gauges().get("MemAvailable")
+        return self._machine_memory_gauges()["MemAvailable"]
 
     @property
     def default_group(self) -> str:
@@ -1988,7 +1987,7 @@ class SpaCommander:
         platform does not offer alarms nobody. The gauges are read off the loop.
         """
         memory_percent, storage_free_percent = await asyncio.to_thread(self._read_resources)
-        over = memory_percent is not None and memory_percent > self.machine_memory_alarm_percent
+        over = memory_percent > self.machine_memory_alarm_percent
         self.state = "saturated" if over else "running"
         on_reserve = storage_free_percent < STORAGE_RESERVE_PERCENT
         if over or on_reserve:
@@ -2049,15 +2048,14 @@ class SpaCommander:
                 expired.append(user)
         return expired
 
-    def _read_resources(self) -> tuple[float | None, float]:
+    def _read_resources(self) -> tuple[float, float]:
         """The machine's memory used and the freezer's storage free, in percent; off the loop."""
         return self._machine_memory_used_percent(), self.freeze_handler.storage_free_percent
 
-    def _machine_memory_used_percent(self) -> float | None:
-        """How much of the WHOLE machine's memory is in use, in percent, or None."""
+    def _machine_memory_used_percent(self) -> float:
+        """How much of the WHOLE machine's memory is in use, in percent."""
         gauges = self._machine_memory_gauges()
-        total, available = gauges.get("MemTotal"), gauges.get("MemAvailable")
-        return 100.0 * (total - available) / total if total and available is not None else None
+        return 100.0 * (gauges["MemTotal"] - gauges["MemAvailable"]) / gauges["MemTotal"]
 
     def _machine_memory_gauges(self) -> dict[str, float]:
         """The machine's whole and available memory in BYTES, both always there.
