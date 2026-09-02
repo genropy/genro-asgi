@@ -41,12 +41,12 @@ from .test_orchestration_group_handler import make_group  # noqa: F401
 DECISIONS_LOGGER = "genro_asgi.orchestration.decisions"
 
 
-def declare_cpu(worker_handler, cpu_percent: float) -> None:
+def declare_cpu(worker_handler, cpu_temperature_percent: float) -> None:
     """Declare the CPU channel directly; policy tests do not test its clock."""
-    worker_handler.cpu_temperature_percent = cpu_percent
+    worker_handler.cpu_temperature_percent = cpu_temperature_percent
     worker_handler.cpu_temperature_sampled_at = time.monotonic()
     worker_handler.cpu_temperature_interval_seconds = 0.1
-    worker_handler.get_cpu_temperature_percent = lambda: cpu_percent
+    worker_handler.get_cpu_temperature_percent = lambda: cpu_temperature_percent
 
 
 async def offload_group(make_group, commander, users, **policies):

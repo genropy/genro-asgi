@@ -89,9 +89,9 @@ def worker_at(group, name: str, occupancy_percent: float, state: str = "running"
     return worker_handler
 
 
-def warm(worker_handler, cpu_percent: float) -> None:
+def warm(worker_handler, cpu_temperature_percent: float) -> None:
     """Declare a fresh filtered temperature on a worker, as the meter would."""
-    worker_handler.cpu_temperature_percent = cpu_percent
+    worker_handler.cpu_temperature_percent = cpu_temperature_percent
     worker_handler.cpu_temperature_sampled_at = real_time.monotonic()
     worker_handler.cpu_temperature_interval_seconds = 0.1
 

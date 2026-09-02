@@ -257,7 +257,7 @@ class WorkerHandler:
         self.worker_snapshot: dict[str, Any] | None = None
         #: The soft CPU admission (#43): True, this worker is a candidate for
         #: NEW users. The group's judge writes False when the smoothed
-        #: ``cpu_percent`` crosses above ``cpu_admission_close_percent`` — the placement
+        #: ``cpu_temperature_percent`` crosses above ``cpu_admission_close_percent`` — the placement
         #: then skips this worker — and True again below
         #: ``cpu_admission_reopen_percent``. Over the threshold it stays closed;
         #: capacity is born only when concrete demand finds no open candidate.

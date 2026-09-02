@@ -59,9 +59,9 @@ from genro_asgi.spa.orchestration.worker_handler import (
 from .conftest import kill_process, wait_for
 
 
-def warm(worker_handler, cpu_percent: float) -> None:
+def warm(worker_handler, cpu_temperature_percent: float) -> None:
     """Declare a fresh filtered temperature, as the meter would have measured it."""
-    worker_handler.cpu_temperature_percent = cpu_percent
+    worker_handler.cpu_temperature_percent = cpu_temperature_percent
     worker_handler.cpu_temperature_sampled_at = real_time.monotonic()
     worker_handler.cpu_temperature_interval_seconds = 0.1
 

@@ -1548,10 +1548,10 @@ class GroupHandler:
             return
         transitions = 0
         for worker_handler in self.living_workers:
-            cpu_percent = worker_handler.get_cpu_temperature_percent()
-            if cpu_percent is None:
+            cpu_temperature_percent = worker_handler.get_cpu_temperature_percent()
+            if cpu_temperature_percent is None:
                 continue
-            if cpu_percent > policy.cpu_admission_close_percent:
+            if cpu_temperature_percent > policy.cpu_admission_close_percent:
                 if worker_handler.cpu_admission_open:
                     worker_handler.cpu_admission_open = False
                     transitions += 1
@@ -1560,11 +1560,11 @@ class GroupHandler:
                         self.name,
                         "cpu_admission",
                         worker_handler.name,
-                        numbers={"cpu_temperature_percent": cpu_percent},
+                        numbers={"cpu_temperature_percent": cpu_temperature_percent},
                         outcome="blocked: over the close threshold",
                         reason="cpu_over_close_threshold",
                     )
-            elif cpu_percent < policy.cpu_admission_reopen_percent:
+            elif cpu_temperature_percent < policy.cpu_admission_reopen_percent:
                 if not worker_handler.cpu_admission_open:
                     worker_handler.cpu_admission_open = True
                     transitions += 1
@@ -1573,7 +1573,7 @@ class GroupHandler:
                         self.name,
                         "cpu_admission",
                         worker_handler.name,
-                        numbers={"cpu_temperature_percent": cpu_percent},
+                        numbers={"cpu_temperature_percent": cpu_temperature_percent},
                         outcome="reopened: below the reopen threshold",
                         reason="cpu_below_reopen_threshold",
                     )

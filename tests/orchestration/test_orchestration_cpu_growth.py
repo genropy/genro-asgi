@@ -60,12 +60,12 @@ async def grown_group(make_group, **policies):
     return group
 
 
-def declare_cpu(worker_handler, cpu_percent: float) -> None:
+def declare_cpu(worker_handler, cpu_temperature_percent: float) -> None:
     """Declare the CPU channel directly; policy tests do not test its clock."""
-    worker_handler.cpu_temperature_percent = cpu_percent
+    worker_handler.cpu_temperature_percent = cpu_temperature_percent
     worker_handler.cpu_temperature_sampled_at = real_time.monotonic()
     worker_handler.cpu_temperature_interval_seconds = 0.1
-    worker_handler.get_cpu_temperature_percent = lambda: cpu_percent
+    worker_handler.get_cpu_temperature_percent = lambda: cpu_temperature_percent
 
 
 class ControlledTime:
@@ -208,8 +208,8 @@ async def test_inside_the_hysteresis_band_the_state_is_kept(make_group):
     declare_cpu(group.reception, 55.0)
     await group.check_occupancy(now=True)
 
-    for cpu_percent in (45.0, 49.0, 41.0, 49.9):
-        declare_cpu(group.reception, cpu_percent)
+    for cpu_temperature_percent in (45.0, 49.0, 41.0, 49.9):
+        declare_cpu(group.reception, cpu_temperature_percent)
         await group.check_occupancy(now=True)
 
     assert group.reception.cpu_admission_open is False
