@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 from genro_asgi.spa import Register, RegisterRegistry
+from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker
 
 
 def test_generic_registers_exist_with_ratified_indexes() -> None:
@@ -327,14 +328,15 @@ def test_drop_connection_without_cascade_leaves_the_user_standing() -> None:
     assert len(registry.page_items) == 0
 
 
-def test_drop_connection_detaches_the_collectors_of_its_pages() -> None:
+def test_drop_connection_detaches_the_capture_of_its_pages() -> None:
     registry = RegisterRegistry()
     page = registry.new_page("p1", user="alice", connection_id="s1")
     registry.subscribe_store_path("p1", "prefs")
-    collector, view = page["collector"], page["user_view"]
+    page["subscribed_paths"].add("x")
+    view = page["user_view"]
     registry.drop_connection("s1")
     page["store"]["x"] = 1
-    assert collector.changes == []
+    assert page["datachanges"] == []
     assert view.changes == []
 
 
@@ -440,14 +442,15 @@ def test_subscribe_store_path_unknown_page_raises_key_error() -> None:
         registry.subscribe_store_path("nope", "prefs")
 
 
-def test_the_factory_seams_own_every_store_and_collector() -> None:
-    """A subclass owning the two factories owns every live object a row is born with."""
+def test_the_factory_seams_own_every_store_and_capture() -> None:
+    """A subclass owning the three seams owns every live object a row is born with."""
 
     class SeamRegistry(RegisterRegistry):
         def __init__(self) -> None:
             super().__init__()
             self.stores: list[Any] = []
             self.collectors: list[Any] = []
+            self.subscribed_pages: list[str] = []
 
         def new_store(self) -> Any:
             store = super().new_store()
@@ -459,6 +462,10 @@ def test_the_factory_seams_own_every_store_and_collector() -> None:
             self.collectors.append(collector)
             return collector
 
+        def subscribe_page_store(self, page: dict[str, Any]) -> None:
+            super().subscribe_page_store(page)
+            self.subscribed_pages.append(page["register_item_id"])
+
     registry = SeamRegistry()
     registry.new_user("alice")
     page = registry.new_page("p1", user="sess-1", connection_id="sess-1")
@@ -468,8 +475,24 @@ def test_the_factory_seams_own_every_store_and_collector() -> None:
     # Every store born through the seam: alice's, the guest's, the page's.
     assert registry.user_items.get("alice")["store"] in registry.stores
     assert page["store"] in registry.stores
-    # Every collector too: the page's own filtered one, the first user_view,
-    # the re-attach of the resident login — which is the last one built.
-    assert page["collector"] in registry.collectors
+    # The page's own store goes through its own seam, once.
+    assert registry.subscribed_pages == ["p1"]
+    # The collector seam is the user_view's alone: the first one and the
+    # re-attach of the resident login, which is the last one built.
     assert page["user_view"] is registry.collectors[-1]
-    assert len(registry.collectors) == 3
+    assert len(registry.collectors) == 2
+
+
+def test_connection_parcel_leaves_the_row_locks_behind(tmp_path) -> None:
+    """A lock is neither pickled nor deep-copied: the parcel must not carry it."""
+    worker = SpaWorker(
+        "standard_0001",
+        freeze_handler=FreezeHandler(tmp_path / "frozen_users"),
+        deposit_lock_retry_interval=0.01,
+    )
+    worker.add_page("p1", "cid-a")
+
+    parcel = worker._connection_parcel("cid-a")
+
+    assert "item_lock" not in parcel["connection"]
+    assert [page for page in parcel["pages"].values() if "item_lock" in page] == []

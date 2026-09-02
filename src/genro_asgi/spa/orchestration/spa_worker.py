@@ -24,7 +24,7 @@ and the thing on disk are never two words for one object.
 ``build_registry`` — the seam a consumer replaces to pair its own row types with
 the tree — and the three names above are properties onto its ``user_items`` /
 ``connection_items`` / ``page_items``. So a row is born with the whole data
-plane already on it (the live store, the filtered collector, the deposit
+plane already on it (the live store, the queue its capture fills, the deposit
 container, the subscription sets) and the worker's own fields — ``state``, the
 transfer flag, the three clocks — ride that same row: one object, whichever
 half of the machine is reading it. Reading goes through the register idioms
@@ -326,7 +326,7 @@ DESK_STORE_UNLOCK_PATH = "/desk/store_unlock"
 DESK_OBSERVATION_PATH = "/desk/observation"
 
 #: The address kind that names a page itself: the change is a SIGNAL and lands
-#: as a deposit on that page's collector — no Bag write, no residue.
+#: as a deposit on that page's queue at the desk — no Bag write, no residue.
 SIGNAL_KIND = "page"
 
 #: The address kinds that name a STORE instead of a page. They exist in the
@@ -341,18 +341,23 @@ STATE_KINDS = frozenset({"page_store", "user_store", "connection_store"})
 _NOT_JSON_SAFE = object()
 
 # The connection-row fields a parcel leaves behind: the edges of the ownership
-# tree, which the adoption rebuilds from the rows it lands, and the reserved key
-# the register seeds itself and refuses as a keyword.
-PARCEL_CONNECTION_REBUILT_FIELDS = frozenset({"register_item_id", "user", "pages"})
+# tree, which the adoption rebuilds from the rows it lands, the reserved key
+# the register seeds itself and refuses as a keyword, and the row's own lock,
+# which is neither pickled nor deep-copied — the rebirth makes a new one.
+PARCEL_CONNECTION_REBUILT_FIELDS = frozenset(
+    {"register_item_id", "user", "pages", "item_lock"}
+)
 
 # The page-row fields a parcel leaves behind: the reserved key, the two edges to
-# its connection, and the live objects bound to THIS process's Bags — the two
-# collectors and the deposit container — which the rebirth builds itself.
+# its connection, the row's own lock, and the live objects bound to THIS
+# process's Bags — the user view and the deposit container — which the rebirth
+# builds itself. The page's own queue is NOT among them: ``datachanges`` is a
+# plain list and travels with the row.
 PARCEL_PAGE_REBUILT_FIELDS = frozenset(
     {
         "register_item_id",
         "connection_id",
-        "collector",
+        "item_lock",
         "user_view",
         "dbevents",
     }
@@ -940,7 +945,7 @@ class SpaWorker:
             bag: the store the change belongs to — the user's own.
             change: the change as the desk handed it back.
 
-        The write is a real write, so the local collectors capture it with a
+        The write is a real write, so the local captures see it with a
         local ``change_ts``: ordering stays on local time. What the producer
         knew travels as ``_original_ts``, an attribute added to the ones the
         change carried. A delete removes the node: setting None would be a
@@ -986,21 +991,19 @@ class SpaWorker:
             KeyError: no such page here.
             ValueError: any other storename — an impossible address.
 
-        Moves the row's subscription set and the collector's prefix set
-        together: the set is what a move packages, the collector what the
-        drain reads.
+        Moves the row's ``subscribed_paths``, which the capture reads at event
+        time: the set is what a move packages and what the filter consults.
         """
         with self.dispatch_lock:
             page = self.page_register.get(page_id)
             if page is None:
                 raise KeyError(f"setStoreSubscription: unknown page {page_id!r}")
             if storename == "page":
-                if active:
-                    page["subscribed_paths"].add(prefix)
-                    page["collector"].subscribe_path(prefix)
-                else:
-                    page["subscribed_paths"].discard(prefix)
-                    page["collector"].unsubscribe_path(prefix)
+                with page["item_lock"]:
+                    if active:
+                        page["subscribed_paths"].add(prefix)
+                    else:
+                        page["subscribed_paths"].discard(prefix)
             elif storename == "user":
                 if active:
                     self.registry.subscribe_store_path(page_id, prefix)
@@ -1019,7 +1022,7 @@ class SpaWorker:
 
         Returns:
             ``{"datachanges": [...], "dbevents": [...]}`` — the page's own
-            collector and its ``user_view`` merged with the changes the desk
+            queue and its ``user_view`` merged with the changes the desk
             handed back, sorted by ``change_ts`` with a stable sort; the
             deposits are their own species in their own key, never dressed as
             datachanges.
@@ -1028,7 +1031,8 @@ class SpaWorker:
             KeyError: no such page here.
             CommanderCallFailed: the desk refused the exchange.
 
-        Empties the request slot, both collectors and — through the exchange —
+        Empties the request slot, the row's queue, the user view and — through
+        the exchange —
         the page's queues at the desk. The exchange happens on EVERY request,
         empty-handed included: retiring what waits is the reason it exists. The
         STATE writes it brings back are applied to the user's own Bag BEFORE
@@ -1057,12 +1061,17 @@ class SpaWorker:
             page = self.page_register.get(page_id)
             if page is None:
                 raise KeyError(f"collect_page: unknown page {page_id!r}")
-            store = self.user_register.get(user)["store"]
-            for change in from_tytx(reply["store_changes"], "json"):
-                self.apply_forwarded(store, change)
-            datachanges = page["collector"].drain()
-            if page["user_view"] is not None:
-                datachanges.extend(page["user_view"].drain())
+            user_item = self.user_register.get(user)
+            with user_item["item_lock"]:
+                store = user_item["store"]
+                for change in from_tytx(reply["store_changes"], "json"):
+                    self.apply_forwarded(store, change)
+            with page["item_lock"]:
+                datachanges = page["datachanges"]
+                page["datachanges"] = []
+                page["datachanges_idx"] = 0
+                if page["user_view"] is not None:
+                    datachanges.extend(page["user_view"].drain())
             datachanges.extend(from_tytx(reply["datachanges"], "json"))
             dbevents = reply["dbevents"] + slot.own_dbevents
             slot.own_dbevents = []
@@ -1459,7 +1468,7 @@ class SpaWorker:
             request_id: the hold's own id, which the release quotes back.
 
         Returns:
-            The working copy, hydrated BEFORE its collector attaches — a captured
+            The working copy, hydrated BEFORE its capture attaches — a captured
             hydration would ship the whole store back as changes at the release.
 
         Raises:
@@ -1974,7 +1983,7 @@ class SpaWorker:
         came home first, or he is living on this worker already — the RESIDENT
         wins and what the guest did before logging in dies, said out loud rather
         than silently dropped. Every page already watching the row's Bag is
-        re-attached on the carried one — a fresh collector with the same
+        re-attached on the carried one — a fresh view with the same
         prefixes, re-fed with everything the old one still held — so no window
         goes deaf and no captured change is lost in the swap. The caller holds
         the lock.
@@ -2250,6 +2259,7 @@ class SpaWorker:
                     if previous_user.startswith(GUEST_PREFIX):
                         parcel["store"] = self.user_register.get(user)["store"]
                     parcel = copy.deepcopy(parcel)
+                    self._detach_parcel_capture(parcel)
                 await self._run_in_pool(
                     self.service_pool,
                     functools.partial(
@@ -2740,7 +2750,22 @@ class SpaWorker:
                 item["store"],
                 {cid: self._connection_parcel(cid) for cid in sorted(item["connections"])},
             )
-            return copy.deepcopy(parcels)
+            store, connection_parcels = copy.deepcopy(parcels)
+            for parcel in connection_parcels.values():
+                self._detach_parcel_capture(parcel)
+            return store, connection_parcels
+
+    def _detach_parcel_capture(self, parcel: dict[str, Any]) -> None:
+        """Take the capture off the copied page stores, before they are pickled.
+
+        A copied store arrives with the subscriber of the LIVE row still on it —
+        the copy would feed a queue that is not its own, and a subscriber does
+        not pickle at all. The birth on the other side attaches its own.
+        """
+        for page_id, fields in parcel["pages"].items():
+            self.registry.detach_page(
+                {**fields, "register_item_id": page_id, "user_view": None}
+            )
 
     def _write_parcels(
         self, user: str, store: Any, connection_parcels: dict[str, dict[str, Any]]
@@ -2764,10 +2789,11 @@ class SpaWorker:
 
         The edges of the tree are left out on purpose: the folder already says
         whose the connection is, and the pages half is what rebuilds the rest.
-        A page leaves its two collectors and its deposit container behind as
-        well — objects bound to the Bags of THIS process, which the birth on the
-        other side makes anew — while the prefixes they were filtered on travel
-        as plain sets and are subscribed again there.
+        A page leaves its user view and its deposit container behind as well —
+        objects bound to the Bags of THIS process, which the birth on the other
+        side makes anew — while the prefixes the capture is filtered on travel
+        as plain sets and are subscribed again there. Its own ``datachanges``
+        queue is a plain list and travels with the row.
         """
         item = self.connection_register.get(cid)
         return {
@@ -2891,7 +2917,6 @@ class SpaWorker:
             page["table_subscriptions"].add(table)
         for prefix in replayed.get("subscribed_paths", ()):
             page["subscribed_paths"].add(prefix)
-            page["collector"].subscribe_path(prefix)
         for prefix in replayed.get("store_subscriptions", ()):
             self.registry.subscribe_store_path(page_id, prefix)
 

@@ -206,5 +206,5 @@ async def test_the_deposit_drains_on_its_own_key_and_never_as_a_datachange(lane)
     collected = await lane.verb("collect_page", "p1")
 
     assert [d["table"] for d in collected["dbevents"]] == ["glbl.user"]
-    assert [c["key"]["path"] for c in collected["datachanges"]] == ["form", "form.name"]
+    assert [c["key"]["path"] for c in collected["datachanges"]] == ["form.name"]
     assert (await lane.verb("collect_page", "p1"))["dbevents"] == []

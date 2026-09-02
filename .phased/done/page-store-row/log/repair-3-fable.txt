@@ -1,0 +1,10 @@
+✓ Phase 3 repair closed — plan defect confirmed; the resolution (Done narrowed to the page store) was applied by the foreman while this repair ran.
+
+Esito della repair unattended sulla Phase 3 (`page-store-row`):
+
+- **Diagnosi indipendente**: il claim della sessione fallita regge. L'unica menzione di `collector` in `spa_worker.py` è la riga di codice 2009 — `_install_carried_store` ricostruisce il `user_view` con `registry.new_collector`, protetto dal `Must not break:` sul user store e fuori dai `Files:` della fase. Nessuna edit legale poteva azzerare il grep originale: il difetto era del criterio, non del codice.
+- **Risoluzione**: il commit `f0bf7e7` del foreman, arrivato durante la repair, ha ristretto il criterio (`| grep -v new_collector`) e marcato la fase `[x]` con `> Applied:`, senza toccare codice.
+- **Done dimostrato in questa conversazione**: grep ristretto vuoto; `test_contract_page_store_row.py` 9 passed; `pytest tests/ -q` 1817 passed; `ruff check src/ tests/` pulito.
+- **Commit**: `ed2166b` (under repair), `e97e9ab` (marker rimosso, repair chiusa). Staging per nome, mai `git add -A`.
+
+Nessuna fase `[!]` resta nel piano; la prossima è la Phase 4.

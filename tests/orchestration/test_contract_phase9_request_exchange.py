@@ -201,7 +201,7 @@ async def test_collect_merges_own_collectors_with_the_retired_pendings(lane):
     collected = await lane.verb("collect_page", PAGE)
 
     paths = [c["key"]["path"] for c in collected["datachanges"]]
-    assert paths == ["form", "form.name", "prefs", "prefs.theme", "untold.x"]
+    assert paths == ["form.name", "prefs", "prefs.theme", "untold.x"]
     assert [c["change_ts"] for c in collected["datachanges"]] == sorted(
         c["change_ts"] for c in collected["datachanges"]
     )
@@ -230,7 +230,7 @@ async def test_set_datachange_to_any_target_travels_through_the_commander(lane):
 
     assert answer == {"kind": "page", "target": PAGE, "filters": None, "replace": False}
     # Nothing landed locally: the write is at the desk, and only the exchange brings it back.
-    assert lane.worker.page_register.get(PAGE)["collector"].drain() == []
+    assert lane.worker.page_register.get(PAGE)["datachanges"] == []
     collected = await lane.verb("collect_page", PAGE)
     assert [c["key"]["path"] for c in collected["datachanges"]] == ["untold.x"]
     assert lane.desk.page_datachange_map == {}

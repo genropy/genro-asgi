@@ -330,6 +330,24 @@ that immediately occupies it; retirement records its suppression or the absence 
 absorbable spare. The journal observes policy — it never changes placement,
 growth, retirement or restart behaviour.
 
+**The page store lives on the row, under the row's lock (landed 2026-09-02).**
+The page register row carries `datachanges` and `datachanges_idx`, the daemon's
+names, and no collector object: pending changes used to live outside the parcel
+and were lost on a freeze and on a transfer, the queue as a row field travels
+with the row. `RegisterRegistry.subscribe_page_store` attaches to the row's
+store the subscriber that queues, with `key.reason == "serverChange"`, every
+update, insert, delete and transaction mutation whose path falls under a prefix
+of `page["subscribed_paths"]` — autocreated parents skipped, prefixes matched
+segment-aware, the set read at event time so a prefix added later captures from
+then on. `SpaWorker.collect_page` empties the queue and resets the index, its
+two jobs unchanged. Every register row — user, connection, page — is born with
+`item_lock`, an exclusive re-entrant `threading.RLock()` never carried by a
+parcel, and every access to the row and to its Bag takes it: one access at a
+time per item, items in parallel, the in-process image of the daemon's single
+thread plus its `lock_item`, with no expiry because an in-process `with` always
+exits. Nesting in the core: `dispatch_lock` outside, `item_lock` inside. The
+user store keeps its `user_view` and `new_collector` — another round.
+
 **Not yet built (second pass).** The deliberate reboot command on `_server`
 (`reboot now`/`reboot wait N`, notify_user, the consumer service-message
 lane); the single-group reboot (needs no photo — the commander survives) and

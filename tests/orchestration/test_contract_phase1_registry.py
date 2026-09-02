@@ -30,6 +30,8 @@ keeps working on them.
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 from genro_bag import Bag
 
@@ -112,10 +114,10 @@ def test_rows_are_born_with_live_stores(worker):
     page = worker.page_register.get("p1")
     assert isinstance(user["store"], Bag)
     assert isinstance(page["store"], Bag)
-    assert page["collector"].bag is page["store"]
+    assert page["datachanges"] == []
+    assert page["datachanges_idx"] == 0
     assert page["user_view"] is None
     assert page["dbevents"] == []
-    assert page["collector"].paths == set()
     assert page["subscribed_paths"] == set()
     assert page["store_subscriptions"] == set()
 
@@ -186,3 +188,53 @@ async def test_the_freeze_cycle_still_parks_the_registry_rows(worker, deposit):
     assert worker.page_register.get("p1") is None
     assert deposit.read_user_register_item(user) is not None
     assert deposit.read_connection_register_item(user, "cid-a") is not None
+
+
+# ----------------------------------------------------------------------
+# Every row is born with its own exclusive re-entrant lock
+# ----------------------------------------------------------------------
+
+
+def _acquired_from_another_thread(lock):
+    """Whether a second thread can take ``lock`` right now, without waiting."""
+    outcome = []
+
+    def attempt():
+        taken = lock.acquire(blocking=False)
+        if taken:
+            lock.release()
+        outcome.append(taken)
+
+    thread = threading.Thread(target=attempt)
+    thread.start()
+    thread.join()
+    return outcome[0]
+
+
+def test_every_register_row_is_born_with_an_item_lock(worker):
+    worker.add_page("p1", "cid-a")
+
+    for row in (
+        worker.page_register.get("p1"),
+        worker.connection_register.get("cid-a"),
+        worker.user_register.get(GUEST_PREFIX + "cid-a"),
+    ):
+        lock = row["item_lock"]
+        assert lock.acquire()
+        assert lock.acquire()
+        assert _acquired_from_another_thread(lock) is False
+        lock.release()
+        lock.release()
+        assert _acquired_from_another_thread(lock) is True
+
+
+def test_two_rows_hold_independent_locks(worker):
+    worker.add_page("p1", "cid-a")
+    worker.add_page("p2", "cid-b")
+
+    first = worker.page_register.get("p1")["item_lock"]
+    second = worker.page_register.get("p2")["item_lock"]
+
+    assert first is not second
+    with first:
+        assert _acquired_from_another_thread(second) is True
