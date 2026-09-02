@@ -240,6 +240,7 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
+import psutil
 from genro_bag import Bag
 from genro_tytx import from_tytx, to_tytx
 
@@ -587,43 +588,31 @@ class SpaWorker:
         """The resident set size of this process, in bytes.
 
         Returns:
-            What ``/proc/self/status`` says, or None where there is no ``/proc``
-            (macOS) — the photo carries the counts either way, and no dependency
-            is taken for a gauge that the platform may simply not have.
+            What psutil reads for this process on every platform, or None when
+            the kernel refuses the reading — the photo carries the counts
+            either way.
         """
         try:
-            with open("/proc/self/status", encoding="ascii") as status:
-                for line in status:
-                    if line.startswith("VmRSS:"):
-                        return int(line.split()[1]) * 1024
-        except OSError:
+            return psutil.Process().memory_info().rss
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             return None
-        return None
 
     @property
     def pss_bytes(self) -> int | None:
         """The proportional set size of this process, in bytes.
 
         Returns:
-            The ``Pss`` total from Linux ``smaps_rollup``. Shared pages are
-            divided among the processes mapping them, unlike RSS, so summing
-            this gauge across prefork workers does not charge the template's
-            pages once per child. ``None`` is the honest answer on platforms
-            without the rollup file or when the kernel refuses the reading.
+            The ``pss`` psutil reads from the Linux ``smaps_rollup``. Shared
+            pages are divided among the processes mapping them, unlike RSS, so
+            summing this gauge across prefork workers does not charge the
+            template's pages once per child. ``None`` is the honest answer on
+            platforms whose full memory info has no ``pss`` field (macOS,
+            Windows) or when the kernel refuses the reading.
         """
         try:
-            with open("/proc/self/smaps_rollup", encoding="ascii") as rollup:
-                for line in rollup:
-                    if not line.startswith("Pss:"):
-                        continue
-                    fields = line.split()
-                    if len(fields) != 3 or fields[2] != "kB":
-                        return None
-                    kilobytes = int(fields[1])
-                    return kilobytes * 1024 if kilobytes >= 0 else None
-        except (OSError, ValueError):
+            return getattr(psutil.Process().memory_full_info(), "pss", None)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             return None
-        return None
 
     @property
     def worker_snapshot(self) -> dict[str, Any]:
