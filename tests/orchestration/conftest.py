@@ -148,6 +148,16 @@ class XT_DeskLane:
             self.request_pool, functools.partial(getattr(self.worker, name), *args, **kwargs)
         )
 
+    async def verb_on(self, pool, name, *args, **kwargs):
+        """Call a site verb on ANOTHER request thread than ``verb``'s.
+
+        The request slot is thread-local, so a test that needs two concurrent
+        requests on one worker runs the second one here, on a pool of its own.
+        """
+        return await asyncio.get_running_loop().run_in_executor(
+            pool, functools.partial(getattr(self.worker, name), *args, **kwargs)
+        )
+
     async def open_request(self) -> None:
         """Start a fresh request on the thread the verbs run on."""
         await asyncio.get_running_loop().run_in_executor(

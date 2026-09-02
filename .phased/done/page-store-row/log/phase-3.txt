@@ -1,0 +1,5 @@
+No `foreman.json` — notification skipped in silence, as the shared core specifies.
+
+⚠ Phase 3 has issues: its first `Done:` criterion contradicts a `Must not break:` and cannot be met as written.
+
+The implementation itself landed and is green — `item_lock` taken in `setStoreSubscription`'s page branch and in `collect_page` (user row around `apply_forwarded`, page row around the queue swap and `user_view` drain), the three new contract tests bringing the file to 9, `verb_on` added to `XT_DeskLane`, and the five "collector" docstrings reworded; full suite 1817 passed, `ruff check src/ tests/` clean. The blocker is that the criterion asks for zero `collector` matches in `spa_worker.py` while the plan header protects the `new_collector` call that rebuilds a page's `user_view` at line 2009 — a code line, not the docstring the criterion's parenthetical anticipated. The owner has to narrow the grep or move that call into the registry, which is the user-store round the plan put out of scope.

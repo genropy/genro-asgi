@@ -64,10 +64,10 @@ def foreign_change(path: str, value):
 # ----------------------------------------------------------------------
 
 
-def test_the_page_collector_captures_nothing_until_the_page_subscribes(worker):
+def test_the_page_queue_stays_empty_until_the_page_subscribes(worker):
     page = worker.page_register.get("p1")
     page["store"]["form.name"] = "Ada"
-    assert page["collector"].pending == 0
+    assert page["datachanges"] == []
     assert page["subscribed_paths"] == set()
 
 
@@ -76,12 +76,13 @@ def test_the_page_subscription_opens_and_closes_its_own_store(worker):
 
     worker.setStoreSubscription("u1", page_id="p1", storename="page", prefix="form")
     page["store"]["form.name"] = "Ada"
-    assert [c["key"]["path"] for c in page["collector"].drain()] == ["form", "form.name"]
+    assert [c["key"]["path"] for c in page["datachanges"]] == ["form.name"]
+    page["datachanges"] = []
 
     worker.setStoreSubscription("u1", page_id="p1", storename="page", prefix="form", active=False)
     assert page["subscribed_paths"] == set()
     page["store"]["form.name"] = "Grace"
-    assert page["collector"].pending == 0
+    assert page["datachanges"] == []
 
 
 def test_the_user_subscription_opens_the_view_and_widens_it(worker):
@@ -137,7 +138,6 @@ async def test_collect_page_merges_both_collectors_by_ts(desk_lane):
     collected = await desk_lane.verb("collect_page", "p1")
 
     assert [c["key"]["path"] for c in collected["datachanges"]] == [
-        "form",
         "form.name",
         "prefs",
         "prefs.theme",

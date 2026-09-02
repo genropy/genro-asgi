@@ -1,0 +1,5 @@
+Phase 4 chiusa e committata (`0cee079`).
+
+- `CLAUDE.md`: nuovo paragrafo "The page store lives on the row, under the row's lock (landed 2026-09-02)"; `internals/20_spa/050_datachanges/{README,design}.md` riscritti dal collector alla coda sulla row.
+- Done verificato: i tre grep come da criterio, `pytest tests/ -q` 1817 passed, `ruff check src/ tests/` pulito.
+- Resta pendente la Phase 5 (coherence review e auto-fix).

@@ -1,0 +1,5 @@
+No `foreman.json` — notification skipped in silence.
+
+✓ Phase 1 completed: Every register row carries its own exclusive re-entrant lock
+
+`item_lock` (a `threading.RLock()`) is born on every user, connection and page row and is excluded from both parcel REBUILT sets; nothing takes it yet, per the phase. Full suite 1808 passed, `ruff check src/ tests/` clean, all four `Done:` criteria re-checked literally.
