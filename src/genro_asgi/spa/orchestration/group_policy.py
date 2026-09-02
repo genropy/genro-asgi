@@ -205,8 +205,9 @@ class GroupPolicy:
             0.0 <= self.cpu_admission_reopen_percent < self.cpu_admission_close_percent <= 100.0
         ):
             violations.append(
-                f"cpu_admission_reopen_percent ({self.cpu_admission_reopen_percent}) must sit below "
-                f"cpu_admission_close_percent ({self.cpu_admission_close_percent}), both inside 0-100"
+                f"cpu_admission_reopen_percent ({self.cpu_admission_reopen_percent}) "
+                f"must sit below cpu_admission_close_percent "
+                f"({self.cpu_admission_close_percent}), both inside 0-100"
             )
         if self.cpu_offload_percent is not None:
             if self.cpu_admission_close_percent is None:
@@ -217,5 +218,6 @@ class GroupPolicy:
             elif not (self.cpu_admission_close_percent < self.cpu_offload_percent <= 100.0):
                 violations.append(
                     f"cpu_offload_percent ({self.cpu_offload_percent}) must sit above "
-                    f"cpu_admission_close_percent ({self.cpu_admission_close_percent}), inside 0-100"
+                    f"cpu_admission_close_percent ({self.cpu_admission_close_percent}), "
+                    "inside 0-100"
                 )

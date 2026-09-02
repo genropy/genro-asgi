@@ -45,7 +45,7 @@ def test_validation_rejects_and_lists_all_violations():
     # wf:contract: percentages outside [0, 100]; memory_max_percent 0 and above
     # wf:contract: 100 both rejected (0 < v <= 100); negative times; non-integer
     # wf:contract: counts; worker_max_number <= 0; a broken CPU band
-    # wf:contract: (rearm >= grow); cross rules on the COMPLETE resulting policy:
+    # wf:contract: (reopen >= close); cross rules on the COMPLETE resulting policy:
     # wf:contract: close_occupancy >= occupancy, occupancy > restart_occupancy,
     # wf:contract: new_user_occupancy <= 0.
     # wf:contract: A single violation means NO policy object is produced.
@@ -93,7 +93,9 @@ def test_validation_rejects_and_lists_all_violations():
     assert len(caught.value.violations) == 1
 
     with pytest.raises(GroupPolicyError) as caught:
-        GroupPolicy.from_settings({"cpu_admission_close_percent": 30.0, "cpu_admission_reopen_percent": 30.0})
+        GroupPolicy.from_settings(
+            {"cpu_admission_close_percent": 30.0, "cpu_admission_reopen_percent": 30.0}
+        )
     assert "cpu_admission_reopen_percent" in caught.value.violations[0]
 
     with pytest.raises(GroupPolicyError) as caught:
@@ -217,7 +219,11 @@ def test_the_offload_threshold_stands_on_the_admission_closure():
     assert GroupPolicy.from_settings({"cpu_offload_percent": None}).cpu_offload_percent is None
 
     policy = GroupPolicy.from_settings(
-        {"cpu_admission_reopen_percent": 30.0, "cpu_admission_close_percent": 50.0, "cpu_offload_percent": 75.0}
+        {
+            "cpu_admission_reopen_percent": 30.0,
+            "cpu_admission_close_percent": 50.0,
+            "cpu_offload_percent": 75.0,
+        }
     )
     assert policy.cpu_offload_percent == 75.0
     assert policy.to_settings()["cpu_offload_percent"] == 75.0
@@ -234,5 +240,7 @@ def test_the_offload_threshold_stands_on_the_admission_closure():
         assert "must sit above cpu_admission_close_percent" in caught.value.violations[0]
 
     with pytest.raises(GroupPolicyError) as caught:
-        GroupPolicy.from_settings({"cpu_admission_close_percent": 50.0, "cpu_offload_percent": 101.0})
+        GroupPolicy.from_settings(
+            {"cpu_admission_close_percent": 50.0, "cpu_offload_percent": 101.0}
+        )
     assert "out of range" in caught.value.violations[0]

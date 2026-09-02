@@ -162,7 +162,8 @@ before.
 somebody has to leave before anybody else comes in; ``broken`` says a process
 could not be started at all. Residents are served as ever in either; newcomers
 and the woken get a 503 with a ``Retry-After``. A saturation is written by the placement that was
-refused and lifted by the next check, once the quota affords a birth again; a broken group is closed by the first process that starts.
+refused and lifted by the next check, once the quota affords a birth again; a
+broken group is closed by the first process that starts.
 A user never changes group: there is no fallback and no policy key.
 
 **Putting one user to sleep is the group's own move, in one order.**
@@ -325,8 +326,10 @@ class GroupHandler:
             0.0 <= cpu_admission_reopen_percent < cpu_admission_close_percent <= 100.0
         ):
             raise ValueError(
-                f"Group {name}: cpu_admission_reopen_percent ({cpu_admission_reopen_percent}) must sit "
-                f"below cpu_admission_close_percent ({cpu_admission_close_percent}), both inside 0-100 — the band "
+                f"Group {name}: cpu_admission_reopen_percent "
+                f"({cpu_admission_reopen_percent}) must sit below "
+                f"cpu_admission_close_percent ({cpu_admission_close_percent}), "
+                "both inside 0-100 — the band "
                 "between them is the hysteresis; without it a steady worker respawns forever"
             )
         self.spa_commander = spa_commander
@@ -714,7 +717,11 @@ class GroupHandler:
         async with self._placement_lock:
             worker_handler = self._placement_candidate(user)
             placement_reason = "fullest_cpu_open_candidate"
-            if worker_handler is None and self._may_grow and self._policy_held(policy, "grow", user):
+            if (
+                worker_handler is None
+                and self._may_grow
+                and self._policy_held(policy, "grow", user)
+            ):
                 worker_handler = await self.start_worker()
                 if worker_handler is not None:
                     try:
@@ -730,19 +737,7 @@ class GroupHandler:
                     # The refusal itself writes ``saturated`` where the front
                     # can read it; the next check lifts it when the quota
                     # affords a birth again.
-                    self.state = "saturated"
-                    self.spa_commander.log_order(
-                        self.name,
-                        "grow",
-                        numbers={
-                            "memory_occupied_percent": self.memory_occupied_percent,
-                            "memory_max_percent": policy.memory_max_percent,
-                            "worker_memory_ceiling_bytes": self.worker_memory_ceiling_bytes,
-                            "memory_available_bytes": self.spa_commander.memory_available_bytes,
-                            "workers": len(self.living_workers),
-                        },
-                        outcome="saturated",
-                    )
+                    self._mark_saturated(policy)
                 self.ping_now()
                 self.spa_commander.log_decision(
                     self.name,
@@ -957,6 +952,22 @@ class GroupHandler:
                 )
         return refusal is None
 
+    def _mark_saturated(self, policy: GroupPolicy) -> None:
+        """Write ``saturated`` where the front reads it; journal the birth the memory refused."""
+        self.state = "saturated"
+        self.spa_commander.log_order(
+            self.name,
+            "grow",
+            numbers={
+                "memory_occupied_percent": self.memory_occupied_percent,
+                "memory_max_percent": policy.memory_max_percent,
+                "worker_memory_ceiling_bytes": self.worker_memory_ceiling_bytes,
+                "memory_available_bytes": self.spa_commander.memory_available_bytes,
+                "workers": len(self.living_workers),
+            },
+            outcome="saturated",
+        )
+
     @property
     def _may_grow(self) -> bool:
         """Whether one more worker is allowed right now — every birth obeys it.
@@ -985,7 +996,8 @@ class GroupHandler:
         """Read the group once and take the ONE step that reading calls for.
 
         Acts on the group: restart when MEMORY is past the restart setpoint,
-        update soft CPU admission, give an empty group its reception back,
+        update soft CPU admission, give an empty group its reception back when
+        the memory affords it,
         close a worker the others can absorb — and lift ``saturated`` once the
         memory quota affords a birth again. No worker is born here for a user
         who is not there yet: the only birth is the reception of a group with
@@ -1013,9 +1025,16 @@ class GroupHandler:
         picture = {name: occupancy_reader(photo) for name, photo in snapshots.items()}
         self._judge_cpu_admission()
         if not self.living_workers:
-            # A group must always have a reception: this is the ONE birth
-            # nobody asked for by arriving.
-            await self.start_worker()
+            # A group must always have a reception: the ONE birth nobody asked
+            # for by arriving, under the same lock and the same memory veto as
+            # every other. Whoever waited on the lock rereads the group first.
+            async with self._placement_lock:
+                if self.living_workers or not self._policy_held(policy, "grow"):
+                    return
+                if self._may_grow:
+                    await self.start_worker()
+                else:
+                    self._mark_saturated(policy)
             return
         if self.state == "saturated" and self._may_grow:
             self.state = "running"
@@ -1430,7 +1449,8 @@ class GroupHandler:
         ``close_occupancy_max_percent`` — distinctly below the admission close
         setpoint, so a closure can never create the condition for the next
         birth (#36) — and, the occupancy settled, room BY HEADS for the spare's
-        placed users within each survivor's ``worker_max_users``. A worker younger than ``worker_min_life_seconds``
+        placed users within each survivor's ``worker_max_users``. A worker younger
+        than ``worker_min_life_seconds``
         is no candidate: its occupancy measures its own birth.
         """
         # A quitting worker is nobody's spare — its closure is already

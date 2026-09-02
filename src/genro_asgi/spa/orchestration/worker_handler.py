@@ -76,9 +76,8 @@ one holding none of it.
 process sent — filed by its own layer of the chain from whatever envelope carried
 it, so a live process has one from its very presentation: the gauges the judge
 reads are all in there EXCEPT CPU: the commander reads this process's cumulative
-kernel clock through the handler, through psutil, and keeps the two-reading
-anchor here. That
-temperature travels on no envelope. Aggregate counters still belong to the
+CPU clock through psutil, by way of the handler, and keeps the two-reading anchor
+here. That temperature travels on no envelope. Aggregate counters still belong to the
 Commander, which is also the one that decides the orders worth counting.
 
 **The beat has no clock of its own.** ``ping_process`` is one beat and

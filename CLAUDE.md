@@ -220,7 +220,8 @@ When an arriving user finds no CPU-open worker that admits it, `assign_user`
 creates one worker under the placement lock and assigns that same user before
 returning. The measured template fork is short, so speculative empty workers
 buy little and amplify noisy samples. The periodic judge births nothing: a group with no living
-worker gets its reception back, and every other birth happens inside
+worker gets its reception back when the memory affords it, and every other
+birth happens inside
 `assign_user` for the user who needs it. The journal ties every such birth to its first user with reason
 `new_worker_created_for_placement`.
 

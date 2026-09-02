@@ -79,13 +79,11 @@ from typing import Any
 
 import pytest
 
-from genro_asgi.spa.orchestration import AssignmentRefused
-
 from genro_asgi import AsgiServer
 from genro_asgi.applications.spa_app import SPA_CONNECTION_ID_COOKIE
-from genro_asgi.spa.orchestration import FreezeHandler, GroupHandler
-from genro_asgi.spa.orchestration.worker_handler import WorkerHandler
+from genro_asgi.spa.orchestration import AssignmentRefused, FreezeHandler, GroupHandler
 from genro_asgi.spa.orchestration.spa_commander import GUEST_PREFIX
+from genro_asgi.spa.orchestration.worker_handler import WorkerHandler
 
 from ..conftest import LifespanRunner, ask_app, get_answer_header
 from .conftest import kill_process, wait_for

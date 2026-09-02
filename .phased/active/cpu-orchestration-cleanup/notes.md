@@ -10,6 +10,9 @@ Decision register of the rework: `temp/scheda_ragioni_cpu_orchestration_2026-09-
   Phase 3 keeps ONE user-less birth: `check_occupancy` starts a worker when
   `living_workers` is empty. A group with no reception cannot serve anonymous
   requests at all, so this is the group's existence, not speculative capacity.
+  Amended at the quality check (owner, 2026-09-02): the birth runs under
+  `_placement_lock` with `_policy_held`, and `_may_grow` vetoes it like every
+  other birth — refused, the group reads `saturated` until the quota affords it.
 - **Who writes `saturated`.** `_grow` wrote it when the memory refused a birth.
   Phase 3 moves the write into `assign_user`, at the refusal that raises
   `AssignmentRefused` after the fallback also failed, and `check_occupancy` lifts it
@@ -17,6 +20,12 @@ Decision register of the rework: `temp/scheda_ragioni_cpu_orchestration_2026-09-
   refuses the anonymous stranger while the group is saturated.
 
 ## Phase 1
+
+- Quality check, 2026-09-02: the plan copy of this phase's contract test
+  (`tests/phase-1/test_orchestration_cpu_meter_psutil.py`) was edited by
+  `9572c63` together with the in-tree copy — the two "before/after Phase 2"
+  comment lines collapsed into one `group.cpu_admission_close_percent = None`.
+  Owner's resolution of `verify.md`'s second item; both copies byte-identical.
 
 - The baseline was red on arrival for an environment reason, not a code one:
   `genro-asgi` 0.37.0 was installed non-editable in the interpreter, so the
