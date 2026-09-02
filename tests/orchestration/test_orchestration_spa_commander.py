@@ -76,7 +76,6 @@ def test_whoever_shows_up_is_minted_before_anything_descends(commander):
         "group": None,
         "frozen": False,
         "on_hold": None,
-        "occupancy_percent": None,
         "pending_dbevents": [],
         "pending_datachanges": [],
     }
@@ -84,10 +83,10 @@ def test_whoever_shows_up_is_minted_before_anything_descends(commander):
 
 def test_a_cid_already_known_is_answered_and_nothing_is_written_twice(commander):
     first = minted(commander, "cid-a")
-    commander.user_map[first]["occupancy_percent"] = 9.0
+    commander.user_map[first]["group"] = "kept"
 
     assert minted(commander, "cid-a") == first
-    assert commander.user_map[first]["occupancy_percent"] == 9.0
+    assert commander.user_map[first]["group"] == "kept"
 
 
 def test_a_cookie_that_outlived_its_row_is_still_that_person(commander):
@@ -123,32 +122,23 @@ def test_nobody_is_frozen_until_it_is_written_down(commander):
     assert commander.user_is_frozen("somebody nobody knows") is False
     assert commander.user_is_frozen(user) is False
 
-    commander.mark_user_frozen(user, 6.0)
+    commander.mark_user_frozen(user)
 
     assert commander.user_is_frozen(user) is True
-
-
-def test_a_freeze_that_carries_no_estimate_leaves_the_last_one_alone(commander):
-    user = minted(commander, "cid-a")
-    commander.mark_user_frozen(user, 6.0)
-
-    commander.mark_user_frozen(user, None)
-
-    assert commander.user_map[user]["occupancy_percent"] == 6.0
 
 
 def test_a_freeze_ends_the_wait_it_was_the_reason_for(commander):
     user = minted(commander, "cid-a")
     commander.hold_user(user, "transfer_flag T")
 
-    commander.mark_user_frozen(user, 6.0)
+    commander.mark_user_frozen(user)
 
     assert minted(commander, "cid-a") == user
 
 
 def test_an_adoption_empties_the_row_of_what_was_waiting(commander):
     user = minted(commander, "cid-a")
-    commander.mark_user_frozen(user, 6.0)
+    commander.mark_user_frozen(user)
     commander.user_map[user]["pending_dbevents"] = [{"table": "invoices"}]
 
     commander.mark_user_adopted(user)
@@ -378,7 +368,7 @@ async def test_the_freezer_mark_releases_the_wait_too(commander):
     waiting = asyncio.ensure_future(commander.await_user_release(user, timeout=5.0))
     await asyncio.sleep(0)
 
-    commander.mark_user_frozen(user, 4.0)
+    commander.mark_user_frozen(user)
 
     await waiting
     assert commander.user_hold_event_map == {}
@@ -562,7 +552,7 @@ async def test_the_cookie_survives_a_quit_and_the_boot_that_follows(commander):
     commander.group_map["standard"] = QuietGroup()
     commander.record_connection_user("cid-a", "mario")
     parked_state(commander, "mario")
-    commander.mark_user_frozen("mario", None)
+    commander.mark_user_frozen("mario")
     await commander.quit()
 
     reborn = SpaCommander(commander.freeze_handler.root_path)

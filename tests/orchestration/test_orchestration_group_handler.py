@@ -37,7 +37,6 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -852,27 +851,6 @@ async def test_without_the_ceiling_nothing_changes(make_group, commander):
     commander.record_connection_user("cid-b", "guest_second1")
     assert await group.assign_user("guest_first1") == "standard_0001"
     assert await group.assign_user("guest_second1") == "standard_0001"
-
-
-async def test_the_occupancy_reads_the_fullest_component_cpu_included(make_group):
-    """#38: a GIL-saturated worker with a flat RSS is no longer invisible."""
-    group = make_group()
-
-    # Memory says 10%, the separate fresh temperature says 90%: the judge reads 90.
-    quota = group.memory_quota_bytes * group.worker_memory_max_percent / 100.0
-    photo = {"rss_bytes": int(quota * 0.10), "cpu_percent": 90.0}
-    hot = SimpleNamespace(get_cpu_temperature_percent=lambda: 90.0)
-    assert group.get_occupancy_percent(photo, hot) == 90.0
-
-    # The old photo field is historical telemetry, never a CPU decision input.
-    assert group.get_occupancy_percent(photo) == 10.0
-
-    # No memory at all: the separate temperature alone carries the reading.
-    warm = SimpleNamespace(get_cpu_temperature_percent=lambda: 35.0)
-    assert group.get_occupancy_percent({}, warm) == 35.0
-
-    # Neither: as today, nothing measurable reads empty.
-    assert group.get_occupancy_percent({}) == 0.0
 
 
 async def test_the_group_orders_the_freeze_and_the_confirmation_settles_everything(

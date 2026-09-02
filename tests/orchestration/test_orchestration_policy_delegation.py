@@ -69,7 +69,6 @@ async def test_setpoint_attributes_delegate_to_policy(make_group):
             "cpu_admission_close_percent": 55.0,
             "cpu_admission_reopen_percent": 30.0,
             "worker_min_life_seconds": 12.0,
-            "new_user_occupancy_percent": 4.0,
             "worker_max_users": 9,
             "user_idle_freeze_minutes": 45.0,
             "memory_max_percent": 60.0,

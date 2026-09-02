@@ -285,8 +285,6 @@ class GroupHandler:
             just closed or just ceded a user stays closed while its load leaves.
         worker_min_life_seconds: a worker is no closure candidate before this
             age — younger, its occupancy measures its own birth, not its work.
-        new_user_occupancy_percent: what a user nobody has ever measured is
-            expected to cost.
         user_idle_freeze_minutes: the silence, IN MINUTES, past which this group
             parks a user in the freezer; with nothing said, silence never parks
             anybody. Minutes because it is a policy of the installation, and the
@@ -322,7 +320,6 @@ class GroupHandler:
         cpu_cooling_seconds: float = 5.0,
         worker_admission_interval_seconds: float = 1.0,
         worker_min_life_seconds: float = 60.0,
-        new_user_occupancy_percent: float = 5.0,
         worker_max_users: float = math.inf,
         user_idle_freeze_minutes: float = math.inf,
         memory_concession_bytes: int,
@@ -361,7 +358,6 @@ class GroupHandler:
                 "cpu_cooling_seconds": cpu_cooling_seconds,
                 "worker_admission_interval_seconds": worker_admission_interval_seconds,
                 "worker_min_life_seconds": worker_min_life_seconds,
-                "new_user_occupancy_percent": new_user_occupancy_percent,
                 "worker_max_users": None if worker_max_users == math.inf else worker_max_users,
                 "user_idle_freeze_minutes": (
                     None if user_idle_freeze_minutes == math.inf else user_idle_freeze_minutes
@@ -459,10 +455,6 @@ class GroupHandler:
     @property
     def worker_min_life_seconds(self) -> float:
         return self.policy.worker_min_life_seconds
-
-    @property
-    def new_user_occupancy_percent(self) -> float:
-        return self.policy.new_user_occupancy_percent
 
     @property
     def worker_max_users(self) -> float:
@@ -657,35 +649,6 @@ class GroupHandler:
         ]
         await asyncio.gather(*beats, return_exceptions=True)
 
-    def get_occupancy_percent(
-        self,
-        worker_snapshot: dict[str, Any] | None,
-        worker_handler: WorkerHandler | None = None,
-    ) -> float:
-        """How full the worker of this photo is, in percent.
-
-        Args:
-            worker_snapshot: the photo, or None when the worker has sent none.
-
-        Returns:
-            The fullest of the components the photo carries, each clamped to its
-            own full — 0.0 when nothing in it is measurable. Memory is PSS
-            against this worker's share of the quota, with RSS as its portable
-            conservative fallback. CPU comes only from the commander's separate
-            process thermometer when ``worker_handler`` is supplied; a photo's
-            historical ``cpu_percent`` is never an orchestration input.
-        """
-        photo = worker_snapshot or {}
-        components = [self.get_memory_occupancy_percent(photo) / 100.0]
-        cpu_percent = (
-            None
-            if worker_handler is None
-            else worker_handler.get_cpu_temperature_percent()
-        )
-        if cpu_percent is not None:
-            components.append(cpu_percent / 100.0)
-        return 100.0 * min(max(components, default=0.0), 1.0)
-
     def get_memory_occupancy_percent(
         self, worker_snapshot: dict[str, Any] | None
     ) -> float:
@@ -705,9 +668,7 @@ class GroupHandler:
         """Place a user: the hottest open worker that admits him, or one born for him.
 
         Args:
-            user: the identity to place; his row at the vertex says what he is
-                expected to cost, and one nobody has measured costs
-                ``new_user_occupancy_percent``.
+            user: the identity to place.
 
         Returns:
             The name of the worker that took him.
@@ -879,9 +840,7 @@ class GroupHandler:
             "cpu_admission_open": worker_handler.cpu_admission_open,
             "cpu_temperature_percent": worker_handler.get_cpu_temperature_percent(),
             "recently_admitted": self._recently_admitted(worker_handler),
-            "occupancy_percent": self.get_occupancy_percent(photo, worker_handler),
             "memory_occupancy_percent": self.get_memory_occupancy_percent(photo),
-            "worker_cap": self.worker_memory_admission_percent,
         }
 
     def _placement_decision_rows(self) -> list[dict[str, Any]]:
@@ -890,9 +849,7 @@ class GroupHandler:
             self._get_worker_decision_row(worker_handler)
             for worker_handler in sorted(
                 self.living_workers,
-                key=lambda handler: -self.get_occupancy_percent(
-                    handler.worker_snapshot, handler
-                ),
+                key=lambda handler: -(handler.get_cpu_temperature_percent() or 0.0),
             )
         ]
 
@@ -1057,12 +1014,7 @@ class GroupHandler:
                 if self._policy_held(policy, "restart_worker", name):
                     await self.restart_worker(self.worker_handler_map[name])
                 return
-        occupancy_reader = (
-            self.get_memory_occupancy_percent
-            if policy.cpu_admission_close_percent is not None
-            else self.get_occupancy_percent
-        )
-        picture = {name: occupancy_reader(photo) for name, photo in snapshots.items()}
+        picture = memory_picture
         self._judge_cpu_admission()
         if not self.living_workers:
             # A group must always have a reception: the ONE birth nobody asked
@@ -1707,9 +1659,6 @@ class GroupHandler:
             order,
             worker_handler.name,
             numbers={
-                "occupancy_percent": self.get_occupancy_percent(
-                    worker_handler.worker_snapshot, worker_handler
-                ),
                 "memory_occupancy_percent": self.get_memory_occupancy_percent(
                     worker_handler.worker_snapshot
                 ),

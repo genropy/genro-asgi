@@ -372,11 +372,19 @@ the group's share. The same word on each rung is deliberate — it always means
 itself, so the cascade is always anchored; a machine that does not say how much
 of it is IN USE (a `/proc/meminfo` capability) simply alarms nobody.
 
-**The occupancy keys are how full is full.** `worker_memory_admission_percent` is where a
-worker stops admitting new users; `restart_occupancy_max_percent` is where a
-process is replaced rather than kept;
-`new_user_occupancy_percent` is what somebody nobody has ever measured is
-expected to cost.
+**The memory keys are a veto, never a choice.** `worker_memory_admission_percent`
+(default 80) is the share of its ceiling past which a worker takes no new user,
+whatever its CPU says; `restart_occupancy_max_percent` (default 95) is where a
+process is replaced rather than kept. Neither picks a worker: the CPU does.
+
+**The CPU picks the worker.** A newcomer goes to the hottest CPU-open worker
+that admits him — the group consolidates while a worker still has room under the
+close threshold — and a worker that admitted somebody less than
+`worker_admission_interval_seconds` ago (default 1) is skipped, so its load shows
+in the temperature before the next one lands. When every open worker is in its
+window the hottest that admits takes him anyway: the interval orders the walk,
+it refuses nobody and births nobody. Nobody estimates what a user will cost: the
+gate is the CPU admission, the heads and the memory veto.
 
 **The CPU keys are the soft admission, and its brake.** `cpu_admission_close_percent`
 (experimental, off when omitted) is the smoothed CPU above which a worker stops

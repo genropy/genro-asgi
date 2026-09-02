@@ -102,10 +102,10 @@ def newcomer(commander, cid: str = "cid-a") -> str:
 
 
 async def test_a_photo_reads_as_the_percentage_it_is_and_never_over_full(group):
-    assert group.get_occupancy_percent(None) == 0.0
-    assert group.get_occupancy_percent({}) == 0.0
-    assert group.get_occupancy_percent({"rss_bytes": MEMORY_CEILING // 4}) == 25.0
-    assert group.get_occupancy_percent({"rss_bytes": 3 * MEMORY_CEILING}) == 100.0
+    assert group.get_memory_occupancy_percent(None) == 0.0
+    assert group.get_memory_occupancy_percent({}) == 0.0
+    assert group.get_memory_occupancy_percent({"rss_bytes": MEMORY_CEILING // 4}) == 25.0
+    assert group.get_memory_occupancy_percent({"rss_bytes": 3 * MEMORY_CEILING}) == 100.0
 
 
 async def test_a_worker_reads_as_full_at_its_own_share_of_the_group_quota(commander, tmp_path):
@@ -124,8 +124,8 @@ async def test_a_worker_reads_as_full_at_its_own_share_of_the_group_quota(comman
     # is what one of its workers may hold — so a quarter of the machine is a
     # worker of this group standing at its full.
     assert group.memory_quota_bytes == MEMORY_CEILING / 2
-    assert group.get_occupancy_percent({"rss_bytes": MEMORY_CEILING // 4}) == 100.0
-    assert group.get_occupancy_percent({"rss_bytes": MEMORY_CEILING // 8}) == 50.0
+    assert group.get_memory_occupancy_percent({"rss_bytes": MEMORY_CEILING // 4}) == 100.0
+    assert group.get_memory_occupancy_percent({"rss_bytes": MEMORY_CEILING // 8}) == 50.0
 
 
 async def test_the_hottest_worker_that_still_takes_him_is_the_one_that_gets_him(group, commander):

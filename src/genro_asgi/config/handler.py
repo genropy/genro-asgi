@@ -398,7 +398,6 @@ class ConfigurationHandler(ConfigHandler):
                 "cpu_cooling_seconds",
                 "worker_admission_interval_seconds",
                 "worker_min_life_seconds",
-                "new_user_occupancy_percent",
                 "worker_max_users",
                 "user_idle_freeze_minutes",
                 "entry_module",

@@ -163,7 +163,7 @@ def parked_state(commander: SpaCommander, user: str) -> None:
         user, {"store": "whatever"}, writer=WORKER_NAME, cause="freeze", group="standard"
     )
     commander.freeze_handler.release_lock(user, WORKER_NAME)
-    commander.mark_user_frozen(user, None)
+    commander.mark_user_frozen(user)
 
 
 def counting_check(checks: list[int], beats: int):
@@ -485,7 +485,7 @@ async def test_the_frozen_are_forgotten_each_on_the_clock_of_his_own_kind(make_c
     # judge: the sweep of the deposit is what answers for him, not the reaper.
     commander.connection_user_map["cid-p"] = "paolo"
     commander.resolve_user("cid-p")
-    commander.mark_user_frozen("paolo", None)
+    commander.mark_user_frozen("paolo")
 
     await commander.drop_expired_users(now=True)
 

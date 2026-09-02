@@ -145,7 +145,6 @@ class ServerConfiguration(AsgiConfigBuilder):
             # The story's spare is closed seconds after its birth: the minimum
             # life would exempt it, and this stanza is how the recipe waives it.
             worker_min_life_seconds=0.0,
-            new_user_occupancy_percent=5.0,
             user_idle_freeze_minutes={idle_minutes},
             entry_module="{entry_module}",
             worker_class="{worker_class}",
@@ -363,7 +362,7 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     # keeps a guest at the reception, so the one who takes the capacity walk is
     # an identity (doctrine of 2026-08-21).
     carla = known_at_the_vertex(vertex, "cid-c", "carla")
-    assert group.get_occupancy_percent(reception.worker_snapshot) == 87.5
+    assert group.get_memory_occupancy_percent(reception.worker_snapshot) == 87.5
 
     assert await group.assign_user(carla) == f"{GROUP}_0002"
 
@@ -430,7 +429,7 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     orders = orders_of(story_root)
     # The share each of the two read when the closure was decided, as the group
     # itself computes it: the row carries the number, not a rounding of it.
-    closed_occupancy = group.get_occupancy_percent({"rss_bytes": SPARE_RSS_BYTES})
+    closed_occupancy = group.get_memory_occupancy_percent({"rss_bytes": SPARE_RSS_BYTES})
 
     assert [row for row in orders if "order=start_worker" in row] == [
         f"std order=start_worker subject={GROUP}_0001 numbers={{'workers': 1}} outcome=None",
@@ -439,8 +438,7 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     ]
     assert [row for row in orders if "order=close_worker" in row] == [
         f"std order=close_worker subject={GROUP}_0002 "
-        f"numbers={{'occupancy_percent': {closed_occupancy}, "
-        f"'memory_occupancy_percent': {closed_occupancy}, "
+        f"numbers={{'memory_occupancy_percent': {closed_occupancy}, "
             "'cpu_temperature_percent': None, 'workers': 2} outcome=None"
     ]
     assert [row for row in orders if "order=drop_worker" in row] == [

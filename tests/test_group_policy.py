@@ -26,7 +26,6 @@ def test_defaults_materialized_from_empty_settings():
     assert policy.cpu_heating_seconds == 1.0
     assert policy.cpu_cooling_seconds == 5.0
     assert policy.worker_min_life_seconds == 60.0
-    assert policy.new_user_occupancy_percent == 5.0
     assert policy.worker_max_users == math.inf
     assert policy.user_idle_freeze_minutes == math.inf
     assert policy.memory_max_percent == 100.0
@@ -91,7 +90,7 @@ def test_validation_rejects_and_lists_all_violations():
     assert GroupPolicy.from_settings({"memory_max_percent": 100.0}).memory_max_percent == 100.0
 
     with pytest.raises(GroupPolicyError) as caught:
-        GroupPolicy.from_settings({"new_user_occupancy_percent": 0.0})
+        GroupPolicy.from_settings({"cpu_heating_seconds": 0.0})
     assert len(caught.value.violations) == 1
 
     with pytest.raises(GroupPolicyError) as caught:

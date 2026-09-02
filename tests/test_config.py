@@ -726,7 +726,6 @@ class SpaPoolConfig(AsgiConfigBuilder):
             worker_memory_max_percent=40.0,
             worker_memory_admission_percent=70.0,
             restart_occupancy_max_percent=90.0,
-            new_user_occupancy_percent=4.0,
             worker_min_life_seconds=120.0,
             worker_max_users=16,
             cpu_retirement_quiet_seconds=75.0,
@@ -831,7 +830,6 @@ class TestCommanderSection:
             "worker_memory_max_percent": 40.0,
             "worker_memory_admission_percent": 70.0,
             "restart_occupancy_max_percent": 90.0,
-            "new_user_occupancy_percent": 4.0,
             "worker_min_life_seconds": 120.0,
             "worker_max_users": 16,
             # The retirement's quiet is a policy of the GROUP (#43): how long
@@ -894,7 +892,6 @@ class TestCommanderSection:
         assert attached.backupCount == 3
         assert group.worker_memory_admission_percent == 70.0
         assert group.restart_occupancy_max_percent == 90.0
-        assert group.new_user_occupancy_percent == 4.0
         assert group.policy.worker_min_life_seconds == 120.0
         assert group.worker_max_users == 16
         assert group.memory_max_percent == 80.0

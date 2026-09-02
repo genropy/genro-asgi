@@ -224,7 +224,6 @@ class SpaApplicationGrammar(ApplicationGrammar):
         cpu_cooling_seconds: float | BagResolver | None = None,
         worker_admission_interval_seconds: float | BagResolver | None = None,
         worker_min_life_seconds: float | BagResolver = None,
-        new_user_occupancy_percent: float | BagResolver = None,
         worker_max_users: int | BagResolver = None,
         user_idle_freeze_minutes: float | BagResolver = None,
         entry_module: str = None,
@@ -260,8 +259,7 @@ class SpaApplicationGrammar(ApplicationGrammar):
         distinctly below the growth setpoint, the band between the two being the
         pool's normal state — and ``worker_min_life_seconds`` the age before
         which a worker is no closure candidate;
-        ``new_user_occupancy_percent`` is what a user nobody has ever measured is
-        expected to cost. ``user_idle_freeze_minutes`` is the silence past which the
+        ``user_idle_freeze_minutes`` is the silence past which the
         group parks a user in the freezer. ``cpu_admission_close_percent`` (experimental,
         off when omitted) turns on soft CPU admission: a worker above it is
         closed to NEW users and reopens below ``cpu_admission_reopen_percent``. CPU

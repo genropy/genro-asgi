@@ -83,7 +83,6 @@ class GroupPolicy:
         "cpu_cooling_seconds": (False, False, 0.0, True, None),
         "worker_admission_interval_seconds": (False, False, 0.0, False, None),
         "worker_min_life_seconds": (False, False, 0.0, False, None),
-        "new_user_occupancy_percent": (False, False, 0.0, True, None),
         "worker_max_users": (True, True, 1, False, None),
         "user_idle_freeze_minutes": (False, True, 0.0, True, None),
         "memory_max_percent": (False, False, 0.0, True, 100.0),
@@ -102,7 +101,6 @@ class GroupPolicy:
     cpu_cooling_seconds: float = 5.0
     worker_admission_interval_seconds: float = 1.0
     worker_min_life_seconds: float = 60.0
-    new_user_occupancy_percent: float = 5.0
     worker_max_users: float = math.inf
     user_idle_freeze_minutes: float = math.inf
     memory_max_percent: float = 100.0

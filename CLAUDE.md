@@ -211,19 +211,25 @@ and with `cpu_admission_close_percent` off the gate is never consulted. Past the
 `_spare_worker` and `_order_quit` are exactly what they always were —
 consolidation of a worker with users included.
 
-**CPU pressure gates admission; concrete demand births capacity (landed
-2026-08-29; thermometer channel 2026-09-01).** A fresh commander-side worker
-temperature above `cpu_admission_close_percent` closes that worker to new users; one below
-`cpu_admission_reopen_percent` reopens it. A photo's `cpu_percent` is not an
-orchestration input. The CPU judge never forks.
-When an arriving user finds no CPU-open worker that admits it, `assign_user`
-creates one worker under the placement lock and assigns that same user before
-returning. The measured template fork is short, so speculative empty workers
-buy little and amplify noisy samples. The periodic judge births nothing: a group with no living
-worker gets its reception back when the memory affords it, and every other
-birth happens inside
-`assign_user` for the user who needs it. The journal ties every such birth to its first user with reason
-`new_worker_created_for_placement`.
+**The CPU picks the worker; the memory only refuses (landed 2026-09-02).** A
+filtered temperature above `cpu_admission_close_percent` closes a worker to new
+users; one below `cpu_admission_reopen_percent` reopens it. `assign_user` walks
+the CPU-open workers HOTTEST first (the filtered temperature, never memory) and
+skips one that admitted somebody less than `worker_admission_interval_seconds`
+ago (1.0 s); when every open worker is in its window the hottest that admits
+takes the user anyway (`all_workers_recently_admitted`) — the interval orders,
+it never refuses and never births. `WorkerHandler.assign_user` judges state,
+`worker_max_users` and the memory veto `worker_memory_admission_percent` (80,
+`< restart_occupancy_max_percent`); nobody estimates a user's cost any more — the
+row at the vertex carries no `occupancy_percent`, the census shows memory and
+temperature per worker. When no open worker admits, `assign_user` creates one
+worker under the placement lock and assigns that same user before returning;
+refused the birth, a CPU-closed worker under the veto takes him as a logged
+fallback. The periodic judge births nothing: a group with no living worker gets
+its reception back when the memory affords it. Journal: `hottest_cpu_open_candidate`,
+`worker_recently_admitted` / `worker_memory_full` on the candidate rows,
+`all_workers_recently_admitted`, `new_worker_created_for_placement`,
+`cpu_closed_hard_cap_fallback`.
 
 **Worker CPU temperature is a separate measurement channel (landed
 2026-09-01; filtered 2026-09-02).** One commander-side task reads each worker's

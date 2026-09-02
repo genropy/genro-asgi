@@ -172,7 +172,6 @@ class ServerConfiguration(AsgiConfigBuilder):
                 worker_memory_max_percent=50.0,
                 worker_memory_admission_percent=80.0,
                 restart_occupancy_max_percent=95.0,
-                new_user_occupancy_percent=5.0,
                 user_idle_freeze_minutes={idle_minutes},
                 entry_module="{entry_module}",
                 worker_class="{worker_class}",
@@ -388,7 +387,7 @@ async def test_a_day_of_the_site_from_the_front_to_the_child(server):
 
     spare = await group.start_worker()
 
-    assert group.get_occupancy_percent(reception.worker_snapshot) == 87.5
+    assert group.get_memory_occupancy_percent(reception.worker_snapshot) == 87.5
     assert group.worker_memory_admission_percent == 80.0
 
     # A second browser of the same person arrives ANONYMOUS, and anonymous
