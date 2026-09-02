@@ -16,20 +16,42 @@
 
 ``Request`` is HTTP-only — no transport abstraction (the WSX/message transport
 is orchestration, out of the core). It wraps the ASGI ``scope`` and, in the
-async ``init()``, parses headers/cookies/query/body once via
-``genro_tytx.asgi_data`` (which hydrates JSON/XML/msgpack bodies and hands back
-the raw bytes for anything else). TYTX mode is detected from the
-``X-TYTX-Transport`` header; the paired ``Response`` reads ``tytx_mode`` /
-``tytx_transport`` to serialize the reply in the same transport.
+async ``init()``, reads the request once and by itself: headers and cookies
+off the scope, the query string, and the whole body pumped from ``receive``
+until ``more_body`` is false — always, whatever the content-type, so a
+request never leaves unread ASGI messages behind. genro-tytx is used ONLY as
+a serializer: header values, query values and multipart fields are hydrated
+with ``from_tytx``, an urlencoded body with ``from_qs``, a json/xml/msgpack
+body with ``from_tytx(transport=...)``. The media-type ↔ transport maps live
+in ``media_types``; the protocol reading lives here and nowhere else.
 
-The owning application creates it (``Request(scope, receive, application=app)``,
-or ``server=`` directly) and holds the response seam: ``self.response`` is a
-``Response`` bound back to this request (the TYTX path).
+The body is decoded by content-type:
+
+- json / xml / msgpack (standard or ``application/vnd.tytx+*`` media type) →
+  the hydrated value;
+- ``application/x-www-form-urlencoded`` → a dict via ``from_qs``;
+- ``multipart/form-data`` → a dict: text parts hydrated with ``from_tytx``,
+  file parts (those carrying a ``filename``) as ``UploadedFile``; a field
+  name repeated across parts collects its values in a list;
+- anything else → the raw bytes;
+- an empty body → ``None``.
+
+``UploadedFile`` is the file a client uploaded in a multipart form: ``name``
+(the form field), ``filename`` (as sent by the client), ``content_type``
+(declared for that part) and ``data`` (the bytes, whole — no spooling, no
+streaming: the body is already resident).
+
+TYTX mode is detected from the ``X-TYTX-Transport`` header; the paired
+``Response`` reads ``tytx_mode`` / ``tytx_transport`` to serialize the reply
+in the same transport. The owning application creates the request
+(``Request(scope, receive, application=app)``, or ``server=`` directly) and
+holds the response seam: ``self.response`` is a ``Response`` bound back to it.
 
 ``handler_kwargs()`` builds the kwargs a route handler receives: the query is
-the base; a form body (``x-www-form-urlencoded``) is decoded and merged (body
-wins on a clash), a hydrated body is passed whole as ``body_data``, opaque bytes
-as ``body_raw``, an empty body adds nothing.
+the base; a form body — urlencoded OR multipart — is merged field by field
+(body wins on a clash, files included: ``def upload(self, title, doc)`` gets
+``doc`` as an ``UploadedFile``); a hydrated body is passed whole as
+``body_data``; opaque bytes as ``body_raw``; an empty body adds nothing.
 
 ``db`` is the deferred preparation layer (no ORM yet): on first access it
 resolves the server's registered handler for the owning app's ``db_name`` (else
@@ -41,11 +63,16 @@ cleanup registration. Auth and session ride the scope (``scope["auth"]`` — an
 
 from __future__ import annotations
 
+import email.policy
 import time
 import uuid
-from typing import TYPE_CHECKING, Any
+from collections import defaultdict
+from email.parser import BytesParser
+from http.cookies import SimpleCookie
+from typing import TYPE_CHECKING, Any, Literal
+from urllib.parse import parse_qs
 
-from genro_tytx import asgi_data
+from genro_tytx import from_qs, from_tytx
 
 from .response import Response
 from .session.session import Session
@@ -55,7 +82,25 @@ if TYPE_CHECKING:
     from .server import BaseServer
     from .types import Receive, Scope
 
-__all__ = ["Request"]
+__all__ = ["Request", "UploadedFile"]
+
+
+class UploadedFile:
+    """A file uploaded in a multipart form: its form field, name, type and bytes."""
+
+    __slots__ = ("name", "filename", "content_type", "data")
+
+    def __init__(self, name: str, filename: str, content_type: str, data: bytes) -> None:
+        self.name = name
+        self.filename = filename
+        self.content_type = content_type
+        self.data = data
+
+    def __repr__(self) -> str:
+        return (
+            f"<UploadedFile name={self.name!r} filename={self.filename!r} "
+            f"bytes={len(self.data)}>"
+        )
 
 
 class Request:
@@ -104,17 +149,16 @@ class Request:
         self.response: Response = Response(request=self)
 
     async def init(self) -> None:
-        """Parse headers, cookies, query and body from the scope (once).
+        """Read headers, cookies, query and body from the scope (once).
 
-        Delegates to ``genro_tytx.asgi_data`` and then derives TYTX mode, the
-        request id (``x-request-id`` header or a fresh uuid4) and the optional
-        client correlation id (``x-external-id``).
+        Then derives TYTX mode, the request id (``x-request-id`` header or a
+        fresh uuid4) and the optional client correlation id (``x-external-id``).
         """
-        data = await asgi_data(dict(self._scope), self._receive)
-        self._headers = data["headers"]
-        self._cookies = data["cookies"]
-        self._query = data["query"]
-        self._data = data["body"]
+        cookie_header = self.read_headers()
+        self._cookies = self.decode_cookies(cookie_header)
+        self._query = self.decode_query(self._scope.get("query_string", b"").decode("latin-1"))
+        body = await self.read_body()
+        self._data = self.decode_body(body, str(self.content_type or ""))
         transport = self._headers.get("x-tytx-transport")
         if transport:
             self._tytx_mode = True
@@ -123,6 +167,101 @@ class Request:
         self._id = str(request_id) if request_id else str(uuid.uuid4())
         external_id = self._headers.get("x-external-id")
         self._external_id = str(external_id) if external_id is not None else None
+
+    def read_headers(self) -> str:
+        """Fill the header map off the scope and hand back the raw cookie header.
+
+        Keys are lowercased and values TYTX-hydrated; ``cookie`` stays out of the
+        map — it is the one header ``decode_cookies`` owns.
+        """
+        cookie_header = ""
+        for name, value in self._scope.get("headers", []):
+            key = name.decode("latin-1").lower()
+            text = value.decode("latin-1")
+            if key == "cookie":
+                cookie_header = text
+            else:
+                self._headers[key] = from_tytx(text)
+        return cookie_header
+
+    def decode_cookies(self, cookie_header: str) -> dict[str, str]:
+        """Split a ``Cookie`` header into its morsels, values TYTX-hydrated."""
+        cookies: SimpleCookie = SimpleCookie()
+        cookies.load(cookie_header)
+        return {key: from_tytx(morsel.value) for key, morsel in cookies.items()}
+
+    def decode_query(self, query_string: str) -> dict[str, Any]:
+        """Split a query string, values TYTX-hydrated (a repeated key gives a list)."""
+        parsed = parse_qs(query_string, keep_blank_values=True)
+        return {
+            key: from_tytx(values[0]) if len(values) == 1 else [from_tytx(v) for v in values]
+            for key, values in parsed.items()
+        }
+
+    async def read_body(self) -> bytes:
+        """Pump the ASGI body messages until ``more_body`` is false, joined once."""
+        chunks: list[bytes] = []
+        while True:
+            message = await self._receive()
+            chunks.append(message.get("body", b""))
+            if not message.get("more_body", False):
+                return b"".join(chunks)
+
+    def get_transport(self, content_type: str) -> Literal["json", "xml", "msgpack"] | None:
+        """The TYTX transport a content-type names, or ``None`` for the others.
+
+        Substring matching, so the standard media type (``application/json``) and
+        the TYTX one (``application/vnd.tytx+json``) resolve to the same transport.
+        """
+        if "json" in content_type:
+            return "json"
+        if "xml" in content_type:
+            return "xml"
+        if "msgpack" in content_type:
+            return "msgpack"
+        return None
+
+    def decode_body(self, body: bytes, content_type: str) -> Any:
+        """Decode the body bytes by content-type.
+
+        A json/xml/msgpack body comes back hydrated, a form body (urlencoded or
+        multipart) as a dict of fields, anything else as the opaque bytes it is;
+        an empty body is ``None``. The media type decides case-insensitively,
+        while the multipart parser gets the header as sent — its boundary is
+        case-sensitive.
+        """
+        if not body:
+            return None
+        media = content_type.lower()
+        transport = self.get_transport(media)
+        if transport == "msgpack":
+            return from_tytx(body, transport=transport)
+        if transport is not None:
+            return from_tytx(body.decode("utf-8"), transport=transport)
+        if "x-www-form-urlencoded" in media:
+            return from_qs(body.decode("latin-1"))
+        if "multipart/form-data" in media:
+            return self.decode_multipart(body, content_type)
+        return body
+
+    def decode_multipart(self, body: bytes, content_type: str) -> dict[str, Any]:
+        """Split a multipart form body into its fields, keyed by form name.
+
+        A part carrying a ``filename`` becomes an ``UploadedFile``, a text part is
+        TYTX-hydrated, and a name repeated across parts collects a list.
+        """
+        raw = b"Content-Type: " + content_type.encode("latin-1") + b"\r\n\r\n" + body
+        form = BytesParser(policy=email.policy.HTTP).parsebytes(raw)
+        fields: defaultdict[str, list[Any]] = defaultdict(list)
+        for part in form.iter_parts():
+            name = part.get_param("name", header="content-disposition")
+            filename = part.get_filename()
+            payload = part.get_payload(decode=True)
+            if filename is None:
+                fields[name].append(from_tytx(payload.decode("utf-8")))
+            else:
+                fields[name].append(UploadedFile(name, filename, part.get_content_type(), payload))
+        return {name: values[0] if len(values) == 1 else values for name, values in fields.items()}
 
     @property
     def id(self) -> str:
@@ -268,18 +407,19 @@ class Request:
         """Build the kwargs a route handler is called with (query + body).
 
         The query params are the base. The body adds to them by content-type,
-        not by Python shape: an ``x-www-form-urlencoded`` body arrives already
-        hydrated (``asgi_data`` decodes it, typed, via TYTX ``from_qs``) and is
-        merged — the body wins on a name clash; a hydrated body (JSON/XML/msgpack)
-        is passed whole as ``body_data``; opaque bytes are passed as ``body_raw``;
-        an empty body adds nothing.
+        not by Python shape: a form body — ``x-www-form-urlencoded`` or
+        ``multipart/form-data`` — arrives as a dict of hydrated fields (files
+        included, as ``UploadedFile``) and is merged field by field, the body
+        winning on a name clash; a hydrated body (JSON/XML/msgpack) is passed
+        whole as ``body_data``; opaque bytes are passed as ``body_raw``; an
+        empty body adds nothing.
         """
         kwargs: dict[str, Any] = dict(self._query)
         data = self._data
         if data is None:
             return kwargs
         content_type = (self.content_type or "").lower()
-        if "x-www-form-urlencoded" in content_type:
+        if "x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
             if isinstance(data, dict):
                 kwargs.update(data)
         elif isinstance(data, bytes):
