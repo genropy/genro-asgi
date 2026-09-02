@@ -630,15 +630,6 @@ async def test_a_photo_past_the_restart_setpoint_brings_the_round_forward(make_g
     )
     assert group.ping_now_event.is_set() is False
 
-    worker_handler.read_envelope(
-        {
-            ENVELOPE_SLOT_WORKER_SNAPSHOT: {
-                "rss_bytes": WORKER_CEILING // 5,
-            }
-        }
-    )
-    assert group.ping_now_event.is_set() is False
-
     worker_handler.read_envelope({ENVELOPE_SLOT_WORKER_SNAPSHOT: {"rss_bytes": WORKER_CEILING}})
 
     assert group.ping_now_event.is_set() is True

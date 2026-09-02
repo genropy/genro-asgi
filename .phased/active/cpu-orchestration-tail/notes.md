@@ -20,3 +20,12 @@
   reformat of 8 files in the set would be this phase inventing a convention.
 - The only edit is a whitespace reflow of the docstring sentence Phase 1 wrote
   in `spa_worker.worker_snapshot`; the words are untouched.
+
+## Quality check
+
+- Review agent, 2026-09-02: two tests that lost their observable with the photo's CPU were settled —
+  `test_cpu_never_enters_memory_occupancy` deleted (its body had become a copy of the PSS test) and
+  the dead middle step of `test_a_photo_past_the_restart_setpoint_brings_the_round_forward` removed;
+  the ordering `cpu_temperature_missing` before the pressure gate gained a test; one 109-column
+  docstring line rewrapped. Left to the owner: the local name `cpu_percent` in `_judge_cpu_admission`
+  and five test helpers; the mypy advisory on `temperatures: dict[str, float]`.

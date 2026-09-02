@@ -1003,7 +1003,8 @@ class GroupHandler:
         update soft CPU admission, give an empty group its reception back when
         the memory affords it, close a worker the others can absorb — or, when a
         living worker has no temperature yet, journal that and take no step —
-        and lift ``saturated`` once the memory quota affords a birth again. No worker is born here for a user
+        and lift ``saturated`` once the memory quota affords a birth again. No
+        worker is born here for a user
         who is not there yet: the only birth is the reception of a group with
         no living worker, every other one happens inside ``assign_user`` for
         the user who needs it.

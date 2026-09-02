@@ -825,6 +825,25 @@ async def test_a_worker_with_no_temperature_suspends_the_retirement(make_group, 
     assert rows[0]["numbers"]["missing"] == [second.name]
 
 
+async def test_a_missing_temperature_is_journaled_before_the_pressure_gate(
+    make_group, caplog
+):
+    # Pressure stands (the reception is CPU-closed) AND the newborn has no
+    # temperature yet: the round says the judgment could not be made, not that
+    # the pressure holds it — one row, the missing one.
+    group = await grown_group(make_group)
+    second = await group.start_worker()
+    declare_cpu(group.reception, 60.0)
+    with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
+        await group.check_occupancy(now=True)
+    assert group.reception.cpu_admission_open is False
+    decisions = [json.loads(r.getMessage()) for r in caplog.records if r.name == DECISIONS_LOGGER]
+    rows = [d for d in decisions if d["decision"] == "retirement"]
+    assert [r["reason"] for r in rows] == ["cpu_temperature_missing"]
+    assert rows[0]["numbers"]["missing"] == [second.name]
+    assert second.state == "running"
+
+
 def test_the_quiet_is_a_duration_and_zero_is_one(make_group):
     # The validation is the policy's, and it lists what is wrong: a negative
     # quiet is out of range, zero is a legitimate duration.
