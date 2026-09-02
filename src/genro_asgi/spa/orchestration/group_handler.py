@@ -199,7 +199,7 @@ from typing import Any
 
 from .envelope_handler import GroupEnvelopeHandler
 from .group_policy import GroupPolicy
-from .exceptions import AssignmentRefused
+from .exceptions import AssignmentRefused, NoRoomError
 from .beats import every
 from .template_connector import TemplateConnector
 from .worker_handler import DROP_USER_OP_PATH, FREEZE_USER_OP_PATH, WorkerHandler
@@ -702,7 +702,7 @@ class GroupHandler:
         return 100.0 * min(accounted_bytes / self.worker_memory_ceiling_bytes, 1.0)
 
     async def assign_user(self, user: str) -> str:
-        """Place a user: the fullest worker that admits him, or one born for him.
+        """Place a user: the hottest open worker that admits him, or one born for him.
 
         Args:
             user: the identity to place; his row at the vertex says what he is
@@ -725,7 +725,7 @@ class GroupHandler:
         parked and never sent away to come back: it waits right here.
 
         Three levels, each tried only when the one before surrendered. First
-        the CPU-open workers, fullest-first (``_placement_candidate``). Then
+        the CPU-open workers, hottest-first (``_placement_candidate``). Then
         the birth. LAST, when the growth was refused or failed, a CPU-closed
         worker still under its hard cap takes him (``_fallback_candidate``) —
         the soft closure shapes the pool, it must never cost a 503 the hard
@@ -742,7 +742,7 @@ class GroupHandler:
         policy = self.policy
         async with self._placement_lock:
             worker_handler = self._placement_candidate(user)
-            placement_reason = "fullest_cpu_open_candidate"
+            placement_reason = "hottest_cpu_open_candidate"
             if (
                 worker_handler is None
                 and self._may_grow
@@ -776,8 +776,9 @@ class GroupHandler:
                 )
                 raise AssignmentRefused(user, f"{self.name} cannot allocate him")
             self.user_worker_map[user] = worker_handler.name
+            worker_handler.last_admission_monotonic = time.monotonic()
             self.spa_commander.record_user_group(user, self.name)
-            if placement_reason != "fullest_cpu_open_candidate":
+            if placement_reason != "hottest_cpu_open_candidate":
                 self.spa_commander.log_decision(
                     self.name,
                     "placement",
@@ -789,17 +790,24 @@ class GroupHandler:
             return worker_handler.name
 
     def _placement_candidate(self, user: str) -> WorkerHandler | None:
-        """The fullest CPU-open living worker that admits *user* right now, or None.
+        """The hottest CPU-open living worker that admits *user* right now, or None.
 
         The choice is a CALCULATION of the group (owner, 2026-08-25) — the
-        numbers are all here: the photos, the caps, the counts. Each worker's
-        own judgment (``WorkerHandler.assign_user``) stays the single gate a
-        placement passes, so choosing and admitting cannot drift apart. A
-        worker the CPU judge closed (``cpu_admission_open`` False) is not in
-        the running: fullest-first is applied AMONG THE OPEN ONLY. If no open
-        worker admits the user, the placement itself creates capacity. With the
-        policy off nobody is ever closed, and this is fullest-first over
-        everybody, as it always was.
+        numbers are all here: the temperatures, the photos, the counts. Each
+        worker's own judgment (``WorkerHandler.assign_user``) stays the single
+        gate a placement passes, so choosing and admitting cannot drift apart.
+        A worker the CPU judge closed (``cpu_admission_open`` False) is not in
+        the running: hottest-first is applied AMONG THE OPEN ONLY, and hottest
+        means the filtered temperature — the group consolidates while a worker
+        still has room under the close threshold.
+
+        Two passes over the same order. The first skips a worker that admitted
+        somebody less than ``worker_admission_interval_seconds`` ago: his load
+        is not in the temperature yet, so the next one goes elsewhere. The
+        second, only when every open worker was skipped, ignores the interval
+        — it orders the walk, it refuses nobody — and takes the hottest that
+        admits, journaled as ``all_workers_recently_admitted``. If no open
+        worker admits the user, the placement itself creates capacity.
         """
         candidates = sorted(
             (
@@ -807,29 +815,40 @@ class GroupHandler:
                 for worker_handler in self.living_workers
                 if worker_handler.cpu_admission_open
             ),
-            key=lambda worker_handler: -self.get_occupancy_percent(
-                worker_handler.worker_snapshot, worker_handler
-            ),
+            key=lambda worker_handler: -(worker_handler.get_cpu_temperature_percent() or 0.0),
         )
         decision_rows = [self._get_worker_decision_row(candidate) for candidate in candidates]
-        for worker_handler in candidates:
-            try:
-                worker_handler.assign_user(user)
-            except AssignmentRefused as refusal:
-                self._logger.debug("Group %s: %s", self.name, refusal)
-                next(
-                    row for row in decision_rows if row["name"] == worker_handler.name
-                )["refusal"] = str(refusal)
-                continue
-            self.spa_commander.log_decision(
-                self.name,
-                "placement",
-                worker_handler.name,
-                reason="fullest_cpu_open_candidate",
-                subject=user,
-                candidates=decision_rows,
-            )
-            return worker_handler
+        rows_by_name = {row["name"]: row for row in decision_rows}
+        for reason, skip_recent in (
+            ("hottest_cpu_open_candidate", True),
+            ("all_workers_recently_admitted", False),
+        ):
+            for worker_handler in candidates:
+                row = rows_by_name[worker_handler.name]
+                if skip_recent and row["recently_admitted"]:
+                    row["skipped"] = "worker_recently_admitted"
+                    continue
+                try:
+                    worker_handler.assign_user(user)
+                except NoRoomError as refusal:
+                    row["refusal"] = str(refusal)
+                    row["skipped"] = "worker_memory_full"
+                    continue
+                except AssignmentRefused as refusal:
+                    self._logger.debug("Group %s: %s", self.name, refusal)
+                    row["refusal"] = str(refusal)
+                    continue
+                self.spa_commander.log_decision(
+                    self.name,
+                    "placement",
+                    worker_handler.name,
+                    reason=reason,
+                    subject=user,
+                    candidates=decision_rows,
+                )
+                return worker_handler
+            if not any(row.get("skipped") == "worker_recently_admitted" for row in decision_rows):
+                break
         self.spa_commander.log_decision(
             self.name,
             "placement_candidates",
@@ -839,6 +858,14 @@ class GroupHandler:
             candidates=decision_rows,
         )
         return None
+
+    def _recently_admitted(self, worker_handler: WorkerHandler) -> bool:  # wf:phase-2:new
+        """Whether this worker admitted a user less than the admission interval ago."""
+        last = worker_handler.last_admission_monotonic
+        return (
+            last is not None
+            and time.monotonic() - last < self.policy.worker_admission_interval_seconds
+        )
 
     def _get_worker_decision_row(self, worker_handler: WorkerHandler) -> dict[str, Any]:
         """The facts a placement or growth judge sees for one worker."""
@@ -851,6 +878,7 @@ class GroupHandler:
             ),
             "cpu_admission_open": worker_handler.cpu_admission_open,
             "cpu_temperature_percent": worker_handler.get_cpu_temperature_percent(),
+            "recently_admitted": self._recently_admitted(worker_handler),
             "occupancy_percent": self.get_occupancy_percent(photo, worker_handler),
             "memory_occupancy_percent": self.get_memory_occupancy_percent(photo),
             "worker_cap": self.worker_memory_admission_percent,
@@ -869,7 +897,7 @@ class GroupHandler:
         ]
 
     def _fallback_candidate(self, user: str) -> WorkerHandler | None:
-        """The fullest CPU-closed worker that still admits *user* under its hard cap.
+        """The hottest CPU-closed worker that still admits *user* under the memory veto.
 
         Args:
             user: the newcomer nobody else could take.
@@ -890,9 +918,7 @@ class GroupHandler:
                 for worker_handler in self.living_workers
                 if not worker_handler.cpu_admission_open
             ),
-            key=lambda worker_handler: -self.get_occupancy_percent(
-                worker_handler.worker_snapshot, worker_handler
-            ),
+            key=lambda worker_handler: -(worker_handler.get_cpu_temperature_percent() or 0.0),
         )
         for worker_handler in candidates:
             try:

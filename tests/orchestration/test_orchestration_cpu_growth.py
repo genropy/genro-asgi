@@ -173,7 +173,7 @@ async def test_the_journal_explains_a_reopened_full_worker_winning_placement(
     ]
     placement = [row for row in decisions if row["decision"] == "placement"][-1]
     assert placement["outcome"] == first.name
-    assert placement["reason"] == "fullest_cpu_open_candidate"
+    assert placement["reason"] == "hottest_cpu_open_candidate"
     assert [candidate["name"] for candidate in placement["candidates"]] == [first.name]
     assert placement["candidates"][0]["cpu_temperature_percent"] == 28.0
 
@@ -307,7 +307,7 @@ async def test_the_newborn_takes_new_users_for_as_long_as_the_trigger_stays_hot(
     assert homes == ["standard_0002"] * 4
 
 
-async def test_two_open_workers_are_still_fullest_first(make_group, commander):
+async def test_two_open_workers_are_hottest_first(make_group, commander):
     group = await grown_group(make_group)
     second = await group.start_worker()
     declare_cpu(group.reception, 30.0)

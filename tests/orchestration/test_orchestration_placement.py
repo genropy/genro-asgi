@@ -28,6 +28,8 @@ of every refusal is readable in the numbers themselves.
 
 from __future__ import annotations
 
+import time as real_time
+
 import pytest
 
 from genro_asgi.spa.orchestration import (
@@ -87,6 +89,13 @@ def worker_at(group, name: str, occupancy_percent: float, state: str = "running"
     return worker_handler
 
 
+def warm(worker_handler, cpu_percent: float) -> None:
+    """Declare a fresh filtered temperature on a worker, as the meter would."""
+    worker_handler.cpu_temperature_percent = cpu_percent
+    worker_handler.cpu_temperature_sampled_at = real_time.monotonic()
+    worker_handler.cpu_temperature_interval_seconds = 0.1
+
+
 def newcomer(commander, cid: str = "cid-a") -> str:
     """A user the vertex has minted and nobody has ever measured."""
     return minted(commander, cid)
@@ -119,10 +128,10 @@ async def test_a_worker_reads_as_full_at_its_own_share_of_the_group_quota(comman
     assert group.get_occupancy_percent({"rss_bytes": MEMORY_CEILING // 8}) == 50.0
 
 
-async def test_the_fullest_worker_that_still_takes_him_is_the_one_that_gets_him(group, commander):
-    worker_at(group, "standard_0001", 10.0)
-    worker_at(group, "standard_0002", 20.0)
-    worker_at(group, "standard_0003", 60.0)
+async def test_the_hottest_worker_that_still_takes_him_is_the_one_that_gets_him(group, commander):
+    warm(worker_at(group, "standard_0001", 10.0), 10.0)
+    warm(worker_at(group, "standard_0002", 20.0), 20.0)
+    warm(worker_at(group, "standard_0003", 60.0), 60.0)
     user = newcomer(commander)
 
     assert await group.assign_user(user) == "standard_0003"
@@ -130,27 +139,26 @@ async def test_the_fullest_worker_that_still_takes_him_is_the_one_that_gets_him(
 
 
 async def test_the_walk_goes_past_the_one_with_no_room_and_stops_at_the_next(group, commander):
-    worker_at(group, "standard_0001", 10.0)
-    worker_at(group, "standard_0002", 50.0)
-    # 85 is past the memory veto of 80: he does not fit, and the class of the
-    # refusal says so.
-    worker_at(group, "standard_0003", 85.0)
+    warm(worker_at(group, "standard_0001", 10.0), 10.0)
+    warm(worker_at(group, "standard_0002", 50.0), 20.0)
+    # The hottest is past the memory veto of 80: he does not fit, and the walk
+    # goes on to the next one down the temperature.
+    warm(worker_at(group, "standard_0003", 85.0), 60.0)
     user = newcomer(commander)
 
     assert await group.assign_user(user) == "standard_0002"
 
 
-async def test_two_placements_in_a_row_are_judged_on_the_same_photo(group, commander):
-    worker_at(group, "standard_0001", 0.0)
-    worker_at(group, "standard_0002", 70.0)
+async def test_two_placements_in_a_row_go_to_two_workers(group, commander):
+    warm(worker_at(group, "standard_0001", 0.0), 5.0)
+    warm(worker_at(group, "standard_0002", 70.0), 40.0)
     first = newcomer(commander, "cid-a")
     second = newcomer(commander, "cid-b")
 
-    # 70 is under the veto, and it still reads 70 when the second one is
-    # judged: the overshoot of one newcomer is the declared price of not
-    # locking a photo.
+    # The hotter one takes the first; having just admitted, it is skipped for
+    # the admission interval and the second lands on the other.
     assert await group.assign_user(first) == "standard_0002"
-    assert await group.assign_user(second) == "standard_0002"
+    assert await group.assign_user(second) == "standard_0001"
 
 
 async def test_a_worker_with_no_room_refuses_with_the_class_that_says_so(group):

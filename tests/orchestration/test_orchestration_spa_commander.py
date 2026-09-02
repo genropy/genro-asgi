@@ -256,7 +256,7 @@ def test_a_calculation_can_be_recorded_without_inventing_an_order(short_root):
         "standard",
         "placement_candidates",
         "standard_0002",
-        reason="fullest_cpu_open_candidate",
+        reason="hottest_cpu_open_candidate",
         subject="mario",
         candidates=[
             {"name": "standard_0001", "cpu_admission_open": False},
@@ -268,7 +268,7 @@ def test_a_calculation_can_be_recorded_without_inventing_an_order(short_root):
     row = json.loads(log_path.with_suffix(".decisions.jsonl").read_text())
     assert row["decision"] == "placement_candidates"
     assert row["outcome"] == "standard_0002"
-    assert row["reason"] == "fullest_cpu_open_candidate"
+    assert row["reason"] == "hottest_cpu_open_candidate"
     assert [candidate["name"] for candidate in row["candidates"]] == [
         "standard_0001",
         "standard_0002",
