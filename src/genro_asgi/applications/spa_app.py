@@ -213,15 +213,17 @@ class SpaApplicationGrammar(ApplicationGrammar):
         memory_max_percent: float | BagResolver = None,
         worker_max_number: int | BagResolver = None,
         worker_memory_max_percent: float | BagResolver = None,
-        occupancy_max_percent: float | BagResolver = None,
+        worker_memory_admission_percent: float | BagResolver = None,
         restart_occupancy_max_percent: float | BagResolver = None,
-        close_occupancy_max_percent: float | BagResolver = None,
+        cpu_close_percent: float | BagResolver | None = None,
         cpu_admission_close_percent: float | BagResolver = None,
         cpu_admission_reopen_percent: float | BagResolver = None,
         cpu_offload_percent: float | BagResolver | None = None,
         cpu_retirement_quiet_seconds: float | BagResolver | None = None,
+        cpu_heating_seconds: float | BagResolver | None = None,
+        cpu_cooling_seconds: float | BagResolver | None = None,
+        worker_admission_interval_seconds: float | BagResolver | None = None,
         worker_min_life_seconds: float | BagResolver = None,
-        new_user_occupancy_percent: float | BagResolver = None,
         worker_max_users: int | BagResolver = None,
         user_idle_freeze_minutes: float | BagResolver = None,
         entry_module: str = None,
@@ -250,16 +252,15 @@ class SpaApplicationGrammar(ApplicationGrammar):
         The POLICIES: ``memory_max_percent`` is this group's share of the
         server's concession and ``worker_memory_max_percent`` what ONE worker may
         hold of that share (the same word one rung down — the cascade is machine,
-        concession, quota, worker); ``occupancy_max_percent`` is how full a worker
+        concession, quota, worker); ``worker_memory_admission_percent`` is how full a worker
         gets before it stops admitting and ``restart_occupancy_max_percent`` where
-        a process is replaced instead of kept; ``close_occupancy_max_percent`` is
-        the ceiling every survivor must stay under for a worker to be closed —
-        distinctly below the growth setpoint, the band between the two being the
-        pool's normal state — and ``worker_min_life_seconds`` the age before
-        which a worker is no closure candidate;
-        ``new_user_occupancy_percent`` is what a user nobody has ever measured is
-        expected to cost. ``user_idle_freeze_minutes`` is the silence past which the
-        group parks a user in the freezer. ``cpu_admission_close_percent`` (experimental,
+        a process is replaced instead of kept; ``cpu_close_percent`` is the temperature, shared onto the survivors, under
+        which a worker is a closure candidate (unset, the reopen threshold itself)
+        and ``worker_min_life_seconds`` the age before which a worker is no
+        closure candidate; ``worker_admission_interval_seconds`` is how long after
+        admitting a user a worker is skipped by the placement, so its load shows
+        in the temperature first; ``user_idle_freeze_minutes`` is the silence past
+        which the group parks a user in the freezer. ``cpu_admission_close_percent`` (experimental,
         off when omitted) turns on soft CPU admission: a worker above it is
         closed to NEW users and reopens below ``cpu_admission_reopen_percent``. CPU
         samples do not fork processes. When a concrete arrival finds no open
@@ -271,7 +272,10 @@ class SpaApplicationGrammar(ApplicationGrammar):
         one. ``cpu_retirement_quiet_seconds`` is how long the CPU must
         stay silent — no blocking or reopening — before retirement judges
         again: the quiet of the GROUP, distinct from the age of one worker,
-        restarted whole by every CPU admission transition.
+        restarted whole by every CPU admission transition. ``cpu_heating_seconds``
+        (1 s) and ``cpu_cooling_seconds`` (5 s) are the two time constants of the
+        filter every CPU judge reads the 100 ms temperature through: a worker
+        heats up fast and cools down slowly, so one idle sample never reopens it.
 
         The IDENTITY of the child: ``entry_module`` (what ``python -m`` runs),
         ``executable`` (the interpreter — a group is how two versions of a site
@@ -300,7 +304,7 @@ class SpaApplicationGrammar(ApplicationGrammar):
         orchestration_log_backup_count: int | BagResolver = None,
         user_expiry_hours: float | BagResolver = None,
         guest_expiry_hours: float | BagResolver = None,
-            cpu_temperature_sample_seconds: float | BagResolver | None = None,
+        cpu_temperature_sample_seconds: float | BagResolver | None = None,
     ) -> None:
         """The SPA pool: the vertex's own policies, and the groups under it.
 
@@ -310,8 +314,9 @@ class SpaApplicationGrammar(ApplicationGrammar):
         ``instance_dir`` holds the sockets.
 
         ``cpu_temperature_sample_seconds`` is the cadence of commander-side,
-        traffic-independent worker CPU measurement. CPU admission, occupancy
-        and offload use this channel; omit it for the 100 ms default.
+        traffic-independent worker CPU measurement. CPU admission, placement and
+        offload read this channel through each group's filter; omit it for the
+        100 ms default.
 
         ``memory_max_percent`` is what this server may hold OF THE MACHINE (the
         concession; omitted, all of it), and every percentage below is a share of

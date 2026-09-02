@@ -70,8 +70,8 @@ async def test_concurrent_applies_serialize_on_the_lock(configured, make_group):
     # wf:contract: defaults ⊕ recipe_settings ⊕ profile ⊕ env_settings from the
     # wf:contract: immutable levels, never from the other's result.
     group = make_group()
-    configured.profile_store.write("first", {"occupancy_max_percent": 60.0})
-    configured.profile_store.write("second", {"close_occupancy_max_percent": 30.0})
+    configured.profile_store.write("first", {"worker_memory_admission_percent": 60.0})
+    configured.profile_store.write("second", {"cpu_close_percent": 30.0})
 
     payloads = await asyncio.gather(
         configured.apply_group_settings(profile_name="first", source="reload"),
@@ -83,8 +83,8 @@ async def test_concurrent_applies_serialize_on_the_lock(configured, make_group):
     first, second = payloads
     # Neither apply carries the other's key: each composed from the levels, and
     # the levels are the only thing an apply reads.
-    assert first["effective_settings"]["close_occupancy_max_percent"] == 40.0
-    assert second["effective_settings"]["occupancy_max_percent"] == 80.0
+    assert first["effective_settings"]["cpu_close_percent"] is None
+    assert second["effective_settings"]["worker_memory_admission_percent"] == 80.0
     # What is in force is the one that landed last, whole.
     last = max(payloads, key=lambda payload: payload["generation"])
     assert group.policy.to_settings() == last["effective_settings"]
@@ -125,7 +125,7 @@ async def test_decision_snapshot_and_emitted_order_complete(
 
     with caplog.at_level("INFO", logger=ORDERS_LOGGER):
         caplog.clear()
-        payload = await configured.apply_group_settings(profile={"occupancy_max_percent": 75.0})
+        payload = await configured.apply_group_settings(profile={"worker_memory_admission_percent": 75.0})
         group._placement_lock.release()
         with pytest.raises(AssignmentRefused):
             await placement
@@ -134,7 +134,7 @@ async def test_decision_snapshot_and_emitted_order_complete(
     assert "suppressed: policy changed while deciding" in caplog.text
     # And no mixed values: every reader answers the policy of that one apply.
     assert group.policy.to_settings() == payload["effective_settings"]
-    assert group.occupancy_max_percent == 75.0
+    assert group.worker_memory_admission_percent == 75.0
 
 
 async def test_cpu_apply_and_scan_never_create_capacity(configured, make_group):  # noqa: F811
@@ -247,13 +247,13 @@ async def test_no_partial_state_observable(configured, make_group):  # noqa: F81
 
     # A named apply reads its profile off the loop, so the loop IS yielded while
     # the apply runs: the watcher samples it from the inside.
-    configured.profile_store.write("shift", {"occupancy_max_percent": 55.0})
+    configured.profile_store.write("shift", {"worker_memory_admission_percent": 55.0})
     samples = []
     stop = asyncio.Event()
 
     async def watch() -> None:
         while not stop.is_set():
-            samples.append((group.occupancy_max_percent, configured.configuration_generation))
+            samples.append((group.worker_memory_admission_percent, configured.configuration_generation))
             await asyncio.sleep(0)
 
     watcher = asyncio.create_task(watch())
@@ -279,7 +279,7 @@ async def test_audit_line_per_attempt(configured, make_group, caplog):  # noqa: 
     with caplog.at_level("INFO", logger=ORDERS_LOGGER):
         caplog.clear()
         payload = await configured.apply_group_settings(
-            profile={"occupancy_max_percent": 65.0}, source="apply"
+            profile={"worker_memory_admission_percent": 65.0}, source="apply"
         )
     applied = caplog.text
 
@@ -287,7 +287,7 @@ async def test_audit_line_per_attempt(configured, make_group, caplog):  # noqa: 
     assert f"'digest': '{configured.last_apply['digest']}'" in applied
     assert "'generation': 2" in applied
     assert "'source': 'apply'" in applied
-    assert "'changed': {'occupancy_max_percent': 65.0}" in applied
+    assert "'changed': {'worker_memory_admission_percent': 65.0}" in applied
     assert "outcome=applied" in applied
     assert payload["outcome"] == "applied"
 
@@ -295,12 +295,12 @@ async def test_audit_line_per_attempt(configured, make_group, caplog):  # noqa: 
         caplog.clear()
         with pytest.raises(GroupPolicyError):
             await configured.apply_group_settings(
-                profile={"occupancy_max_percent": 500.0, "worker_max_number": 0}, source="apply"
+                profile={"worker_memory_admission_percent": 500.0, "worker_max_number": 0}, source="apply"
             )
     rejected = caplog.text
 
     assert "'violations':" in rejected
-    assert "outcome=rejected: occupancy_max_percent: 500.0 is out of range" in rejected
+    assert "outcome=rejected: worker_memory_admission_percent: 500.0 is out of range" in rejected
     assert rejected.rstrip().endswith("+1")
     # Nothing moved: the generation and the setpoints are the applied ones.
     assert configured.configuration_generation == 2
@@ -321,10 +321,10 @@ async def test_post_commit_best_effort(configured, make_group, caplog, monkeypat
     monkeypatch.setattr(configured, "log_order", refuse_the_log)
     with caplog.at_level("ERROR", logger=VERTEX_LOGGER):
         caplog.clear()
-        payload = await configured.apply_group_settings(profile={"occupancy_max_percent": 55.0})
+        payload = await configured.apply_group_settings(profile={"worker_memory_admission_percent": 55.0})
 
     assert payload["generation"] == 2
-    assert group.occupancy_max_percent == 55.0
+    assert group.worker_memory_admission_percent == 55.0
     assert group.ping_now_event.is_set()
     assert "the apply of the setpoints could not be audited" in caplog.text
 
@@ -336,10 +336,10 @@ async def test_post_commit_best_effort(configured, make_group, caplog, monkeypat
     monkeypatch.setattr(group, "ping_now", refuse_the_wake)
     with caplog.at_level("ERROR", logger=VERTEX_LOGGER):
         caplog.clear()
-        payload = await configured.apply_group_settings(profile={"occupancy_max_percent": 56.0})
+        payload = await configured.apply_group_settings(profile={"worker_memory_admission_percent": 56.0})
 
     assert payload["generation"] == 3
-    assert group.occupancy_max_percent == 56.0
+    assert group.worker_memory_admission_percent == 56.0
     assert "the round after the apply could not be anticipated" in caplog.text
 
 
@@ -370,9 +370,9 @@ async def test_a_foreign_apply_during_the_quiet_leaves_it_running(
     group.record_cpu_pressure()
     stamped = group._cpu_pressure_monotonic
 
-    await configured.apply_group_settings(profile={"occupancy_max_percent": 61.0})
+    await configured.apply_group_settings(profile={"worker_memory_admission_percent": 61.0})
 
-    assert group.occupancy_max_percent == 61.0
+    assert group.worker_memory_admission_percent == 61.0
     assert group._cpu_pressure_monotonic == stamped
 
 

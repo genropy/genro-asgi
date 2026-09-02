@@ -18,14 +18,14 @@ def commander(tmp_path):
     spa_commander = SpaCommander(
         tmp_path / "frozen_users",
         profiles_path=tmp_path / "profiles",
-        recipe_settings={"occupancy_max_percent": 70.0, "worker_max_number": 3},
+        recipe_settings={"worker_memory_admission_percent": 70.0, "worker_max_number": 3},
         env_settings={"worker_max_users": 16},
     )
     GroupHandler(
         spa_commander,
         "standard",
         memory_concession_bytes=MEMORY_CEILING,
-        occupancy_max_percent=70.0,
+        worker_memory_admission_percent=70.0,
         worker_max_number=3,
         worker_max_users=16,
         instance_dir=tmp_path / "i",
@@ -40,7 +40,7 @@ async def test_recompute_independent_of_previous_profile(commander):
     # wf:contract: profile ⊕ env_settings; a key present in P1 and absent in P2
     # wf:contract: falls back to env, recipe or default, in that order (T5 sibling
     # wf:contract: at the HTTP level lives in phase 6).
-    first = {"occupancy_max_percent": 60.0, "worker_min_life_seconds": 5.0}
+    first = {"worker_memory_admission_percent": 60.0, "worker_min_life_seconds": 5.0}
     second = {"worker_min_life_seconds": 9.0}
     commander.profile_store.write("p1", first)
     commander.profile_store.write("p2", second)
@@ -50,11 +50,11 @@ async def test_recompute_independent_of_previous_profile(commander):
 
     # The recipe level is back in charge of what P1 had overridden, and the env
     # level still wins over the recipe on its own key.
-    assert after_both["effective_settings"]["occupancy_max_percent"] == 70.0
+    assert after_both["effective_settings"]["worker_memory_admission_percent"] == 70.0
     assert after_both["effective_settings"]["worker_min_life_seconds"] == 9.0
     assert after_both["effective_settings"]["worker_max_users"] == 16
     # A key nobody names anywhere is the dataclass default.
-    assert after_both["effective_settings"]["close_occupancy_max_percent"] == 40.0
+    assert after_both["effective_settings"]["cpu_close_percent"] is None
 
     alone = SpaCommander(
         commander.freeze_handler.root_path,
@@ -100,12 +100,12 @@ async def test_generation_advances_on_idempotent_apply(commander):
     # wf:contract: changed_settings, outcome "applied", and a generation that
     # wf:contract: advances anyway: the audit counts successful attempts, not
     # wf:contract: differences.
-    commander.profile_store.write("steady", {"close_occupancy_max_percent": 30.0})
+    commander.profile_store.write("steady", {"cpu_close_percent": 30.0})
 
     first = await commander.apply_group_settings(profile_name="steady", source="reload")
     second = await commander.apply_group_settings(profile_name="steady", source="reload")
 
-    assert first["changed_settings"] == {"close_occupancy_max_percent": 30.0}
+    assert first["changed_settings"] == {"cpu_close_percent": 30.0}
     assert second["changed_settings"] == {}
     assert second["outcome"] == "applied"
     assert (first["generation"], second["generation"]) == (2, 3)

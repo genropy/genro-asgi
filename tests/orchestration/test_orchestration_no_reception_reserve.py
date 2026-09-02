@@ -16,7 +16,7 @@
 
 Contract tests. ``reception_reserved_percent`` is an unknown setpoint,
 ``GroupHandler.get_worker_cap`` is gone, and the reception admits under the
-same ``occupancy_max_percent`` as every other worker.
+same ``worker_memory_admission_percent`` as every other worker.
 """
 
 from __future__ import annotations
@@ -42,10 +42,10 @@ def test_the_reception_reserve_is_gone():
 
 
 async def test_the_reception_admits_up_to_the_common_cap(make_group, commander):
-    # occupancy 80, a newcomer 5: sixteen placements fit ONE worker. With the
-    # old reserve of 50 the reception stopped at six and the seventh was born
-    # a worker of his own.
-    group = make_group(occupancy_max_percent=80.0, new_user_occupancy_percent=5.0)
+    # Under the memory veto every one of them fits ONE worker. With the old
+    # reserve of 50 the reception stopped at six and the seventh was born a
+    # worker of his own.
+    group = make_group(worker_memory_admission_percent=80.0)
     await group.start_worker()
 
     for index in range(7):

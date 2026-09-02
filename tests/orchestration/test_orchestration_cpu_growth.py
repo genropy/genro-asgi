@@ -173,7 +173,7 @@ async def test_the_journal_explains_a_reopened_full_worker_winning_placement(
     ]
     placement = [row for row in decisions if row["decision"] == "placement"][-1]
     assert placement["outcome"] == first.name
-    assert placement["reason"] == "fullest_cpu_open_candidate"
+    assert placement["reason"] == "hottest_cpu_open_candidate"
     assert [candidate["name"] for candidate in placement["candidates"]] == [first.name]
     assert placement["candidates"][0]["cpu_temperature_percent"] == 28.0
 
@@ -307,7 +307,7 @@ async def test_the_newborn_takes_new_users_for_as_long_as_the_trigger_stays_hot(
     assert homes == ["standard_0002"] * 4
 
 
-async def test_two_open_workers_are_still_fullest_first(make_group, commander):
+async def test_two_open_workers_are_hottest_first(make_group, commander):
     group = await grown_group(make_group)
     second = await group.start_worker()
     declare_cpu(group.reception, 30.0)
@@ -387,8 +387,9 @@ async def test_nobody_open_and_growth_refused_falls_back_on_a_blocked_worker(
 
 
 async def test_a_blocked_worker_at_the_hard_limit_still_refuses(make_group, commander):
-    group = await grown_group(make_group)
-    declare_cpu(group.reception, 85.0)  # over occupancy_max_percent: the hard gate
+    # CPU-closed AND past the memory veto: the fallback has nowhere to put him.
+    group = await grown_group(make_group, rss_bytes=int(0.9 * MEMORY_CEILING))
+    declare_cpu(group.reception, 60.0)
     await group.check_occupancy(now=True)
     group.reception.cpu_admission_open = False
     commander.state = "quitting"
@@ -473,7 +474,7 @@ async def test_concurrent_arrivals_share_one_demand_born_worker(make_group, comm
 async def test_the_reactive_growth_and_a_placement_cannot_fork_twice(make_group, commander):
     group = make_group()
     await group.start_worker()
-    group.reception.worker_snapshot["rss_bytes"] = int(0.79 * WORKER_CEILING)
+    group.reception.worker_snapshot["rss_bytes"] = int(0.85 * WORKER_CEILING)  # past the veto
     known_at_the_vertex(commander, "c_arriving", "arriving")
 
     _, home = await asyncio.gather(
@@ -834,6 +835,21 @@ async def test_sticky_users_stand_until_the_intentional_retirement(
 
     assert group.user_worker_map["settler"] == "standard_0002"  # untouched so far
     assert newborn.state == "running"
+
+
+async def test_a_worker_with_no_temperature_suspends_the_retirement(make_group, caplog):
+    # The CPU decides the closure: with one worker unmeasured there is no
+    # judgment this round, and the journal says so — nothing is closed.
+    group = make_group()
+    await group.start_worker()
+    second = await group.start_worker()
+    declare_cpu(group.reception, 1.0)
+    with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
+        await group.check_occupancy(now=True)
+    assert second.state == "running"
+    decisions = [json.loads(r.getMessage()) for r in caplog.records if r.name == DECISIONS_LOGGER]
+    rows = [d for d in decisions if d["reason"] == "cpu_temperature_missing"]
+    assert rows and rows[-1]["numbers"]["missing"] == [second.name]
 
 
 def test_the_quiet_is_a_duration_and_zero_is_one(make_group):

@@ -324,11 +324,13 @@ def applications_section(self, cfg):
         guest_expiry_hours=24.0,             # a frozen browser, a day
     )
     groups = commander.groups()
-    groups.group(name="stable", occupancy_max_percent=80.0,
+    groups.group(name="stable", worker_memory_admission_percent=80.0,
                  user_idle_freeze_minutes=60.0,
                  cpu_admission_reopen_percent=30.0,   # below this a worker admits again
                  cpu_admission_close_percent=50.0,         # above this it stops taking new users
                  cpu_offload_percent=75.0,      # above this it cedes one user per beat
+                 cpu_heating_seconds=1.0,       # the temperature filter, going up
+                 cpu_cooling_seconds=5.0,       # and going down: slower on purpose
                  entry_module="genro_asgi.spa.orchestration.worker_entry",
                  worker_class="myshop.app:ShopWorker",
                  worker_kwargs={"site_path": "/srv/shop"})
@@ -370,11 +372,19 @@ the group's share. The same word on each rung is deliberate — it always means
 itself, so the cascade is always anchored; a machine that does not say how much
 of it is IN USE (a `/proc/meminfo` capability) simply alarms nobody.
 
-**The occupancy keys are how full is full.** `occupancy_max_percent` is where a
-worker stops admitting new users; `restart_occupancy_max_percent` is where a
-process is replaced rather than kept;
-`new_user_occupancy_percent` is what somebody nobody has ever measured is
-expected to cost.
+**The memory keys are a veto, never a choice.** `worker_memory_admission_percent`
+(default 80) is the share of its ceiling past which a worker takes no new user,
+whatever its CPU says; `restart_occupancy_max_percent` (default 95) is where a
+process is replaced rather than kept. Neither picks a worker: the CPU does.
+
+**The CPU picks the worker.** A newcomer goes to the hottest CPU-open worker
+that admits him — the group consolidates while a worker still has room under the
+close threshold — and a worker that admitted somebody less than
+`worker_admission_interval_seconds` ago (default 1) is skipped, so its load shows
+in the temperature before the next one lands. When every open worker is in its
+window the hottest that admits takes him anyway: the interval orders the walk,
+it refuses nobody and births nobody. Nobody estimates what a user will cost: the
+gate is the CPU admission, the heads and the memory veto.
 
 **The CPU keys are the soft admission, and its brake.** `cpu_admission_close_percent`
 (experimental, off when omitted) is the smoothed CPU above which a worker stops
@@ -388,6 +398,25 @@ judge resumes. It is the quiet of the whole GROUP, not the age of one worker
 Without it, closing the emptiest worker while demand still stands hands its
 users back to the hot one, which regrows seconds later. With the CPU policy off
 the brake does not exist at all.
+
+**The temperature the CPU keys read is filtered.** The commander samples each
+worker's CPU every 100 ms; a saturated process reads 0% or 100% on such a short
+window, so no judge reads the raw sample. `cpu_heating_seconds` (default 1) and
+`cpu_cooling_seconds` (default 5) are the time constants of a first-order filter
+the sample goes through: the temperature moves towards the sample by
+`1 - exp(-dt/tau)`, with the shorter constant when the sample is hotter and the
+longer one when it is colder. A worker heats up in about a second and needs
+several seconds of real silence to reopen, so a user it just ceded does not come
+back on the next request. The raw sample stays visible in the pool census as
+`cpu_temperature_sample_percent`, beside the filtered `cpu_temperature_percent`.
+
+**`cpu_close_percent` is where the pool shrinks.** Past the CPU quiet, the coldest
+worker is closed when its temperature, shared by the survivors, keeps every one
+of them under this key (unset, the reopen threshold itself; set while the CPU
+admission is on, never above `cpu_admission_reopen_percent`),
+and its memory, shared the same way, keeps every survivor under
+`worker_memory_admission_percent`. A worker with no temperature yet suspends the
+judgment. Its users go to the freezer and wake where their next request lands.
 
 **`cpu_offload_percent` is what makes a hot worker slim down.** Closing the
 admission protects the workers to come; it does nothing for the users already

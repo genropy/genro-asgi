@@ -108,7 +108,7 @@ def pool_recipe(
                 collection.group(
                     name=name,
                     entry_module="never.launched",
-                    occupancy_max_percent=70.0,
+                    worker_memory_admission_percent=70.0,
                     worker_max_number=3,
                 )
 
@@ -215,7 +215,7 @@ async def test_boot_precedence_four_levels(tmp_path):
     # wf:contract: profile overrides the recipe and env_settings overrides the
     # wf:contract: profile, key by key.
     folder = tmp_path / "profiles"
-    written(folder, "fast", {"occupancy_max_percent": 60.0, "worker_min_life_seconds": 5.0})
+    written(folder, "fast", {"worker_memory_admission_percent": 60.0, "worker_min_life_seconds": 5.0})
     server = pool_server(
         tmp_path,
         profiles_path=folder,
@@ -227,13 +227,13 @@ async def test_boot_precedence_four_levels(tmp_path):
 
     policy = server.applications["site0"].commander.configured_group.policy
     # The profile wins over the recipe...
-    assert policy.occupancy_max_percent == 60.0
+    assert policy.worker_memory_admission_percent == 60.0
     # ...the environment wins over the profile...
     assert policy.worker_min_life_seconds == 9.0
     # ...the recipe still owns what nobody above it named...
     assert policy.worker_max_number == 3
     # ...and the dataclass default owns what nobody named at all.
-    assert policy.close_occupancy_max_percent == 40.0
+    assert policy.cpu_close_percent is None
 
 
 async def test_boot_without_named_profile_unchanged(tmp_path):
@@ -250,10 +250,10 @@ async def test_boot_without_named_profile_unchanged(tmp_path):
     assert commander.last_apply["digest"] is None
     # The recipe alone decided, and its own level is kept for the next apply.
     policy = commander.configured_group.policy
-    assert policy.occupancy_max_percent == 70.0
+    assert policy.worker_memory_admission_percent == 70.0
     assert policy.worker_min_life_seconds == 60.0
     assert commander.recipe_settings == {
-        "occupancy_max_percent": 70.0,
+        "worker_memory_admission_percent": 70.0,
         "worker_max_number": 3,
     }
 
@@ -281,7 +281,7 @@ async def test_boot_failure_invalid_profile(tmp_path, caplog):
     # wf:contract: violation on the named profile: on_startup raises, the
     # wf:contract: violations are in the message on the spa app module logger.
     folder = tmp_path / "profiles"
-    written(folder, "wrong", {"occupancy_max_percent": 200.0})
+    written(folder, "wrong", {"worker_memory_admission_percent": 200.0})
     server = pool_server(tmp_path, profiles_path=folder, profile_name="wrong")
 
     with caplog.at_level(logging.ERROR, logger="genro_asgi.applications.spa_app"):
@@ -305,7 +305,7 @@ async def test_zero_or_multi_group_rejection(tmp_path):
     # wf:contract: apply on such a composition answers 409; without a profile and
     # wf:contract: without the gate a multi-group composition boots as today.
     folder = tmp_path / "profiles"
-    written(folder, "fast", {"occupancy_max_percent": 60.0})
+    written(folder, "fast", {"worker_memory_admission_percent": 60.0})
 
     for groups in ((), ("standard", "heavy")):
         server = pool_server(tmp_path, groups, profiles_path=folder, profile_name="fast")
@@ -319,7 +319,7 @@ async def test_zero_or_multi_group_rejection(tmp_path):
     assert set(gated.applications["site0"].commander.group_map) == {"standard", "heavy"}
 
     status, answer = await ask(
-        gated, f"/{ORCHESTRATION_ROOT}/apply", method="POST", body={"occupancy_max_percent": 60.0}
+        gated, f"/{ORCHESTRATION_ROOT}/apply", method="POST", body={"worker_memory_admission_percent": 60.0}
     )
     assert status == 409
     assert "exactly one group" in answer["error"]
@@ -369,7 +369,7 @@ async def test_http_contract_success_and_errors(tmp_path):
     reload_path = f"/{ORCHESTRATION_ROOT}/reload"
 
     status, answer = await ask(
-        server, apply_path, method="POST", body={"occupancy_max_percent": 65.0}
+        server, apply_path, method="POST", body={"worker_memory_admission_percent": 65.0}
     )
     assert status == 200
     assert set(answer) == {
@@ -384,18 +384,18 @@ async def test_http_contract_success_and_errors(tmp_path):
     assert answer["source"] == "inline"
     assert answer["active_profile"] is None
     assert answer["generation"] == 2
-    assert answer["changed_settings"] == {"occupancy_max_percent": 65.0}
-    assert answer["effective_settings"]["occupancy_max_percent"] == 65.0
+    assert answer["changed_settings"] == {"worker_memory_admission_percent": 65.0}
+    assert answer["effective_settings"]["worker_memory_admission_percent"] == 65.0
 
     # 400 — the body is a JSON object the schema refuses, and every violation is said.
     status, answer = await ask(
         server,
         apply_path,
         method="POST",
-        body={"occupancy_max_percent": 200.0, "unknown_setpoint": 1},
+        body={"worker_memory_admission_percent": 200.0, "unknown_setpoint": 1},
     )
     assert status == 400
-    assert "occupancy_max_percent" in answer["error"]
+    assert "worker_memory_admission_percent" in answer["error"]
     assert "unknown_setpoint" in answer["error"]
 
     # 404 — a reload of a name the folder does not hold.
@@ -434,7 +434,7 @@ async def test_profile_level_replacement(tmp_path):
     # wf:contract: returns to the env_settings, recipe_settings or default value,
     # wf:contract: in that order of precedence.
     folder = tmp_path / "profiles"
-    written(folder, "p1", {"occupancy_max_percent": 60.0, "worker_min_life_seconds": 5.0})
+    written(folder, "p1", {"worker_memory_admission_percent": 60.0, "worker_min_life_seconds": 5.0})
     written(folder, "p2", {"worker_min_life_seconds": 30.0})
     server = pool_server(
         tmp_path,
@@ -447,18 +447,18 @@ async def test_profile_level_replacement(tmp_path):
 
     status, first = await ask(server, reload_path, method="POST", body={"name": "p1"})
     assert status == 200
-    assert first["effective_settings"]["occupancy_max_percent"] == 60.0
+    assert first["effective_settings"]["worker_memory_admission_percent"] == 60.0
 
     status, second = await ask(server, reload_path, method="POST", body={"name": "p2"})
     assert status == 200
     # P1's key is not carried over: the recipe level owns it again...
-    assert second["effective_settings"]["occupancy_max_percent"] == 70.0
+    assert second["effective_settings"]["worker_memory_admission_percent"] == 70.0
     # ...P2's own key is in force...
     assert second["effective_settings"]["worker_min_life_seconds"] == 30.0
     # ...the environment still wins on its key...
     assert second["effective_settings"]["worker_max_users"] == 16
     # ...and a key nobody ever named is the default.
-    assert second["effective_settings"]["close_occupancy_max_percent"] == 40.0
+    assert second["effective_settings"]["cpu_close_percent"] is None
     assert second["active_profile"] == "p2"
     assert second["source"] == "profile"
 
@@ -476,12 +476,12 @@ async def test_invalid_apply_all_or_nothing(tmp_path):
         server,
         f"/{ORCHESTRATION_ROOT}/apply",
         method="POST",
-        body={"worker_min_life_seconds": 5.0, "close_occupancy_max_percent": 99.0},
+        body={"worker_min_life_seconds": 5.0, "worker_memory_admission_percent": 99.0},
     )
 
     assert status == 400
     # The one violation is the cross rule, and the valid key did not land either.
-    assert "close_occupancy_max_percent" in answer["error"]
+    assert "worker_memory_admission_percent" in answer["error"]
     assert commander.configured_group.policy is before
     assert commander.configuration_generation == 1
     assert commander.last_apply["outcome"].startswith("rejected: ")
@@ -492,7 +492,7 @@ async def test_status_introspection(tmp_path):
     # wf:contract: generation, last_apply and effective_settings coherent with
     # wf:contract: the last apply, read-only, no lock taken.
     folder = tmp_path / "profiles"
-    written(folder, "fast", {"occupancy_max_percent": 62.0})
+    written(folder, "fast", {"worker_memory_admission_percent": 62.0})
     server = pool_server(tmp_path, profiles_path=folder, control_enabled=True)
     await boot(server)
     commander = server.applications["site0"].commander

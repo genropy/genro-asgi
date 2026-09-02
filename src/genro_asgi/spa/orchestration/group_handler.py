@@ -85,14 +85,15 @@ runs is given another one.
 ``check_occupancy`` takes the occupancy of every living worker once and then does
 the FIRST thing that reading calls for: restart the worker whose MEMORY is past
 ``restart_occupancy_max_percent`` (it will not get better on its own), give a
-group with no living worker its reception back, or close one whose share keeps
-every survivor under ``close_occupancy_max_percent`` — a threshold distinctly
-below the admission close setpoint, because reading both decisions against the
-same number made each one create the condition for its own reversal (#36): the
-band between the two is the pool's normal state. It births nothing for a user
-who is not there yet: the reception of an empty group is the only birth here,
-every other one happens inside ``assign_user`` for the user who needs it. A worker younger than
-``worker_min_life_seconds`` is never the one closed, and a closure is refused
+group with no living worker its reception back when the memory affords it, or
+close the COLDEST worker whose temperature, shared by the survivors, keeps every
+one of them under ``cpu_close_percent`` (unset, the reopen threshold itself), so a
+closure never creates the condition for the next birth (#36) — and whose memory,
+shared the same way, keeps every survivor under the veto. It births nothing for a
+user who is not there yet: the reception of an empty group is the only birth
+here, every other one happens inside ``assign_user`` for the user who needs it.
+A worker younger than ``worker_min_life_seconds`` is never the one closed, a
+worker with no temperature yet suspends the judgment, and a closure is refused
 when the survivors lack room BY HEADS for the spare's placed users. The next
 round re-reads: a decision is never carried over.
 
@@ -108,7 +109,7 @@ admits that user does the same placement, under its lock, fork one worker and
 place that same user on it. A transient sample therefore cannot leave empty
 capacity behind, while the template fork keeps the demand path short. Sticky
 users are never moved. If memory or server state refuses the birth, a closed
-worker still under the hard ``occupancy_max_percent`` takes the user as a
+worker still under the hard ``worker_memory_admission_percent`` takes the user as a
 LOGGED fallback — the soft closure shapes the pool, never at the price of a
 premature 503. Admission is reconciled in the sampling pass, without waiting for
 the heartbeat. The RETIREMENT STANDS ASIDE while the CPU speaks: a living
@@ -199,7 +200,7 @@ from typing import Any
 
 from .envelope_handler import GroupEnvelopeHandler
 from .group_policy import GroupPolicy
-from .exceptions import AssignmentRefused
+from .exceptions import AssignmentRefused, NoRoomError
 from .beats import every
 from .template_connector import TemplateConnector
 from .worker_handler import DROP_USER_OP_PATH, FREEZE_USER_OP_PATH, WorkerHandler
@@ -246,15 +247,19 @@ class GroupHandler:
             order goes to.
         name: the group's name; its workers are named ``<name>_<counter>``, short
             because the name is the socket's too.
-        occupancy_max_percent: how full a worker may be before it stops admitting.
+        worker_memory_admission_percent: the memory veto — past this share of its
+            ceiling a worker takes no new user, whatever its CPU says.
+        worker_admission_interval_seconds: how long after admitting a user a worker
+            is skipped by the placement, so its load shows in the temperature
+            before the next one lands; 0 switches the rule off.
         restart_occupancy_max_percent: past this MEMORY occupancy a process is
             restarted rather than kept. CPU pressure grows and closes
             admission; it never replaces a healthy process.
-        close_occupancy_max_percent: a closure is ordered only when the spare's
-            share, redistributed, keeps EVERY survivor under this — distinctly
-            below ``occupancy_max_percent``, so the band between the two is the
-            pool's normal state and never a condition to correct. One threshold
-            for both made every growth the evidence for its own reversal (#36).
+        cpu_close_percent: a closure is ordered only when the spare's temperature,
+            shared by the survivors, keeps every one of them under this. None,
+            the default, means ``cpu_admission_reopen_percent`` itself; set, it
+            must not exceed it, so the band between the two is the pool's
+            normal state and never a condition to correct (#36).
         cpu_admission_close_percent: the soft-admission threshold (#43, experimental): a
             worker whose fresh commander-side CPU temperature crosses above it
             stops taking new users. CPU sampling never creates a worker; concrete placement
@@ -275,10 +280,12 @@ class GroupHandler:
             whole. Closing the emptiest worker while demand still speaks hands
             its users back to the hot one, which regrows seconds later
             (measured, churn 2026-08-28).
+        cpu_heating_seconds: the time constant of the temperature filter while the
+            worker heats up — how long a hotter sample takes to weigh in.
+        cpu_cooling_seconds: the same while it cools down; longer, so a worker that
+            just closed or just ceded a user stays closed while its load leaves.
         worker_min_life_seconds: a worker is no closure candidate before this
             age — younger, its occupancy measures its own birth, not its work.
-        new_user_occupancy_percent: what a user nobody has ever measured is
-            expected to cost.
         user_idle_freeze_minutes: the silence, IN MINUTES, past which this group
             parks a user in the freezer; with nothing said, silence never parks
             anybody. Minutes because it is a policy of the installation, and the
@@ -303,15 +310,17 @@ class GroupHandler:
         spa_commander: Any,
         name: str,
         *,
-        occupancy_max_percent: float = 80.0,
+        worker_memory_admission_percent: float = 80.0,
         restart_occupancy_max_percent: float = 95.0,
-        close_occupancy_max_percent: float = 40.0,
+        cpu_close_percent: float | None = None,
         cpu_admission_close_percent: float | None = None,
         cpu_admission_reopen_percent: float = 40.0,
         cpu_offload_percent: float | None = None,
         cpu_retirement_quiet_seconds: float = 60.0,
+        cpu_heating_seconds: float = 1.0,
+        cpu_cooling_seconds: float = 5.0,
+        worker_admission_interval_seconds: float = 1.0,
         worker_min_life_seconds: float = 60.0,
-        new_user_occupancy_percent: float = 5.0,
         worker_max_users: float = math.inf,
         user_idle_freeze_minutes: float = math.inf,
         memory_concession_bytes: int,
@@ -339,15 +348,17 @@ class GroupHandler:
         #: and ``null`` is how a profile spells it, so the two translate here.
         self.policy = GroupPolicy.from_settings(
             {
-                "occupancy_max_percent": occupancy_max_percent,
+                "worker_memory_admission_percent": worker_memory_admission_percent,
                 "restart_occupancy_max_percent": restart_occupancy_max_percent,
-                "close_occupancy_max_percent": close_occupancy_max_percent,
+                "cpu_close_percent": cpu_close_percent,
                 "cpu_admission_close_percent": cpu_admission_close_percent,
                 "cpu_admission_reopen_percent": cpu_admission_reopen_percent,
                 "cpu_offload_percent": cpu_offload_percent,
                 "cpu_retirement_quiet_seconds": cpu_retirement_quiet_seconds,
+                "cpu_heating_seconds": cpu_heating_seconds,
+                "cpu_cooling_seconds": cpu_cooling_seconds,
+                "worker_admission_interval_seconds": worker_admission_interval_seconds,
                 "worker_min_life_seconds": worker_min_life_seconds,
-                "new_user_occupancy_percent": new_user_occupancy_percent,
                 "worker_max_users": None if worker_max_users == math.inf else worker_max_users,
                 "user_idle_freeze_minutes": (
                     None if user_idle_freeze_minutes == math.inf else user_idle_freeze_minutes
@@ -403,16 +414,16 @@ class GroupHandler:
     # are the ones every decision and every reader has always used, and after
     # a swap they answer the new policy at once.
     @property
-    def occupancy_max_percent(self) -> float:
-        return self.policy.occupancy_max_percent
+    def worker_memory_admission_percent(self) -> float:
+        return self.policy.worker_memory_admission_percent
 
     @property
     def restart_occupancy_max_percent(self) -> float:
         return self.policy.restart_occupancy_max_percent
 
     @property
-    def close_occupancy_max_percent(self) -> float:
-        return self.policy.close_occupancy_max_percent
+    def cpu_close_percent(self) -> float | None:
+        return self.policy.cpu_close_percent
 
     @property
     def cpu_admission_close_percent(self) -> float | None:
@@ -431,12 +442,20 @@ class GroupHandler:
         return self.policy.cpu_retirement_quiet_seconds
 
     @property
-    def worker_min_life_seconds(self) -> float:
-        return self.policy.worker_min_life_seconds
+    def cpu_heating_seconds(self) -> float:
+        return self.policy.cpu_heating_seconds
 
     @property
-    def new_user_occupancy_percent(self) -> float:
-        return self.policy.new_user_occupancy_percent
+    def cpu_cooling_seconds(self) -> float:
+        return self.policy.cpu_cooling_seconds
+
+    @property
+    def worker_admission_interval_seconds(self) -> float:
+        return self.policy.worker_admission_interval_seconds
+
+    @property
+    def worker_min_life_seconds(self) -> float:
+        return self.policy.worker_min_life_seconds
 
     @property
     def worker_max_users(self) -> float:
@@ -631,35 +650,6 @@ class GroupHandler:
         ]
         await asyncio.gather(*beats, return_exceptions=True)
 
-    def get_occupancy_percent(
-        self,
-        worker_snapshot: dict[str, Any] | None,
-        worker_handler: WorkerHandler | None = None,
-    ) -> float:
-        """How full the worker of this photo is, in percent.
-
-        Args:
-            worker_snapshot: the photo, or None when the worker has sent none.
-
-        Returns:
-            The fullest of the components the photo carries, each clamped to its
-            own full — 0.0 when nothing in it is measurable. Memory is PSS
-            against this worker's share of the quota, with RSS as its portable
-            conservative fallback. CPU comes only from the commander's separate
-            process thermometer when ``worker_handler`` is supplied; a photo's
-            historical ``cpu_percent`` is never an orchestration input.
-        """
-        photo = worker_snapshot or {}
-        components = [self.get_memory_occupancy_percent(photo) / 100.0]
-        cpu_percent = (
-            None
-            if worker_handler is None
-            else worker_handler.get_cpu_temperature_percent()
-        )
-        if cpu_percent is not None:
-            components.append(cpu_percent / 100.0)
-        return 100.0 * min(max(components, default=0.0), 1.0)
-
     def get_memory_occupancy_percent(
         self, worker_snapshot: dict[str, Any] | None
     ) -> float:
@@ -676,12 +666,10 @@ class GroupHandler:
         return 100.0 * min(accounted_bytes / self.worker_memory_ceiling_bytes, 1.0)
 
     async def assign_user(self, user: str) -> str:
-        """Place a user: the fullest worker that admits him, or one born for him.
+        """Place a user: the hottest open worker that admits him, or one born for him.
 
         Args:
-            user: the identity to place; his row at the vertex says what he is
-                expected to cost, and one nobody has measured costs
-                ``new_user_occupancy_percent``.
+            user: the identity to place.
 
         Returns:
             The name of the worker that took him.
@@ -699,7 +687,7 @@ class GroupHandler:
         parked and never sent away to come back: it waits right here.
 
         Three levels, each tried only when the one before surrendered. First
-        the CPU-open workers, fullest-first (``_placement_candidate``). Then
+        the CPU-open workers, hottest-first (``_placement_candidate``). Then
         the birth. LAST, when the growth was refused or failed, a CPU-closed
         worker still under its hard cap takes him (``_fallback_candidate``) —
         the soft closure shapes the pool, it must never cost a 503 the hard
@@ -716,7 +704,7 @@ class GroupHandler:
         policy = self.policy
         async with self._placement_lock:
             worker_handler = self._placement_candidate(user)
-            placement_reason = "fullest_cpu_open_candidate"
+            placement_reason = "hottest_cpu_open_candidate"
             if (
                 worker_handler is None
                 and self._may_grow
@@ -725,7 +713,7 @@ class GroupHandler:
                 worker_handler = await self.start_worker()
                 if worker_handler is not None:
                     try:
-                        worker_handler.assign_user(user, self._expected_occupancy(user))
+                        worker_handler.assign_user(user)
                         placement_reason = "new_worker_created_for_placement"
                     except AssignmentRefused:
                         worker_handler = None
@@ -750,73 +738,102 @@ class GroupHandler:
                 )
                 raise AssignmentRefused(user, f"{self.name} cannot allocate him")
             self.user_worker_map[user] = worker_handler.name
+            worker_handler.last_admission_monotonic = time.monotonic()
             self.spa_commander.record_user_group(user, self.name)
-            if placement_reason != "fullest_cpu_open_candidate":
+            if placement_reason != "hottest_cpu_open_candidate":
                 self.spa_commander.log_decision(
                     self.name,
                     "placement",
                     worker_handler.name,
                     reason=placement_reason,
                     subject=user,
-                    numbers={"expected_occupancy_percent": self._expected_occupancy(user)},
                     candidates=self._placement_decision_rows(),
                 )
             return worker_handler.name
 
     def _placement_candidate(self, user: str) -> WorkerHandler | None:
-        """The fullest CPU-open living worker that admits *user* right now, or None.
+        """The hottest CPU-open living worker that admits *user* right now, or None.
 
         The choice is a CALCULATION of the group (owner, 2026-08-25) — the
-        numbers are all here: the photos, the caps, the counts. Each worker's
-        own judgment (``WorkerHandler.assign_user``) stays the single gate a
-        placement passes, so choosing and admitting cannot drift apart. A
-        worker the CPU judge closed (``cpu_admission_open`` False) is not in
-        the running: fullest-first is applied AMONG THE OPEN ONLY. If no open
-        worker admits the user, the placement itself creates capacity. With the
-        policy off nobody is ever closed, and this is fullest-first over
-        everybody, as it always was.
+        numbers are all here: the temperatures, the photos, the counts. Each
+        worker's own judgment (``WorkerHandler.assign_user``) stays the single
+        gate a placement passes, so choosing and admitting cannot drift apart.
+        A worker the CPU judge closed (``cpu_admission_open`` False) is not in
+        the running: hottest-first is applied AMONG THE OPEN ONLY, and hottest
+        means the filtered temperature — the group consolidates while a worker
+        still has room under the close threshold.
+
+        Two passes over the same order. The first skips a worker that admitted
+        somebody less than ``worker_admission_interval_seconds`` ago: his load
+        is not in the temperature yet, so the next one goes elsewhere. The
+        second, only when the first pass skipped somebody for that reason,
+        waives the interval — it orders the walk, it refuses nobody and never
+        births a worker — and takes the hottest that admits, journaled as
+        ``admission_interval_waived``. If no open worker admits the user, the
+        placement itself creates capacity.
         """
-        occupancy_percent = self._expected_occupancy(user)
         candidates = sorted(
             (
                 worker_handler
                 for worker_handler in self.living_workers
                 if worker_handler.cpu_admission_open
             ),
-            key=lambda worker_handler: -self.get_occupancy_percent(
-                worker_handler.worker_snapshot, worker_handler
-            ),
+            key=lambda worker_handler: -(worker_handler.get_cpu_temperature_percent() or 0.0),
         )
         decision_rows = [self._get_worker_decision_row(candidate) for candidate in candidates]
-        for worker_handler in candidates:
-            try:
-                worker_handler.assign_user(user, occupancy_percent)
-            except AssignmentRefused as refusal:
-                self._logger.debug("Group %s: %s", self.name, refusal)
-                next(
-                    row for row in decision_rows if row["name"] == worker_handler.name
-                )["refusal"] = str(refusal)
-                continue
-            self.spa_commander.log_decision(
-                self.name,
-                "placement",
-                worker_handler.name,
-                reason="fullest_cpu_open_candidate",
-                subject=user,
-                numbers={"expected_occupancy_percent": occupancy_percent},
-                candidates=decision_rows,
-            )
-            return worker_handler
+        rows_by_name = {row["name"]: row for row in decision_rows}
+        for reason, skip_recent in (
+            ("hottest_cpu_open_candidate", True),
+            ("admission_interval_waived", False),
+        ):
+            for worker_handler in candidates:
+                row = rows_by_name[worker_handler.name]
+                if skip_recent and row["recently_admitted"]:
+                    row["skipped"] = "worker_recently_admitted"
+                    continue
+                try:
+                    worker_handler.assign_user(user)
+                except NoRoomError as refusal:
+                    row["refusal"] = str(refusal)
+                    row["skipped"] = (
+                        "worker_max_users_reached"
+                        if row["users"] >= self.policy.worker_max_users
+                        else "worker_memory_full"
+                    )
+                    continue
+                except AssignmentRefused as refusal:
+                    self._logger.debug("Group %s: %s", self.name, refusal)
+                    row["refusal"] = str(refusal)
+                    continue
+                row.pop("skipped", None)
+                self.spa_commander.log_decision(
+                    self.name,
+                    "placement",
+                    worker_handler.name,
+                    reason=reason,
+                    subject=user,
+                    candidates=decision_rows,
+                )
+                return worker_handler
+            if not any(row.get("skipped") == "worker_recently_admitted" for row in decision_rows):
+                break
         self.spa_commander.log_decision(
             self.name,
             "placement_candidates",
             "none",
             reason="no_cpu_open_candidate_admitted_user",
             subject=user,
-            numbers={"expected_occupancy_percent": occupancy_percent},
             candidates=decision_rows,
         )
         return None
+
+    def _recently_admitted(self, worker_handler: WorkerHandler) -> bool:
+        """Whether this worker admitted a user less than the admission interval ago."""
+        last = worker_handler.last_admission_monotonic
+        return (
+            last is not None
+            and time.monotonic() - last < self.policy.worker_admission_interval_seconds
+        )
 
     def _get_worker_decision_row(self, worker_handler: WorkerHandler) -> dict[str, Any]:
         """The facts a placement or growth judge sees for one worker."""
@@ -829,9 +846,8 @@ class GroupHandler:
             ),
             "cpu_admission_open": worker_handler.cpu_admission_open,
             "cpu_temperature_percent": worker_handler.get_cpu_temperature_percent(),
-            "occupancy_percent": self.get_occupancy_percent(photo, worker_handler),
+            "recently_admitted": self._recently_admitted(worker_handler),
             "memory_occupancy_percent": self.get_memory_occupancy_percent(photo),
-            "worker_cap": self.occupancy_max_percent,
         }
 
     def _placement_decision_rows(self) -> list[dict[str, Any]]:
@@ -840,14 +856,12 @@ class GroupHandler:
             self._get_worker_decision_row(worker_handler)
             for worker_handler in sorted(
                 self.living_workers,
-                key=lambda handler: -self.get_occupancy_percent(
-                    handler.worker_snapshot, handler
-                ),
+                key=lambda handler: -(handler.get_cpu_temperature_percent() or 0.0),
             )
         ]
 
     def _fallback_candidate(self, user: str) -> WorkerHandler | None:
-        """The fullest CPU-closed worker that still admits *user* under its hard cap.
+        """The hottest CPU-closed worker that still admits *user* under the memory veto.
 
         Args:
             user: the newcomer nobody else could take.
@@ -858,24 +872,21 @@ class GroupHandler:
         The last level of the placement, reached only when no open worker
         admits him AND the growth was refused or failed: the soft closure is a
         shaping policy, and shaping must never turn into a 503 the hard
-        ``occupancy_max_percent`` — which ``assign_user`` still enforces here —
+        ``worker_memory_admission_percent`` — which ``assign_user`` still enforces here —
         would not have given. Every fallback placement is logged as its own
         order: capacity served over the soft limit is a fact the bench must see.
         """
-        occupancy_percent = self._expected_occupancy(user)
         candidates = sorted(
             (
                 worker_handler
                 for worker_handler in self.living_workers
                 if not worker_handler.cpu_admission_open
             ),
-            key=lambda worker_handler: -self.get_occupancy_percent(
-                worker_handler.worker_snapshot, worker_handler
-            ),
+            key=lambda worker_handler: -(worker_handler.get_cpu_temperature_percent() or 0.0),
         )
         for worker_handler in candidates:
             try:
-                worker_handler.assign_user(user, occupancy_percent)
+                worker_handler.assign_user(user)
             except AssignmentRefused as refusal:
                 self._logger.debug("Group %s: %s", self.name, refusal)
                 continue
@@ -894,13 +905,6 @@ class GroupHandler:
             )
             return worker_handler
         return None
-
-    def _expected_occupancy(self, user: str) -> float:
-        """What placing *user* is expected to cost, on the photo's own scale."""
-        occupancy_percent = self.spa_commander.user_map[user]["occupancy_percent"]
-        return (
-            self.new_user_occupancy_percent if occupancy_percent is None else occupancy_percent
-        )
 
     async def freeze_hosted_user(self, user: str) -> bool:
         """Block one of this group's users, have his worker park him, let the block fall.
@@ -993,7 +997,7 @@ class GroupHandler:
 
     @every(CHECK_OCCUPANCY_BEATS)
     async def check_occupancy(self) -> None:
-        """Read the group once and take the ONE step that reading calls for.
+        """Read the group and take the ONE step that reading calls for.
 
         Acts on the group: restart when MEMORY is past the restart setpoint,
         update soft CPU admission, give an empty group its reception back when
@@ -1017,12 +1021,6 @@ class GroupHandler:
                 if self._policy_held(policy, "restart_worker", name):
                     await self.restart_worker(self.worker_handler_map[name])
                 return
-        occupancy_reader = (
-            self.get_memory_occupancy_percent
-            if policy.cpu_admission_close_percent is not None
-            else self.get_occupancy_percent
-        )
-        picture = {name: occupancy_reader(photo) for name, photo in snapshots.items()}
         self._judge_cpu_admission()
         if not self.living_workers:
             # A group must always have a reception: the ONE birth nobody asked
@@ -1054,11 +1052,11 @@ class GroupHandler:
                     "retirement",
                     "no_action",
                     reason="cpu_pressure_holds_retirement",
-                    numbers={"detail": suspension, "workers": len(picture)},
+                    numbers={"detail": suspension, "workers": len(self.living_workers)},
                     candidates=self._placement_decision_rows(),
                 )
                 return
-        spare = self._spare_worker(picture, policy)
+        spare = self._spare_worker(policy)
         if spare is not None and self._policy_held(policy, "close_worker", spare.name):
             await self._order_quit(spare, "close_worker")
             return
@@ -1067,7 +1065,7 @@ class GroupHandler:
             "retirement",
             "no_action",
             reason="no_absorbable_spare_worker",
-            numbers={"workers": len(picture)},
+            numbers={"workers": len(self.living_workers)},
             candidates=self._placement_decision_rows(),
         )
 
@@ -1439,22 +1437,41 @@ class GroupHandler:
             self.name, "drop_worker", name, outcome=worker_handler.state
         )
 
-    def _spare_worker(
-        self, picture: dict[str, float], policy: GroupPolicy
-    ) -> WorkerHandler | None:
-        """The emptiest worker whose closure leaves the pool cool; None when there is none.
+    def _spare_worker(self, policy: GroupPolicy) -> WorkerHandler | None:
+        """The coldest worker whose closure leaves the pool cool; None when there is none.
 
-        The remaining workers are read as if they shared what this one holds,
-        then asked TWO questions in order: every survivor under
-        ``close_occupancy_max_percent`` — distinctly below the admission close
-        setpoint, so a closure can never create the condition for the next
-        birth (#36) — and, the occupancy settled, room BY HEADS for the spare's
-        placed users within each survivor's ``worker_max_users``. A worker younger
-        than ``worker_min_life_seconds``
-        is no candidate: its occupancy measures its own birth.
+        Args:
+            policy: the setpoints this round decided on.
+
+        Returns:
+            The worker to close, or None — nobody, or a judgment that could not
+            be made: a living worker with no temperature yet is journaled as
+            ``cpu_temperature_missing`` and nothing is closed this round.
+
+        The CPU decides, the memory vetoes. Candidates: not the reception, not
+        on their way out, older than ``worker_min_life_seconds``. The spare is
+        the coldest; its temperature is read as if shared evenly by the
+        survivors, and every survivor must stay under ``cpu_close_percent`` —
+        unset, the reopen threshold itself; set, at or below it — so a closure
+        can never create the condition for the next birth (#36). Then the veto: every survivor, with
+        its even share of the spare's memory, must stay under
+        ``worker_memory_admission_percent``; and, LAST, room BY HEADS for the
+        spare's placed users within each survivor's ``worker_max_users``.
         """
-        # A quitting worker is nobody's spare — its closure is already
-        # somebody's order — and nobody's absorber: its room counts for nobody.
+        temperatures = {
+            worker_handler.name: worker_handler.get_cpu_temperature_percent()
+            for worker_handler in self.living_workers
+        }
+        missing = sorted(name for name, value in temperatures.items() if value is None)
+        if missing:
+            self.spa_commander.log_decision(
+                self.name,
+                "retirement",
+                "no_action",
+                reason="cpu_temperature_missing",
+                numbers={"workers": len(temperatures), "missing": missing},
+            )
+            return None
         candidates = [
             worker_handler
             for worker_handler in self.living_workers
@@ -1464,20 +1481,37 @@ class GroupHandler:
         ]
         if not candidates:
             return None
-        spare = min(candidates, key=lambda worker_handler: picture[worker_handler.name])
-        remaining = {
-            name: pct
-            for name, pct in picture.items()
-            if name != spare.name and self.worker_handler_map[name].state != "quitting"
-        }
+        spare = min(candidates, key=lambda worker_handler: temperatures[worker_handler.name])
+        remaining = [
+            worker_handler
+            for worker_handler in self.living_workers
+            if worker_handler is not spare and worker_handler.state != "quitting"
+        ]
         if not remaining:
             return None
-        shared = picture[spare.name] / len(remaining)
-        after = {name: pct + shared for name, pct in remaining.items()}
-        if max(after.values()) > policy.close_occupancy_max_percent:
+        close_threshold = (
+            policy.cpu_admission_reopen_percent
+            if policy.cpu_close_percent is None
+            else policy.cpu_close_percent
+        )
+        shared_heat = temperatures[spare.name] / len(remaining)
+        if any(
+            temperatures[worker_handler.name] + shared_heat > close_threshold
+            for worker_handler in remaining
+        ):
+            return None
+        shared_memory = self.get_memory_occupancy_percent(spare.worker_snapshot) / len(remaining)
+        if any(
+            self.get_memory_occupancy_percent(worker_handler.worker_snapshot) + shared_memory
+            > policy.worker_memory_admission_percent
+            for worker_handler in remaining
+        ):
             return None
         placed = Counter(self.user_worker_map.values())
-        head_room = sum(max(0, policy.worker_max_users - placed[name]) for name in remaining)
+        head_room = sum(
+            max(0, policy.worker_max_users - placed[worker_handler.name])
+            for worker_handler in remaining
+        )
         if head_room < placed[spare.name]:
             return None
         return spare
@@ -1574,7 +1608,7 @@ class GroupHandler:
         The reopen counts ON PURPOSE: a worker that was closed for minutes and
         reopens must not meet the retirement at the very next beat — the bench
         measured exactly that close, and the regrowth it caused 5 seconds later
-        (churn of 2026-08-28, rearm30).
+        (churn of 2026-08-28, reopen at 30).
         """
         self._cpu_pressure_monotonic = time.monotonic()
 
@@ -1667,9 +1701,6 @@ class GroupHandler:
             order,
             worker_handler.name,
             numbers={
-                "occupancy_percent": self.get_occupancy_percent(
-                    worker_handler.worker_snapshot, worker_handler
-                ),
                 "memory_occupancy_percent": self.get_memory_occupancy_percent(
                     worker_handler.worker_snapshot
                 ),

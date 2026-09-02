@@ -63,6 +63,7 @@ directory is already past it, which is the very reason worker names are short.
 from __future__ import annotations
 
 import asyncio
+import time
 import base64
 import shutil
 import tempfile
@@ -140,12 +141,11 @@ class ServerConfiguration(AsgiConfigBuilder):
         commander.groups().group(
             name="{group}",
             worker_memory_max_percent=50.0,
-            occupancy_max_percent=80.0,
+            worker_memory_admission_percent=80.0,
             restart_occupancy_max_percent=95.0,
             # The story's spare is closed seconds after its birth: the minimum
             # life would exempt it, and this stanza is how the recipe waives it.
             worker_min_life_seconds=0.0,
-            new_user_occupancy_percent=5.0,
             user_idle_freeze_minutes={idle_minutes},
             entry_module="{entry_module}",
             worker_class="{worker_class}",
@@ -298,7 +298,7 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     # group's, and the ones that belong to the child.
     assert vertex.user_expiry_hours == 240.0
     assert vertex.machine_memory_alarm_percent == 95.0
-    assert group.occupancy_max_percent == 80.0
+    assert group.worker_memory_admission_percent == 80.0
     assert group.user_idle_freeze_minutes == IDLE_MINUTES
 
     # 1. THE RECEPTION IS BORN. One worker, which is a role and not a count: the
@@ -363,7 +363,7 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     # keeps a guest at the reception, so the one who takes the capacity walk is
     # an identity (doctrine of 2026-08-21).
     carla = known_at_the_vertex(vertex, "cid-c", "carla")
-    assert group.get_occupancy_percent(reception.worker_snapshot) == 87.5
+    assert group.get_memory_occupancy_percent(reception.worker_snapshot) == 87.5
 
     assert await group.assign_user(carla) == f"{GROUP}_0002"
 
@@ -380,7 +380,15 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     # order, the reply that carries everybody flagged, the drain, the process
     # ending BY ITSELF, the awaited end of its wire.
     group.memory_concession_bytes = ROOMY_CONCESSION_BYTES
-
+    # The closure is judged on temperature: two real readings of each process,
+    # 100 ms apart, as the commander's thermometer takes them.
+    for _ in range(2):
+        for worker_handler in group.living_workers:
+            worker_handler.record_cpu_reading(
+                worker_handler.get_process_cpu_reading(), sampled_at=time.monotonic()
+            )
+        await asyncio.sleep(0.1)
+    spare_heat = spare.get_cpu_temperature_percent()
     await group.check_occupancy(now=True)
 
     assert spare.state == "quitted"
@@ -430,7 +438,7 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     orders = orders_of(story_root)
     # The share each of the two read when the closure was decided, as the group
     # itself computes it: the row carries the number, not a rounding of it.
-    closed_occupancy = group.get_occupancy_percent({"rss_bytes": SPARE_RSS_BYTES})
+    closed_occupancy = group.get_memory_occupancy_percent({"rss_bytes": SPARE_RSS_BYTES})
 
     assert [row for row in orders if "order=start_worker" in row] == [
         f"std order=start_worker subject={GROUP}_0001 numbers={{'workers': 1}} outcome=None",
@@ -439,9 +447,8 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     ]
     assert [row for row in orders if "order=close_worker" in row] == [
         f"std order=close_worker subject={GROUP}_0002 "
-        f"numbers={{'occupancy_percent': {closed_occupancy}, "
-        f"'memory_occupancy_percent': {closed_occupancy}, "
-            "'cpu_temperature_percent': None, 'workers': 2} outcome=None"
+        f"numbers={{'memory_occupancy_percent': {closed_occupancy}, "
+        f"'cpu_temperature_percent': {spare_heat}, 'workers': 2}} outcome=None"
     ]
     assert [row for row in orders if "order=drop_worker" in row] == [
         f"std order=drop_worker subject={GROUP}_0002 numbers=None outcome=quitted",

@@ -98,6 +98,7 @@ class WorkerStub:
             self.worker_snapshot["pss_bytes"] = pss_bytes
         self.cpu_temperature_percent = cpu_percent
         self.cpu_admission_open = True
+        self.last_admission_monotonic = None
 
     def get_cpu_temperature_percent(self) -> float | None:
         return self.cpu_temperature_percent

@@ -22,12 +22,14 @@ none of its fields is consumed by orchestration.
 from __future__ import annotations
 
 import asyncio
+import math
 from types import SimpleNamespace
 
 import pytest
 
 from genro_asgi.spa.orchestration import worker_handler as worker_handler_module
 from genro_asgi.spa.orchestration import spa_commander as spa_commander_module
+from genro_asgi.spa.orchestration.group_policy import GroupPolicy
 from genro_asgi.spa.orchestration.worker_handler import WorkerHandler
 
 from .test_orchestration_group_handler import commander  # noqa: F401
@@ -48,6 +50,7 @@ def handler_double() -> WorkerHandler:
     group = SimpleNamespace()
     group.envelope_handler = lambda envelope: envelope
     group.cpu_admission_close_percent = None
+    group.policy = GroupPolicy.from_settings({})
     handler = WorkerHandler(
         group,
         "standard_0001",
@@ -99,8 +102,12 @@ def test_fresh_temperature_closes_and_reopens_cpu_admission(
     handler.process = None
     handler.group_handler = group
     group.worker_handler_map[handler.name] = handler
-    readings = iter([(900, 1.0), (900, 1.08), (900, 1.081)])
-    monkeypatch.setattr(handler, "get_process_cpu_reading", lambda: next(readings))
+    cpu_seconds = [1.0, 1.08]  # 80% over the first interval, then idle
+    monkeypatch.setattr(
+        handler,
+        "get_process_cpu_reading",
+        lambda: (900, cpu_seconds.pop(0) if cpu_seconds else 1.08),
+    )
     started = worker_handler_module.time.monotonic()
 
     commander.sample_cpu_temperatures(sampled_at=started)
@@ -109,10 +116,53 @@ def test_fresh_temperature_closes_and_reopens_cpu_admission(
     assert handler.cpu_admission_open is False
     assert handler.worker_snapshot["cpu_percent"] == 7.0
 
-    handler.worker_snapshot["cpu_percent"] = 99.0
+    # One idle sample no longer reopens: it cools the filter by ~2% over 100 ms.
     commander.sample_cpu_temperatures(sampled_at=started + 0.2)
+    assert handler.cpu_temperature_sample_percent == 0.0
+    assert handler.cpu_temperature_percent == pytest.approx(78.4, abs=0.1)
+    assert handler.cpu_admission_open is False
+
+    # Five seconds of silence: 80 * exp(-1) ~ 29.4, under the reopen threshold.
+    for step in range(3, 52):
+        commander.sample_cpu_temperatures(sampled_at=started + 0.1 * step)
+    assert handler.cpu_temperature_percent < 30.0
     assert handler.cpu_admission_open is True
 
+
+def test_the_filter_heats_faster_than_it_cools():
+    handler = handler_double()
+    handler.record_cpu_reading((900, 0.0), sampled_at=10.0)
+    handler.record_cpu_reading((900, 0.0), sampled_at=10.1)  # seeds at 0%
+    assert handler.cpu_temperature_percent == 0.0
+
+    heated = handler.record_cpu_reading((900, 0.1), sampled_at=10.2)  # a 100% sample
+    assert handler.cpu_temperature_sample_percent == pytest.approx(100.0)
+    assert heated == pytest.approx(100.0 * (1 - math.exp(-0.1 / 1.0)))
+
+    cooled = handler.record_cpu_reading((900, 0.1), sampled_at=10.3)  # a 0% sample
+    assert cooled == pytest.approx(heated * math.exp(-0.1 / 5.0))
+    assert heated - cooled == pytest.approx(heated * (1 - math.exp(-0.1 / 5.0)))
+
+
+def test_the_time_constants_are_the_groups_setpoints():
+    handler = handler_double()
+    handler.group_handler.policy = GroupPolicy.from_settings(
+        {"cpu_heating_seconds": 0.1, "cpu_cooling_seconds": 0.1}
+    )
+    handler.record_cpu_reading((900, 0.0), sampled_at=10.0)
+    handler.record_cpu_reading((900, 0.0), sampled_at=10.1)
+    heated = handler.record_cpu_reading((900, 0.1), sampled_at=10.2)
+    assert heated == pytest.approx(100.0 * (1 - math.exp(-1.0)))
+
+
+def test_clearing_the_measure_clears_the_sample_too():
+    handler = handler_double()
+    handler.record_cpu_reading((900, 0.0), sampled_at=10.0)
+    handler.record_cpu_reading((900, 0.05), sampled_at=10.1)
+    assert handler.cpu_temperature_sample_percent == pytest.approx(50.0)
+    handler.record_cpu_reading(None, sampled_at=10.2)
+    assert handler.cpu_temperature_sample_percent is None
+    assert handler.cpu_temperature_percent is None
 
 def test_temperature_is_observed_even_when_the_cpu_policy_is_off(
     commander, make_group, monkeypatch
@@ -203,6 +253,7 @@ async def test_pool_census_exposes_temperature_without_putting_it_in_the_photo(
     handler.process = None
     handler.group_handler = group
     handler.cpu_temperature_percent = 62.0
+    handler.cpu_temperature_sample_percent = 3.0
     handler.cpu_temperature_interval_seconds = 0.1
     handler.cpu_temperature_sampled_at = 10.0
     group.worker_handler_map[handler.name] = handler
@@ -218,6 +269,7 @@ async def test_pool_census_exposes_temperature_without_putting_it_in_the_photo(
 
     group_row = census["groups"][group.name]["workers"][handler.name]
     assert group_row["cpu_temperature_percent"] == 62.0
+    assert group_row["cpu_temperature_sample_percent"] == 3.0
     assert group_row["cpu_temperature_interval_seconds"] == 0.1
     assert group_row["cpu_temperature_age_seconds"] == 0.25
     assert handler.worker_snapshot == {"cpu_percent": 7.0}

@@ -26,8 +26,7 @@ same person, whatever happened to the process it used to talk to.
 changes for the life of the page. ``user_map`` is the anagraph, one row per
 identity:
 
-    user_map[user] = {group, frozen, on_hold, occupancy_percent,
-                      pending_dbevents, pending_datachanges}
+    user_map[user] = {group, frozen, on_hold, pending_dbevents, pending_datachanges}
 
 Reading a row's meaning goes through the predicates (``user_is_frozen``), and
 ``on_hold`` is not read at all: it is RAISED, as ``UserOnHold``, by the one step
@@ -1092,7 +1091,6 @@ class SpaCommander:
                     "group": row["group"],
                     "frozen": row["frozen"],
                     "on_hold": row["on_hold"],
-                    "occupancy_percent": row["occupancy_percent"],
                     "pending_dbevents": len(row["pending_dbevents"]),
                     "pending_datachanges": len(row["pending_datachanges"]),
                 }
@@ -1130,9 +1128,6 @@ class SpaCommander:
                 "workers": {
                     worker_handler.name: {
                         "state": worker_handler.state,
-                        "occupancy_percent": group_handler.get_occupancy_percent(
-                            worker_handler.worker_snapshot, worker_handler
-                        ),
                         "memory_occupancy_percent": (
                             group_handler.get_memory_occupancy_percent(
                                 worker_handler.worker_snapshot
@@ -1146,9 +1141,11 @@ class SpaCommander:
                         "memory_accounting": group_handler.get_memory_accounting(
                             worker_handler.worker_snapshot
                         )[1],
-                        "worker_cap": group_handler.occupancy_max_percent,
                         "cpu_temperature_percent": (
                             worker_handler.cpu_temperature_percent
+                        ),
+                        "cpu_temperature_sample_percent": (
+                            worker_handler.cpu_temperature_sample_percent
                         ),
                         "cpu_temperature_interval_seconds": (
                             worker_handler.cpu_temperature_interval_seconds
@@ -1170,6 +1167,9 @@ class SpaCommander:
                 worker_census = await self._get_worker_census(worker_handler)
                 worker_census["cpu_temperature_percent"] = (
                     worker_handler.cpu_temperature_percent
+                )
+                worker_census["cpu_temperature_sample_percent"] = (
+                    worker_handler.cpu_temperature_sample_percent
                 )
                 worker_census["cpu_temperature_interval_seconds"] = (
                     worker_handler.cpu_temperature_interval_seconds
@@ -1410,13 +1410,11 @@ class SpaCommander:
         """
         self.user_map[user]["group"] = group
 
-    def mark_user_frozen(self, user: str, occupancy_percent: float | None) -> None:
-        """Write down that a user's state is on disk, and what it is expected to cost.
+    def mark_user_frozen(self, user: str) -> None:
+        """Write down that a user's state is on disk.
 
         Args:
             user: the identity that left his process.
-            occupancy_percent: what he occupied where he was, normalised; None
-                leaves the estimate as it was.
 
         Acts on his row and on his barrier: the mark goes on and the wait he may
         have been in is over.
@@ -1425,8 +1423,6 @@ class SpaCommander:
         row["frozen"] = True
         row["on_hold"] = None
         self._release_hold(user)
-        if occupancy_percent is not None:
-            row["occupancy_percent"] = occupancy_percent
 
     def mark_user_adopted(self, user: str) -> None:
         """Write down that a user came home from the freezer.
@@ -2153,7 +2149,6 @@ class SpaCommander:
             "group": None,
             "frozen": False,
             "on_hold": None,
-            "occupancy_percent": None,
             "pending_dbevents": [],
             "pending_datachanges": [],
         }

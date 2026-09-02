@@ -299,35 +299,6 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
     #: freezer instead of from a login, and the process holds him either way.
     on_user_adopted = on_new_user
 
-    def work_on_envelope(self, envelope: dict[str, Any]) -> None:
-        """The estimate of every leaver is stamped first: it needs the WHOLE envelope.
-
-        Args:
-            envelope: the payload as it came off the wire.
-
-        Acts on the ``user_frozen`` worker events: each is stamped with the
-        ABSTRACT occupancy of the worker — the group's own gauge over this
-        envelope's photo — split evenly over everybody it held: the photo's
-        population plus ALL the leavers of this same envelope, because an
-        idleness sweep freezes many between two beats and they travel together.
-        Then the base reading: the photo, the events.
-        """
-        worker_events = envelope.get(ENVELOPE_SLOT_WORKER_EVENTS) or ()
-        leavers = sum(1 for we in worker_events if we["op"] == "user_frozen")
-        if leavers:
-            photo = (
-                envelope.get(ENVELOPE_SLOT_WORKER_SNAPSHOT)
-                or self.worker_handler.worker_snapshot
-                or {}
-            )
-            estimate = self.worker_handler.group_handler.get_occupancy_percent(
-                photo, self.worker_handler
-            ) / (len(photo.get("users") or {}) + leavers)
-            for worker_event in worker_events:
-                if worker_event["op"] == "user_frozen":
-                    worker_event["occupancy_percent"] = estimate
-        super().work_on_envelope(envelope)
-
     def on_connection_user_changed(self, worker_event: dict[str, Any]) -> None:
         """A login: the person arrives, and only a GUEST leaves with his connection.
 
@@ -512,10 +483,8 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
         )
 
     def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
-        """A user is in the freezer: the mark goes on, with what he is expected to cost."""
-        self.spa_commander.mark_user_frozen(
-            worker_event["user"], worker_event.get("occupancy_percent")
-        )
+        """A user is in the freezer: the mark goes on."""
+        self.spa_commander.mark_user_frozen(worker_event["user"])
 
     def on_user_adopted(self, worker_event: dict[str, Any]) -> None:
         """A user came home from the freezer: the mark goes off, his waiting is drained."""
@@ -525,7 +494,7 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
         """The users of a dead process: the frozen are marked — whether their own
         worker event survived the closing wire or not — and the lost are purged."""
         for user in worker_event["frozen_users"]:
-            self.spa_commander.mark_user_frozen(user, None)
+            self.spa_commander.mark_user_frozen(user)
         self.spa_commander.drop_users(worker_event["lost_users"], cause=worker_event["op"])
 
     #: The wild death is read exactly as the ordered one, and it names nobody as

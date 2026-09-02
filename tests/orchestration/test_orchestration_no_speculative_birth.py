@@ -48,9 +48,8 @@ def test_the_reserve_judges_are_gone():
 
 
 async def test_the_periodic_check_births_nothing_while_a_worker_lives(make_group):
-    # A newcomer costing the whole worker: the old reserve read zero room here
-    # and forked; the check must not.
-    group = make_group(new_user_occupancy_percent=100.0)
+    # The old reserve forked here on a picture it read as full; the check must not.
+    group = make_group()
     await group.start_worker()
 
     for _ in range(3):

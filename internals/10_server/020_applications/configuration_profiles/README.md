@@ -62,7 +62,11 @@ Example profile:
   "cpu_admission_close_percent": 50,
   "cpu_admission_reopen_percent": 40,
   "cpu_retirement_quiet_seconds": 60,
-  "occupancy_max_percent": 80
+  "cpu_heating_seconds": 1.0,
+  "cpu_cooling_seconds": 5.0,
+  "cpu_close_percent": 35,
+  "worker_admission_interval_seconds": 1.0,
+  "worker_memory_admission_percent": 80
 }
 ```
 
