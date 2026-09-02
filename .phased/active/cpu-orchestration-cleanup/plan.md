@@ -121,3 +121,6 @@ Prepare the CPU orchestration rework on `feat/cpu-orchestration`: one CPU source
 | Phase 3 | medium | opus |
 | Phase 4 | medium | opus |
 | Phase 5 | xhigh | opus |
+
+## Quality check
+> Quality check: 2026-09-02T03:53:03Z — commit 6f2e1d3 — review agent, QA done, findings 10 confirmed (6 fixed at 6f2e1d3, 4 deferred to the next plans), 0 dismissed
