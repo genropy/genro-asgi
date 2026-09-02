@@ -61,7 +61,7 @@ from .mcp import McpEngine, McpError
 from .middleware import BaseMiddleware, MiddlewareMixin
 from .plugin_mixin import PluginMixin
 from .plugins import OpenAPIPlugin, OpenAPITranslator, router_openapi
-from .request import Request
+from .request import Request, UploadedFile
 from .request_registry import RegisteredRequest, RequestRegistry
 from .response import Response
 from .routed_application import RoutedApplication
@@ -138,6 +138,7 @@ __all__ = [
     "SessionStore",
     "StorageMixin",
     "TaskGrammar",
+    "UploadedFile",
     "UserStore",
     "__version__",
     "router_openapi",

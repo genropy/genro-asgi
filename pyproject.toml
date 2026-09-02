@@ -31,7 +31,7 @@ dependencies = [
     "genro-bag>=0.21.0",
     "genro-builders>=0.23.0",
     "genro-toolbox>=0.14.0",
-    "genro-tytx>=0.12.2",
+    "genro-tytx>=0.13.0",
     "genro-routes>=0.29.0",
     "genro-storage[encryption]>=0.8.0",
     "pyjwt>=2.0",
@@ -47,7 +47,7 @@ test = [
     "pytest-asyncio>=0.23",
     # The suite exercises the TYTX msgpack transport branch of response.py:
     # without this extra that coverage silently vanishes in a clean env.
-    "genro-tytx[msgpack]>=0.12.2",
+    "genro-tytx[msgpack]>=0.13.0",
 ]
 dev = [
     "genro-asgi[test]",

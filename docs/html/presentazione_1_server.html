@@ -167,7 +167,7 @@ footer { border-top: 1px solid var(--line); padding-top: 28px; margin-top: 80px;
 <span class="k">if</span> __name__ == "__main__":
     server = AsgiServer(applications=[Hello()])
     server.serve(host="127.0.0.1", port=8000)</pre>
-  <p class="caption">Da qui hai già: le due rotte, il loro schema OpenAPI, la documentazione navigabile, l'app di sistema <code>/_server</code> con login e gestione utenti, il registro delle richieste e il pool per il lavoro bloccante. Nessuna configurazione richiesta.</p>
+  <p class="caption">Da qui hai già: le due rotte, il loro schema OpenAPI, la documentazione navigabile, l'app di sistema <code>/_server</code> con login e gestione utenti, il registro delle richieste — l'elenco delle richieste in volo, ciò su cui la chiusura ordinata aspetta — e il pool per il lavoro bloccante. Nessuna configurazione richiesta.</p>
 
   <div class="diagram">
     <svg viewBox="0 0 900 210" role="img" aria-label="Il percorso di una richiesta">
@@ -330,7 +330,7 @@ server = AsgiServer(config=ServerConfiguration)</pre>
     <h3>I valori esterni si risolvono quando li leggi</h3>
     <p>Un valore che viene dall'ambiente non è una stringa copiata al boot: metti un <em>resolver</em> dove andrebbe il valore, e si risolve alla lettura. Il runtime consuma sempre il valore corrente, e non esiste il caso in cui la configurazione materializzata perde in silenzio un livello intero.</p>
     <h3>Il server legge se stesso</h3>
-    <p>Non c'è un componente esterno che costruisce un server da una configurazione: il server costruisce la propria porta di lettura e le chiede i valori che gli servono. La porta è pubblica e interrogabile per percorso — <code>server.config("server.host")</code> — su quattro livelli in cascata: il valore scritto, il default dichiarato nella firma dell'elemento, il default passato dalla chiamata, e infine un errore esplicito. Un'applicazione legge il proprio sottoalbero con <code>app.config(percorso)</code>: possiede un indirizzo nell'albero, mai una copia di una sua fetta.</p>
+    <p>Non c'è un componente esterno che costruisce un server da una configurazione: il server costruisce la propria porta di lettura e le chiede i valori che gli servono. La porta è pubblica e interrogabile per percorso — <code>server.config("server.host")</code> — su una cascata a tre livelli — il valore scritto, il default dichiarato nella firma dell'elemento, il default passato dalla chiamata — e, vuoti tutti e tre, un errore esplicito. Un'applicazione legge il proprio sottoalbero con <code>app.config(percorso)</code>: possiede un indirizzo nell'albero, mai una copia di una sua fetta.</p>
     <p>Gli argomenti passati esplicitamente al costruttore vincono su quelli configurati, uno per uno. È la regola che rende <code>--host</code> e <code>--port</code> della riga di comando semplici argomenti, senza calcoli di precedenza da nessuna parte.</p>
   </div>
 </section>
@@ -340,7 +340,7 @@ server = AsgiServer(config=ServerConfiguration)</pre>
   <div class="prose">
     <p>Un <strong>server</strong> possiede il runtime: il loop, la catena dei middleware, il pool per il lavoro bloccante, il ciclo di vita, il registro delle richieste, e l'insieme delle applicazioni che serve. Un'<strong>applicazione</strong> possiede il comportamento e non sa nulla di porte o middleware.</p>
     <p>Ogni applicazione porta due metà della propria identità: il <strong>codice</strong>, che è il suo nome, e il <strong>mount</strong>, che è il prefisso di URL sotto cui risponde. Sono distinti, quindi la stessa classe può essere servita due volte sotto nomi diversi. Un mount vuoto è la radice del sito.</p>
-    <p>Lo smistamento ha una sola regola, uguale su ogni server: primo segmento del percorso verso l'applicazione montata lì; altrimenti quella sulla radice; altrimenti, per <code>/</code> con un default dichiarato, un redirect; altrimenti 404.</p>
+    <p>Lo smistamento ha una sola regola, uguale su ogni server: primo segmento del percorso verso l'applicazione montata lì; altrimenti quella sulla radice; altrimenti, per <code>/</code> con un default dichiarato, un redirect; altrimenti, sulla radice scoperta, un indice del sito — i collegamenti alle applicazioni montate, disattivabile dalla configurazione in favore del 404.</p>
     <h3>Le classi che erediti</h3>
   </div>
 
@@ -432,7 +432,7 @@ server = AsgiServer(config=ServerConfiguration)</pre>
     <p>Una sessione tiene lo stato di un visitatore tra una richiesta e l'altra: un identificatore, i suoi metadati, un albero di dati liberamente strutturato e una collezione di avatar per chiave.</p>
     <p>La decisione che vale la pena conoscere è come si comporta al login: <strong>la sessione è un continuum, e il login la arricchisce di un'identità senza sostituirla</strong>. L'identificatore non cambia, i dati non si perdono — il carrello che un visitatore anonimo ha riempito sopravvive all'accesso — e il cookie che il client già possiede resta valido. Non esiste un cookie emesso al momento del login: se ne emette uno solo quando nasce una sessione anonima nuova.</p>
     <p>La difesa contro la fissazione della sessione sta a monte, nella disciplina del cookie — non leggibile da script, con vincolo di provenienza, e il token mai letto dall'URL — invece che in una rotazione di identificatore che costerebbe la continuità.</p>
-    <p>Lo store è un contratto: quello in memoria è il predefinito, il tuo si innesta senza che nulla intorno cambi.</p>
+    <p>Lo store è un contratto: quello in memoria è il predefinito — e sa fotografarsi su disco alla chiusura ordinata e ripartire da quella fotografia, che è ciò che tiene vive le sessioni attraverso un riavvio — e il tuo si innesta senza che nulla intorno cambi.</p>
   </div>
 </section>
 
@@ -628,7 +628,7 @@ server = AsgiServer(config=ServerConfiguration)</pre>
 
     <h4>Le capacità si dichiarano, non si scoprono sbattendoci</h4>
     <p>La trasparenza ha un limite onesto: i backend non sanno fare le stesse cose. Un bucket non sa aggiungere in coda a un file esistente; un disco locale non sa produrre un collegamento firmato a scadenza; un archivio di sola lettura non accetta scritture.</p>
-    <p>Invece di far finta che siano equivalenti — e lasciare che la differenza esploda in produzione — ogni backend <strong>dichiara le proprie capacità</strong>, diciannove in tutto: lettura, scrittura, cancellazione, elenco, metadati, collegamenti firmati e pubblici, atomicità, ricerca posizionale, aggiunta in coda, ottimizzazione della copia lato server, impronta nei metadati, sola lettura, temporaneità. Il codice può <em>chiedere</em> prima di provare.</p>
+    <p>Invece di far finta che siano equivalenti — e lasciare che la differenza esploda in produzione — ogni backend <strong>dichiara le proprie capacità</strong>, diciannove in tutto: lettura, scrittura, cancellazione, creazione di cartelle, elenco, metadati, collegamenti simbolici, collegamenti firmati e pubblici, le tre capacità delle versioni, atomicità, ricerca posizionale, aggiunta in coda, ottimizzazione della copia lato server, impronta nei metadati, sola lettura, temporaneità. Il codice può <em>chiedere</em> prima di provare.</p>
     <p>E la dichiarazione non è un'etichetta scritta a mano: per un bucket, la capacità di gestire versioni viene verificata <strong>interrogando il bucket vero</strong>. Se il versioning è attivo su quel bucket la capacità è vera; se non lo è, è falsa. Non c'è un file di configurazione che possa mentire su un fatto verificabile.</p>
 
     <h4>Il multiversione</h4>
@@ -685,7 +685,7 @@ server = AsgiServer(config=ServerConfiguration)</pre>
     <p>Per i flussi lunghi c'è la risposta a blocchi, e sopra di essa gli eventi inviati dal server già inquadrati — la via naturale per l'avanzamento di un lavoro o per una notifica.</p>
     <p>Le eccezioni HTTP si sollevano da qualunque punto del codice e trovano risposta nel middleware più esterno: non passi codici di stato lungo la catena delle chiamate.</p>
     <h3>La catena dei middleware</h3>
-    <p>Sette middleware pronti — errori, CORS, autenticazione, sessione, log di accesso, filtro dei percorsi di sonda — ordinati da un <em>numero</em>, non da una gerarchia di classi: il più piccolo è il più esterno, e inserire il tuo significa scegliere una posizione. Solo la gestione degli errori è attiva di default; le altre si armano quando configuri la capacità corrispondente.</p>
+    <p>Sei middleware pronti — errori, CORS, autenticazione, sessione, log di accesso, filtro dei percorsi di sonda — i path convenzionali che browser e bot tentano su ogni sito, chiusi con un 404 pulito — ordinati da un <em>numero</em>, non da una gerarchia di classi: il più piccolo è il più esterno, e inserire il tuo significa scegliere una posizione. Tre stanno in piedi da sé — gli errori, e la coppia sessione + autenticazione che la superficie di sistema richiede; le altre si armano quando configuri la capacità corrispondente.</p>
   </div>
 
   <h3>Due trasporti, un solo motore</h3>
@@ -734,18 +734,18 @@ server = AsgiServer(config=ServerConfiguration)</pre>
   <div class="prose">
     <p>Un file di configurazione più un comando sono un'unità di deployment completa. Il comando risolve quello che gli passi in tre passi: un'assegnazione che nomina direttamente una classe applicativa, un percorso a un file esistente, oppure il nome di un server già registrato.</p>
     <p>I server registrati vivono in un registro che è un <strong>archivio di puntatori, mai una copia</strong>: tiene la stringa sorgente e le opzioni date, quindi rilanciare per nome esegue sempre il codice corrente. Un file di pid non viene mai creduto sulla parola — mancante, illeggibile o riferito a un processo che non c'è più si leggono tutti come «non in esecuzione», così un server crollato risulta fermo e non fantasma.</p>
-    <p>C'è la ricarica automatica per lo sviluppo. La supervisione multi-processo, invece, è deliberatamente fuori: appartiene a uno strumento dedicato della famiglia.</p>
+    <p>C'è la ricarica automatica per lo sviluppo. La supervisione multi-processo, invece, è deliberatamente fuori — appartiene al supervisore del secondo documento, lo strumento dedicato della famiglia.</p>
     <h3>Si sviluppa sullo stack di produzione</h3>
     <p>Non c'è un server per lo sviluppo e un altro per l'esercizio. Il comando che avvii sulla tua macchina è quello che gira in produzione: stesso server, stessa catena di middleware, stesso smistamento, stessa autenticazione. Quello che cambia è un flag.</p>
     <p>E il flag è davvero solo un flag: la modalità di sviluppo è un valore dichiarato su cui <strong>il server non si ramifica in nessun punto</strong>. Esiste perché chi aggiunge un middleware o un controllo possa comportarsi diversamente sapendo in che modo il server sta girando, non perché il server faccia due cose diverse.</p>
     <p>È una scelta che si paga a monte e rende in continuazione. Un difetto che compare solo in esercizio, e che sulla macchina di chi l'ha scritto non si riproduce, quasi sempre nasce dalla distanza fra i due ambienti: il server di sviluppo serve i file in un modo, quello di esercizio in un altro; uno tiene una connessione aperta, l'altro la chiude; uno è a thread singolo, l'altro no. Se i due ambienti sono lo stesso ambiente, quella famiglia di difetti non ha dove nascere.</p>
     <p>Perché questo sia praticabile serve però una cosa, ed è la vera ragione per cui esiste un server di sviluppo separato: <strong>salvare un file e ritrovarsi il codice nuovo</strong>. Senza quello nessuno svilupperebbe sullo stack di esercizio, e riavvierebbe a mano cento volte al giorno.</p>
     <p>Quindi c'è una sentinella che guarda i file del progetto. Quando uno cambia, il server viene sostituito con uno che monta il codice nuovo. Fin qui è quello che fa qualunque server di sviluppo.</p>
-    <p>La differenza è quello che succede alle persone collegate. Un server che tiene in memoria lo stato di lavoro di chi lo sta usando, riavviato di colpo, quello stato lo butta — e sviluppare su un server del genere significherebbe rifare il login e ricostruire il contesto a ogni salvataggio. Qui non accade, perché <strong>l'uscita provocata dalla sentinella è una di quelle che salvano</strong>: prima di morire il processo parcheggia ogni persona congelata e scrive le proprie mappe, e il processo che nasce al suo posto le riprende. Chi stava lavorando batte il colpo successivo e viene risvegliato dove serve, con lo stesso cookie e la stessa identità.</p>
+    <p>La differenza è quello che succede alle persone collegate — ed è il meccanismo del secondo documento, visto qui dal lato di chi sviluppa. Un server che tiene in memoria lo stato di lavoro di chi lo sta usando, riavviato di colpo, quello stato lo butta — e sviluppare su un server del genere significherebbe rifare il login e ricostruire il contesto a ogni salvataggio. Qui non accade, perché <strong>l'uscita provocata dalla sentinella è una di quelle che salvano</strong>: prima di morire il processo parcheggia ogni persona congelata e scrive le proprie mappe, e il processo che nasce al suo posto le riprende. Chi stava lavorando batte il colpo successivo e viene risvegliato dove serve, con lo stesso cookie e la stessa identità.</p>
     <p class="pull">Salvi un file, il server rinasce col codice nuovo, e chi era collegato non deve rifare il login.</p>
     <p>Questo è anche il motivo per cui il meccanismo di parcheggio non è una funzione di esercizio prestata allo sviluppo: è il contrario. Serve tutti i giorni a chi scrive codice, e il giorno del rilascio si scopre che è lo stesso meccanismo che permette di riavviare un impianto vivo.</p>
     <p>La sentinella guarda il progetto per intero, quindi un cambiamento fa rinascere tutto. Quando i processi sono divisi in gruppi, guarda anche a quale gruppo appartiene il file che è cambiato, e fa rinascere solo quelli: chi lavora su una versione che non hai toccato non se ne accorge affatto.</p>
-    <p>In esercizio l'unità non è più un file di configurazione su una macchina: è un'<strong>immagine</strong>. Tutto quello che questo documento descrive — il server, il suo supervisore, gli interpreti, le fondamenta condivise — sta dentro un'immagine sola, identica per ogni cliente, che si aggiorna come si aggiorna qualsiasi applicazione: si pubblica una versione nuova e si passa a quella. Quello che non c'è dentro è l'applicazione del cliente, che viaggia separata e con i propri tempi. Il secondo documento spiega come.</p>
+    <p>In esercizio l'unità non è più un file di configurazione su una macchina: è un'<strong>immagine</strong>, identica per ogni cliente — e come l'immagine e i bundle delle applicazioni viaggiano lo racconta il secondo documento.</p>
   </div>
 </section>
 

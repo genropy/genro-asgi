@@ -55,6 +55,16 @@ what the middleware chain serves itself passes. `Lifespan.shutdown` turns the
 state first (to `shutdown_mode` — STOPPING by default, QUITTING set by the
 reload child in `factory()`), drains the in-flight requests (bounded), THEN
 runs the hooks in reverse.
+`Request` reads the ASGI request by itself (landed 2026-09-02): headers and
+cookies off the scope, the query, the body drained ALWAYS from `receive` and
+joined once; the body is decoded by content-type — json/xml/msgpack hydrated,
+urlencoded via `from_qs`, `multipart/form-data` via the stdlib `email` parser
+into fields (text hydrated, files as `UploadedFile` with `name`/`filename`/
+`content_type`/`data`), anything else raw bytes. Form fields, files included,
+reach the handler as kwargs named after the form field (a repeated name gives
+a list). genro-tytx is used ONLY as a serializer (`from_tytx`, `from_qs`,
+`to_tytx`, `json_dumps`): nothing is imported from `genro_tytx.http`, and the
+transport → media type map lives in `media_types.py`.
 Middleware wraps the dispatch (errors, authentication, session, cors,
 logging, wellknown). Auth answers **401 to the anonymous, 403 to the known**;
 admin surfaces live under the `_server` app as sections (auth, monitor,

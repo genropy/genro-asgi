@@ -135,7 +135,7 @@ ul.proofs li::before { content: ""; position: absolute; left: 2px; top: .62em;
 posto dove si legge quanto di quel disegno esiste oggi, e l'unico che cambia mentre l'implementazione
 procede. Ogni riga porta la propria prova: un file con la sua copertura, un test che la esercita,
 oppure la constatazione che non esiste una riga di codice.</p>
-<dl class="facts"><div class='fact'><dt>Test</dt><dd><strong>1519</strong><span>verdi, 0 falliti</span></dd></div><div class='fact'><dt>Copertura</dt><dd><strong>97%</strong><span>8.028 stmt, 279 scoperti</span></dd></div><div class='fact'><dt>Voci</dt><dd><strong>33</strong><span>sui tre mondi di internals/</span></dd></div><div class='fact'><dt>Consolidate</dt><dd><strong>20</strong><span>8 con riserve, 5 solo progettate</span></dd></div></dl>
+<dl class="facts"><div class='fact'><dt>Test</dt><dd><strong>1671</strong><span>verdi, 0 falliti</span></dd></div><div class='fact'><dt>Copertura</dt><dd><strong>97%</strong><span>8.772 stmt, 302 scoperti</span></dd></div><div class='fact'><dt>Voci</dt><dd><strong>34</strong><span>sui tre mondi di internals/</span></dd></div><div class='fact'><dt>Consolidate</dt><dd><strong>21</strong><span>8 con riserve, 5 solo progettate</span></dd></div></dl>
 <nav class="worldnav"><a href="#server">Il server</a><a href="#spa">Il mondo SPA</a><a href="#deploy">Rilascio e scala</a></nav>
 </div></header>
 <main class="wrap">
@@ -151,7 +151,7 @@ esistono test dedicati che lo esercitano, e se la decisione che lo riguarda è c
 <article id="v-configuration" class="node">
 <div class="node-head"><h3>La configurazione</h3><span class="chip done">Consolidato</span></div>
 <p class="lead">L'albero da cui ogni voce legge le proprie parole: strati, pila di lettura, sottoscrittori.</p>
-<ul class="proofs"><li><code>config/handler.py</code> 147 stmt · 100% · <code>elements.py</code> 100% · <code>builder.py</code> 100% · <code>default_config.py</code> 98%</li><li><code>test_config.py</code> — 82 casi, il file più esercitato del progetto — e <code>test_config_env.py</code></li></ul>
+<ul class="proofs"><li><code>config/handler.py</code> 150 stmt · 100% · <code>elements.py</code> 100% · <code>builder.py</code> 100% · <code>default_config.py</code> 98%</li><li><code>test_config.py</code> — 82 casi, il file più esercitato del progetto — e <code>test_config_env.py</code></li></ul>
 </article>
 <article id="v-applications" class="node">
 <div class="node-head"><h3>Le applicazioni e il loro albero di rotte</h3><span class="chip done">Consolidato</span></div>
@@ -239,7 +239,7 @@ esistono test dedicati che lo esercitano, e se la decisione che lo riguarda è c
 <article id="v-cli" class="node">
 <div class="node-head"><h3>La riga di comando</h3><span class="chip done">Consolidato</span></div>
 <p class="lead">Guidare le installazioni dalla shell. Un <code>config.py</code> più <code>genroasgi serve</code> sono un'unità di rilascio completa.</p>
-<ul class="proofs"><li><code>__main__.py</code> 291 stmt · 98% — verbi <code>serve</code>, <code>apps</code>, <code>stop</code>, <code>remove</code></li><li><code>test_cli.py</code> (50 casi)</li></ul>
+<ul class="proofs"><li><code>__main__.py</code> 289 stmt · 98% — verbi <code>serve</code>, <code>apps</code>, <code>stop</code>, <code>remove</code></li><li><code>test_cli.py</code> (50 casi)</li></ul>
 </article>
 <article id="v-restart" class="node">
 <div class="node-head"><h3>Il riavvio</h3><span class="chip partial">Attivo con riserve</span></div>
@@ -257,16 +257,21 @@ esistono test dedicati che lo esercitano, e se la decisione che lo riguarda è c
 <div class="node-head"><h3>Il limite di frequenza per IP</h3><span class="chip planned">Solo progettato</span></div>
 <p class="lead">Un middleware dedicato che limita per indirizzo, distinto dal blocco progressivo per identità.</p>
 <ul class="proofs"><li>zero occorrenze di <code>rate_limit</code> in <code>src/</code></li><li>il blocco progressivo per identità esiste ed è operativo (D28), ed è un'altra cosa</li></ul>
-</article></section><section id="spa" class="world"><header class="world-head"><p class="eyebrow">documento 2</p><h2>Il mondo SPA</h2><p class="world-lead">Il mondo che ospita un sito a pagina singola con stato vivo sul server.</p><p class="tallies"><span class="tally done">5 consolidato</span> · <span class="tally partial">3 attivo con riserve</span></p></header><article id="v-front" class="node">
+</article></section><section id="spa" class="world"><header class="world-head"><p class="eyebrow">documento 2</p><h2>Il mondo SPA</h2><p class="world-lead">Il mondo che ospita un sito a pagina singola con stato vivo sul server.</p><p class="tallies"><span class="tally done">6 consolidato</span> · <span class="tally partial">3 attivo con riserve</span></p></header><article id="v-front" class="node">
 <div class="node-head"><h3>Il front SPA</h3><span class="chip done">Consolidato</span></div>
 <p class="lead">Una porta sola e stabile verso il sito ospitato, senza stato nella porta: cookie, demux a due stadi, traduzione HTTP.</p>
-<ul class="proofs"><li><code>applications/spa_app.py</code> 106 stmt · 99% · <code>test_spa_application.py</code></li><li>un rifiuto esce 503 con <code>Retry-After</code>, un sito che fallisce dentro il proprio processo esce 502</li></ul>
+<ul class="proofs"><li><code>applications/spa_app.py</code> 236 stmt · 97% · <code>test_spa_application.py</code></li><li>un rifiuto esce 503 con <code>Retry-After</code>, un sito che fallisce dentro il proprio processo esce 502</li></ul>
 </article>
 <article id="v-orchestration" class="node">
 <div class="node-head"><h3>L'orchestrazione</h3><span class="chip partial">Attivo con riserve</span></div>
 <p class="lead">Molti utenti con stato vivo, distribuiti su più processi e mai spezzati. La catena è commander → gruppo → worker.</p>
-<ul class="proofs"><li><code>spa_commander.py</code> 490 stmt · 97% · <code>spa_worker.py</code> 921 · 97% · <code>group_handler.py</code> 207 · 97% · <code>worker_handler.py</code> 172 · 97% · <code>envelope_handler.py</code> 100%</li><li>27 file sotto <code>tests/orchestration/</code></li><li>il gruppo che dichiara <code>engine_factory</code> possiede un processo template: costruisce il motore una volta, congela l'heap, e ogni worker è un suo fork (<code>template_entry.py</code>, <code>template_connector.py</code>)</li><li>la ricetta di un gruppo dichiara <code>executable</code>: il processo del server e i worker di ogni gruppo possono stare su interpreti diversi (<code>worker_handler.py:425</code>, <code>template_connector.py:133</code>)</li><li>i massimali sono <code>worker_max_number</code> e <code>worker_max_users</code>; la memoria è una cascata di percentuali e solo il fondo è in byte</li></ul>
+<ul class="proofs"><li><code>spa_commander.py</code> 568 stmt · 97% · <code>spa_worker.py</code> 920 · 97% · <code>group_handler.py</code> 432 · 97% · <code>worker_handler.py</code> 183 · 97% · <code>envelope_handler.py</code> 100%</li><li>40 file sotto <code>tests/orchestration/</code></li><li>il gruppo che dichiara <code>engine_factory</code> possiede un processo template: costruisce il motore una volta, congela l'heap, e ogni worker è un suo fork (<code>template_entry.py</code>, <code>template_connector.py</code>)</li><li>la ricetta di un gruppo dichiara <code>executable</code>: il processo del server e i worker di ogni gruppo possono stare su interpreti diversi (<code>worker_handler.py:425</code>, <code>template_connector.py:133</code>)</li><li>i massimali sono <code>worker_max_number</code> e <code>worker_max_users</code>; la memoria è una cascata di percentuali e solo il fondo è in byte</li></ul>
 <div class="reserve"><span class="reserve-label">Riserve</span><ul><li>Non esiste il worker in-processo. Il canale locale c'è ed è testato (<code>channel/local.py</code> 92%), ma nessun percorso dell'orchestrazione lo usa per costruire un worker dentro il commander.</li><li>Non esiste il ribilanciamento che sceglie chi spostare in base al consumo recente: il pool cresce, riavvia un worker oltre soglia, e chiude quello in esubero.</li><li>Non esiste la serie storica della memoria né la stima di quando un processo toccherà il limite: <code>restart_occupancy_max_percent</code> è una soglia secca.</li></ul></div>
+</article>
+<article id="v-profiles" class="node">
+<div class="node-head"><h3>Il profilo di orchestrazione</h3><span class="chip done">Consolidato</span></div>
+<p class="lead">I quindici setpoint di un gruppo in un dataclass congelato che È la validazione; un profilo archiviato raggiunge il pool al boot e a caldo, e il ritiro di un worker resta fermo finché la pressione CPU non tace.</p>
+<ul class="proofs"><li><code>group_policy.py</code> 101 stmt · 100% — <code>GroupPolicy.from_settings</code> compone defaults ⊕ ricetta ⊕ profilo ⊕ env e raccoglie ogni violazione; fra i setpoint <code>cpu_retirement_quiet_seconds</code> (default 60.0)</li><li><code>orchestration_profile_store.py</code> 74 stmt · 99% — l'archivio condiviso con <code>_sysop</code>; un profilo mancante o invalido al boot è <code>FatalBootError</code>, mai un ripiego silenzioso</li><li>rotte <code>POST apply</code> / <code>POST reload</code> / <code>GET status</code> sotto <code>_orchestration</code>, montate solo a cancello aperto e DOPO il vertice; l'apply a caldo è in tre stadi sotto <code>_configuration_lock</code> (<code>SpaCommander.apply_group_settings</code>)</li><li>84 test dedicati: <code>test_group_policy.py</code>, <code>test_apply_group_settings.py</code>, <code>test_spa_app_profiles.py</code>, <code>test_orchestration_apply.py</code>, <code>test_orchestration_cpu_growth.py</code></li></ul>
 </article>
 <article id="v-channel" class="node">
 <div class="node-head"><h3>Il canale</h3><span class="chip done">Consolidato</span></div>
@@ -315,7 +320,7 @@ esistono test dedicati che lo esercitano, e se la decisione che lo riguarda è c
 <p class="lead">Autorità delegata lungo la catena: radice → subcommander → gruppo → worker.</p>
 <ul class="proofs"><li>nessuna riga · proposta non ratificata</li><li>il protocollo del canale è disegnato dall'inizio per due collocazioni, in-processo e su rete; oggi ne esiste una</li></ul>
 </article></section>
-<footer class="foot"><p>Aggiornato al 26 agosto 2026 · misurato su <code>develop</code> con <code>pytest --cov</code>.
+<footer class="foot"><p>Aggiornato al 29 agosto 2026 · misurato su <code>main</code> (release 0.36.0) con <code>pytest --cov</code>.
 Le voci del corpo dei tre documenti non cambiano quando una riga di questa pagina cambia stato.</p>
 <p class="lic">genro-asgi · Apache License 2.0 · Softwell S.r.l.</p></footer>
 </main>

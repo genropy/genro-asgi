@@ -71,6 +71,7 @@ def test_root_exports_public_api():
         "SessionStore",
         "StorageMixin",
         "TaskGrammar",
+        "UploadedFile",
         "UserStore",
         "__version__",
         "router_openapi",

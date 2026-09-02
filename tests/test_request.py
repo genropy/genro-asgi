@@ -19,6 +19,11 @@ bytes → ``body_raw``, empty body → query only), the request id comes from th
 header or is generated, TYTX mode is read off the header, and auth/session ride
 the scope.
 
+Body decoding is exercised per content-type (xml/msgpack/json hydration, an
+urlencoded form with typed values, an unknown type and a type-less body kept
+raw, a body split over several ASGI messages) and multipart forms deliver text
+fields hydrated and file parts as ``UploadedFile`` kwargs.
+
 The ``db`` preparation layer is exercised end-to-end through the server: a fake
 app touches ``request.db`` and the server drains ``closeConnection`` at end of
 request; ``get_db`` never registers a cleanup; an unregistered code answers
@@ -28,9 +33,21 @@ request; ``get_db`` never registers a cleanup; an unregistered code answers
 from __future__ import annotations
 
 import uuid
+from datetime import date
+from decimal import Decimal
 from typing import Any
 
-from genro_asgi import Avatar, BaseApplication, BaseServer, Request, Response, Session
+from genro_tytx import to_tytx
+
+from genro_asgi import (
+    Avatar,
+    BaseApplication,
+    BaseServer,
+    Request,
+    Response,
+    Session,
+    UploadedFile,
+)
 from genro_asgi.types import Receive, Scope, Send
 
 
@@ -39,15 +56,22 @@ async def make_request(
     headers: list[tuple[bytes, bytes]] | None = None,
     query: bytes = b"",
     body: bytes = b"",
+    chunks: list[bytes] | None = None,
     method: str = "GET",
     path: str = "/",
     scope_extra: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> Request:
-    """Build a ``Request`` from a synthetic ASGI scope and init it."""
+    """Build a ``Request`` from a synthetic ASGI scope and init it.
+
+    ``chunks`` delivers the body in several ``http.request`` messages (the last
+    one alone with ``more_body`` false); ``body`` delivers it in a single one.
+    """
+    pending = list(chunks) if chunks is not None else [body]
 
     async def receive() -> dict[str, Any]:
-        return {"type": "http.request", "body": body, "more_body": False}
+        chunk = pending.pop(0)
+        return {"type": "http.request", "body": chunk, "more_body": bool(pending)}
 
     scope: Scope = {
         "type": "http",
@@ -88,7 +112,7 @@ class TestParsing:
         assert request.response.request is request
 
     async def test_numeric_id_headers_are_coerced_to_str(self) -> None:
-        # asgi_data TYTX-hydrates header values: "123" arrives as int 123;
+        # Header values are TYTX-hydrated: "123" arrives as int 123;
         # the id/external_id contract is str regardless.
         request = await make_request(
             headers=[(b"x-request-id", b"123"), (b"x-external-id", b"456")]
@@ -115,8 +139,8 @@ class TestHandlerKwargs:
             headers=[(b"content-type", b"application/x-www-form-urlencoded")],
             body=b"a=1&b=hello",
         )
-        # asgi_data hydrates the urlencoded body via TYTX from_qs (genro-tytx
-        # 0.10.0): the body arrives as a typed dict, not raw bytes.
+        # The urlencoded body is hydrated via TYTX from_qs: it arrives as a
+        # typed dict, not raw bytes.
         assert request.data == {"a": 1, "b": "hello"}
         kwargs = request.handler_kwargs()
         assert kwargs == {"a": 1, "b": "hello", "page": 2}  # body 'a' wins over query 'a'
@@ -135,6 +159,174 @@ class TestHandlerKwargs:
         request = await make_request(method="GET", query=b"x=1&y=two")
         assert request.data is None
         assert request.handler_kwargs() == {"x": 1, "y": "two"}
+
+
+class TestBodyDecoding:
+    async def test_xml_body_hydrated(self) -> None:
+        payload = to_tytx({"root": {"attrs": {}, "value": Decimal("100.50")}}, transport="xml")
+        request = await make_request(
+            method="POST",
+            headers=[(b"content-type", b"application/vnd.tytx+xml")],
+            body=payload.encode("utf-8"),
+        )
+        assert request.data == {"root": {"attrs": {}, "value": Decimal("100.50")}}
+
+    async def test_msgpack_body_hydrated(self) -> None:
+        payload = to_tytx({"price": Decimal("100.50")}, transport="msgpack")
+        request = await make_request(
+            method="POST",
+            headers=[(b"content-type", b"application/vnd.tytx+msgpack")],
+            body=payload,
+        )
+        assert request.data == {"price": Decimal("100.50")}
+
+    async def test_standard_json_media_type_hydrates_like_the_tytx_one(self) -> None:
+        payload = to_tytx({"price": Decimal("100.50")}, transport="json")
+        request = await make_request(
+            method="POST",
+            headers=[(b"content-type", b"application/json")],
+            body=payload.encode("utf-8"),
+        )
+        assert request.data == {"price": Decimal("100.50")}
+
+    async def test_unknown_content_type_stays_raw(self) -> None:
+        blob = b"\x89PNG\r\n\x1a\n binary image bytes"
+        request = await make_request(
+            method="POST", headers=[(b"content-type", b"image/png")], body=blob
+        )
+        assert request.data == blob
+        assert request.handler_kwargs() == {"body_raw": blob}
+
+    async def test_body_without_content_type_is_read_and_kept_raw(self) -> None:
+        blob = b"orphan payload"
+        request = await make_request(method="POST", body=blob)
+        assert request.data == blob
+        assert request.handler_kwargs() == {"body_raw": blob}
+
+    async def test_chunked_body_is_reassembled(self) -> None:
+        request = await make_request(
+            method="POST",
+            headers=[(b"content-type", b"application/json")],
+            chunks=[b'{"name":', b'"ada","age"', b":36}"],
+        )
+        assert request.data == {"name": "ada", "age": 36}
+
+    async def test_multi_value_query_becomes_a_list_of_hydrated_values(self) -> None:
+        request = await make_request(query=b"tag=100.50%3A%3AN&tag=200.75%3A%3AN")
+        assert request.query == {"tag": [Decimal("100.50"), Decimal("200.75")]}
+
+    async def test_urlencoded_typed_values_are_hydrated(self) -> None:
+        request = await make_request(
+            method="POST",
+            headers=[(b"content-type", b"application/x-www-form-urlencoded")],
+            body=b"n=1::L&price=100.50::N&when=2025-01-15::D",
+        )
+        assert request.data == {"n": 1, "price": Decimal("100.50"), "when": date(2025, 1, 15)}
+
+    async def test_empty_json_body_is_none_and_adds_no_kwargs(self) -> None:
+        request = await make_request(
+            method="POST",
+            query=b"x=1",
+            headers=[(b"content-type", b"application/json")],
+            body=b"",
+        )
+        assert request.data is None
+        assert request.handler_kwargs() == {"x": 1}
+
+
+MULTIPART_BOUNDARY = "----genroasgi"
+MULTIPART_CONTENT_TYPE = f"multipart/form-data; boundary={MULTIPART_BOUNDARY}".encode()
+
+
+def form_part(
+    name: str,
+    payload: bytes,
+    *,
+    filename: str | None = None,
+    content_type: str | None = None,
+) -> bytes:
+    """Render one multipart part: content-disposition, optional type, payload."""
+    disposition = f'form-data; name="{name}"'
+    if filename is not None:
+        disposition += f'; filename="{filename}"'
+    lines = [f"Content-Disposition: {disposition}".encode()]
+    if content_type is not None:
+        lines.append(f"Content-Type: {content_type}".encode())
+    return b"\r\n".join(lines) + b"\r\n\r\n" + payload
+
+
+async def make_multipart_request(*parts: bytes) -> Request:
+    """Build and init a POST request whose body is a multipart form of ``parts``."""
+    marker = f"--{MULTIPART_BOUNDARY}".encode()
+    body = b"".join(marker + b"\r\n" + part + b"\r\n" for part in parts) + marker + b"--\r\n"
+    return await make_request(
+        method="POST", headers=[(b"content-type", MULTIPART_CONTENT_TYPE)], body=body
+    )
+
+
+class TestMultipart:
+    async def test_text_field_and_file_arrive_as_kwargs(self) -> None:
+        request = await make_multipart_request(
+            form_part("title", b"my doc"),
+            form_part("doc", b"file bytes", filename="a.txt", content_type="text/plain"),
+        )
+        kwargs = request.handler_kwargs()
+        assert kwargs["title"] == "my doc"
+        uploaded = kwargs["doc"]
+        assert isinstance(uploaded, UploadedFile)
+        assert uploaded.name == "doc"
+        assert uploaded.filename == "a.txt"
+        assert uploaded.content_type == "text/plain"
+        assert uploaded.data == b"file bytes"
+
+    async def test_text_field_is_tytx_hydrated(self) -> None:
+        request = await make_multipart_request(form_part("count", b"123"))
+        assert request.handler_kwargs() == {"count": 123}
+
+    async def test_two_files_under_different_names(self) -> None:
+        request = await make_multipart_request(
+            form_part("first", b"one", filename="one.txt", content_type="text/plain"),
+            form_part("second", b"two", filename="two.txt", content_type="text/plain"),
+        )
+        kwargs = request.handler_kwargs()
+        assert kwargs["first"].filename == "one.txt"
+        assert kwargs["second"].filename == "two.txt"
+        assert kwargs["first"].data == b"one"
+        assert kwargs["second"].data == b"two"
+
+    async def test_repeated_name_collects_a_list(self) -> None:
+        request = await make_multipart_request(
+            form_part("doc", b"one", filename="one.txt", content_type="text/plain"),
+            form_part("doc", b"two", filename="two.txt", content_type="text/plain"),
+        )
+        docs = request.handler_kwargs()["doc"]
+        assert [type(item) for item in docs] == [UploadedFile, UploadedFile]
+        assert [item.filename for item in docs] == ["one.txt", "two.txt"]
+
+    async def test_binary_payload_survives_intact(self) -> None:
+        blob = b"\x89PNG\x00\xff\r\n\x1a\n tail"
+        request = await make_multipart_request(
+            form_part("doc", blob, filename="a.png", content_type="image/png")
+        )
+        assert request.handler_kwargs()["doc"].data == blob
+
+    async def test_data_is_the_decoded_dict(self) -> None:
+        request = await make_multipart_request(
+            form_part("title", b"my doc"),
+            form_part("doc", b"bytes", filename="a.bin", content_type="application/octet-stream"),
+        )
+        assert isinstance(request.data, dict)
+        assert set(request.data) == {"title", "doc"}
+        assert request.data["title"] == "my doc"
+
+    async def test_each_file_keeps_its_own_content_type(self) -> None:
+        request = await make_multipart_request(
+            form_part("image", b"png", filename="a.png", content_type="image/png"),
+            form_part("blob", b"raw", filename="a.bin", content_type="application/octet-stream"),
+        )
+        kwargs = request.handler_kwargs()
+        assert kwargs["image"].content_type == "image/png"
+        assert kwargs["blob"].content_type == "application/octet-stream"
 
 
 class TestIdentityMetadata:

@@ -95,9 +95,6 @@ record is that commit message. Friction S1.
   `FIXED_PLUGINS` and cannot be switched off, so the no-signature branches of
   `bind_kwargs`/`spread_over_params` only run under a bare `BaseServer`. Do not
   write a test that expects to reach them through `AsgiServer`.
-- **The body is read only when a `content-type` header is present.** The gate
-  is in the dependency (`genro_tytx.asgi_data`), not here, and the result is a
-  200 with a wrong body. Friction S4.
 
 ## What was verified live while writing this
 

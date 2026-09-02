@@ -26,9 +26,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from genro_tytx import TRANSPORT_MIME, json_dumps, to_tytx
+from genro_tytx import json_dumps, to_tytx
 
 from genro_asgi import HTTPForbidden, HTTPNotFound, HTTPUnauthorized, Response
+from genro_asgi.media_types import TRANSPORT_MIME
 from genro_asgi.types import Message
 
 

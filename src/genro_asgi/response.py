@@ -23,7 +23,7 @@ before being sent.
 
 ``set_result`` dispatches by result type: ``dict``/``list`` → JSON bytes via
 ``genro_tytx.json_dumps`` (or TYTX serialization — media type from
-``genro_tytx.TRANSPORT_MIME`` — when the bound request is in TYTX mode),
+``media_types.TRANSPORT_MIME`` — when the bound request is in TYTX mode),
 ``Path`` → file bytes, ``bytes`` → as-is, ``str`` → UTF-8 text, ``None`` →
 empty. ``set_error`` maps an exception to a status:
 ``HTTPException`` subtypes carry their own status; ``ValueError``/``TypeError``
@@ -42,9 +42,10 @@ from pathlib import Path
 from typing import Any, Literal, cast
 from urllib.parse import quote
 
-from genro_tytx import TRANSPORT_MIME, json_dumps, to_tytx
+from genro_tytx import json_dumps, to_tytx
 
 from .exceptions import HTTPException
+from .media_types import TRANSPORT_MIME
 from .types import Receive, Scope, Send
 
 __all__ = ["Response"]

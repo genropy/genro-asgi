@@ -217,10 +217,15 @@ Slotted per D18 (request.py:64-80). Built by the owning application
 is constructed with it and bound back (request.py:104), proven by
 `test_request.py:85`.
 
-**Parsing, once.** `init()` (request.py:106-125) delegates to
-`genro_tytx.asgi_data`, then derives the TYTX mode from `x-tytx-transport`
-(`:118-121`), the request id from `x-request-id` or a fresh uuid4 (`:122-123`)
-and the client correlation id from `x-external-id` (`:124-125`). Proven by
+**Parsing, once.** `init()` (request.py:151-169) reads the request by itself —
+headers, cookies, query, and the body drained from `receive` until `more_body`
+is false (`read_body`, `:201`), decoded by content-type (`decode_body`, `:224`;
+`multipart/form-data` into fields and `UploadedFile` parts, `:247`) — then
+derives the TYTX mode from `x-tytx-transport` (`:162-165`), the request id from
+`x-request-id` or a fresh uuid4 (`:167`) and the client correlation id from
+`x-external-id` (`:169`). genro-tytx is used only as a deserializer
+(`from_tytx`, `from_qs`); nothing is imported from `genro_tytx.http` (landed
+2026-09-02). Proven by
 `test_request.py:67`, `:90` (numeric id headers coerced to `str`), `:141`,
 `:145`, `:149`, `:154`.
 
@@ -249,12 +254,10 @@ Proven by `test_request.py:252`, `:264`, `:275`, `:283`, `:294`.
 uncovered lines are the two `server is None` early returns (`:249`, `:264`) and
 `__repr__` (`:292`).
 
-**A body without a `content-type` header is never read.** The read loop in
-`genro_tytx.asgi_data` is gated on the header
-(`genro-tytx/src/genro_tytx/http.py`, `if content_type:`), so the body is
-dropped and `data` is `None`. Driven live against a composed server: the same
-`POST /add` with `{"x": 2, "y": 3}` answers `{"sum": 5}` with the header and
-**`{"sum": 0}` with status 200** without it. No test covers the second case.
+**A body without a `content-type` header is read and kept raw** (friction S4,
+settled 2026-09-02). `read_body` (request.py:201) drains `receive` whatever
+the headers say; the bytes reach the handler as `body_raw`. Proven by
+`test_request.py:200`; the chunked read by `:206`.
 
 ## `Response` — [response.py:56](../../../src/genro_asgi/response.py)
 

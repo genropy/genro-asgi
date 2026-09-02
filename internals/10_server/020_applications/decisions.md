@@ -303,6 +303,8 @@ from the defaults. Proven live in [status.md](status.md): the same POST
 answers `{"sum": 5}` with the header and `{"sum": 0}` without it. The gate is
 in `genro_tytx.asgi_data`, so settling it may mean fixing a dependency rather
 than this package.
+Settled 2026-09-02: `Request.read_body` (request.py:201) drains the body
+unconditionally; nothing is imported from `genro_tytx.http` any more.
 
 **S5 [silent] — a `TypeError` inside a synchronous handler is reported to the caller as
 a bad request.** A bug in a handler's own body — an addition between an int and
