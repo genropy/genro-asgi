@@ -105,7 +105,10 @@ class XT_DeskLane:
 
     def __init__(self, commander, group, freeze_handler, worker_name=WORKER_NAME) -> None:
         self.commander = commander
+        self.worker_name = worker_name
+        self.group = group
         self.worker_handler = WorkerHandler(group, worker_name, **group.worker_settings)
+        group.worker_handler_map[worker_name] = self.worker_handler
         self.worker = SpaWorker(
             worker_name, freeze_handler=freeze_handler, deposit_lock_retry_interval=0.01
         )
@@ -137,6 +140,7 @@ class XT_DeskLane:
         self.request_pool.shutdown(wait=True)
         self.worker.exit_process()
         await self.worker_handler.connector.stop()
+        self.group.worker_handler_map.pop(self.worker_name, None)
 
     async def verb(self, name, *args, **kwargs):
         """Call one of the worker's site verbs where the site calls it: off the loop."""
@@ -149,6 +153,14 @@ class XT_DeskLane:
         await asyncio.get_running_loop().run_in_executor(
             self.request_pool, self.worker.open_request_slot
         )
+
+    async def wait_filter_synced(self) -> None:
+        """Wait until the worker's source filter equals the desk's set.
+
+        The commander pushes the set as a task, so a test that reads the
+        worker's ``subscribed_tables`` right after a subscription waits here.
+        """
+        await wait_for(lambda: self.worker.subscribed_tables == set(self.desk.subscribed_tables))
 
 
 @pytest.fixture
@@ -164,6 +176,20 @@ async def desk_lane(short_root, tmp_path):
         entry_module="never.launched",
     )
     lane = XT_DeskLane(commander, group, FreezeHandler(tmp_path / "frozen_users"))
+    await lane.open()
+    yield lane
+    await lane.close()
+
+
+@pytest.fixture
+async def second_desk_lane(desk_lane, tmp_path):
+    """A SECOND live lane on the same commander and the same group as ``desk_lane``."""
+    lane = XT_DeskLane(
+        desk_lane.commander,
+        desk_lane.worker_handler.group_handler,
+        FreezeHandler(tmp_path / "frozen_users_w2"),
+        worker_name="w2",
+    )
     await lane.open()
     yield lane
     await lane.close()

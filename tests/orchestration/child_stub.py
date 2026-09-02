@@ -60,7 +60,11 @@ from genro_asgi.spa.orchestration.worker_connector import (
     REPLY_METHOD,
     ENVELOPE_SLOT_WORKER_SNAPSHOT,
 )
-from genro_asgi.spa.orchestration.worker_handler import PING_OP_PATH, WORKER_ENV_VAR
+from genro_asgi.spa.orchestration.worker_handler import (
+    PING_OP_PATH,
+    SUBSCRIBED_TABLES_OP_PATH,
+    WORKER_ENV_VAR,
+)
 
 #: The parent tells the child to stop answering: the mute worker of the drill.
 #: It answers this one, and nothing after it.
@@ -105,7 +109,9 @@ class ChildStub:
             WRITE_CONNECTION_REGISTER_ITEM_OP: self.write_connection_register_item,
             RELEASE_LOCK_OP: self.release_deposit_lock,
             GO_MUTE_OP: self.go_mute,
+            SUBSCRIBED_TABLES_OP_PATH: self.take_subscribed_tables,
         }
+        self.subscribed_tables: set[str] = set()
 
     @property
     def photo(self) -> dict[str, Any]:
@@ -175,6 +181,11 @@ class ChildStub:
                     },
                 )
             )
+
+    async def take_subscribed_tables(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Take the source filter the parent pushes, as a real worker does."""
+        self.subscribed_tables = set(data.get("tables", ()))
+        return {}
 
     async def answer_ping(self, data: Any) -> dict[str, Any]:
         """The health beat: an answer is the whole point of it.

@@ -1,0 +1,5 @@
+✓ Phase 4 completed: Coherence review and auto-fix (final, mandatory)
+
+`ruff check` on the 12 code files of Phases 1..3 passed at the first cycle, so nothing was auto-fixed; `review.md` carries the three sections with three items flagged for human (chief among them the `notifyDbEvents` docstring in `spa_worker.py`, still saying the deposits leave only with the end-of-request exchange). Full suite 1809 passed, `ruff check src/ tests/` clean, both before and after.
+
+The phase commit did NOT land: the `pre-commit-rules.sh` PreToolUse hook returns `permissionDecision: "ask"` on any `git commit`, which in a non-interactive session is a denial — its own exemption (`PHASED_UNATTENDED=1`, exported by the phased launcher) is absent because this run came from `/goal`, and a session cannot set it for the hook process. The three files are staged and ready: `git commit -m "wf(phase 4): Coherence review and auto-fix (final, mandatory)"`.

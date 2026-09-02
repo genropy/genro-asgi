@@ -1,0 +1,5 @@
+No `foreman.json` — notification skipped.
+
+✓ Phase 1 completed: The set of subscribed tables reaches every worker by broadcast (D1)
+
+The commander now pushes the whole subscribed-table set to every living worker on each transition of it, and to a newborn at its first presentation; no reply carries the list any more. Three adaptations the plan did not foresee are recorded in `notes.md`: the `child_stub` test double had to learn the new op (it died on 16 tests without it), two extra phase-8 contract assertions fell under the plan's own "adjusted the same way" rule, and every test reading the worker's filter right after a subscribe now waits for the push. Full suite 1805 passed, `ruff check src/ tests/` clean, commit `dd8fc24`.

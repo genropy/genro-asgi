@@ -43,10 +43,10 @@ from typing import Any
 import pytest
 from genro_tytx import from_tytx, to_tytx
 
-from genro_asgi.spa.orchestration import FreezeHandler, GroupHandler, SpaCommander, SpaWorker
-from genro_asgi.spa.orchestration import spa_worker as spa_worker_module
+from genro_asgi.spa.orchestration import FreezeHandler, GroupHandler, SpaCommander
 from genro_asgi.spa.orchestration.spa_commander import DESK_PATH_PREFIX
-from genro_asgi.spa.orchestration.worker_handler import WorkerHandler
+
+from .conftest import XT_DeskLane
 
 WORKER_NAME = "standard_0001"
 SUBSCRIBE_PATH = f"{DESK_PATH_PREFIX}subscribe_table"
@@ -56,47 +56,12 @@ PAGE = "page_one"
 SIBLING = "page_two"
 
 
-class XT_DeskLane:
-    """A worker and its real handler on one UDS, the desk at the top of it.
+class XT_DeskProtocolLane(XT_DeskLane):
+    """The shared lane, plus the two desk calls placed as raw frames.
 
-    Args:
-        commander: the vertex whose desk the calls reach.
-        group: the group the handler hangs under.
-        freeze_handler: the deposit the worker is built with.
+    ``subscribe`` and ``exchange`` put the CALLs on the wire the way the
+    worker's verbs will place them, and decode the answers.
     """
-
-    def __init__(
-        self, commander: SpaCommander, group: GroupHandler, freeze_handler: FreezeHandler
-    ) -> None:
-        self.commander = commander
-        self.worker_handler = WorkerHandler(group, WORKER_NAME, **group.worker_settings)
-        self.worker = SpaWorker(WORKER_NAME, freeze_handler=freeze_handler)
-        self._reader_task: asyncio.Task[None] | None = None
-
-    @property
-    def desk(self) -> Any:
-        """The desk the calls of this lane land on."""
-        return self.commander.delivery_desk
-
-    async def open(self) -> None:
-        """Bind, connect, present, and put the worker's read loop on the air."""
-        connector = self.worker_handler.connector
-        await connector.start()
-        reader, writer = await asyncio.open_unix_connection(str(connector.socket_path))
-        self.worker.attach_stream(spa_worker_module.FrameStream(reader, writer))
-        await self.worker.send_presentation({})
-        self._reader_task = asyncio.create_task(self.worker.receive_frames())
-        await connector.wait_connected()
-
-    async def close(self) -> None:
-        if self._reader_task is not None:
-            self._reader_task.cancel()
-            try:
-                await self._reader_task
-            except asyncio.CancelledError:
-                pass
-        self.worker.exit_process()
-        await self.worker_handler.connector.stop()
 
     async def subscribe(self, page_id: str, table: str, subscribe: bool = True) -> Any:
         """Place the subscription call the way ``subscribeTable`` will place it."""
@@ -125,7 +90,6 @@ class XT_DeskLane:
             "datachanges": from_tytx(answer["datachanges"], "json"),
             "dbevents": answer["dbevents"],
             "store_changes": from_tytx(answer["store_changes"], "json"),
-            "tables": answer["tables"],
         }
 
 
@@ -140,7 +104,7 @@ async def lane(short_root, tmp_path):
         frozen_users_path=short_root / "frozen_users",
         entry_module="never.launched",
     )
-    built = XT_DeskLane(commander, group, FreezeHandler(tmp_path / "frozen_users"))
+    built = XT_DeskProtocolLane(commander, group, FreezeHandler(tmp_path / "frozen_users"))
     await built.open()
     yield built
     await built.close()
@@ -190,12 +154,11 @@ def a_deposit(table: str, reason: str | None = None, age: float = 0.0) -> dict[s
 async def test_a_subscription_call_updates_the_index_before_it_answers(lane):
     # wf:contract: the worker's subscribeTable sends a CALL on the lane; when
     # wf:contract: that call returns, the commander's table->pages index
-    # wf:contract: already holds the entry — subscribe-then-commit inside the
-    # wf:contract: same request finds the table active (the window is closed).
+    # wf:contract: already holds the entry. The worker's own source filter is
+    # wf:contract: not in this reply: it follows on the CALL the commander
+    # wf:contract: pushes on every transition of the set.
     answer = await asyncio.wait_for(lane.subscribe(PAGE, "invoices"), 5.0)
     assert lane.desk.page_subscriptions.pages_for("invoices") == {PAGE}
-    # The answer itself carries the table: the index was written before it was composed.
-    assert answer["tables"] == ["invoices"]
     assert answer["page_id"] == PAGE and answer["subscribe"] is True
 
 
@@ -204,7 +167,7 @@ async def test_an_unsubscribe_call_removes_the_entry_and_stops_future_delivery(l
     # wf:contract: that table are no longer queued for that page.
     await asyncio.wait_for(lane.subscribe(PAGE, "invoices"), 5.0)
     answer = await asyncio.wait_for(lane.subscribe(PAGE, "invoices", subscribe=False), 5.0)
-    assert answer["tables"] == []
+    assert answer["subscribe"] is False
     assert lane.desk.page_subscriptions.pages_for("invoices") == set()
     exchanged = await asyncio.wait_for(
         lane.exchange(dbevents=[a_deposit("invoices")]), 5.0
@@ -239,7 +202,6 @@ async def test_the_exchange_returns_the_callers_own_events_in_the_same_round(lan
         "datachanges": [],
         "dbevents": [],
         "store_changes": [],
-        "tables": ["invoices"],
     }
 
 
@@ -262,21 +224,6 @@ async def test_events_for_another_pages_queue_wait_for_that_pages_own_exchange(l
     assert [deposit["table"] for deposit in theirs["dbevents"]] == ["invoices"]
     assert SIBLING not in lane.desk.page_dbevent_map
     assert SIBLING not in lane.desk.page_datachange_map
-
-
-async def test_every_exchange_reply_carries_the_subscribed_table_names(lane):
-    # wf:contract: the reply of every exchange carries the current list of
-    # wf:contract: table names holding at least one subscription — the
-    # wf:contract: worker's source filter cache (registro §4).
-    assert (await asyncio.wait_for(lane.exchange(), 5.0))["tables"] == []
-    await asyncio.wait_for(lane.subscribe(PAGE, "invoices"), 5.0)
-    await asyncio.wait_for(lane.subscribe(SIBLING, "customers"), 5.0)
-    assert (await asyncio.wait_for(lane.exchange(), 5.0))["tables"] == [
-        "customers",
-        "invoices",
-    ]
-    await asyncio.wait_for(lane.subscribe(SIBLING, "customers", subscribe=False), 5.0)
-    assert (await asyncio.wait_for(lane.exchange(), 5.0))["tables"] == ["invoices"]
 
 
 async def test_an_event_for_a_table_nobody_subscribes_dies_at_the_desk(lane):

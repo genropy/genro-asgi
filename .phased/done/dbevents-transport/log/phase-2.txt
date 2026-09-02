@@ -1,0 +1,5 @@
+No foreman — notification skipped.
+
+✓ Phase 2 completed: What the slot still holds is delivered before the request returns (D2)
+
+`DeliveryDesk.op_deposit` files a request's deposits without retiring anything, and `SpaWorker.deliver_slot_deposits` runs in the `finally` of `_serve_on_thread`, so a `rootPage` webhook or a request that fails after its commit still announces. Full suite 1809 passed, `ruff check src/ tests/` clean, the new contract file `tests/orchestration/test_contract_slot_deposit.py` carries 4 tests; committed as `0f3ebc6`.

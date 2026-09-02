@@ -40,6 +40,8 @@ from genro_tytx import to_tytx
 
 from genro_asgi.spa.orchestration.spa_worker import RequestSlot
 
+from .conftest import wait_for
+
 USER = "alice"
 PAGE = "p1"
 SIBLING = "p0"
@@ -78,6 +80,7 @@ async def test_events_of_a_request_accumulate_on_that_requests_own_slot(lane):
     # wf:contract: and lays them on the CURRENT request's slot; two requests
     # wf:contract: served in parallel threads never see each other's slot.
     await lane.verb("subscribeTable", USER, table=TABLE, page_id=PAGE)
+    await lane.wait_filter_synced()
     await lane.open_request()
     await lane.verb(
         "notifyDbEvents", USER, dbevents={TABLE: ["ins:1"]}, reason="commit", page_id=SIBLING
@@ -99,10 +102,10 @@ async def test_events_of_a_request_accumulate_on_that_requests_own_slot(lane):
 
 async def test_events_for_tables_outside_the_cache_die_in_the_worker(lane):
     # wf:contract: the worker filters at the source with the subscribed-table
-    # wf:contract: names cache the last exchange reply carried: an event for a
-    # wf:contract: table not in the cache is dropped before the wire.
+    # wf:contract: names the commander pushes: an event for a table not in that
+    # wf:contract: set is dropped before the wire.
     await lane.verb("subscribeTable", USER, table=TABLE, page_id=PAGE)
-    assert lane.worker.subscribed_tables == {TABLE}
+    await wait_for(lambda: lane.worker.subscribed_tables == {TABLE})
 
     answer = await lane.verb(
         "notifyDbEvents", USER, dbevents={"nobody.wants": ["ins:1"]}, page_id=PAGE
@@ -122,6 +125,7 @@ async def test_local_only_events_reach_only_the_own_collect_and_never_the_wire(l
     # wf:contract: page's own collect alone: nothing is sent to the commander,
     # wf:contract: no other page ever sees them.
     await lane.verb("subscribeTable", USER, table=TABLE, page_id=SIBLING)
+    await lane.wait_filter_synced()
     await lane.verb(
         "notifyDbEvents", USER, dbevents={TABLE: ["ins:1"]}, page_id=PAGE, local_only=True
     )
@@ -166,6 +170,7 @@ async def test_own_generated_events_come_back_in_the_same_requests_collect(lane)
     # wf:contract: same call, not the next one (the desk sorts before
     # wf:contract: answering; phase-8 twin, asserted end to end here).
     await lane.verb("subscribeTable", USER, table=TABLE, page_id=PAGE)
+    await lane.wait_filter_synced()
     await lane.verb("notifyDbEvents", USER, dbevents={TABLE: ["ins:1"]}, page_id=PAGE)
 
     collected = await lane.verb("collect_page", PAGE)
@@ -182,6 +187,7 @@ async def test_collect_merges_own_collectors_with_the_retired_pendings(lane):
     await lane.verb("setStoreSubscription", USER, page_id=PAGE, storename="page", prefix="form")
     await lane.verb("setStoreSubscription", USER, page_id=PAGE, storename="user", prefix="prefs")
     await lane.verb("subscribeTable", USER, table=TABLE, page_id=PAGE)
+    await lane.wait_filter_synced()
     worker.page_register.get(PAGE)["store"]["form.name"] = "Ada"
     worker.user_register.get(USER)["store"]["prefs.theme"] = "dark"
     # A change that crosses the wire keeps its change_ts to the millisecond (TYTX
@@ -276,6 +282,7 @@ async def test_the_dead_helpers_are_gone(lane):
     assert not hasattr(worker, "subscriptions")
     assert not hasattr(worker, "_addressed_row")
     await lane.verb("subscribeTable", USER, table=TABLE, page_id=PAGE)
+    await lane.wait_filter_synced()
     await lane.verb("notifyDbEvents", USER, dbevents={TABLE: ["ins:1"]}, page_id=PAGE)
     await lane.verb("collect_page", PAGE)
     # The row's mailbox — kept alive by the pre_refactoring worker, which shares

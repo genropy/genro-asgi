@@ -1,0 +1,6 @@
+Phase 3 chiusa e committata (`b3693ec`).
+
+- `CLAUDE.md`: paragrafo "**The source filter is pushed, and the slot always delivers (landed 2026-09-02).**" dopo il Data plane; `Last Updated` era già 2026-09-02.
+- `internals/20_spa/060_dbevents/design.md`: nuova sezione sui due meccanismi (push del set, consegna a fine request); `README.md` non descriveva nessuno dei due, quindi lasciato intatto come le Decisions permettono.
+- Il Done gate vietava `closed by construction`: la frase sopravviveva nella docstring di `SpaWorker.subscribeTable` — riscritta senza perdere il fatto.
+- `pytest tests/ -q` 1809 passed, `ruff check src/ tests/` pulito.
