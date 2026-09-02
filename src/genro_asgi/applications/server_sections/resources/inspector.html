@@ -163,7 +163,7 @@ function renderCommander() {
         ["worker max number", group.worker_max_number],
         ["placed users", Object.keys(group.user_worker_map).length],
         ...Object.entries(group.workers).map(([worker, shape]) =>
-          [worker, shape.state + " · " + shape.occupancy_percent + "% · cap " + shape.worker_cap]),
+          [worker, shape.state + " · mem " + shape.memory_occupancy_percent + "% · cpu " + shape.cpu_temperature_percent + "%"]),
       ]));
       card.appendChild(groupCard);
     }

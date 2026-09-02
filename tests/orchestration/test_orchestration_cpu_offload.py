@@ -26,6 +26,7 @@ transferred; the standing conditions reach the journal once, not every beat.
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -40,6 +41,14 @@ from .test_orchestration_group_handler import make_group  # noqa: F401
 DECISIONS_LOGGER = "genro_asgi.orchestration.decisions"
 
 
+def declare_cpu(worker_handler, cpu_temperature_percent: float) -> None:
+    """Declare the CPU channel directly; policy tests do not test its clock."""
+    worker_handler.cpu_temperature_percent = cpu_temperature_percent
+    worker_handler.cpu_temperature_sampled_at = time.monotonic()
+    worker_handler.cpu_temperature_interval_seconds = 0.1
+    worker_handler.get_cpu_temperature_percent = lambda: cpu_temperature_percent
+
+
 async def offload_group(make_group, commander, users, **policies):
     """One worker past the offload threshold, its users placed and declared.
 
@@ -47,11 +56,10 @@ async def offload_group(make_group, commander, users, **policies):
     flag is read at the vertex as a hold), and every identity is known at the
     vertex before the child registers.
     """
-    policies.setdefault("reception_reserved_percent", 0.0)
     group = make_group(
         users=list(users),
         transfer_flag=None,
-        cpu_grow_percent=50.0,
+        cpu_admission_close_percent=50.0,
         cpu_offload_percent=75.0,
         **policies,
     )
@@ -62,7 +70,7 @@ async def offload_group(make_group, commander, users, **policies):
         assert await group.assign_user(user) == worker_handler.name
         worker_handler.hosted_users.add(user)
     worker_handler.cpu_admission_open = False
-    worker_handler.worker_snapshot["cpu_percent"] = 80.0
+    declare_cpu(worker_handler, 80.0)
     return group, worker_handler
 
 
@@ -88,7 +96,7 @@ def offload_decisions(caplog):
 
 async def test_below_the_threshold_nobody_is_ceded(make_group, commander):
     group, worker_handler = await offload_group(make_group, commander, ["mario", "lucia"])
-    worker_handler.worker_snapshot["cpu_percent"] = 60.0
+    declare_cpu(worker_handler, 60.0)
     declare_service(worker_handler, "mario", seconds=5.0, calls=3)
     declare_service(worker_handler, "lucia", seconds=3.0, calls=1)
 
@@ -136,7 +144,7 @@ async def test_one_beat_cedes_the_least_busy_material_alone(make_group, commande
     assert reasons == ["cpu_offload_threshold", "cpu_offload_user_selected", "cpu_offload_completed"]
     # Every row carries the numbers that rebuild the judgment.
     threshold_row = rows[0]
-    assert threshold_row["numbers"]["cpu_percent"] == 80.0
+    assert threshold_row["numbers"]["cpu_temperature_percent"] == 80.0
     assert threshold_row["numbers"]["window_service_seconds"] == pytest.approx(8.5)
     assert threshold_row["numbers"]["active_users"] == 3
     assert threshold_row["numbers"]["material_threshold"] == pytest.approx(8.5 / 6)
@@ -270,9 +278,9 @@ async def test_the_condition_speaks_again_after_it_fell(make_group, commander, c
 
     with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
         await group.check_cpu_offload()
-        worker_handler.worker_snapshot["cpu_percent"] = 40.0
+        declare_cpu(worker_handler, 40.0)
         await group.check_cpu_offload()
-        worker_handler.worker_snapshot["cpu_percent"] = 80.0
+        declare_cpu(worker_handler, 80.0)
         await group.check_cpu_offload()
 
     assert [row["reason"] for row in offload_decisions(caplog)] == [
@@ -341,7 +349,7 @@ async def test_the_hottest_of_the_closed_workers_is_the_target(make_group, comma
         group.user_worker_map[user] = second.name
         second.hosted_users.add(user)
     second.cpu_admission_open = False
-    second.worker_snapshot["cpu_percent"] = 90.0
+    declare_cpu(second, 90.0)
     # The second child's photo carries no users of its own: hand it the rows.
     second.worker_snapshot["users"] = {
         user: {"transfer_flag": None, "item": {"state": "active"}} for user in ("carla", "nino")
@@ -384,7 +392,7 @@ async def test_the_offload_threshold_applies_live(make_group, commander):
     await group.check_cpu_offload()
     assert commander.user_is_frozen("lucia") is False
 
-    worker_handler.worker_snapshot["cpu_percent"] = 95.0
+    declare_cpu(worker_handler, 95.0)
     await group.check_cpu_offload()
     assert commander.user_is_frozen("lucia") is True
     assert worker_handler is group.worker_handler_map[worker_handler.name]
@@ -393,4 +401,4 @@ async def test_the_offload_threshold_applies_live(make_group, commander):
 def test_a_group_built_with_offload_but_no_admission_does_not_exist(make_group):
     with pytest.raises(GroupPolicyError) as caught:
         make_group(cpu_offload_percent=75.0)
-    assert "requires cpu_grow_percent" in str(caught.value)
+    assert "requires cpu_admission_close_percent" in str(caught.value)

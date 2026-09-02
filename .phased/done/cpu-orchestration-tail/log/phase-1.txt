@@ -1,0 +1,3 @@
+✓ Phase 1 completed: The photo carries no CPU any more
+
+The photo's `cpu_seconds` and the fold's smoothed `cpu_percent` are gone, with their two constants, two attributes and the four envelope-chain CPU tests; suite 1786 passed, `ruff check src/ tests/` clean, committed as `ab3e240`. The Done grep still shows the commander-side thermometer's own `cpu_seconds` (`worker_handler.record_cpu_reading` and its psutil double) — the category the criterion accepts by name — recorded as a `> Review:` note on the phase.

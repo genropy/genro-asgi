@@ -72,12 +72,13 @@ the wire writes what it is handed. The one thing that answer carries today is th
 global store, whole, and only to a process presenting itself — which is the only
 one holding none of it.
 
-**No counters here.** The handler holds ``worker_snapshot``, the last photo its
+**No worker-owned counters here.** The handler holds ``worker_snapshot``, the last photo its
 process sent — filed by its own layer of the chain from whatever envelope carried
 it, so a live process has one from its very presentation: the gauges the judge
-reads are all in there. Counters are
-aggregate and belong to the Commander, which is also the one that decides the
-orders worth counting.
+reads are all in there EXCEPT CPU: the commander reads this process's cumulative
+CPU clock through psutil, by way of the handler, and keeps the two-reading anchor
+here. That temperature travels on no envelope. Aggregate counters still belong to the
+Commander, which is also the one that decides the orders worth counting.
 
 **The beat has no clock of its own.** ``ping_process`` is one beat and
 ``process_ping_interval`` is the cadence it is meant to be called at; the clock
@@ -98,6 +99,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import signal
 import subprocess
@@ -105,6 +107,8 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+
+import psutil
 
 from .envelope_handler import WorkerEnvelopeHandler
 from .exceptions import (
@@ -169,6 +173,10 @@ PROCESS_PING_TIMEOUT = 10.0
 # How often the wait for an OS death re-reads the process: nothing signals that,
 # so it polls. The wait for the end of the wire does not — that one is a future.
 WAIT_POLL_INTERVAL = 0.05
+
+#: A temperature older than three intended samples is unavailable. One second
+#: is the floor, so a brief event-loop delay cannot withdraw a healthy gauge.
+CPU_TEMPERATURE_MIN_STALE_SECONDS = 1.0
 
 __all__ = [
     "CENSUS_OP_PATH",
@@ -249,14 +257,36 @@ class WorkerHandler:
         self.worker_snapshot: dict[str, Any] | None = None
         #: The soft CPU admission (#43): True, this worker is a candidate for
         #: NEW users. The group's judge writes False when the smoothed
-        #: ``cpu_percent`` crosses above ``cpu_grow_percent`` — the placement
+        #: ``cpu_temperature_percent`` crosses above ``cpu_admission_close_percent`` — the placement
         #: then skips this worker — and True again below
-        #: ``cpu_grow_rearm_percent``. Over the threshold it stays closed;
+        #: ``cpu_admission_reopen_percent``. Over the threshold it stays closed;
         #: capacity is born only when concrete demand finds no open candidate.
-        #: Sticky users are untouched, the hard ``occupancy_max_percent``
-        #: gate in ``assign_user`` stands apart, and the state dies with the
+        #: Sticky users are untouched, the memory veto in ``assign_user`` stands
+        #: apart, and the state dies with the
         #: handler. State only — this handler decides nothing with it.
         self.cpu_admission_open = True
+        #: When the placement last landed a user here (commander's monotonic
+        #: clock), None before the first: the admission interval reads it.
+        self.last_admission_monotonic: float | None = None
+        #: The ``psutil.Process`` of the pid this handler owns, built once and
+        #: rebuilt when the pid changes.
+        self._process_probe: psutil.Process | None = None
+        #: The last lightweight process reading as ``(process birth, cpu seconds,
+        #: sample instant)``. The birth distinguishes a live worker from an
+        #: unrelated process that later reused its pid.
+        self._cpu_meter_reading: tuple[float, float, float] | None = None
+        #: The worker's CPU share over the last meter interval, raw: telemetry
+        #: only, no judge reads it. None until two readings of the same process
+        #: exist: the first interval has no temperature yet.
+        self.cpu_temperature_sample_percent: float | None = None
+        #: The temperature the judges read: the raw samples through the group's
+        #: asymmetric first-order filter (``cpu_heating_seconds`` up,
+        #: ``cpu_cooling_seconds`` down), seeded by the first sample.
+        self.cpu_temperature_percent: float | None = None
+        #: When the temperature above was sampled, on the commander's monotonic
+        #: clock, and the real width of the interval that produced it.
+        self.cpu_temperature_sampled_at: float | None = None
+        self.cpu_temperature_interval_seconds: float | None = None
         #: The offload condition last journaled for this worker, as
         #: ``(reason, subject)`` — ``single_user_overload`` and
         #: ``cpu_offload_no_active_candidate`` would otherwise repeat every
@@ -309,25 +339,28 @@ class WorkerHandler:
             "kwargs": self.worker_kwargs,
         }
 
-    def assign_user(self, user: str, occupancy_percent: float) -> None:
+    def assign_user(self, user: str) -> None:
         """Judge whether this worker takes one more user, and refuse by raising.
 
         Args:
             user: the identity being placed here.
-            occupancy_percent: what he is expected to cost, on the same scale the
-                photo is read in.
 
         Raises:
             WorkerQuittingError: its process is leaving or is gone.
             AssignmentRefused: it has not presented itself yet.
-            NoRoomError: the projected occupancy is over this worker's setpoint,
-                or it already hosts ``worker_max_users`` placed users — the
-                placement policy the bench sets to 1 for one worker per user.
+            NoRoomError: it already hosts ``worker_max_users`` placed users, or
+                its memory is past ``worker_memory_admission_percent`` — the
+                veto. The CPU admission is not judged here: the placement walks
+                the open workers first and the CPU-closed ones only as its
+                fallback, so this gate must let a closed worker take the user
+                the memory allows.
 
         Nothing is written. The user count is read off ``user_worker_map``, the
         map the placement writes in the same breath — never ``hosted_users``,
         which the fold writes only when the worker has announced, and would let
         two rapid arrivals land on one worker before the first is on board.
+        The admission interval is not judged here: it orders the placement's
+        walk, it refuses nobody.
         """
         if self.state in ("quitting", "quitted", "aborted"):
             raise WorkerQuittingError(user, f"{self.name} is {self.state}")
@@ -339,11 +372,97 @@ class WorkerHandler:
         )
         if placed >= policy.worker_max_users:
             raise NoRoomError(user, f"{self.name} already hosts {placed} placed user(s)")
-        projected = (
-            self.group_handler.get_occupancy_percent(self.worker_snapshot) + occupancy_percent
-        )
-        if projected > self.group_handler.get_worker_cap(self):
-            raise NoRoomError(user, f"{self.name} would stand at {projected:.1f}%")
+        memory_percent = self.group_handler.get_memory_occupancy_percent(self.worker_snapshot)
+        if memory_percent > policy.worker_memory_admission_percent:
+            raise NoRoomError(user, f"{self.name} stands at {memory_percent:.1f}% of memory")
+
+    def get_process_cpu_reading(self) -> tuple[float, float] | None:
+        """Read this worker's process birth and cumulative CPU seconds through psutil.
+
+        Returns:
+            ``(create time, cpu seconds)`` for the pid this handler owns, or
+            None when there is no process or psutil cannot see it.
+
+        The ``psutil.Process`` probe is built once per pid and reused. No
+        command is spawned and no message is sent to the worker.
+        """
+        if self.process is None:
+            return None
+        try:
+            if self._process_probe is None or self._process_probe.pid != self.process.pid:
+                self._process_probe = psutil.Process(self.process.pid)
+            times = self._process_probe.cpu_times()
+            return self._process_probe.create_time(), times.user + times.system
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            return None
+
+    def record_cpu_reading(
+        self, reading: tuple[float, float] | None, *, sampled_at: float
+    ) -> float | None:
+        """Turn two lightweight process readings into this worker's temperature.
+
+        Returns:
+            The filtered temperature after this reading, or None when the
+            reading did not produce one (first of a process, cleared, no time
+            elapsed).
+
+        The raw share of one core over the interval is kept as
+        ``cpu_temperature_sample_percent``; ``cpu_temperature_percent`` moves
+        towards it by ``1 - exp(-elapsed / tau)``, with ``tau`` the group's
+        ``cpu_heating_seconds`` when the sample is hotter than the filtered
+        value and ``cpu_cooling_seconds`` when it is colder. The first sample of
+        a process seeds the filter.
+
+        A missing row or a changed process birth clears the unfinished measure;
+        neither invents a zero. The result is separate commander-side telemetry:
+        it never changes the full photo, while CPU orchestration reads this
+        channel explicitly.
+        """
+        if reading is None:
+            self._cpu_meter_reading = None
+            self.cpu_temperature_sample_percent = None
+            self.cpu_temperature_percent = None
+            self.cpu_temperature_sampled_at = None
+            self.cpu_temperature_interval_seconds = None
+            return None
+        created_at, cpu_seconds = reading
+        previous = self._cpu_meter_reading
+        self._cpu_meter_reading = (created_at, cpu_seconds, sampled_at)
+        if previous is None or previous[0] != created_at:
+            self.cpu_temperature_sample_percent = None
+            self.cpu_temperature_percent = None
+            self.cpu_temperature_sampled_at = None
+            self.cpu_temperature_interval_seconds = None
+            return None
+        elapsed = sampled_at - previous[2]
+        if elapsed <= 0.0:
+            return None
+        burned = max(0.0, cpu_seconds - previous[1])
+        sample = 100.0 * min(burned / elapsed, 1.0)
+        current = self.cpu_temperature_percent
+        if current is None:
+            temperature = sample
+        else:
+            policy = self.group_handler.policy
+            tau = policy.cpu_heating_seconds if sample > current else policy.cpu_cooling_seconds
+            temperature = current + (1.0 - math.exp(-elapsed / tau)) * (sample - current)
+        self.cpu_temperature_sample_percent = sample
+        self.cpu_temperature_percent = temperature
+        self.cpu_temperature_sampled_at = sampled_at
+        self.cpu_temperature_interval_seconds = elapsed
+        return temperature
+
+    def get_cpu_temperature_percent(self) -> float | None:
+        """Return the fresh commander-side temperature, never a stale value."""
+        temperature = self.cpu_temperature_percent
+        sampled_at = self.cpu_temperature_sampled_at
+        cadence = self.group_handler.spa_commander.cpu_temperature_sample_seconds
+        if temperature is None or sampled_at is None or cadence is None:
+            return None
+        stale_after = max(CPU_TEMPERATURE_MIN_STALE_SECONDS, 3.0 * cadence)
+        if time.monotonic() - sampled_at > stale_after:
+            return None
+        return temperature
 
     def read_envelope(self, envelope: dict[str, Any]) -> dict[str, Any]:
         """Hand an envelope that arrived from the process to the chain.

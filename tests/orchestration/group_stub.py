@@ -75,8 +75,8 @@ class GroupStub:
         self.restart_occupancy_max_percent = 95.0
         #: CPU admission stays OFF under this stub, as on a real group by
         #: default: the threshold decides whether a photo rings the wake (#43).
-        self.cpu_grow_percent: float | None = None
-        self.cpu_grow_rearm_percent = 40.0
+        self.cpu_admission_close_percent: float | None = None
+        self.cpu_admission_reopen_percent = 40.0
         #: The handler under this group; the tests assign it after construction.
         self.worker_handler: Any = None
 
@@ -85,15 +85,11 @@ class GroupStub:
         self.wakes.append(self.worker_handler.state)
         self.users_on_board.append(set(self.worker_handler.hosted_users))
 
-    def get_occupancy_percent(self, worker_snapshot: dict[str, Any] | None) -> float:
-        """How full the worker of this photo is: full when the tests want it urgent."""
-        return 100.0 if self.urgent_snapshots else 0.0
-
     def get_memory_occupancy_percent(
         self, worker_snapshot: dict[str, Any] | None
     ) -> float:
-        """The memory-only reading: this test double has just one gauge."""
-        return self.get_occupancy_percent(worker_snapshot)
+        """How full the worker of this photo is: full when the tests want it urgent."""
+        return 100.0 if self.urgent_snapshots else 0.0
 
     def drop_worker(self, worker: str) -> None:
         """Take a dead handler out of the group, with the placements that pointed at it."""

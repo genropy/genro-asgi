@@ -88,7 +88,7 @@ class WorkerStub:
         self,
         name: str,
         rss_bytes: int,
-        cpu_percent: float | None = None,
+        cpu_temperature_percent: float | None = None,
         pss_bytes: int | None = None,
     ) -> None:
         self.name = name
@@ -96,9 +96,12 @@ class WorkerStub:
         self.worker_snapshot: dict[str, Any] = {"rss_bytes": rss_bytes}
         if pss_bytes is not None:
             self.worker_snapshot["pss_bytes"] = pss_bytes
-        if cpu_percent is not None:
-            self.worker_snapshot["cpu_percent"] = cpu_percent
+        self.cpu_temperature_percent = cpu_temperature_percent
         self.cpu_admission_open = True
+        self.last_admission_monotonic = None
+
+    def get_cpu_temperature_percent(self) -> float | None:
+        return self.cpu_temperature_percent
 
 
 def build_group(commander, tmp_path, **settings: Any) -> GroupHandler:
@@ -306,24 +309,11 @@ def test_a_vertex_that_is_not_running_refuses_the_growth(commander, tmp_path, mo
     assert not group._may_grow
 
 
-async def test_the_ordinary_growth_saturates_the_group_when_the_container_is_full(
-    commander, tmp_path, monkeypatch
-):
-    group = build_group(commander, tmp_path, worker_max_number=4)
-    with_workers(group, WorkerStub("standard_0001", rss_bytes=LIMIT_BYTES // 4))
-    with_available(monkeypatch, commander, 4 * MIB)
-
-    await group._grow()
-
-    assert group.state == "saturated"
-    assert len(group.worker_handler_map) == 1
-
-
 def test_cpu_pressure_only_closes_admission_when_the_container_is_full(
     commander, tmp_path, monkeypatch
 ):
-    group = build_group(commander, tmp_path, worker_max_number=4, cpu_grow_percent=70.0)
-    worker = WorkerStub("standard_0001", rss_bytes=LIMIT_BYTES // 4, cpu_percent=90.0)
+    group = build_group(commander, tmp_path, worker_max_number=4, cpu_admission_close_percent=70.0)
+    worker = WorkerStub("standard_0001", rss_bytes=LIMIT_BYTES // 4, cpu_temperature_percent=90.0)
     with_workers(group, worker)
     with_available(monkeypatch, commander, 4 * MIB)
 
@@ -336,8 +326,8 @@ def test_cpu_pressure_only_closes_admission_when_the_container_is_full(
 def test_cpu_scan_never_consults_changing_memory_to_fork(
     commander, tmp_path, monkeypatch
 ):
-    group = build_group(commander, tmp_path, worker_max_number=4, cpu_grow_percent=70.0)
-    worker = WorkerStub("standard_0001", rss_bytes=LIMIT_BYTES // 4, cpu_percent=90.0)
+    group = build_group(commander, tmp_path, worker_max_number=4, cpu_admission_close_percent=70.0)
+    worker = WorkerStub("standard_0001", rss_bytes=LIMIT_BYTES // 4, cpu_temperature_percent=90.0)
     with_workers(group, worker)
     # Memory availability may change, but a CPU scan never starts a fork.
     with_available(monkeypatch, commander, LIMIT_BYTES, 4 * MIB)

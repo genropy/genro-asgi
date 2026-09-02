@@ -163,7 +163,7 @@ async def test_a_resident_goes_to_his_own_worker_and_is_placed_again_by_nobody(c
 
     await commander.serve_request("cid-a", request(), hold_timeout=HOLD_TIMEOUT)
 
-    # The fullest-first walk would have chosen the first: a resident is not walked.
+    # The hottest-first walk would have chosen the first: a resident is not walked.
     assert first.connector.calls == []
     assert len(second.connector.calls) == 1
 
@@ -171,7 +171,7 @@ async def test_a_resident_goes_to_his_own_worker_and_is_placed_again_by_nobody(c
 async def test_the_freezer_verdict_travels_with_the_request(commander, group):
     worker_handler = worker_at(group, "standard_0001")
     commander.record_connection_user("cid-a", "mario")
-    commander.mark_user_frozen("mario", 4.0)
+    commander.mark_user_frozen("mario")
     commander.record_user_group("mario", "standard")
 
     await commander.serve_request("cid-a", request(), hold_timeout=HOLD_TIMEOUT)
@@ -204,7 +204,7 @@ async def test_a_user_wakes_in_the_group_he_was_frozen_on(commander, short_root)
     on_canary = worker_at(canary, "canary_0001")
     commander.record_connection_user("cid-a", "mario")
     commander.record_user_group("mario", "canary")
-    commander.mark_user_frozen("mario", 4.0)
+    commander.mark_user_frozen("mario")
 
     await commander.serve_request("cid-a", request(), hold_timeout=HOLD_TIMEOUT)
 

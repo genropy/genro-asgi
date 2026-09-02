@@ -88,15 +88,6 @@ def test_valid_pss_wins_over_a_much_larger_rss(tmp_path):
 
     assert subject.get_memory_accounting(photo) == (200_000.0, "pss")
     assert subject.get_memory_occupancy_percent(photo) == 20.0
-    assert subject.get_occupancy_percent(photo) == 20.0
-
-
-def test_cpu_is_capacity_but_never_memory_occupancy(tmp_path):
-    subject = group(tmp_path)
-    photo = {"rss_bytes": 900_000, "pss_bytes": 200_000, "cpu_percent": 96.0}
-
-    assert subject.get_memory_occupancy_percent(photo) == 20.0
-    assert subject.get_occupancy_percent(photo) == 96.0
 
 
 @pytest.mark.parametrize(
@@ -107,7 +98,7 @@ def test_invalid_or_missing_pss_falls_back_to_rss(tmp_path, bad_pss):
     photo = {"rss_bytes": 400_000, "pss_bytes": bad_pss}
 
     assert subject.get_memory_accounting(photo) == (400_000.0, "rss_fallback")
-    assert subject.get_occupancy_percent(photo) == 40.0
+    assert subject.get_memory_occupancy_percent(photo) == 40.0
 
 
 def test_a_photo_with_no_valid_memory_gauge_is_unmeasured(tmp_path):
@@ -117,4 +108,4 @@ def test_a_photo_with_no_valid_memory_gauge_is_unmeasured(tmp_path):
         None,
         "unmeasured",
     )
-    assert subject.get_occupancy_percent({"pss_bytes": -1, "rss_bytes": "unknown"}) == 0.0
+    assert subject.get_memory_occupancy_percent({"pss_bytes": -1, "rss_bytes": "unknown"}) == 0.0

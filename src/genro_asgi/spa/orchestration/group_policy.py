@@ -23,9 +23,9 @@ an invalid policy object cannot exist.
 
 ``null`` in a profile means unlimited or off: ``worker_max_users`` and
 ``user_idle_freeze_minutes`` become ``math.inf`` inside the policy,
-``cpu_grow_percent`` becomes ``None`` (CPU admission policy off),
+``cpu_admission_close_percent`` becomes ``None`` (CPU admission policy off),
 ``cpu_offload_percent`` becomes ``None`` (no user is ever offloaded for CPU;
-set, it requires ``cpu_grow_percent`` and must sit above it) and
+set, it requires ``cpu_admission_close_percent`` and must sit above it) and
 ``worker_memory_max_percent`` becomes the derivation
 ``100 / worker_max_number``.  ``to_settings`` translates all of that back, so
 its output always survives ``json.dumps(..., allow_nan=False)``.
@@ -72,17 +72,17 @@ class GroupPolicy:
 
     #: key -> (integer, nullable, low bound, low bound exclusive, high bound)
     SETPOINTS: ClassVar[dict[str, tuple[bool, bool, float, bool, float | None]]] = {
-        "occupancy_max_percent": (False, False, 0.0, False, 100.0),
+        "worker_memory_admission_percent": (False, False, 0.0, False, 100.0),
         "restart_occupancy_max_percent": (False, False, 0.0, False, 100.0),
-        "close_occupancy_max_percent": (False, False, 0.0, False, 100.0),
-        "cpu_grow_percent": (False, True, 0.0, False, 100.0),
-        "cpu_grow_rearm_percent": (False, False, 0.0, False, 100.0),
+        "cpu_close_percent": (False, True, 0.0, False, 100.0),
+        "cpu_admission_close_percent": (False, True, 0.0, False, 100.0),
+        "cpu_admission_reopen_percent": (False, False, 0.0, False, 100.0),
         "cpu_offload_percent": (False, True, 0.0, False, 100.0),
         "cpu_retirement_quiet_seconds": (False, False, 0.0, False, None),
+        "cpu_heating_seconds": (False, False, 0.0, True, None),
+        "cpu_cooling_seconds": (False, False, 0.0, True, None),
+        "worker_admission_interval_seconds": (False, False, 0.0, False, None),
         "worker_min_life_seconds": (False, False, 0.0, False, None),
-        "reception_reserved_percent": (False, False, 0.0, False, 100.0),
-        "new_user_occupancy_percent": (False, False, 0.0, True, None),
-        "newcomer_reserve_count": (True, False, 0, False, None),
         "worker_max_users": (True, True, 1, False, None),
         "user_idle_freeze_minutes": (False, True, 0.0, True, None),
         "memory_max_percent": (False, False, 0.0, True, 100.0),
@@ -90,17 +90,17 @@ class GroupPolicy:
         "worker_memory_max_percent": (False, True, 0.0, True, None),
     }
 
-    occupancy_max_percent: float = 80.0
+    worker_memory_admission_percent: float = 80.0
     restart_occupancy_max_percent: float = 95.0
-    close_occupancy_max_percent: float = 40.0
-    cpu_grow_percent: float | None = None
-    cpu_grow_rearm_percent: float = 40.0
+    cpu_close_percent: float | None = None
+    cpu_admission_close_percent: float | None = None
+    cpu_admission_reopen_percent: float = 40.0
     cpu_offload_percent: float | None = None
     cpu_retirement_quiet_seconds: float = 60.0
+    cpu_heating_seconds: float = 1.0
+    cpu_cooling_seconds: float = 5.0
+    worker_admission_interval_seconds: float = 1.0
     worker_min_life_seconds: float = 60.0
-    reception_reserved_percent: float = 50.0
-    new_user_occupancy_percent: float = 5.0
-    newcomer_reserve_count: int = 1
     worker_max_users: float = math.inf
     user_idle_freeze_minutes: float = math.inf
     memory_max_percent: float = 100.0
@@ -195,36 +195,38 @@ class GroupPolicy:
 
     def _check_cross_rules(self, violations: list[str]) -> None:
         """The rules that only the complete policy can answer."""
-        if self.close_occupancy_max_percent >= self.occupancy_max_percent:
+        if self.worker_memory_admission_percent >= self.restart_occupancy_max_percent:
             violations.append(
-                f"close_occupancy_max_percent ({self.close_occupancy_max_percent}) must stay "
-                f"below occupancy_max_percent ({self.occupancy_max_percent})"
-            )
-        if self.occupancy_max_percent > self.restart_occupancy_max_percent:
-            violations.append(
-                f"occupancy_max_percent ({self.occupancy_max_percent}) must not exceed "
+                f"worker_memory_admission_percent ({self.worker_memory_admission_percent}) must stay below "
                 f"restart_occupancy_max_percent ({self.restart_occupancy_max_percent})"
             )
-        if self.reception_reserved_percent >= self.occupancy_max_percent:
-            violations.append(
-                f"reception_reserved_percent ({self.reception_reserved_percent}) must stay "
-                f"below occupancy_max_percent ({self.occupancy_max_percent})"
-            )
-        if self.cpu_grow_percent is not None and not (
-            0.0 <= self.cpu_grow_rearm_percent < self.cpu_grow_percent <= 100.0
+        if self.cpu_admission_close_percent is not None and not (
+            0.0 <= self.cpu_admission_reopen_percent < self.cpu_admission_close_percent <= 100.0
         ):
             violations.append(
-                f"cpu_grow_rearm_percent ({self.cpu_grow_rearm_percent}) must sit below "
-                f"cpu_grow_percent ({self.cpu_grow_percent}), both inside 0-100"
+                f"cpu_admission_reopen_percent ({self.cpu_admission_reopen_percent}) "
+                f"must sit below cpu_admission_close_percent "
+                f"({self.cpu_admission_close_percent}), both inside 0-100"
+            )
+        if (
+            self.cpu_close_percent is not None
+            and self.cpu_admission_close_percent is not None
+            and self.cpu_close_percent > self.cpu_admission_reopen_percent
+        ):
+            violations.append(
+                f"cpu_close_percent ({self.cpu_close_percent}) must not exceed "
+                f"cpu_admission_reopen_percent ({self.cpu_admission_reopen_percent}): "
+                "a closure must never reopen the growth cycle"
             )
         if self.cpu_offload_percent is not None:
-            if self.cpu_grow_percent is None:
+            if self.cpu_admission_close_percent is None:
                 violations.append(
                     f"cpu_offload_percent ({self.cpu_offload_percent}) requires "
-                    "cpu_grow_percent: the offload stands on the CPU admission closure"
+                    "cpu_admission_close_percent: the offload stands on the CPU admission closure"
                 )
-            elif not (self.cpu_grow_percent < self.cpu_offload_percent <= 100.0):
+            elif not (self.cpu_admission_close_percent < self.cpu_offload_percent <= 100.0):
                 violations.append(
                     f"cpu_offload_percent ({self.cpu_offload_percent}) must sit above "
-                    f"cpu_grow_percent ({self.cpu_grow_percent}), inside 0-100"
+                    f"cpu_admission_close_percent ({self.cpu_admission_close_percent}), "
+                    "inside 0-100"
                 )

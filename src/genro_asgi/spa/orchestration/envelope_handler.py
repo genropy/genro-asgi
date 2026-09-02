@@ -102,7 +102,6 @@ re-login — the declared price of a death nobody ordered.
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from .worker_connector import (
@@ -115,15 +114,6 @@ from .worker_connector import (
 #: with its ratified value rather than imported: the vertex owns the module that
 #: declares it and importing it back would close a circle.
 GUEST_PREFIX = "guest_"
-
-#: The weight of the newest CPU reading in the smoothed ``cpu_percent``; the
-#: rest is what the average already said. A policy to tune by trials.
-CPU_SMOOTHING_FACTOR = 0.3
-
-#: The shortest wall-clock window a CPU rate is read over, in seconds. Photos
-#: closer than this carry the standing value forward and leave the anchor
-#: where it is: a rate over milliseconds is noise, not load.
-CPU_WINDOW_MIN_SECONDS = 1.0
 
 __all__ = [
     "CommanderEnvelopeHandler",
@@ -170,8 +160,6 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
     def __init__(self, worker_handler: Any, group_envelope_handler: GroupEnvelopeHandler) -> None:
         self.worker_handler = worker_handler
         self.group_envelope_handler = group_envelope_handler
-        self._last_cpu: tuple[float, float] | None = None
-        self._cpu_percent = 0.0
         #: The previous photo's cumulative service counters, per user:
         #: ``(service_seconds, served_call_count)``. Rebuilt at every photo, so
         #: a user the photo no longer carries costs no memory here.
@@ -226,46 +214,14 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
     def on_worker_snapshot(self, photo: dict[str, Any]) -> None:
         """File the photo as this handler's latest: the gauges everybody judges on.
 
-        Two photos apart, the CPU seconds become a rate: the share of one core
-        this process burned between them, clamped to a whole core, SMOOTHED, and
-        written into the photo as ``cpu_percent`` — the component that sees a
-        worker saturating the GIL while its RSS stands still (#38). The first
-        photo has nothing to compare against and carries no such component.
-
-        Smoothed because two photos may be milliseconds apart: a raw reading
-        makes one busy instant look like saturation, and the CPU admission and
-        growth judges must react to load, not to a spike. Restart is deliberately
-        memory-only: CPU pressure must not destroy a process that owns live
-        sessions. The moving average starts at zero — a newborn is presumed idle — the
-        weight of the newest reading is ``CPU_SMOOTHING_FACTOR``, and no rate
-        is read over less than ``CPU_WINDOW_MIN_SECONDS`` of wall clock:
-        photos closer than that carry the standing value forward. Policies
-        to tune by trials, not by taste.
-
-        The user rows get the same treatment: their cumulative service
-        counters become ``recent_call_count`` and ``recent_service_seconds``,
-        the work done since the previous photo. A user first seen reads 0 —
-        nothing to compare against, like the first CPU photo — and a counter
-        that went backwards (a row reborn after a freeze) is clamped to 0
-        rather than invented negative.
+        The user rows are derived here: their cumulative service counters
+        become ``recent_call_count`` and ``recent_service_seconds``, the work
+        done since the previous photo. A user first seen reads 0 — nothing to
+        compare against — and a counter that went backwards (a row reborn
+        after a freeze) is clamped to 0 rather than invented negative.
         """
-        cpu_seconds = photo.get("cpu_seconds")
-        now = time.monotonic()
-        previous = self._last_cpu
-        if cpu_seconds is not None:
-            if previous is None:
-                self._last_cpu = (cpu_seconds, now)
-            else:
-                elapsed = now - previous[1]
-                if elapsed >= CPU_WINDOW_MIN_SECONDS:
-                    burned = max(0.0, cpu_seconds - previous[0])
-                    sample = 100.0 * min(burned / elapsed, 1.0)
-                    self._cpu_percent += CPU_SMOOTHING_FACTOR * (sample - self._cpu_percent)
-                    self._last_cpu = (cpu_seconds, now)
-                photo["cpu_percent"] = self._cpu_percent
         self._derive_user_service(photo)
         self.worker_handler.worker_snapshot = photo
-        self._signal_cpu_crossing(photo)
 
     def _derive_user_service(self, photo: dict[str, Any]) -> None:
         """Turn each user row's cumulative counters into this interval's deltas.
@@ -292,41 +248,6 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
             item["recent_call_count"] = max(0, served_call_count - read_count)
             self._user_service_read[user] = (service_seconds, served_call_count)
 
-    def _signal_cpu_crossing(self, photo: dict[str, Any]) -> None:
-        """Ring the group's wake when this photo crosses a CPU admission threshold.
-
-        Args:
-            photo: the photo just filed, ``cpu_percent`` already smoothed.
-
-        A SIGNAL and nothing more: the judge, the spawn and the admission
-        writes all stay in ``GroupHandler`` — this layer only says the shape
-        of the pool deserves a look NOW instead of at the shape's own cadence,
-        which is what a 30-second cadence cost the bench when the load climbed
-        in seconds (#43). The edge is read against ``cpu_admission_open``, the
-        very state the judge writes: an OPEN worker photographed above the
-        growth threshold is a crossing, a CLOSED one photographed below the
-        rearm threshold is the other — and a worker already judged rings
-        nothing, however many photos arrive on the same plateau, so a steady
-        load is one wake, not a storm. Policy off (no ``cpu_grow_percent``),
-        no CPU wake at all. ``ping_now`` is idempotent besides.
-        """
-        group_handler = self.worker_handler.group_handler
-        if group_handler.cpu_grow_percent is None:
-            return
-        cpu_percent = photo.get("cpu_percent")
-        if cpu_percent is None:
-            return
-        crossed_above = (
-            self.worker_handler.cpu_admission_open
-            and cpu_percent > group_handler.cpu_grow_percent
-        )
-        crossed_below = (
-            not self.worker_handler.cpu_admission_open
-            and cpu_percent < group_handler.cpu_grow_rearm_percent
-        )
-        if crossed_above or crossed_below:
-            group_handler.ping_now()
-
     def on_new_user(self, worker_event: dict[str, Any]) -> None:
         """A user is in this process now: he is one of this handler's own."""
         self.worker_handler.hosted_users.add(worker_event["user"])
@@ -334,35 +255,6 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
     #: An adoption is an arrival like any other: the state came home from the
     #: freezer instead of from a login, and the process holds him either way.
     on_user_adopted = on_new_user
-
-    def work_on_envelope(self, envelope: dict[str, Any]) -> None:
-        """The estimate of every leaver is stamped first: it needs the WHOLE envelope.
-
-        Args:
-            envelope: the payload as it came off the wire.
-
-        Acts on the ``user_frozen`` worker events: each is stamped with the
-        ABSTRACT occupancy of the worker — the group's own gauge over this
-        envelope's photo — split evenly over everybody it held: the photo's
-        population plus ALL the leavers of this same envelope, because an
-        idleness sweep freezes many between two beats and they travel together.
-        Then the base reading: the photo, the events.
-        """
-        worker_events = envelope.get(ENVELOPE_SLOT_WORKER_EVENTS) or ()
-        leavers = sum(1 for we in worker_events if we["op"] == "user_frozen")
-        if leavers:
-            photo = (
-                envelope.get(ENVELOPE_SLOT_WORKER_SNAPSHOT)
-                or self.worker_handler.worker_snapshot
-                or {}
-            )
-            estimate = self.worker_handler.group_handler.get_occupancy_percent(photo) / (
-                len(photo.get("users") or {}) + leavers
-            )
-            for worker_event in worker_events:
-                if worker_event["op"] == "user_frozen":
-                    worker_event["occupancy_percent"] = estimate
-        super().work_on_envelope(envelope)
 
     def on_connection_user_changed(self, worker_event: dict[str, Any]) -> None:
         """A login: the person arrives, and only a GUEST leaves with his connection.
@@ -548,10 +440,8 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
         )
 
     def on_user_frozen(self, worker_event: dict[str, Any]) -> None:
-        """A user is in the freezer: the mark goes on, with what he is expected to cost."""
-        self.spa_commander.mark_user_frozen(
-            worker_event["user"], worker_event.get("occupancy_percent")
-        )
+        """A user is in the freezer: the mark goes on."""
+        self.spa_commander.mark_user_frozen(worker_event["user"])
 
     def on_user_adopted(self, worker_event: dict[str, Any]) -> None:
         """A user came home from the freezer: the mark goes off, his waiting is drained."""
@@ -561,7 +451,7 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
         """The users of a dead process: the frozen are marked — whether their own
         worker event survived the closing wire or not — and the lost are purged."""
         for user in worker_event["frozen_users"]:
-            self.spa_commander.mark_user_frozen(user, None)
+            self.spa_commander.mark_user_frozen(user)
         self.spa_commander.drop_users(worker_event["lost_users"], cause=worker_event["op"])
 
     #: The wild death is read exactly as the ordered one, and it names nobody as

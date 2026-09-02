@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Where a user lands: the walk down from the fullest, and the four refusals.
+"""Where a user lands: the walk down from the hottest, and the four refusals.
 
 The subject here is the JUDGEMENT, not the processes: the workers are real
 ``WorkerHandler`` over a real group and a real vertex, but none of them has a
@@ -27,6 +27,8 @@ of every refusal is readable in the numbers themselves.
 """
 
 from __future__ import annotations
+
+import time as real_time
 
 import pytest
 
@@ -87,16 +89,23 @@ def worker_at(group, name: str, occupancy_percent: float, state: str = "running"
     return worker_handler
 
 
+def warm(worker_handler, cpu_temperature_percent: float) -> None:
+    """Declare a fresh filtered temperature on a worker, as the meter would."""
+    worker_handler.cpu_temperature_percent = cpu_temperature_percent
+    worker_handler.cpu_temperature_sampled_at = real_time.monotonic()
+    worker_handler.cpu_temperature_interval_seconds = 0.1
+
+
 def newcomer(commander, cid: str = "cid-a") -> str:
     """A user the vertex has minted and nobody has ever measured."""
     return minted(commander, cid)
 
 
 async def test_a_photo_reads_as_the_percentage_it_is_and_never_over_full(group):
-    assert group.get_occupancy_percent(None) == 0.0
-    assert group.get_occupancy_percent({}) == 0.0
-    assert group.get_occupancy_percent({"rss_bytes": MEMORY_CEILING // 4}) == 25.0
-    assert group.get_occupancy_percent({"rss_bytes": 3 * MEMORY_CEILING}) == 100.0
+    assert group.get_memory_occupancy_percent(None) == 0.0
+    assert group.get_memory_occupancy_percent({}) == 0.0
+    assert group.get_memory_occupancy_percent({"rss_bytes": MEMORY_CEILING // 4}) == 25.0
+    assert group.get_memory_occupancy_percent({"rss_bytes": 3 * MEMORY_CEILING}) == 100.0
 
 
 async def test_a_worker_reads_as_full_at_its_own_share_of_the_group_quota(commander, tmp_path):
@@ -115,14 +124,14 @@ async def test_a_worker_reads_as_full_at_its_own_share_of_the_group_quota(comman
     # is what one of its workers may hold — so a quarter of the machine is a
     # worker of this group standing at its full.
     assert group.memory_quota_bytes == MEMORY_CEILING / 2
-    assert group.get_occupancy_percent({"rss_bytes": MEMORY_CEILING // 4}) == 100.0
-    assert group.get_occupancy_percent({"rss_bytes": MEMORY_CEILING // 8}) == 50.0
+    assert group.get_memory_occupancy_percent({"rss_bytes": MEMORY_CEILING // 4}) == 100.0
+    assert group.get_memory_occupancy_percent({"rss_bytes": MEMORY_CEILING // 8}) == 50.0
 
 
-async def test_the_fullest_worker_that_still_takes_him_is_the_one_that_gets_him(group, commander):
-    worker_at(group, "standard_0001", 10.0)
-    worker_at(group, "standard_0002", 20.0)
-    worker_at(group, "standard_0003", 60.0)
+async def test_the_hottest_worker_that_still_takes_him_is_the_one_that_gets_him(group, commander):
+    warm(worker_at(group, "standard_0001", 10.0), 10.0)
+    warm(worker_at(group, "standard_0002", 20.0), 20.0)
+    warm(worker_at(group, "standard_0003", 60.0), 60.0)
     user = newcomer(commander)
 
     assert await group.assign_user(user) == "standard_0003"
@@ -130,56 +139,34 @@ async def test_the_fullest_worker_that_still_takes_him_is_the_one_that_gets_him(
 
 
 async def test_the_walk_goes_past_the_one_with_no_room_and_stops_at_the_next(group, commander):
-    worker_at(group, "standard_0001", 10.0)
-    worker_at(group, "standard_0002", 50.0)
-    # 78 + the 5 percent a user nobody measured is expected to cost is over the
-    # setpoint of 80: he does not fit, and the class of the refusal says so.
-    worker_at(group, "standard_0003", 78.0)
+    warm(worker_at(group, "standard_0001", 10.0), 10.0)
+    warm(worker_at(group, "standard_0002", 50.0), 20.0)
+    # The hottest is past the memory veto of 80: he does not fit, and the walk
+    # goes on to the next one down the temperature.
+    warm(worker_at(group, "standard_0003", 85.0), 60.0)
     user = newcomer(commander)
 
     assert await group.assign_user(user) == "standard_0002"
 
 
-async def test_what_he_cost_where_he_was_is_what_he_is_expected_to_cost_here(group, commander):
-    worker_at(group, "standard_0001", 10.0)
-    worker_at(group, "standard_0002", 50.0)
-    worker_at(group, "standard_0003", 70.0)
-    user = newcomer(commander)
-    commander.user_map[user]["occupancy_percent"] = 25.0
-
-    # 70 + 25 is over the setpoint, 50 + 25 is exactly at it.
-    assert await group.assign_user(user) == "standard_0002"
-
-
-async def test_the_reception_keeps_its_reserve_and_takes_less_than_the_others(group, commander):
-    reception = worker_at(group, "standard_0001", 28.0)
-    worker_at(group, "standard_0002", 28.0)
-    user = newcomer(commander)
-
-    # Both stand at 28, but the reception's own setpoint is the difference
-    # between the group's and its reserve: 80 - 50 = 30, and 28 + 5 is over it.
-    assert group.get_worker_cap(reception) == 30.0
-    assert await group.assign_user(user) == "standard_0002"
-
-
-async def test_two_placements_in_a_row_are_judged_on_the_same_photo(group, commander):
-    worker_at(group, "standard_0001", 0.0)
-    worker_at(group, "standard_0002", 70.0)
+async def test_two_placements_in_a_row_go_to_two_workers(group, commander):
+    warm(worker_at(group, "standard_0001", 0.0), 5.0)
+    warm(worker_at(group, "standard_0002", 70.0), 40.0)
     first = newcomer(commander, "cid-a")
     second = newcomer(commander, "cid-b")
 
-    # 70 + 5 fits, and it still reads 70 when the second one is judged: the
-    # overshoot of one newcomer is the declared price of not locking a photo.
+    # The hotter one takes the first; having just admitted, it is skipped for
+    # the admission interval and the second lands on the other.
     assert await group.assign_user(first) == "standard_0002"
-    assert await group.assign_user(second) == "standard_0002"
+    assert await group.assign_user(second) == "standard_0001"
 
 
 async def test_a_worker_with_no_room_refuses_with_the_class_that_says_so(group):
-    worker_handler = worker_at(group, "standard_0002", 78.0)
+    worker_handler = worker_at(group, "standard_0002", 85.0)
     worker_at(group, "standard_0001", 0.0)
 
-    with pytest.raises(NoRoomError, match="would stand at 83.0%"):
-        worker_handler.assign_user("mario", 5.0)
+    with pytest.raises(NoRoomError, match="stands at 85.0% of memory"):
+        worker_handler.assign_user("mario")
 
 
 async def test_a_worker_on_its_way_out_refuses_with_the_class_that_says_it_will_not(group):
@@ -187,14 +174,14 @@ async def test_a_worker_on_its_way_out_refuses_with_the_class_that_says_it_will_
         worker_handler = worker_at(group, f"standard_{state}", 0.0, state=state)
 
         with pytest.raises(WorkerQuittingError):
-            worker_handler.assign_user("mario", 5.0)
+            worker_handler.assign_user("mario")
 
 
 async def test_a_worker_that_has_not_presented_itself_yet_takes_nobody(group):
     worker_handler = worker_at(group, "standard_0001", 0.0, state="starting")
 
     with pytest.raises(AssignmentRefused) as refusal:
-        worker_handler.assign_user("mario", 5.0)
+        worker_handler.assign_user("mario")
 
     assert type(refusal.value) is AssignmentRefused
 
@@ -211,8 +198,8 @@ async def test_a_worker_whose_process_has_ended_is_nobodys_candidate(group, comm
 
 
 async def test_when_nobody_admits_the_wake_rings_and_the_base_rises(group, commander):
-    worker_at(group, "standard_0001", 79.0)
-    worker_at(group, "standard_0002", 79.0)
+    worker_at(group, "standard_0001", 85.0)
+    worker_at(group, "standard_0002", 85.0)
     user = newcomer(commander)
     assert group.ping_now_event.is_set() is False
 

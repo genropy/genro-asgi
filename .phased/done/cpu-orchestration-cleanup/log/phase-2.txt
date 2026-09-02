@@ -1,0 +1,3 @@
+✓ Phase 2 completed: Rename the CPU admission thresholds to what they do
+
+The rename landed across src, tests, docs, internals and CLAUDE.md, with the journal reason codes and outcome strings following it; full suite 1778 passed and `ruff check src/ tests/` clean. Two notes recorded in the plan: the `cpu_growth` test's journal assertion was unfalsifiable after the rename and now asserts `order=grow`, and the phase-1 in-tree contract test diverges from its plan copy because it carried the old key by design.

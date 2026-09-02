@@ -1,0 +1,61 @@
+Verifica completata. Ecco il report.
+
+```
+STATE: wf/cpu-orchestration-rework (dedicato, parent feat/cpu-orchestration) | base a8b10ab
+       | tree pulito tranne .phased/active/cpu-orchestration-rework/log/ (untracked)
+       | fasi 3/3 [x], nessuna [!]/[~]/[>]
+       | diff a8b10ab..HEAD = 39 file, +834 / -543
+```
+
+**DONE-CHECK**
+
+- **Phase 1 — met.** `git grep -c cpu_heating_seconds -- src docs internals CLAUDE.md` elenca policy, grammar, `config/handler.py`, `group_handler.py`, `worker_handler.py`, `CLAUDE.md`, `configuration.md`, README profili. Idem `cpu_cooling_seconds`. Il criterio nominava anche "commander census": la census porta i valori, mai il nome del setpoint — scarto già registrato in `notes.md`, non è un difetto.
+- **Phase 2 — met, criterio scritto troppo largo.** Il grep `occupancy_max_percent|…` NON stampa nulla di residuo: gli unici hit sono `restart_occupancy_max_percent`, che contiene la sottostringa e sopravvive per design. Con pattern preciso (`(^|[^_a-z])occupancy_max_percent`) zero hit. `git grep -n '"occupancy_percent"' -- src` zero hit. La census è asserita da `tests/orchestration/test_orchestration_census.py:97-98`.
+- **Phase 3 — met.** `git grep -n close_occupancy_max_percent -- src tests docs internals CLAUDE.md` zero hit.
+- **Suite e lint — rieseguiti ora:** `pytest tests/ -q` → **1788 passed** in 123s (coincide col numero dichiarato in Phase 3). `ruff check src/ tests/` → All checks passed.
+- **Must-not-break verificati:** `record_cpu_reading` è l'unico writer di `cpu_temperature_percent` (worker_handler.py:424,433,450); tutti i judge passano da `get_cpu_temperature_percent()`; il `cpu_percent` della photo non ha acquisito lettori (solo scrittura in `envelope_handler.py:265`).
+- **Non rieseguibile:** il `Verify` di Phase 3 (bench). Vive in `genropy-asgi/benchmarks/cpu_offload/`, altro repo.
+
+**FINDINGS — MECHANICAL**
+
+1. `src/genro_asgi/spa/orchestration/group_handler.py:797` — un rifiuto per `worker_max_users` viene giornalato `worker_memory_full`. `WorkerHandler.assign_user` alza `NoRoomError` sia per il cap di teste sia per il veto di memoria; `_placement_candidate` cattura la classe e scrive un solo codice. **Verificato in esecuzione**: con `worker_max_users=1` la riga porta `"skipped": "worker_memory_full"` e `"memory_occupancy_percent": 0.0`, con `refusal` che dice "already hosts 1 placed user(s)". Il bench gira proprio a `worker_max_users=1` (lo dice la docstring di `assign_user`).
+
+2. `src/genro_asgi/spa/orchestration/group_handler.py:791` — la riga del worker che VINCE al secondo passaggio conserva `"skipped": "worker_recently_admitted"`. **Verificato in esecuzione**: il journal dichiara skippato il worker che ha preso l'utente.
+
+3. `src/genro_asgi/spa/orchestration/group_handler.py:812` + `:786` — il secondo passaggio parte se ALMENO UNO dei candidati è stato skippato per recency, non se lo sono stati tutti; le Decisions del piano dicono "only when every candidate was skipped". **Verificato in esecuzione** con due worker aperti (uno dentro la finestra, uno oltre il veto memoria): il piazzamento è giornalato `all_workers_recently_admitted` mentre solo uno dei due era nella finestra. Il comportamento in sé è difendibile (evita una nascita inutile), il codice ragione no.
+
+4. `CLAUDE.md:296` — "Group placement records every CPU-open candidate in **fullest-first** order". L'ordine è ora hottest-first. Phase 2 ha riscritto il paragrafo dell'ammissione e ha mancato quello del journal, nello stesso file.
+
+5. `tests/orchestration/test_orchestration_placement.py:15` e `tests/orchestration/test_orchestration_request_chain.py:166` — docstring di modulo e commento parlano ancora di "the walk down from the fullest" / "the fullest-first walk". Entrambi i file sono stati toccati da Phase 2.
+
+6. `src/genro_asgi/applications/spa_app.py:252-273` — tre parametri della grammar `group` senza documentazione. `worker_admission_interval_seconds` è nuovo e non è mai nominato nella docstring; `worker_min_life_seconds` e `user_idle_freeze_minutes` erano documentati alla base e hanno perso la frase nella riscrittura di Phase 2 (regressione, visibile nel diff del blocco "The POLICIES:").
+
+7. `internals/…/configuration_profiles/README.md` — l'esempio di profilo non porta `cpu_close_percent` né `worker_admission_interval_seconds`, gli altri tre nuovi setpoint sì. Phase 3 elenca il README fra i `Files` del piano ma non fra i `Files:` effettivamente toccati.
+
+**FINDINGS — JUDGMENT**
+
+8. `src/genro_asgi/spa/orchestration/group_policy.py:213` — la cross rule su `cpu_close_percent` scatta solo se `cpu_admission_close_percent` è valorizzato. `CLAUDE.md:213` e `docs/guides/configuration.md` enunciano la regola senza quella condizione ("set, `<= cpu_admission_reopen_percent`" / "set, never above"). Con l'ammissione CPU spenta un profilo può dichiarare `cpu_close_percent: 90` con reopen a 40 e passare la validazione. Comportamento difendibile (senza gate non c'è ciclo da riaprire), documentazione non allineata.
+
+9. `src/genro_asgi/spa/orchestration/group_handler.py:1061` — dopo un giro chiuso da `cpu_temperature_missing`, `check_occupancy` scrive comunque una seconda riga `no_absorbable_spare_worker`. Già annotato in `notes.md` come noto. Le due righe insieme si leggono, ma un consumatore che conta `no_absorbable_spare_worker` sovrastima le rinunce per assenza di spare.
+
+10. `src/genro_asgi/spa/orchestration/group_handler.py:1456` — il gate `cpu_temperature_missing` guarda `living_workers`, che include `starting` e `quitting`. Un worker senza pid ancora leggibile, o il cui pid è appena morto senza transizione a DEAD_STATE, sospende il retirement dell'intero gruppo. Scelta ratificata dal titolare in planning; la modalità di guasto (un worker bloccato congela lo shrink) non è coperta da test.
+
+11. `check_occupancy` (`:1006`) calcola `memory_picture` per il controllo di restart, poi `_spare_worker` ricalcola `get_memory_occupancy_percent` per ogni sopravvissuto. La docstring del metodo dice ancora "Read the group once". Costo trascurabile, deriva rispetto a quanto la docstring promette.
+
+**Note `> Review:` del piano — esito**
+
+- Phase 1, grep che nomina la census: **confermato**, imprecisione del testo del piano, nessun difetto.
+- Phase 1, test del meter cambiato di significato: **confermato** intenzionale, suite verde.
+- Phase 2, il gate non rifiuta un worker CPU-closed: **confermato corretto**. `_fallback_candidate` passa dallo stesso `assign_user`; un rifiuto CPU nel gate renderebbe il fallback codice morto.
+- Phase 2, `fullest_cpu_open_candidate` → `hottest_cpu_open_candidate`: **confermato**, nessun residuo del vecchio codice in `src`; restano tre occorrenze testuali (findings 4 e 5).
+- Phase 3, `cpu_close_percent` nullable: **confermato** implementato come descritto; vedi finding 8 per lo scarto con le docs.
+
+**VERIFY-NOTES**
+
+- **Phase 2 — `now`**: *"read the rewritten `CLAUDE.md` paragraph and the three journal reason codes in one placement of a warm group (`temp/` recipe or the m3 story): the numbers in `candidates` must let you rebuild the choice."*
+  Eseguito su un gruppo caldo a due worker. I numeri ci sono e bastano: ogni riga porta `cpu_temperature_percent`, `memory_occupancy_percent`, `users`, `recently_admitted`, `cpu_admission_open`, più `refusal` quando c'è. Le etichette no: findings 1, 2 e 3 rendono i codici ragione non affidabili in tre casi. Il paragrafo `CLAUDE.md` riscritto descrive il comportamento implementato correttamente.
+
+- **Phase 3 — `deferred`**: *"needs the bench in genropy-asgi — a run on the `temp4` plan with the new setpoints; acceptance on the journal: share of the busiest worker at 160 active, number of offloads that returned to the source worker."*
+  Non eseguibile qui: il bench sta in un altro repo. Resta aperto.
+
+`notes.md` non ha una sezione `## Run inspection`; la directory del piano non ha `verify.md`.

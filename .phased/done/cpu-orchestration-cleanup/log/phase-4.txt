@@ -1,0 +1,3 @@
+✓ Phase 4 completed: The reception is a worker like any other
+
+`reception_reserved_percent` and `GroupHandler.get_worker_cap` are gone from src, tests, docs, internals and pyproject; every worker now admits under the same `occupancy_max_percent`. Full suite 1781 passed, `ruff check src/ tests/` clean, committed as `aad0d5b`. The two e2e growth stories needed a substitute gate — heavy reception, light newborn — recorded in the phase's `> Review:` note.

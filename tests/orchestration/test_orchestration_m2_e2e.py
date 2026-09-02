@@ -289,7 +289,6 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
         "group": None,
         "frozen": False,
         "on_hold": None,
-        "occupancy_percent": None,
         "pending_dbevents": [],
         "pending_datachanges": [],
     }
@@ -334,9 +333,6 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
             "worker": WORKER_NAME,
             "user": "mario",
             "placement": None,
-            # Stamped by the bottom rung on the way up: what he absorbed of the
-            # worker he left, as the group's gauge read it.
-            "occupancy_percent": 0.0,
         }
     ]
     assert deposit.read_user_register_item("mario") is not None

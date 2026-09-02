@@ -36,6 +36,7 @@ import asyncio
 import os
 import shutil
 import tempfile
+import time as real_time
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +57,13 @@ from genro_asgi.spa.orchestration.worker_handler import (
 )
 
 from .conftest import kill_process, wait_for
+
+
+def warm(worker_handler, cpu_temperature_percent: float) -> None:
+    """Declare a fresh filtered temperature, as the meter would have measured it."""
+    worker_handler.cpu_temperature_percent = cpu_temperature_percent
+    worker_handler.cpu_temperature_sampled_at = real_time.monotonic()
+    worker_handler.cpu_temperature_interval_seconds = 0.1
 
 CHILD_SCRIPT = '''
 """A scripted worker of a group: one photo, one answer, one departure."""
@@ -316,16 +324,6 @@ async def test_the_first_worker_of_a_group_is_its_reception(make_group):
     assert group.state == "running"
 
 
-async def test_a_group_where_nobody_admits_anybody_grows_at_its_check(make_group):
-    group = make_group(rss_bytes=int(0.79 * WORKER_CEILING))
-    await group.start_worker()
-
-    await group.check_occupancy(now=True)
-
-    assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
-    assert group.state == "running"
-
-
 async def test_a_group_of_one_closes_nobody(make_group):
     group = make_group()
     reception = await group.start_worker()
@@ -338,24 +336,31 @@ async def test_a_group_of_one_closes_nobody(make_group):
     assert reception.state == "running"
 
 
-async def test_a_growth_the_quota_refuses_saturates_the_group_until_there_is_room(make_group):
+async def test_a_growth_the_quota_refuses_saturates_the_group_until_there_is_room(
+    make_group, commander
+):
     # Half the concession is this group's, and one worker of it may hold half of
-    # that: two of them at 79% of what they may hold stand together at 39.5% of
-    # the concession, and a third one's ceiling would not fit the group's share.
+    # that: two of them at 85% of what they may hold — past the memory veto —
+    # stand together at 42.5% of the concession, and a third one's ceiling would
+    # not fit the group's share.
     quota = MEMORY_CEILING // 2
     ceiling = quota // 2
-    group = make_group(rss_bytes=int(0.79 * ceiling), memory_max_percent=50.0)
+    group = make_group(rss_bytes=int(0.85 * ceiling), memory_max_percent=50.0)
     reception = await group.start_worker()
     spare = await group.start_worker()
 
-    await group.check_occupancy(now=True)
+    # The refusal writes the saturation: nobody admits him, and the quota
+    # refuses the birth that would.
+    known_at_the_vertex(commander, "cid-a", "mario")
+    with pytest.raises(AssignmentRefused):
+        await group.assign_user("mario")
 
     assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
-    assert group.memory_occupied_percent == 39.5
+    assert group.memory_occupied_percent == 42.5
     assert group.state == "saturated"
 
-    # Somebody left: the same reading admits again, and the crisis is over
-    # without anybody having to say so.
+    # Somebody left: the next check finds the quota affords a birth again, and
+    # the crisis is over without anybody having to say so.
     reception.worker_snapshot = {"rss_bytes": ceiling // 5}
     spare.worker_snapshot = {"rss_bytes": 3 * ceiling // 5}
     await group.check_occupancy(now=True)
@@ -392,7 +397,6 @@ async def test_a_worker_past_the_restart_setpoint_is_replaced_by_a_fresh_one(
     known_at_the_vertex(commander, "cid-a", "mario")
     doomed = await group.start_worker()
     doomed.worker_snapshot["pss_bytes"] = int(0.99 * WORKER_CEILING)
-    doomed.worker_snapshot["cpu_percent"] = 10.0
     doomed.hosted_users.add("mario")
     group.user_worker_map["mario"] = doomed.name
 
@@ -417,36 +421,6 @@ async def test_shared_rss_does_not_restart_a_worker_whose_pss_is_small(make_grou
 
     assert list(group.worker_handler_map) == ["standard_0001"]
     assert worker.state == "running"
-
-
-async def test_a_closure_that_would_eat_the_reserve_is_not_ordered(make_group):
-    # Both at 30%: the spare's share would put the reception at 60, past its own
-    # cap (80 less the 50 it reserves) — the flat-average reading would close it,
-    # the per-worker question keeps it. The closure threshold is lifted clear of
-    # the 60 so the RESERVE is the question this test asks; it stays below
-    # occupancy_max_percent, which the policy schema requires of it.
-    group = make_group(rss_bytes=int(0.30 * WORKER_CEILING), close_occupancy_max_percent=79.0)
-    await group.start_worker()
-    await group.start_worker()
-
-    await group.check_occupancy(now=True)
-
-    # The map alone is blind here — an ordered quit leaves the map to the next
-    # round — so the states say whether a closure was ordered at all.
-    assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
-    assert [wh.state for wh in group.worker_handler_map.values()] == ["running", "running"]
-
-
-async def test_a_worker_on_its_way_out_counts_no_room(make_group):
-    group = make_group()
-    worker_handler = await group.start_worker()
-    worker_handler.state = "quitting"
-
-    await group.check_occupancy(now=True)
-
-    # Empty as it reads, a quitting worker refuses everybody: the reserve is
-    # gone and the group grows at its own round.
-    assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
 
 
 async def test_a_death_that_outruns_the_close_order_leaves_no_zombie(make_group, commander):
@@ -504,6 +478,8 @@ async def test_the_closure_of_a_spare_worker_goes_through_its_six_steps(make_gro
     spare = await group.start_worker()
     spare.hosted_users.add("mario")
     group.user_worker_map["mario"] = spare.name
+    warm(reception, 1.0)
+    warm(spare, 1.0)
 
     # 1. the group decides on one reading: what the spare one holds, the others
     # can hold and still admit.
@@ -528,25 +504,29 @@ async def test_the_closure_of_a_spare_worker_goes_through_its_six_steps(make_gro
     await wait_for(lambda: not spare.connector.socket_path.exists())
 
 
-async def test_a_closure_that_would_undo_a_growth_is_not_made(make_group):
+async def test_a_closure_the_memory_veto_refuses_is_not_made(make_group):
     group = make_group()
     reception = await group.start_worker()
     spare = await group.start_worker()
     reception.worker_snapshot = {"rss_bytes": int(0.78 * WORKER_CEILING)}
-    spare.worker_snapshot = {"rss_bytes": 0}
+    spare.worker_snapshot = {"rss_bytes": int(0.05 * WORKER_CEILING)}
+    warm(reception, 1.0)
+    warm(spare, 1.0)
 
     await group.check_occupancy(now=True)
 
-    # Alone, the reception would stand at 78 and take nobody: closing the other
-    # one now would only have the next round bring it back.
+    # Cool as both are, the reception would stand at 83 of memory with the
+    # spare's share: the veto refuses a closure the CPU would have allowed.
     assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
     assert spare.state == "running"
 
 
 async def test_a_worker_in_its_first_seconds_is_no_closure_candidate(make_group):
     group = make_group(worker_min_life_seconds=60.0)
-    await group.start_worker()
+    reception = await group.start_worker()
     young = await group.start_worker()
+    warm(reception, 1.0)
+    warm(young, 1.0)
 
     await group.check_occupancy(now=True)
 
@@ -557,13 +537,16 @@ async def test_a_worker_in_its_first_seconds_is_no_closure_candidate(make_group)
 
 
 async def test_a_closure_leaving_a_survivor_warm_is_not_ordered(make_group):
-    # 35 shared onto 35 puts the survivor at 70: under the growth setpoint —
+    # 35 shared onto 35 puts the survivor at 70 of CPU: under the admission close
+    # threshold —
     # one threshold for both decisions would close here and grow the round
-    # after (#36) — but over close_occupancy_max_percent, so the pool holds:
+    # after (#36) — but over cpu_close_percent, so the pool holds:
     # the band between the two thresholds is its normal state.
-    group = make_group(rss_bytes=int(0.35 * WORKER_CEILING), reception_reserved_percent=0.0)
-    await group.start_worker()
+    group = make_group()
+    reception = await group.start_worker()
     spare = await group.start_worker()
+    warm(reception, 35.0)
+    warm(spare, 35.0)
 
     await group.check_occupancy(now=True)
 
@@ -581,6 +564,8 @@ async def test_a_closure_the_survivors_cannot_take_by_heads_is_refused(make_grou
     group.user_worker_map.update(
         {"anna": reception.name, "bruno": reception.name, "carla": spare.name, "dario": spare.name}
     )
+    warm(reception, 1.0)
+    warm(spare, 1.0)
 
     await group.check_occupancy(now=True)
 
@@ -642,16 +627,6 @@ async def test_a_photo_past_the_restart_setpoint_brings_the_round_forward(make_g
 
     worker_handler.read_envelope(
         {ENVELOPE_SLOT_WORKER_SNAPSHOT: {"rss_bytes": WORKER_CEILING // 2}}
-    )
-    assert group.ping_now_event.is_set() is False
-
-    worker_handler.read_envelope(
-        {
-            ENVELOPE_SLOT_WORKER_SNAPSHOT: {
-                "rss_bytes": WORKER_CEILING // 5,
-                "cpu_percent": 96.0,
-            }
-        }
     )
     assert group.ping_now_event.is_set() is False
 
@@ -884,22 +859,6 @@ async def test_without_the_ceiling_nothing_changes(make_group, commander):
     commander.record_connection_user("cid-b", "guest_second1")
     assert await group.assign_user("guest_first1") == "standard_0001"
     assert await group.assign_user("guest_second1") == "standard_0001"
-
-
-async def test_the_occupancy_reads_the_fullest_component_cpu_included(make_group):
-    """#38: a GIL-saturated worker with a flat RSS is no longer invisible."""
-    group = make_group()
-
-    # Memory says 10%, CPU says 90%: the judge reads 90.
-    quota = group.memory_quota_bytes * group.worker_memory_max_percent / 100.0
-    photo = {"rss_bytes": int(quota * 0.10), "cpu_percent": 90.0}
-    assert group.get_occupancy_percent(photo) == 90.0
-
-    # No RSS at all (macOS): the CPU component alone carries the reading.
-    assert group.get_occupancy_percent({"cpu_percent": 35.0}) == 35.0
-
-    # Neither: as today, nothing measurable reads empty.
-    assert group.get_occupancy_percent({}) == 0.0
 
 
 async def test_the_group_orders_the_freeze_and_the_confirmation_settles_everything(

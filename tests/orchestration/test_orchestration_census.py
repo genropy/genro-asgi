@@ -28,7 +28,14 @@ class XT_MuteWorkerHandler:
         self.name = name
         self.state = "running"
         self.worker_snapshot = None
+        self.cpu_temperature_percent = None
+        self.cpu_temperature_sample_percent = None
+        self.cpu_temperature_interval_seconds = None
+        self.cpu_temperature_sampled_at = None
         self.connector = self
+
+    def get_cpu_temperature_percent(self):
+        return None
 
     async def call(self, path: str, data: dict) -> dict:
         raise ConnectionError("the wire is gone")
@@ -87,9 +94,9 @@ async def test_the_pool_census_declares_how_worker_memory_was_accounted(populate
     assert worker_summary["memory_occupancy_percent"] == pytest.approx(
         100.0 * 300 / group.worker_memory_ceiling_bytes
     )
-    assert worker_summary["occupancy_percent"] == pytest.approx(
-        100.0 * 300 / group.worker_memory_ceiling_bytes
-    )
+    assert "occupancy_percent" not in worker_summary
+    assert "worker_cap" not in worker_summary
+    assert "cpu_temperature_sample_percent" in worker_summary
 
 
 async def test_the_whole_census_is_json(populated_lane):
