@@ -213,7 +213,7 @@ class SpaApplicationGrammar(ApplicationGrammar):
         memory_max_percent: float | BagResolver = None,
         worker_max_number: int | BagResolver = None,
         worker_memory_max_percent: float | BagResolver = None,
-        occupancy_max_percent: float | BagResolver = None,
+        worker_memory_admission_percent: float | BagResolver = None,
         restart_occupancy_max_percent: float | BagResolver = None,
         close_occupancy_max_percent: float | BagResolver = None,
         cpu_admission_close_percent: float | BagResolver = None,
@@ -222,6 +222,7 @@ class SpaApplicationGrammar(ApplicationGrammar):
         cpu_retirement_quiet_seconds: float | BagResolver | None = None,
         cpu_heating_seconds: float | BagResolver | None = None,
         cpu_cooling_seconds: float | BagResolver | None = None,
+        worker_admission_interval_seconds: float | BagResolver | None = None,
         worker_min_life_seconds: float | BagResolver = None,
         new_user_occupancy_percent: float | BagResolver = None,
         worker_max_users: int | BagResolver = None,
@@ -252,7 +253,7 @@ class SpaApplicationGrammar(ApplicationGrammar):
         The POLICIES: ``memory_max_percent`` is this group's share of the
         server's concession and ``worker_memory_max_percent`` what ONE worker may
         hold of that share (the same word one rung down — the cascade is machine,
-        concession, quota, worker); ``occupancy_max_percent`` is how full a worker
+        concession, quota, worker); ``worker_memory_admission_percent`` is how full a worker
         gets before it stops admitting and ``restart_occupancy_max_percent`` where
         a process is replaced instead of kept; ``close_occupancy_max_percent`` is
         the ceiling every survivor must stay under for a worker to be closed —

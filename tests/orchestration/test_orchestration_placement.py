@@ -132,22 +132,11 @@ async def test_the_fullest_worker_that_still_takes_him_is_the_one_that_gets_him(
 async def test_the_walk_goes_past_the_one_with_no_room_and_stops_at_the_next(group, commander):
     worker_at(group, "standard_0001", 10.0)
     worker_at(group, "standard_0002", 50.0)
-    # 78 + the 5 percent a user nobody measured is expected to cost is over the
-    # setpoint of 80: he does not fit, and the class of the refusal says so.
-    worker_at(group, "standard_0003", 78.0)
+    # 85 is past the memory veto of 80: he does not fit, and the class of the
+    # refusal says so.
+    worker_at(group, "standard_0003", 85.0)
     user = newcomer(commander)
 
-    assert await group.assign_user(user) == "standard_0002"
-
-
-async def test_what_he_cost_where_he_was_is_what_he_is_expected_to_cost_here(group, commander):
-    worker_at(group, "standard_0001", 10.0)
-    worker_at(group, "standard_0002", 50.0)
-    worker_at(group, "standard_0003", 70.0)
-    user = newcomer(commander)
-    commander.user_map[user]["occupancy_percent"] = 25.0
-
-    # 70 + 25 is over the setpoint, 50 + 25 is exactly at it.
     assert await group.assign_user(user) == "standard_0002"
 
 
@@ -157,18 +146,19 @@ async def test_two_placements_in_a_row_are_judged_on_the_same_photo(group, comma
     first = newcomer(commander, "cid-a")
     second = newcomer(commander, "cid-b")
 
-    # 70 + 5 fits, and it still reads 70 when the second one is judged: the
-    # overshoot of one newcomer is the declared price of not locking a photo.
+    # 70 is under the veto, and it still reads 70 when the second one is
+    # judged: the overshoot of one newcomer is the declared price of not
+    # locking a photo.
     assert await group.assign_user(first) == "standard_0002"
     assert await group.assign_user(second) == "standard_0002"
 
 
 async def test_a_worker_with_no_room_refuses_with_the_class_that_says_so(group):
-    worker_handler = worker_at(group, "standard_0002", 78.0)
+    worker_handler = worker_at(group, "standard_0002", 85.0)
     worker_at(group, "standard_0001", 0.0)
 
-    with pytest.raises(NoRoomError, match="would stand at 83.0%"):
-        worker_handler.assign_user("mario", 5.0)
+    with pytest.raises(NoRoomError, match="stands at 85.0% of memory"):
+        worker_handler.assign_user("mario")
 
 
 async def test_a_worker_on_its_way_out_refuses_with_the_class_that_says_it_will_not(group):
@@ -176,14 +166,14 @@ async def test_a_worker_on_its_way_out_refuses_with_the_class_that_says_it_will_
         worker_handler = worker_at(group, f"standard_{state}", 0.0, state=state)
 
         with pytest.raises(WorkerQuittingError):
-            worker_handler.assign_user("mario", 5.0)
+            worker_handler.assign_user("mario")
 
 
 async def test_a_worker_that_has_not_presented_itself_yet_takes_nobody(group):
     worker_handler = worker_at(group, "standard_0001", 0.0, state="starting")
 
     with pytest.raises(AssignmentRefused) as refusal:
-        worker_handler.assign_user("mario", 5.0)
+        worker_handler.assign_user("mario")
 
     assert type(refusal.value) is AssignmentRefused
 
@@ -200,8 +190,8 @@ async def test_a_worker_whose_process_has_ended_is_nobodys_candidate(group, comm
 
 
 async def test_when_nobody_admits_the_wake_rings_and_the_base_rises(group, commander):
-    worker_at(group, "standard_0001", 79.0)
-    worker_at(group, "standard_0002", 79.0)
+    worker_at(group, "standard_0001", 85.0)
+    worker_at(group, "standard_0002", 85.0)
     user = newcomer(commander)
     assert group.ping_now_event.is_set() is False
 

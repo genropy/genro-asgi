@@ -324,7 +324,7 @@ def applications_section(self, cfg):
         guest_expiry_hours=24.0,             # a frozen browser, a day
     )
     groups = commander.groups()
-    groups.group(name="stable", occupancy_max_percent=80.0,
+    groups.group(name="stable", worker_memory_admission_percent=80.0,
                  user_idle_freeze_minutes=60.0,
                  cpu_admission_reopen_percent=30.0,   # below this a worker admits again
                  cpu_admission_close_percent=50.0,         # above this it stops taking new users
@@ -372,7 +372,7 @@ the group's share. The same word on each rung is deliberate — it always means
 itself, so the cascade is always anchored; a machine that does not say how much
 of it is IN USE (a `/proc/meminfo` capability) simply alarms nobody.
 
-**The occupancy keys are how full is full.** `occupancy_max_percent` is where a
+**The occupancy keys are how full is full.** `worker_memory_admission_percent` is where a
 worker stops admitting new users; `restart_occupancy_max_percent` is where a
 process is replaced rather than kept;
 `new_user_occupancy_percent` is what somebody nobody has ever measured is

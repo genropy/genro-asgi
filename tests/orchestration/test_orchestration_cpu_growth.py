@@ -387,8 +387,9 @@ async def test_nobody_open_and_growth_refused_falls_back_on_a_blocked_worker(
 
 
 async def test_a_blocked_worker_at_the_hard_limit_still_refuses(make_group, commander):
-    group = await grown_group(make_group)
-    declare_cpu(group.reception, 85.0)  # over occupancy_max_percent: the hard gate
+    # CPU-closed AND past the memory veto: the fallback has nowhere to put him.
+    group = await grown_group(make_group, rss_bytes=int(0.9 * MEMORY_CEILING))
+    declare_cpu(group.reception, 60.0)
     await group.check_occupancy(now=True)
     group.reception.cpu_admission_open = False
     commander.state = "quitting"
@@ -473,7 +474,7 @@ async def test_concurrent_arrivals_share_one_demand_born_worker(make_group, comm
 async def test_the_reactive_growth_and_a_placement_cannot_fork_twice(make_group, commander):
     group = make_group()
     await group.start_worker()
-    group.reception.worker_snapshot["rss_bytes"] = int(0.79 * WORKER_CEILING)
+    group.reception.worker_snapshot["rss_bytes"] = int(0.85 * WORKER_CEILING)  # past the veto
     known_at_the_vertex(commander, "c_arriving", "arriving")
 
     _, home = await asyncio.gather(

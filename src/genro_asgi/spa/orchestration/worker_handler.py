@@ -261,10 +261,13 @@ class WorkerHandler:
         #: then skips this worker — and True again below
         #: ``cpu_admission_reopen_percent``. Over the threshold it stays closed;
         #: capacity is born only when concrete demand finds no open candidate.
-        #: Sticky users are untouched, the hard ``occupancy_max_percent``
-        #: gate in ``assign_user`` stands apart, and the state dies with the
+        #: Sticky users are untouched, the memory veto in ``assign_user`` stands
+        #: apart, and the state dies with the
         #: handler. State only — this handler decides nothing with it.
         self.cpu_admission_open = True
+        #: When the placement last landed a user here (commander's monotonic
+        #: clock), None before the first: the admission interval reads it.
+        self.last_admission_monotonic: float | None = None
         #: The ``psutil.Process`` of the pid this handler owns, built once and
         #: rebuilt when the pid changes.
         self._process_probe: psutil.Process | None = None
@@ -336,25 +339,28 @@ class WorkerHandler:
             "kwargs": self.worker_kwargs,
         }
 
-    def assign_user(self, user: str, occupancy_percent: float) -> None:
+    def assign_user(self, user: str) -> None:
         """Judge whether this worker takes one more user, and refuse by raising.
 
         Args:
             user: the identity being placed here.
-            occupancy_percent: what he is expected to cost, on the same scale the
-                photo is read in.
 
         Raises:
             WorkerQuittingError: its process is leaving or is gone.
             AssignmentRefused: it has not presented itself yet.
-            NoRoomError: the projected occupancy is over this worker's setpoint,
-                or it already hosts ``worker_max_users`` placed users — the
-                placement policy the bench sets to 1 for one worker per user.
+            NoRoomError: it already hosts ``worker_max_users`` placed users, or
+                its memory is past ``worker_memory_admission_percent`` — the
+                veto. The CPU admission is not judged here: the placement walks
+                the open workers first and the CPU-closed ones only as its
+                fallback, so this gate must let a closed worker take the user
+                the memory allows.
 
         Nothing is written. The user count is read off ``user_worker_map``, the
         map the placement writes in the same breath — never ``hosted_users``,
         which the fold writes only when the worker has announced, and would let
         two rapid arrivals land on one worker before the first is on board.
+        The admission interval is not judged here: it orders the placement's
+        walk, it refuses nobody.
         """
         if self.state in ("quitting", "quitted", "aborted"):
             raise WorkerQuittingError(user, f"{self.name} is {self.state}")
@@ -366,12 +372,9 @@ class WorkerHandler:
         )
         if placed >= policy.worker_max_users:
             raise NoRoomError(user, f"{self.name} already hosts {placed} placed user(s)")
-        projected = (
-            self.group_handler.get_occupancy_percent(self.worker_snapshot, self)
-            + occupancy_percent
-        )
-        if projected > self.group_handler.occupancy_max_percent:
-            raise NoRoomError(user, f"{self.name} would stand at {projected:.1f}%")
+        memory_percent = self.group_handler.get_memory_occupancy_percent(self.worker_snapshot)
+        if memory_percent > policy.worker_memory_admission_percent:
+            raise NoRoomError(user, f"{self.name} stands at {memory_percent:.1f}% of memory")
 
     def get_process_cpu_reading(self) -> tuple[float, float] | None:
         """Read this worker's process birth and cumulative CPU seconds through psutil.

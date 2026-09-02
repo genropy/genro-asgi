@@ -27,7 +27,8 @@ The CPU decides, the memory is a final veto, a worker is born only when nobody a
   - Details: setpoints first (policy, grammar, handler key lists, properties), then the filter with its tests (heating faster than cooling; a 0% sample on a hot worker lowers the filtered value by less than `alpha_cooling`; first sample seeds; clearing clears both; the census carries both), then `commander_kwargs` with a config test that a recipe declaring `cpu_temperature_sample_seconds` reaches the commander, then docs.
   - Done: `pytest tests/orchestration/test_orchestration_cpu_temperature_meter.py tests/test_group_policy.py tests/test_config.py -q` passes; `pytest tests/ -q` green; `ruff check src/ tests/` zero errors; `git grep -c cpu_heating_seconds -- src docs internals CLAUDE.md` lists policy, grammar, handler, commander census, the three docs.
 
-- [ ] **Phase 2**: The gate and the placement read the CPU; the memory refuses; the estimate goes
+- [>] **Phase 2**: The gate and the placement read the CPU; the memory refuses; the estimate goes
+  > In execution since 2026-09-02T04:23:42Z
   - Run: opus / high
   > Batches: 1 setpoints and the worker gate | 2 placement order and the admission interval | 3 the estimate removed, census and inspector reshaped
   - Pattern: `src/genro_asgi/spa/orchestration/worker_handler.py:assign_user` (the gate being rewritten), `src/genro_asgi/spa/orchestration/group_handler.py:_placement_candidate` (the ordering being rewritten), `src/genro_asgi/spa/orchestration/group_handler.py:_judge_cpu_admission` (how a decision is journaled with `numbers` and `candidates`)

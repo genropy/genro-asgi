@@ -121,7 +121,7 @@ GATE_DELAY = 0.3
 STORY_RSS_BYTES = 35_000_000
 SPARE_RSS_BYTES = 10_000_000
 GROWTH_CONCESSION_BYTES = 80_000_000
-FULL_CONCESSION_BYTES = 26_000_000
+FULL_CONCESSION_BYTES = 24_000_000
 
 #: What the vertex tells a refused browser to wait: the beat times the beats
 #: between two readings of the shape.
@@ -170,7 +170,7 @@ class ServerConfiguration(AsgiConfigBuilder):
             groups.group(
                 name=name,
                 worker_memory_max_percent=50.0,
-                occupancy_max_percent=80.0,
+                worker_memory_admission_percent=80.0,
                 restart_occupancy_max_percent=95.0,
                 new_user_occupancy_percent=5.0,
                 user_idle_freeze_minutes={idle_minutes},
@@ -389,7 +389,7 @@ async def test_a_day_of_the_site_from_the_front_to_the_child(server):
     spare = await group.start_worker()
 
     assert group.get_occupancy_percent(reception.worker_snapshot) == 87.5
-    assert group.occupancy_max_percent == 80.0
+    assert group.worker_memory_admission_percent == 80.0
 
     # A second browser of the same person arrives ANONYMOUS, and anonymous
     # requests go to the reception BY CONSTRUCTION, room or no room (doctrine
@@ -430,9 +430,9 @@ async def test_a_day_of_the_site_from_the_front_to_the_child(server):
     assert identity_of(unmoved) == "mario"
     assert trail_of(unmoved) == f"{MARIO_TRAIL} /orders/10"
 
-    # 8. A POOL WITH NO ROOM IS A POLITE 503. Against twenty-six megabytes the
-    # two processes hold more than the whole concession: nobody admits, and the
-    # growth is refused instead of ordered.
+    # 8. A POOL WITH NO ROOM IS A POLITE 503. Against twenty-four megabytes each
+    # worker's ceiling is twelve, so even the light one stands past the memory
+    # veto: nobody admits, and the growth is refused instead of ordered.
     group.memory_concession_bytes = FULL_CONCESSION_BYTES
 
     # The saturation is written by the placement that was refused: nobody

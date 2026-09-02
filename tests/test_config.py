@@ -724,7 +724,7 @@ class SpaPoolConfig(AsgiConfigBuilder):
             name="stable",
             memory_max_percent=80.0,
             worker_memory_max_percent=40.0,
-            occupancy_max_percent=70.0,
+            worker_memory_admission_percent=70.0,
             restart_occupancy_max_percent=90.0,
             new_user_occupancy_percent=4.0,
             worker_min_life_seconds=120.0,
@@ -829,7 +829,7 @@ class TestCommanderSection:
             "instance_dir": "/srv/shop/instance",
             "memory_max_percent": 80.0,
             "worker_memory_max_percent": 40.0,
-            "occupancy_max_percent": 70.0,
+            "worker_memory_admission_percent": 70.0,
             "restart_occupancy_max_percent": 90.0,
             "new_user_occupancy_percent": 4.0,
             "worker_min_life_seconds": 120.0,
@@ -892,7 +892,7 @@ class TestCommanderSection:
         attached, = logging.getLogger(ORDERS_LOGGER_NAME).handlers
         assert attached.maxBytes == 2_000_000
         assert attached.backupCount == 3
-        assert group.occupancy_max_percent == 70.0
+        assert group.worker_memory_admission_percent == 70.0
         assert group.restart_occupancy_max_percent == 90.0
         assert group.new_user_occupancy_percent == 4.0
         assert group.policy.worker_min_life_seconds == 120.0

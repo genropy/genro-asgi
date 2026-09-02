@@ -17,7 +17,7 @@ def test_defaults_materialized_from_empty_settings():
     # wf:contract: a sparse settings dict fills the absent keys with those same
     # wf:contract: defaults, never a KeyError.
     policy = GroupPolicy.from_settings({})
-    assert policy.occupancy_max_percent == 80.0
+    assert policy.worker_memory_admission_percent == 80.0
     assert policy.restart_occupancy_max_percent == 95.0
     assert policy.close_occupancy_max_percent == 40.0
     assert policy.cpu_admission_close_percent is None
@@ -32,8 +32,8 @@ def test_defaults_materialized_from_empty_settings():
     assert policy.memory_max_percent == 100.0
     assert policy.worker_max_number == 6
 
-    sparse = GroupPolicy.from_settings({"occupancy_max_percent": 70.0})
-    assert sparse.occupancy_max_percent == 70.0
+    sparse = GroupPolicy.from_settings({"worker_memory_admission_percent": 70.0})
+    assert sparse.worker_memory_admission_percent == 70.0
     assert sparse.close_occupancy_max_percent == 40.0
     assert sparse.worker_max_number == 6
     assert set(sparse.to_settings()) == set(GroupPolicy.SETPOINTS)
@@ -48,7 +48,7 @@ def test_validation_rejects_and_lists_all_violations():
     # wf:contract: 100 both rejected (0 < v <= 100); negative times; non-integer
     # wf:contract: counts; worker_max_number <= 0; a broken CPU band
     # wf:contract: (reopen >= close); cross rules on the COMPLETE resulting policy:
-    # wf:contract: close_occupancy >= occupancy, occupancy > restart_occupancy,
+    # wf:contract: memory admission >= restart_occupancy,
     # wf:contract: new_user_occupancy <= 0.
     # wf:contract: A single violation means NO policy object is produced.
     with pytest.raises(GroupPolicyError) as caught:
@@ -56,7 +56,7 @@ def test_validation_rejects_and_lists_all_violations():
             {
                 "nonsense_percent": 1.0,
                 "engine_factory": "module:factory",
-                "occupancy_max_percent": True,
+                "worker_memory_admission_percent": True,
                 "restart_occupancy_max_percent": float("nan"),
                 "close_occupancy_max_percent": float("inf"),
                 "memory_max_percent": 0.0,
@@ -71,7 +71,7 @@ def test_validation_rejects_and_lists_all_violations():
     assert "nonsense_percent: unknown setpoint" in violations
     assert "engine_factory: structural, not a profile key" in violations
     for key in (
-        "occupancy_max_percent",
+        "worker_memory_admission_percent",
         "restart_occupancy_max_percent",
         "close_occupancy_max_percent",
         "memory_max_percent",
@@ -80,7 +80,7 @@ def test_validation_rejects_and_lists_all_violations():
         "worker_max_number",
     ):
         assert any(v.startswith(f"{key}:") for v in violations), reported
-    assert "occupancy_max_percent: expected a number, got bool" in violations
+    assert "worker_memory_admission_percent: expected a number, got bool" in violations
     assert "worker_max_users: expected an integer, got float" in violations
 
     with pytest.raises(GroupPolicyError) as caught:
@@ -100,12 +100,9 @@ def test_validation_rejects_and_lists_all_violations():
         )
     assert "cpu_admission_reopen_percent" in caught.value.violations[0]
 
-    with pytest.raises(GroupPolicyError) as caught:
-        GroupPolicy.from_settings({"close_occupancy_max_percent": 80.0})
-    assert "close_occupancy_max_percent" in caught.value.violations[0]
 
     with pytest.raises(GroupPolicyError) as caught:
-        GroupPolicy.from_settings({"occupancy_max_percent": 96.0})
+        GroupPolicy.from_settings({"worker_memory_admission_percent": 96.0})
     assert len(caught.value.violations) == 1
     assert "restart_occupancy_max_percent" in caught.value.violations[0]
 

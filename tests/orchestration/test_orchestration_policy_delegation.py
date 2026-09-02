@@ -58,12 +58,12 @@ def decision_source(name: str) -> str:
 
 async def test_setpoint_attributes_delegate_to_policy(make_group):
     group = make_group()
-    assert group.occupancy_max_percent == 80.0
+    assert group.worker_memory_admission_percent == 80.0
     assert group.worker_max_users == float("inf")
 
     new_policy = GroupPolicy.from_settings(
         {
-            "occupancy_max_percent": 70.0,
+            "worker_memory_admission_percent": 70.0,
             "restart_occupancy_max_percent": 90.0,
             "close_occupancy_max_percent": 25.0,
             "cpu_admission_close_percent": 55.0,

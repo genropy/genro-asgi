@@ -64,7 +64,7 @@ Example profile:
   "cpu_retirement_quiet_seconds": 60,
   "cpu_heating_seconds": 1.0,
   "cpu_cooling_seconds": 5.0,
-  "occupancy_max_percent": 80
+  "worker_memory_admission_percent": 80
 }
 ```
 

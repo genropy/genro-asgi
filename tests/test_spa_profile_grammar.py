@@ -156,7 +156,7 @@ async def test_the_boot_reads_the_node_onto_the_front(tmp_path: Path) -> None:
     # wf:contract: control root — last, once the pool is up.
     profiles = tmp_path / "profiles"
     profiles.mkdir()
-    (profiles / "busy_hours.json").write_text(json.dumps({"occupancy_max_percent": 60.0}))
+    (profiles / "busy_hours.json").write_text(json.dumps({"worker_memory_admission_percent": 60.0}))
     server = AsgiServer(
         config=recipe_with(
             tmp_path,
@@ -485,7 +485,7 @@ async def test_a_boot_that_fails_leaves_the_router_untouched(tmp_path: Path) -> 
     # wf:contract: boot refuses claims no root at all, gate on or not.
     folder = tmp_path / "profiles"
     folder.mkdir()
-    (folder / "wrong.json").write_text(json.dumps({"occupancy_max_percent": 200.0}))
+    (folder / "wrong.json").write_text(json.dumps({"worker_memory_admission_percent": 200.0}))
     server = AsgiServer(
         config=recipe_with(
             tmp_path,

@@ -333,11 +333,12 @@ async def test_a_growth_the_quota_refuses_saturates_the_group_until_there_is_roo
     make_group, commander
 ):
     # Half the concession is this group's, and one worker of it may hold half of
-    # that: two of them at 79% of what they may hold stand together at 39.5% of
-    # the concession, and a third one's ceiling would not fit the group's share.
+    # that: two of them at 85% of what they may hold — past the memory veto —
+    # stand together at 42.5% of the concession, and a third one's ceiling would
+    # not fit the group's share.
     quota = MEMORY_CEILING // 2
     ceiling = quota // 2
-    group = make_group(rss_bytes=int(0.79 * ceiling), memory_max_percent=50.0)
+    group = make_group(rss_bytes=int(0.85 * ceiling), memory_max_percent=50.0)
     reception = await group.start_worker()
     spare = await group.start_worker()
 
@@ -348,7 +349,7 @@ async def test_a_growth_the_quota_refuses_saturates_the_group_until_there_is_roo
         await group.assign_user("mario")
 
     assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
-    assert group.memory_occupied_percent == 39.5
+    assert group.memory_occupied_percent == 42.5
     assert group.state == "saturated"
 
     # Somebody left: the next check finds the quota affords a birth again, and

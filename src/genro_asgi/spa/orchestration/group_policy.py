@@ -72,7 +72,7 @@ class GroupPolicy:
 
     #: key -> (integer, nullable, low bound, low bound exclusive, high bound)
     SETPOINTS: ClassVar[dict[str, tuple[bool, bool, float, bool, float | None]]] = {
-        "occupancy_max_percent": (False, False, 0.0, False, 100.0),
+        "worker_memory_admission_percent": (False, False, 0.0, False, 100.0),
         "restart_occupancy_max_percent": (False, False, 0.0, False, 100.0),
         "close_occupancy_max_percent": (False, False, 0.0, False, 100.0),
         "cpu_admission_close_percent": (False, True, 0.0, False, 100.0),
@@ -81,6 +81,7 @@ class GroupPolicy:
         "cpu_retirement_quiet_seconds": (False, False, 0.0, False, None),
         "cpu_heating_seconds": (False, False, 0.0, True, None),
         "cpu_cooling_seconds": (False, False, 0.0, True, None),
+        "worker_admission_interval_seconds": (False, False, 0.0, False, None),
         "worker_min_life_seconds": (False, False, 0.0, False, None),
         "new_user_occupancy_percent": (False, False, 0.0, True, None),
         "worker_max_users": (True, True, 1, False, None),
@@ -90,7 +91,7 @@ class GroupPolicy:
         "worker_memory_max_percent": (False, True, 0.0, True, None),
     }
 
-    occupancy_max_percent: float = 80.0
+    worker_memory_admission_percent: float = 80.0
     restart_occupancy_max_percent: float = 95.0
     close_occupancy_max_percent: float = 40.0
     cpu_admission_close_percent: float | None = None
@@ -99,6 +100,7 @@ class GroupPolicy:
     cpu_retirement_quiet_seconds: float = 60.0
     cpu_heating_seconds: float = 1.0
     cpu_cooling_seconds: float = 5.0
+    worker_admission_interval_seconds: float = 1.0
     worker_min_life_seconds: float = 60.0
     new_user_occupancy_percent: float = 5.0
     worker_max_users: float = math.inf
@@ -195,14 +197,9 @@ class GroupPolicy:
 
     def _check_cross_rules(self, violations: list[str]) -> None:
         """The rules that only the complete policy can answer."""
-        if self.close_occupancy_max_percent >= self.occupancy_max_percent:
+        if self.worker_memory_admission_percent >= self.restart_occupancy_max_percent:
             violations.append(
-                f"close_occupancy_max_percent ({self.close_occupancy_max_percent}) must stay "
-                f"below occupancy_max_percent ({self.occupancy_max_percent})"
-            )
-        if self.occupancy_max_percent > self.restart_occupancy_max_percent:
-            violations.append(
-                f"occupancy_max_percent ({self.occupancy_max_percent}) must not exceed "
+                f"worker_memory_admission_percent ({self.worker_memory_admission_percent}) must stay below "
                 f"restart_occupancy_max_percent ({self.restart_occupancy_max_percent})"
             )
         if self.cpu_admission_close_percent is not None and not (

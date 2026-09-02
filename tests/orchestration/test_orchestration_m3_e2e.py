@@ -140,7 +140,7 @@ class ServerConfiguration(AsgiConfigBuilder):
         commander.groups().group(
             name="{group}",
             worker_memory_max_percent=50.0,
-            occupancy_max_percent=80.0,
+            worker_memory_admission_percent=80.0,
             restart_occupancy_max_percent=95.0,
             # The story's spare is closed seconds after its birth: the minimum
             # life would exempt it, and this stanza is how the recipe waives it.
@@ -298,7 +298,7 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     # group's, and the ones that belong to the child.
     assert vertex.user_expiry_hours == 240.0
     assert vertex.machine_memory_alarm_percent == 95.0
-    assert group.occupancy_max_percent == 80.0
+    assert group.worker_memory_admission_percent == 80.0
     assert group.user_idle_freeze_minutes == IDLE_MINUTES
 
     # 1. THE RECEPTION IS BORN. One worker, which is a role and not a count: the
