@@ -123,7 +123,7 @@ much memory it has leaves the whole cascade unmeasured, which is what an ungated
 pool honestly is.
 
 The machine is the CGROUP wherever there is one. A server in a container reads,
-through ``os.sysconf`` and ``/proc/meminfo``, the memory of the host holding the
+through ``psutil.virtual_memory``, the memory of the host holding the
 container — 64 GiB where it may take 2 — so the limit written under
 ``/sys/fs/cgroup`` is read as well and stands in for both figures where it is
 smaller. ``memory_available_bytes`` is the second half of that reading: what is
@@ -176,6 +176,7 @@ from pathlib import Path
 from typing import Any
 
 from genro_bag import Bag
+import psutil
 from genro_tytx import from_tytx, to_tytx
 
 from ...orchestration_profile_store import (
@@ -840,13 +841,12 @@ class SpaCommander:
         return int(total * self.memory_max_percent / 100.0)
 
     @property
-    def memory_available_bytes(self) -> float | None:
-        """What the machine still has free, in bytes; None where it is not measurable.
+    def memory_available_bytes(self) -> float:
+        """What the machine still has free, in bytes.
 
         Returns:
             What is left of the cgroup this server runs in, or of the whole
-            machine when no cgroup limits it — None on a platform with no
-            ``/proc/meminfo`` and no cgroup, where nothing is judged.
+            machine when no cgroup limits it.
 
         The twin reading of ``memory_concession_bytes``, and the other half of
         every growth: the concession says how much of the machine this server
@@ -854,7 +854,7 @@ class SpaCommander:
         the cgroup — this process, the templates, whatever else shares the
         container — which the workers' own photos never see.
         """
-        return self._machine_memory_gauges().get("MemAvailable")
+        return self._machine_memory_gauges()["MemAvailable"]
 
     @property
     def default_group(self) -> str:
@@ -1987,7 +1987,7 @@ class SpaCommander:
         platform does not offer alarms nobody. The gauges are read off the loop.
         """
         memory_percent, storage_free_percent = await asyncio.to_thread(self._read_resources)
-        over = memory_percent is not None and memory_percent > self.machine_memory_alarm_percent
+        over = memory_percent > self.machine_memory_alarm_percent
         self.state = "saturated" if over else "running"
         on_reserve = storage_free_percent < STORAGE_RESERVE_PERCENT
         if over or on_reserve:
@@ -2048,26 +2048,24 @@ class SpaCommander:
                 expired.append(user)
         return expired
 
-    def _read_resources(self) -> tuple[float | None, float]:
+    def _read_resources(self) -> tuple[float, float]:
         """The machine's memory used and the freezer's storage free, in percent; off the loop."""
         return self._machine_memory_used_percent(), self.freeze_handler.storage_free_percent
 
-    def _machine_memory_used_percent(self) -> float | None:
-        """How much of the WHOLE machine's memory is in use, in percent, or None."""
+    def _machine_memory_used_percent(self) -> float:
+        """How much of the WHOLE machine's memory is in use, in percent."""
         gauges = self._machine_memory_gauges()
-        total, available = gauges.get("MemTotal"), gauges.get("MemAvailable")
-        return 100.0 * (total - available) / total if total and available is not None else None
+        return 100.0 * (gauges["MemTotal"] - gauges["MemAvailable"]) / gauges["MemTotal"]
 
     def _machine_memory_gauges(self) -> dict[str, float]:
-        """The machine's whole and available memory in BYTES; the whole is always there.
+        """The machine's whole and available memory in BYTES, both always there.
 
-        ``MemTotal`` is answered by every platform (``os.sysconf``), so the
-        cascade of percentages is always anchored. ``MemAvailable`` is a
-        capability only ``/proc/meminfo`` offers — where it lacks, how much of
-        the machine is in use is simply not judged, which is not the same as full.
+        Both are read through ``psutil.virtual_memory`` on every platform, so
+        the cascade of percentages is always anchored and how much of the
+        machine is in use is always judged.
 
-        Both readings are the HOST's: neither ``os.sysconf`` nor
-        ``/proc/meminfo`` knows the cgroup this process runs in, so a server in
+        Both readings are the HOST's: psutil does not know the cgroup this
+        process runs in, so a server in
         a container would read the memory of the machine hosting it and grow
         until the kernel kills it. The limit of the cgroup is therefore read
         too, and where it is smaller it takes the place of both: the whole
@@ -2081,17 +2079,11 @@ class SpaCommander:
         silence is a gauge that failed, not a platform that has none — and what
         is not proven free is not free.
         """
+        machine = psutil.virtual_memory()
         gauges: dict[str, float] = {
-            "MemTotal": float(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"))
+            "MemTotal": float(machine.total),
+            "MemAvailable": float(machine.available),
         }
-        try:
-            with open("/proc/meminfo", encoding="ascii") as meminfo:
-                for row in meminfo:
-                    name, _, value = row.partition(":")
-                    if name == "MemAvailable":
-                        gauges[name] = float(value.split()[0]) * 1024
-        except OSError:
-            pass
         limit, current = self._cgroup_memory_gauges(gauges["MemTotal"])
         if limit is None:
             return gauges

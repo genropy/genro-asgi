@@ -16,25 +16,33 @@
 
 from __future__ import annotations
 
-import builtins
-import io
+from collections import namedtuple
 
+import psutil
 import pytest
 
 from genro_asgi.spa.orchestration import GroupHandler, SpaCommander, SpaWorker
 
 CONCESSION = 1_000_000
 
+LinuxFullInfo = namedtuple("LinuxFullInfo", "rss vms uss pss swap")
+DarwinFullInfo = namedtuple("DarwinFullInfo", "rss vms pfaults pageins uss")
+MemInfo = namedtuple("MemInfo", "rss vms")
+
 
 @pytest.fixture
 def worker() -> SpaWorker:
-    """An uninitialised worker is enough: the gauge reads only the proc file."""
+    """An uninitialised worker is enough: the gauges read only psutil."""
     return object.__new__(SpaWorker)
 
 
-def rollup(monkeypatch, content: str) -> None:
-    """Make the worker's one proc read return this rollup text."""
-    monkeypatch.setattr(builtins, "open", lambda *args, **kwargs: io.StringIO(content))
+def full_info(monkeypatch, value) -> None:
+    """Make psutil's full memory info of this process answer this value."""
+    monkeypatch.setattr(psutil.Process, "memory_full_info", lambda self: value)
+
+
+def refused(*args, **kwargs):
+    raise psutil.AccessDenied(pid=1)
 
 
 def group(tmp_path) -> GroupHandler:
@@ -50,36 +58,34 @@ def group(tmp_path) -> GroupHandler:
     )
 
 
-def test_pss_is_read_from_smaps_rollup_in_bytes(worker, monkeypatch):
-    rollup(monkeypatch, "Rss: 900 kB\nPss: 321 kB\nPss_Anon: 300 kB\n")
+def test_pss_is_the_pss_field_of_psutil_full_memory_info(worker, monkeypatch):
+    full_info(monkeypatch, LinuxFullInfo(900 * 1024, 5_000_000, 400 * 1024, 321 * 1024, 0))
 
     assert worker.pss_bytes == 321 * 1024
 
 
-@pytest.mark.parametrize(
-    "content",
-    [
-        "Rss: 900 kB\n",
-        "Pss:\n",
-        "Pss: garbage kB\n",
-        "Pss: -1 kB\n",
-        "Pss: 1 MB\n",
-        "Pss: 1.5 kB\n",
-    ],
-)
-def test_an_invalid_rollup_reports_no_pss(worker, monkeypatch, content):
-    rollup(monkeypatch, content)
+def test_a_platform_without_a_pss_field_reports_no_pss(worker, monkeypatch):
+    full_info(monkeypatch, DarwinFullInfo(900 * 1024, 5_000_000, 0, 0, 400 * 1024))
 
     assert worker.pss_bytes is None
 
 
-def test_a_missing_rollup_reports_no_pss(worker, monkeypatch):
-    def absent(*args, **kwargs):
-        raise FileNotFoundError
-
-    monkeypatch.setattr(builtins, "open", absent)
+def test_a_refused_full_memory_reading_reports_no_pss(worker, monkeypatch):
+    monkeypatch.setattr(psutil.Process, "memory_full_info", refused)
 
     assert worker.pss_bytes is None
+
+
+def test_rss_is_the_rss_field_of_psutil_memory_info(worker, monkeypatch):
+    monkeypatch.setattr(psutil.Process, "memory_info", lambda self: MemInfo(900 * 1024, 5_000_000))
+
+    assert worker.rss_bytes == 900 * 1024
+
+
+def test_a_refused_memory_reading_reports_no_rss(worker, monkeypatch):
+    monkeypatch.setattr(psutil.Process, "memory_info", refused)
+
+    assert worker.rss_bytes is None
 
 
 def test_valid_pss_wins_over_a_much_larger_rss(tmp_path):

@@ -29,8 +29,10 @@ and the suite says the same thing on a machine that has no cgroup at all.
 
 from __future__ import annotations
 
+from collections import namedtuple
 from typing import Any
 
+import psutil
 import pytest
 
 from genro_asgi.spa.orchestration import GroupHandler, SpaCommander
@@ -41,6 +43,10 @@ MIB = 1024 * 1024
 #: The container of these tests: 64 MiB, small enough to be under the memory of
 #: any machine the suite runs on, so the limit is always the smaller figure.
 LIMIT_BYTES = 64 * MIB
+
+#: The host the pinned baseline describes: far above the container's limit.
+HOST_TOTAL = 8 * 1024 * MIB
+HOST_AVAILABLE = 5 * 1024 * MIB
 
 
 @pytest.fixture
@@ -72,7 +78,13 @@ def cgroup(tmp_path, monkeypatch):
 
 @pytest.fixture
 def host_gauges(commander, monkeypatch):
-    """What this machine reads with no cgroup in the way: the baseline of the tests."""
+    """What the machine reads with no cgroup in the way: the baseline of the tests.
+
+    The host reading is pinned: the available memory of a live machine moves
+    between two readings, and these tests compare two.
+    """
+    machine = namedtuple("Machine", "total available")(HOST_TOTAL, HOST_AVAILABLE)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: machine)
     monkeypatch.setattr(
         spa_commander_module,
         "CGROUP_MEMORY_FILES",
@@ -123,7 +135,7 @@ def with_workers(group: GroupHandler, *workers: WorkerStub) -> None:
         group.worker_handler_map[worker.name] = worker
 
 
-def with_available(monkeypatch, commander, *readings: float | None) -> None:
+def with_available(monkeypatch, commander, *readings: float) -> None:
     """Make the machine answer these readings in order, the last one for ever after."""
     answers = list(readings)
     monkeypatch.setattr(
@@ -291,14 +303,6 @@ def test_a_group_under_its_quota_may_not_grow_into_a_container_with_no_room(
 
     assert group.memory_occupied_percent < group.memory_max_percent
     assert not group._may_grow
-
-
-def test_a_machine_that_measures_nothing_refuses_no_growth(commander, tmp_path, monkeypatch):
-    group = build_group(commander, tmp_path, worker_max_number=4)
-    with_workers(group, WorkerStub("standard_0001", rss_bytes=LIMIT_BYTES // 4))
-    with_available(monkeypatch, commander, None)
-
-    assert group._may_grow
 
 
 def test_a_vertex_that_is_not_running_refuses_the_growth(commander, tmp_path, monkeypatch):
