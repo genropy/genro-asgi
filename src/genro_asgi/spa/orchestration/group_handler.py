@@ -275,6 +275,10 @@ class GroupHandler:
             whole. Closing the emptiest worker while demand still speaks hands
             its users back to the hot one, which regrows seconds later
             (measured, churn 2026-08-28).
+        cpu_heating_seconds: the time constant of the temperature filter while the
+            worker heats up — how long a hotter sample takes to weigh in.
+        cpu_cooling_seconds: the same while it cools down; longer, so a worker that
+            just closed or just ceded a user stays closed while its load leaves.
         worker_min_life_seconds: a worker is no closure candidate before this
             age — younger, its occupancy measures its own birth, not its work.
         new_user_occupancy_percent: what a user nobody has ever measured is
@@ -310,6 +314,8 @@ class GroupHandler:
         cpu_admission_reopen_percent: float = 40.0,
         cpu_offload_percent: float | None = None,
         cpu_retirement_quiet_seconds: float = 60.0,
+        cpu_heating_seconds: float = 1.0,
+        cpu_cooling_seconds: float = 5.0,
         worker_min_life_seconds: float = 60.0,
         new_user_occupancy_percent: float = 5.0,
         worker_max_users: float = math.inf,
@@ -346,6 +352,8 @@ class GroupHandler:
                 "cpu_admission_reopen_percent": cpu_admission_reopen_percent,
                 "cpu_offload_percent": cpu_offload_percent,
                 "cpu_retirement_quiet_seconds": cpu_retirement_quiet_seconds,
+                "cpu_heating_seconds": cpu_heating_seconds,
+                "cpu_cooling_seconds": cpu_cooling_seconds,
                 "worker_min_life_seconds": worker_min_life_seconds,
                 "new_user_occupancy_percent": new_user_occupancy_percent,
                 "worker_max_users": None if worker_max_users == math.inf else worker_max_users,
@@ -429,6 +437,14 @@ class GroupHandler:
     @property
     def cpu_retirement_quiet_seconds(self) -> float:
         return self.policy.cpu_retirement_quiet_seconds
+
+    @property
+    def cpu_heating_seconds(self) -> float:
+        return self.policy.cpu_heating_seconds
+
+    @property
+    def cpu_cooling_seconds(self) -> float:
+        return self.policy.cpu_cooling_seconds
 
     @property
     def worker_min_life_seconds(self) -> float:

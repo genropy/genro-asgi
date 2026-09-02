@@ -355,6 +355,7 @@ class ConfigurationHandler(ConfigHandler):
             "orchestration_log_backup_count",
             "user_expiry_hours",
             "guest_expiry_hours",
+            "cpu_temperature_sample_seconds",
         )
         elected = self(f"{section}.groups.default", default=None)
         if elected is not None:
@@ -393,6 +394,8 @@ class ConfigurationHandler(ConfigHandler):
                 "cpu_admission_reopen_percent",
                 "cpu_offload_percent",
                 "cpu_retirement_quiet_seconds",
+                "cpu_heating_seconds",
+                "cpu_cooling_seconds",
                 "worker_min_life_seconds",
                 "new_user_occupancy_percent",
                 "worker_max_users",

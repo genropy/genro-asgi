@@ -79,6 +79,8 @@ class GroupPolicy:
         "cpu_admission_reopen_percent": (False, False, 0.0, False, 100.0),
         "cpu_offload_percent": (False, True, 0.0, False, 100.0),
         "cpu_retirement_quiet_seconds": (False, False, 0.0, False, None),
+        "cpu_heating_seconds": (False, False, 0.0, True, None),
+        "cpu_cooling_seconds": (False, False, 0.0, True, None),
         "worker_min_life_seconds": (False, False, 0.0, False, None),
         "new_user_occupancy_percent": (False, False, 0.0, True, None),
         "worker_max_users": (True, True, 1, False, None),
@@ -95,6 +97,8 @@ class GroupPolicy:
     cpu_admission_reopen_percent: float = 40.0
     cpu_offload_percent: float | None = None
     cpu_retirement_quiet_seconds: float = 60.0
+    cpu_heating_seconds: float = 1.0
+    cpu_cooling_seconds: float = 5.0
     worker_min_life_seconds: float = 60.0
     new_user_occupancy_percent: float = 5.0
     worker_max_users: float = math.inf

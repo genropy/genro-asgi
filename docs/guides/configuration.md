@@ -329,6 +329,8 @@ def applications_section(self, cfg):
                  cpu_admission_reopen_percent=30.0,   # below this a worker admits again
                  cpu_admission_close_percent=50.0,         # above this it stops taking new users
                  cpu_offload_percent=75.0,      # above this it cedes one user per beat
+                 cpu_heating_seconds=1.0,       # the temperature filter, going up
+                 cpu_cooling_seconds=5.0,       # and going down: slower on purpose
                  entry_module="genro_asgi.spa.orchestration.worker_entry",
                  worker_class="myshop.app:ShopWorker",
                  worker_kwargs={"site_path": "/srv/shop"})
@@ -388,6 +390,17 @@ judge resumes. It is the quiet of the whole GROUP, not the age of one worker
 Without it, closing the emptiest worker while demand still stands hands its
 users back to the hot one, which regrows seconds later. With the CPU policy off
 the brake does not exist at all.
+
+**The temperature the CPU keys read is filtered.** The commander samples each
+worker's CPU every 100 ms; a saturated process reads 0% or 100% on such a short
+window, so no judge reads the raw sample. `cpu_heating_seconds` (default 1) and
+`cpu_cooling_seconds` (default 5) are the time constants of a first-order filter
+the sample goes through: the temperature moves towards the sample by
+`1 - exp(-dt/tau)`, with the shorter constant when the sample is hotter and the
+longer one when it is colder. A worker heats up in about a second and needs
+several seconds of real silence to reopen, so a user it just ceded does not come
+back on the next request. The raw sample stays visible in the pool census as
+`cpu_temperature_sample_percent`, beside the filtered `cpu_temperature_percent`.
 
 **`cpu_offload_percent` is what makes a hot worker slim down.** Closing the
 admission protects the workers to come; it does nothing for the users already

@@ -23,6 +23,8 @@ def test_defaults_materialized_from_empty_settings():
     assert policy.cpu_admission_close_percent is None
     assert policy.cpu_admission_reopen_percent == 40.0
     assert policy.cpu_retirement_quiet_seconds == 60.0
+    assert policy.cpu_heating_seconds == 1.0
+    assert policy.cpu_cooling_seconds == 5.0
     assert policy.worker_min_life_seconds == 60.0
     assert policy.new_user_occupancy_percent == 5.0
     assert policy.worker_max_users == math.inf

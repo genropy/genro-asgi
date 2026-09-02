@@ -1150,6 +1150,9 @@ class SpaCommander:
                         "cpu_temperature_percent": (
                             worker_handler.cpu_temperature_percent
                         ),
+                        "cpu_temperature_sample_percent": (
+                            worker_handler.cpu_temperature_sample_percent
+                        ),
                         "cpu_temperature_interval_seconds": (
                             worker_handler.cpu_temperature_interval_seconds
                         ),
@@ -1170,6 +1173,9 @@ class SpaCommander:
                 worker_census = await self._get_worker_census(worker_handler)
                 worker_census["cpu_temperature_percent"] = (
                     worker_handler.cpu_temperature_percent
+                )
+                worker_census["cpu_temperature_sample_percent"] = (
+                    worker_handler.cpu_temperature_sample_percent
                 )
                 worker_census["cpu_temperature_interval_seconds"] = (
                     worker_handler.cpu_temperature_interval_seconds

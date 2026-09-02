@@ -99,6 +99,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import signal
 import subprocess
@@ -271,9 +272,13 @@ class WorkerHandler:
         #: sample instant)``. The birth distinguishes a live worker from an
         #: unrelated process that later reused its pid.
         self._cpu_meter_reading: tuple[float, float, float] | None = None
-        #: The worker's real CPU share over the last meter interval. None until
-        #: two readings of the same process exist: the first interval has no
-        #: temperature yet.
+        #: The worker's CPU share over the last meter interval, raw: telemetry
+        #: only, no judge reads it. None until two readings of the same process
+        #: exist: the first interval has no temperature yet.
+        self.cpu_temperature_sample_percent: float | None = None
+        #: The temperature the judges read: the raw samples through the group's
+        #: asymmetric first-order filter (``cpu_heating_seconds`` up,
+        #: ``cpu_cooling_seconds`` down), seeded by the first sample.
         self.cpu_temperature_percent: float | None = None
         #: When the temperature above was sampled, on the commander's monotonic
         #: clock, and the real width of the interval that produced it.
@@ -393,6 +398,18 @@ class WorkerHandler:
     ) -> float | None:
         """Turn two lightweight process readings into this worker's temperature.
 
+        Returns:
+            The filtered temperature after this reading, or None when the
+            reading did not produce one (first of a process, cleared, no time
+            elapsed).
+
+        The raw share of one core over the interval is kept as
+        ``cpu_temperature_sample_percent``; ``cpu_temperature_percent`` moves
+        towards it by ``1 - exp(-elapsed / tau)``, with ``tau`` the group's
+        ``cpu_heating_seconds`` when the sample is hotter than the filtered
+        value and ``cpu_cooling_seconds`` when it is colder. The first sample of
+        a process seeds the filter.
+
         A missing row or a changed process birth clears the unfinished measure;
         neither invents a zero. The result is separate commander-side telemetry:
         it never changes the full photo, while CPU orchestration reads this
@@ -400,6 +417,7 @@ class WorkerHandler:
         """
         if reading is None:
             self._cpu_meter_reading = None
+            self.cpu_temperature_sample_percent = None
             self.cpu_temperature_percent = None
             self.cpu_temperature_sampled_at = None
             self.cpu_temperature_interval_seconds = None
@@ -408,6 +426,7 @@ class WorkerHandler:
         previous = self._cpu_meter_reading
         self._cpu_meter_reading = (created_at, cpu_seconds, sampled_at)
         if previous is None or previous[0] != created_at:
+            self.cpu_temperature_sample_percent = None
             self.cpu_temperature_percent = None
             self.cpu_temperature_sampled_at = None
             self.cpu_temperature_interval_seconds = None
@@ -416,7 +435,15 @@ class WorkerHandler:
         if elapsed <= 0.0:
             return None
         burned = max(0.0, cpu_seconds - previous[1])
-        temperature = 100.0 * min(burned / elapsed, 1.0)
+        sample = 100.0 * min(burned / elapsed, 1.0)
+        current = self.cpu_temperature_percent
+        if current is None:
+            temperature = sample
+        else:
+            policy = self.group_handler.policy
+            tau = policy.cpu_heating_seconds if sample > current else policy.cpu_cooling_seconds
+            temperature = current + (1.0 - math.exp(-elapsed / tau)) * (sample - current)
+        self.cpu_temperature_sample_percent = sample
         self.cpu_temperature_percent = temperature
         self.cpu_temperature_sampled_at = sampled_at
         self.cpu_temperature_interval_seconds = elapsed

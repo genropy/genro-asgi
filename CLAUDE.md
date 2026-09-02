@@ -172,7 +172,7 @@ front declared without either does not boot (`FatalBootError` →
 `lifespan.startup.failed`) — wanting no pool means declaring no spa front. At
 boot `boot_group_settings` composes `defaults ⊕ recipe_settings ⊕ profile ⊕ env_settings` through
 `GroupPolicy.from_settings` — the frozen dataclass in
-`spa/orchestration/group_policy.py` that holds the 14 setpoints, IS the
+`spa/orchestration/group_policy.py` that holds the 16 setpoints, IS the
 validation and collects every violation — BEFORE the vertex is built; the recipe
 and env levels stay separate dicts, so every later apply recomposes from them.
 A missing or invalid profile raises `FatalBootError` (`lifespan.py`): the one
@@ -226,14 +226,18 @@ birth happens inside
 `new_worker_created_for_placement`.
 
 **Worker CPU temperature is a separate measurement channel (landed
-2026-09-01).** One commander-side task reads each worker's cumulative
-process CPU clock through psutil at `cpu_temperature_sample_seconds` (100 ms by default), and
-derives the share of one core burned over the real interval. It sends no worker
-RPC and writes no worker photo: the pool census exposes the temperature, sample
-width and age alongside each worker. The sampling pass reconciles admission;
-placement uses that gate and temperature occupancy, and heartbeat offload uses
-the same fresh value. Memory, per-user activity and every non-CPU decision stay
-on their existing channels.
+2026-09-01; filtered 2026-09-02).** One commander-side task reads each worker's
+cumulative process CPU clock through psutil at `cpu_temperature_sample_seconds`
+(100 ms by default) and derives the share of one core burned over the real
+interval. That raw sample is telemetry only (`cpu_temperature_sample_percent` in
+the census): what every CPU judge reads is `cpu_temperature_percent`, the samples
+through an asymmetric first-order filter — `1 - exp(-dt/tau)`, `tau` =
+`cpu_heating_seconds` (1.0) when the sample is hotter, `cpu_cooling_seconds`
+(5.0) when colder, both group setpoints — seeded by the first sample. It sends no
+worker RPC and writes no worker photo. The sampling pass reconciles admission;
+placement uses that gate, and heartbeat offload uses the same filtered value.
+Memory, per-user activity and every non-CPU decision stay on their existing
+channels.
 
 **A CPU-hot worker slims one user per beat (landed 2026-09-01).**
 `cpu_offload_percent` (group setpoint, off by default; requires
@@ -298,4 +302,4 @@ commits, still to be entered in the register). Decision registers:
 
 **All general policies are inherited from the parent document: [meta-genro-modules CLAUDE.md](https://github.com/softwellsrl/meta-genro-modules/blob/main/CLAUDE.md)**
 
-**Last Updated**: 2026-09-01
+**Last Updated**: 2026-09-02

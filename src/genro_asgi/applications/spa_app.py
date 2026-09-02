@@ -220,6 +220,8 @@ class SpaApplicationGrammar(ApplicationGrammar):
         cpu_admission_reopen_percent: float | BagResolver = None,
         cpu_offload_percent: float | BagResolver | None = None,
         cpu_retirement_quiet_seconds: float | BagResolver | None = None,
+        cpu_heating_seconds: float | BagResolver | None = None,
+        cpu_cooling_seconds: float | BagResolver | None = None,
         worker_min_life_seconds: float | BagResolver = None,
         new_user_occupancy_percent: float | BagResolver = None,
         worker_max_users: int | BagResolver = None,
@@ -271,7 +273,10 @@ class SpaApplicationGrammar(ApplicationGrammar):
         one. ``cpu_retirement_quiet_seconds`` is how long the CPU must
         stay silent — no blocking or reopening — before retirement judges
         again: the quiet of the GROUP, distinct from the age of one worker,
-        restarted whole by every CPU admission transition.
+        restarted whole by every CPU admission transition. ``cpu_heating_seconds``
+        (1 s) and ``cpu_cooling_seconds`` (5 s) are the two time constants of the
+        filter every CPU judge reads the 100 ms temperature through: a worker
+        heats up fast and cools down slowly, so one idle sample never reopens it.
 
         The IDENTITY of the child: ``entry_module`` (what ``python -m`` runs),
         ``executable`` (the interpreter — a group is how two versions of a site
@@ -300,7 +305,7 @@ class SpaApplicationGrammar(ApplicationGrammar):
         orchestration_log_backup_count: int | BagResolver = None,
         user_expiry_hours: float | BagResolver = None,
         guest_expiry_hours: float | BagResolver = None,
-            cpu_temperature_sample_seconds: float | BagResolver | None = None,
+        cpu_temperature_sample_seconds: float | BagResolver | None = None,
     ) -> None:
         """The SPA pool: the vertex's own policies, and the groups under it.
 
@@ -310,8 +315,9 @@ class SpaApplicationGrammar(ApplicationGrammar):
         ``instance_dir`` holds the sockets.
 
         ``cpu_temperature_sample_seconds`` is the cadence of commander-side,
-        traffic-independent worker CPU measurement. CPU admission, occupancy
-        and offload use this channel; omit it for the 100 ms default.
+        traffic-independent worker CPU measurement. CPU admission, placement and
+        offload read this channel through each group's filter; omit it for the
+        100 ms default.
 
         ``memory_max_percent`` is what this server may hold OF THE MACHINE (the
         concession; omitted, all of it), and every percentage below is a share of
