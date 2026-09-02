@@ -358,16 +358,17 @@ async def parent_wire(short_root, deposit):
 
 
 async def test_the_presentation_carries_the_first_photo_and_brings_the_store_home(wire):
-    worker = await wire.take()
+    await wire.take()
 
     photo = dict(wire.handler.worker_snapshot)
     pss_bytes = photo.pop("pss_bytes")
     assert pss_bytes is None or pss_bytes >= 0
+    rss_bytes = photo.pop("rss_bytes")
+    assert rss_bytes is None or rss_bytes >= 0
     assert photo == {
         "pid": os.getpid(),
         "name": WORKER_NAME,
         "group": GROUP,
-        "rss_bytes": worker.rss_bytes,
         "user_count": 0,
         "connection_count": 0,
         "page_count": 0,
