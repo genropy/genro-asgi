@@ -141,6 +141,11 @@ CENSUS_OP_PATH = "/op/census"
 #: watching — an observer must not change what it observes.
 OBSERVE_OP_PATH = "/op/observe"
 
+#: The routing key of the source filter: the whole set of tables somebody
+#: subscribes somewhere, pushed down by the commander on every transition of it
+#: and at a worker's first presentation. The worker never asks for it.
+SUBSCRIBED_TABLES_OP_PATH = "/op/subscribed_tables"
+
 #: The routing key of the order to leave: the process drains and ends itself.
 #: Its answer comes back at once, carrying the photo with every user flagged for
 #: cession — the level above parks them all in one read.
@@ -162,6 +167,11 @@ FREEZE_USER_OP_PATH = "/op/freeze_user"
 #: it, in seconds. Past it the process is killed and the death that follows is an
 #: abort like any other: whoever was leaving had its time.
 QUIT_TIMEOUT_SECONDS = 30.0
+
+#: How long a subscribed-tables push waits for the worker's answer before the
+#: task gives up: a worker alive but deaf must not pile one parked task per
+#: transition of the set. The next transition sends the whole set again.
+SUBSCRIBED_TABLES_PUSH_TIMEOUT_SECONDS = 5.0
 
 #: Seconds between two beats of the same process — the cadence, not a clock.
 PROCESS_PING_INTERVAL = 5.0
@@ -190,6 +200,8 @@ __all__ = [
     "PROCESS_PING_TIMEOUT",
     "QUIT_OP_PATH",
     "QUIT_TIMEOUT_SECONDS",
+    "SUBSCRIBED_TABLES_PUSH_TIMEOUT_SECONDS",
+    "SUBSCRIBED_TABLES_OP_PATH",
     "WORKER_ENV_VAR",
     "WorkerHandler",
 ]
@@ -304,6 +316,8 @@ class WorkerHandler:
         self._running_since: float | None = None
         self._observation_switched = False
         self._observation_switch_tasks: set[asyncio.Task[Any]] = set()
+        self._subscribed_tables_pushed = False
+        self._subscribed_tables_push_tasks: set[asyncio.Task[Any]] = set()
 
     @property
     def life_seconds(self) -> float:
@@ -480,6 +494,9 @@ class WorkerHandler:
         if not self._observation_switched and self.group_handler.spa_commander.observation_watched:
             self._observation_switched = True
             self._fire_observation_switch()
+        if not self._subscribed_tables_pushed:
+            self._subscribed_tables_pushed = True
+            self.push_subscribed_tables()
         return self.envelope_handler(envelope)
 
     def _fire_observation_switch(self) -> None:
@@ -487,6 +504,32 @@ class WorkerHandler:
         task = asyncio.create_task(self.connector.call(OBSERVE_OP_PATH, {"on": True}))
         self._observation_switch_tasks.add(task)
         task.add_done_callback(self._observation_switch_tasks.discard)
+
+    def push_subscribed_tables(self) -> None:
+        """Send this process the current source filter, without waiting for it."""
+        task = asyncio.create_task(self._push_subscribed_tables())
+        self._subscribed_tables_push_tasks.add(task)
+        task.add_done_callback(self._subscribed_tables_push_tasks.discard)
+
+    async def _push_subscribed_tables(self) -> None:
+        """Read the desk's set at send time and put it on this process's wire.
+
+        A process whose wire is gone is logged at debug level and left alone: a
+        dead worker has no commits left to filter. One that does not answer
+        within ``SUBSCRIBED_TABLES_PUSH_TIMEOUT_SECONDS`` is logged the same way:
+        the next transition carries the whole set again.
+        """
+        tables = self.group_handler.spa_commander.delivery_desk.subscribed_tables
+        try:
+            await self.connector.call(
+                SUBSCRIBED_TABLES_OP_PATH,
+                {"tables": tables},
+                timeout=SUBSCRIBED_TABLES_PUSH_TIMEOUT_SECONDS,
+            )
+        except ConnectionError:
+            self._logger.debug("Worker %s: the subscribed-tables push found no wire", self.name)
+        except TimeoutError:
+            self._logger.debug("Worker %s: the subscribed-tables push got no answer", self.name)
 
     def serve_child_call(self, path: str, data: dict[str, Any]) -> Any:
         """Hand a CALL the child placed on the lane to the desk that serves it.

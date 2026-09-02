@@ -313,9 +313,12 @@ class DeliveryDesk:
     is waiting for a user who goes into the freezer is lost with the websockets
     that would have carried it, and nothing here is dumped or restored.
 
-    **The subscription answers only once it is filed**, so a site that subscribes
-    a table and commits it inside the same request finds it active: the
-    subscribe-window is closed by construction, not by luck.
+    **The subscription is written before the call answers**, so the index here is
+    right the moment the subscriber is told so. The workers' own source filter is
+    a copy, refreshed by a CALL the commander pushes on every transition of the
+    set, so a worker filters with a set at most one CALL's flight out of date:
+    the accepted risk, measured against the tens of seconds that separate a
+    page's subscription from its first commit.
 
     **The exchange files first and answers after**, so the caller's own events
     come back in the same round; a sibling page's events wait in its own queue
@@ -384,10 +387,12 @@ class DeliveryDesk:
             tables: the ``table_subscriptions`` its register row carries —
                 empty at birth, the replayed set at the wake.
 
-        Acts on ``page_subscriptions``.
+        Acts on ``page_subscriptions``, and announces the new set to the workers
+        once when at least one table gained its first subscriber.
         """
-        for table in tables:
-            self.page_subscriptions.subscribe(page_id, table)
+        created = [self.page_subscriptions.subscribe(page_id, table) for table in tables]
+        if any(created):
+            self._announce_subscribed_tables()
 
     def op_subscribe_table(
         self, page_id: str, table: str, subscribe: bool = True
@@ -400,21 +405,19 @@ class DeliveryDesk:
             subscribe: opening the subscription, or closing it.
 
         Returns:
-            The subscription as it was taken, plus the whole subscribed-table
-            list the worker caches as its source filter.
+            The subscription as it was taken. No table list: the workers' source
+            filter travels on its own CALL, not on this reply.
 
-        Acts on ``page_subscriptions`` BEFORE it answers.
+        Acts on ``page_subscriptions`` BEFORE it answers, and announces the new
+        set to the workers when this was a transition of it.
         """
         if subscribe:
-            self.page_subscriptions.subscribe(page_id, table)
+            moved = self.page_subscriptions.subscribe(page_id, table)
         else:
-            self.page_subscriptions.unsubscribe(page_id, table)
-        return {
-            "page_id": page_id,
-            "table": table,
-            "subscribe": subscribe,
-            "tables": self.subscribed_tables,
-        }
+            moved = self.page_subscriptions.unsubscribe(page_id, table)
+        if moved:
+            self._announce_subscribed_tables()
+        return {"page_id": page_id, "table": table, "subscribe": subscribe}
 
     def op_exchange(
         self,
@@ -435,9 +438,9 @@ class DeliveryDesk:
                 them.
 
         Returns:
-            The two page species, the user's store changes and the current
-            subscribed-table list. The changes travel TYTX-encoded: their
-            ``change_ts`` is a datetime, which JSON has no word for.
+            The two page species and the user's store changes. The changes travel
+            TYTX-encoded: their ``change_ts`` is a datetime, which JSON has no
+            word for.
 
         Acts on all three queue maps: the arrivals are filed first, so what the
         caller itself produced for itself is in the answer.
@@ -450,8 +453,25 @@ class DeliveryDesk:
             "datachanges": to_tytx(self.drain_page_datachanges(page_id), "json"),
             "dbevents": self.drain_page_dbevents(page_id),
             "store_changes": to_tytx(self.drain_user_store_changes(user), "json"),
-            "tables": self.subscribed_tables,
         }
+
+    def op_deposit(self, dbevents: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        """File the deposits of a request that reached no ``collect_page``.
+
+        Args:
+            dbevents: the deposits the request produced, as the worker shaped
+                them.
+
+        Returns:
+            Nothing: there is no page to answer.
+
+        Acts on ``page_dbevent_map`` through ``file_dbevent`` and retires
+        nothing — a ``rootPage`` webhook, or a request that failed after its
+        commit, has no page of its own whose queues would be drained.
+        """
+        for deposit in dbevents or ():
+            self.file_dbevent(deposit)
+        return {}
 
     def file_datachange(self, message: dict[str, Any]) -> None:
         """Put one addressed write in the queue of whoever it is addressed at.
@@ -652,7 +672,12 @@ class DeliveryDesk:
         """
         self.page_datachange_map.pop(page_id, None)
         self.page_dbevent_map.pop(page_id, None)
-        self.page_subscriptions.drop_page(page_id)
+        if self.page_subscriptions.drop_page(page_id):
+            self._announce_subscribed_tables()
+
+    def _announce_subscribed_tables(self) -> None:
+        """Tell the vertex the global set moved: every living worker gets it pushed."""
+        self.spa_commander.broadcast_subscribed_tables()
 
     def drop_user(self, user: str) -> None:
         """Forget what was waiting for a user's own store; his pages go on their own."""
@@ -1054,6 +1079,17 @@ class SpaCommander:
                     self._logger.debug(
                         "Observation switch %s refused by %s (%s)", on, worker_handler.name, exc
                     )
+
+    def broadcast_subscribed_tables(self) -> None:
+        """Push the desk's current subscribed-table set to every living worker.
+
+        Called on every transition of the global set — a table gaining its first
+        subscriber, or losing its last. It creates one task per worker and awaits
+        none of them: the announcement must not hold up the op that caused it.
+        """
+        for group_handler in self.group_map.values():
+            for worker_handler in group_handler.living_workers:
+                worker_handler.push_subscribed_tables()
 
     def publish_observation(self, kind: str, source: str, data: dict[str, Any]) -> None:
         """Put one observation on every watching queue, and never raise.

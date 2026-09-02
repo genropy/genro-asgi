@@ -42,20 +42,12 @@ class XT_MuteWorkerHandler:
 
 
 @pytest.fixture
-def wired_lane(desk_lane):
-    """The lane, with its handler hanging in the group map like a launched one."""
-    group = desk_lane.commander.group_map["standard"]
-    group.worker_handler_map[desk_lane.worker_handler.name] = desk_lane.worker_handler
-    return desk_lane
-
-
-@pytest.fixture
-async def populated_lane(wired_lane):
+async def populated_lane(desk_lane):
     """One user with one connection and one page, both sides knowing about him."""
-    wired_lane.worker.add_connection("a1b2")
-    wired_lane.worker.add_page("page-0", "a1b2")
-    wired_lane.commander.record_connection_user("a1b2", "guest_a1b2")
-    return wired_lane
+    desk_lane.worker.add_connection("a1b2")
+    desk_lane.worker.add_page("page-0", "a1b2")
+    desk_lane.commander.record_connection_user("a1b2", "guest_a1b2")
+    return desk_lane
 
 
 async def test_the_worker_census_holds_its_three_registers(populated_lane):

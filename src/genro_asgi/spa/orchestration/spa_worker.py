@@ -267,6 +267,7 @@ from .worker_handler import (
     OBSERVE_OP_PATH,
     PING_OP_PATH,
     QUIT_OP_PATH,
+    SUBSCRIBED_TABLES_OP_PATH,
 )
 
 #: The reserved prefix that names an anonymous user — the daemon's own
@@ -307,6 +308,10 @@ DESK_SUBSCRIBE_TABLE_PATH = "/desk/subscribe_table"
 #: The routing key of the end-of-request exchange: what this request produced
 #: goes up, what waits for its page comes back.
 DESK_EXCHANGE_PATH = "/desk/exchange"
+
+#: The routing key of the end-of-request deposit: what the slot still holds
+#: when no collect carried it away goes up alone, and nothing comes back.
+DESK_DEPOSIT_PATH = "/desk/deposit"
 
 #: The routing keys of the global store, which lives on the commander and
 #: nowhere else: two blind writes, and the two halves of one grant.
@@ -374,6 +379,7 @@ __all__ = [
     "CLOCK_NAMES",
     "DEPOSIT_LOCK_RETRY_INTERVAL",
     "DEPOSIT_LOCK_WAIT_LIMIT",
+    "DESK_DEPOSIT_PATH",
     "DESK_EXCHANGE_PATH",
     "DESK_STORE_DEL_PATH",
     "DESK_STORE_GET_PATH",
@@ -479,9 +485,10 @@ class SpaWorker:
         #: The rows of the three registers, and the lifecycle vocabulary that
         #: moves them: the shared registry, built through its own hook.
         self.registry = self.build_registry()
-        #: The tables somebody subscribes somewhere, as the last exchange reply
-        #: told it: the source filter of this worker, at most one exchange out
-        #: of date, which is the price of asking nobody.
+        #: The tables somebody subscribes somewhere: the source filter of this
+        #: worker. Fed ONLY by the commander's ``/op/subscribed_tables`` CALL,
+        #: sent on every transition of the global set and at this worker's first
+        #: presentation. Stale for the flight of one CALL — the accepted risk.
         self.subscribed_tables: set[str] = set()
         #: Whether every register mutation of this process is reported up the
         #: lane as it happens. Off until somebody watches, and switched only by
@@ -1046,7 +1053,6 @@ class SpaWorker:
         )
         slot.datachanges = []
         slot.dbevents = []
-        self.subscribed_tables = set(reply["tables"])
         with self.dispatch_lock:
             page = self.page_register.get(page_id)
             if page is None:
@@ -1062,6 +1068,34 @@ class SpaWorker:
             slot.own_dbevents = []
         datachanges.sort(key=lambda change: change["change_ts"])
         return {"datachanges": datachanges, "dbevents": dbevents}
+
+    def deliver_slot_deposits(self) -> None:
+        """Deliver what the slot still holds, at the end of a request that never collected.
+
+        Empties the slot's ``dbevents`` through the desk's own deposit op, which
+        files them in the subscribers' queues and retires nothing: there is no
+        page to answer. ``own_dbevents`` — the hidden transaction — are NOT
+        delivered here: they belong to the origin page's own collect and never
+        leave this process. Called on the pool thread, like ``collect_page``;
+        after a collect the slot is empty, so it delivers nothing twice.
+
+        A desk that refuses the deposit is logged and the deposits are dropped,
+        never raised: this runs in the ``finally`` of the stitching, where an
+        exception of its own would replace the site's — the lost deposits are
+        the same class of loss as a worker dying between commit and delivery.
+        """
+        slot = self.request_slot
+        if not slot.dbevents:
+            return
+        try:
+            self.run_on_loop(self.call(DESK_DEPOSIT_PATH, {"dbevents": slot.dbevents}))
+        except CommanderCallFailed:
+            self._logger.exception(
+                "Worker %s: %d deposits lost, the desk refused the end-of-request deposit",
+                self.name,
+                len(slot.dbevents),
+            )
+        slot.dbevents = []
 
     def _refuse_unservable_address(
         self, op: str, kind: str, target: str | None, filters: str | None
@@ -1254,9 +1288,10 @@ class SpaWorker:
         Moves the row's ``table_subscriptions`` set — what a move packages —
         and then files the interest at the desk, which is the only index there
         is. The call is synchronous: when this request goes on to commit, the
-        index it just changed is already right, so the window «I subscribe and
-        commit in the same breath» is closed by construction. The reply's table
-        list refreshes the source filter.
+        index it just changed is already right, so a site that subscribes a
+        table and commits it in the same request finds the interest filed. The
+        source filter of this process is not touched here: the commander
+        pushes it.
         """
         with self.dispatch_lock:
             page = self.page_register.get(page_id)
@@ -1266,13 +1301,12 @@ class SpaWorker:
                 page["table_subscriptions"].add(table)
             else:
                 page["table_subscriptions"].discard(table)
-        reply = self.run_on_loop(
+        self.run_on_loop(
             self.call(
                 DESK_SUBSCRIBE_TABLE_PATH,
                 {"page_id": page_id, "table": table, "subscribe": subscribe},
             )
         )
-        self.subscribed_tables = set(reply["tables"])
         return {"page_id": page_id, "table": table, "subscribe": subscribe}
 
     def notifyDbEvents(  # noqa: N802 - reserved protocol name
@@ -1302,8 +1336,9 @@ class SpaWorker:
         Returns:
             The tables actually announced.
 
-        Lays the deposits on the request slot, whence the end-of-request
-        exchange carries them to the desk. Filtered at the source: a table no
+        Lays the deposits on the request slot, which has two exits: the exchange
+        inside ``collect_page`` when the page collects, and ``deliver_slot_deposits``
+        at the end of the request otherwise. Filtered at the source: a table no
         page anywhere subscribes is not announced at all — a thousand events
         nobody wants die here rather than on the wire — and neither is a table
         whose batch is empty. The deposits are shaped once, so every subscriber
@@ -1672,6 +1707,10 @@ class SpaWorker:
                 await self.send_reply(frame, result=result)
         elif frame.path == OBSERVE_OP_PATH:
             self.observation_on = bool(payload["on"])
+            await self.send_reply(frame, result={})
+        elif frame.path == SUBSCRIBED_TABLES_OP_PATH:
+            with self.dispatch_lock:
+                self.subscribed_tables = set(payload.get("tables", ()))
             await self.send_reply(frame, result={})
         elif frame.path == CENSUS_OP_PATH:
             await self.send_reply(frame, result=self.census())
@@ -2493,9 +2532,15 @@ class SpaWorker:
         thread and find it by asking for it. What the site named while serving
         LEAVES with the answer — the front has no other way of learning the
         connection this request settled on, and its cookie is written off it.
+        What the slot still holds is delivered in the ``finally``, so a request
+        that never collected — and one that failed after its commit — announces
+        its deposits before the exception goes on its way.
         """
         self.open_request_slot()
-        answer = seam.serve(payload["http"], payload.get("identity"))
+        try:
+            answer = seam.serve(payload["http"], payload.get("identity"))
+        finally:
+            self.deliver_slot_deposits()
         answer["connection_id"] = self.request_slot.connection_id
         return answer
 

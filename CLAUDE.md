@@ -124,6 +124,26 @@ commander — no replicas — with reads as calls on the lane (`store_get`) and
 read-modify-write through the lock grant/release, the grant carrying the
 true master state; never files or shared memory between processes.
 
+**The source filter is pushed, and the slot always delivers (landed
+2026-09-02).** A worker filters the commits of its site with
+`subscribed_tables`, fed ONLY by the commander's `/op/subscribed_tables` CALL:
+`SpaCommander.broadcast_subscribed_tables` sends the whole set to every living
+worker of every group on every transition of the global set — the first
+subscriber of a table, the last one gone, through `subscribe_table`,
+`drop_page` and the wake's `install_page_subscriptions` — and a newborn gets it
+at its first presentation. The replies of `subscribe_table` and `exchange`
+carry no table list any more. A worker filters with a set at most one CALL's
+flight out of date: the accepted risk, measured against the tens of seconds
+that separate a page's subscription from its first commit. And every request
+delivers what its slot still holds before it returns:
+`SpaWorker.deliver_slot_deposits` sits in the `finally` of `_serve_on_thread`
+and sends the slot's deposits up `/desk/deposit`, which files them in the
+subscribers' queues and retires nothing — there is no page to answer — so a
+`rootPage` webhook, or a request that failed after its commit, announces like
+any page. `collect_page` keeps its two jobs, delivering AND retiring, and
+after it the slot is empty, so nothing is delivered twice. `own_dbevents`, the
+hidden transaction, never leave the process.
+
 **Mobility and deaths.** One path only: hold → freeze → reassign →
 unfreeze, used for compaction, ordered replacement and wake — the direct
 worker-to-worker move of the pre_refactoring stack was deliberately

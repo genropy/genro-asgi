@@ -1,0 +1,39 @@
+Verification complete. Report:
+
+```
+STATE: wf/dbevents-transport (dedicated) | base a9c894c | tree dirty: 2 untracked
+       (.phased/active/dbevents-transport/log/, docs/html/genro-asgi-v10.epub — both
+       outside the diff) | phases 4/4 [x], nessun [!]/[~]/[>]
+```
+
+**DONE-CHECK** — tutti i criteri ri-eseguiti, tutti soddisfatti.
+
+| Phase | Esito |
+|---|---|
+| 1 | met — i 3 grep passano (`reply["tables"]` e `"tables": self.subscribed_tables` vuoti; `SUBSCRIBED_TABLES_OP_PATH` in entrambi i file); il nuovo file contract dà 6 test |
+| 2 | met — `DESK_DEPOSIT_PATH` 3 righe in `spa_worker.py`, `def op_deposit` 1 riga; il nuovo file contract dà 4 test |
+| 3 | met — i 4 grep passano, `closed by construction` non compare più in `src`/`CLAUDE.md`/`internals` |
+| 4 | met — `review.md` esiste con le tre sezioni, `ruff check src/ tests/` → `All checks passed!` |
+
+Suite intera: **1809 passed, 3 warnings, coverage 97%** — coincide con quanto dichiarato nei `Done:`. Nulla è risultato non ri-eseguibile.
+
+Una nota sul gate della Phase 3: `git grep 'landed 2026-09-02' -- CLAUDE.md` passa su tre righe **preesistenti** (58, 241, 251). Il nuovo paragrafo manda la data a capo (`(landed\n2026-09-02)`), quindi il grep non lo vede. Il paragrafo c'è ed è corretto; il gate non lo verificava.
+
+**FINDINGS — MECHANICAL**
+
+1. `src/genro_asgi/spa/orchestration/spa_commander.py:457,677,1083` · `worker_handler.py:502,508` · `spa_worker.py:1083` — sei marker `# wf:phase-N:new` restano nel source spedito. `git grep 'wf:phase' develop -- src` non stampa nulla: nessun precedente nel codebase. Sono residuo del run, non codice.
+2. `src/genro_asgi/spa/orchestration/spa_worker.py:1341` — la narrativa di `notifyDbEvents` dice ancora che i deposit escono solo con l'exchange di fine request. Dopo la Phase 2 le uscite sono due. È l'item 1 di `review.md`: confermato ancora presente, va portato avanti, non chiuso.
+3. `tests/orchestration/test_orchestration_census.py:44` · `test_orchestration_console.py:25` · `test_orchestration_observation.py:25` — tre fixture `wired_lane` il cui unico corpo (`group.worker_handler_map[...] = ...`) è ora un no-op: `XT_DeskLane.__init__` registra già l'handler. La loro docstring («with its handler hanging in the group map like a launched one») descrive ciò che fa il costruttore. La Phase 1 ha cambiato il costruttore e ha lasciato le tre fixture.
+
+**FINDINGS — JUDGMENT**
+
+1. `spa_worker.py:2540-2546` — il `finally` maschera l'eccezione del site quando la consegna stessa fallisce. `deliver_slot_deposits` alza `CommanderCallFailed`; alzata dentro un `finally`, **sostituisce** quella in volo. Site che fallisce dopo il commit + desk che rifiuta il deposit → il front vede il guasto di trasporto, l'errore vero resta solo in `__context__`. La docstring («the exception propagates AFTER the delivery») vale solo sul percorso di successo.
+2. `spa_worker.py:1099` — il `finally` mette una chiamata bloccante sul filo, senza limite, sull'uscita di **ogni** request. `run_on_loop` è `run_coroutine_threadsafe(...).result()` senza timeout, e `connector.call` è piazzata con `timeout=None`. Prima solo la strada `pageCall` (via `collect_page`) aveva questa esposizione; ora un webhook `rootPage` o una request fallita può parcheggiare un thread del pool. Commander incastrato = ogni request che committa tiene il suo thread.
+3. `worker_handler.py:504` — `_subscribed_tables_push_tasks` non ha limite contro un worker vivo che non risponde: ogni transizione del set globale aggiunge un task, ciascuno parcato su `call(..., timeout=None)`, e nessuno li attende o li cancella. Il pattern reference `_fire_observation_switch` ha la stessa forma ma parte una volta per worker; questo parte a ogni transizione. L'ordine FIFO è invece salvo (nessun punto di sospensione fra la lettura del set e `writer.write`), quindi la convergenza tiene: il rilievo è solo l'accumulo.
+4. `tests/orchestration/conftest.py:91` e `tests/orchestration/test_contract_phase8_delivery_desk.py:59` sono due classi diverse con lo stesso nome `XT_DeskLane`. La Phase 1 ha insegnato a quella di conftest a registrarsi in `worker_handler_map`; quella di phase8 no, quindi in tutto quel file `broadcast_subscribed_tables` non raggiunge nessuno — ed è la ragione per cui i suoi test non hanno avuto bisogno di barriera. Stesso nome, due comportamenti.
+5. Diciassette copie verbatim di `await wait_for(lambda: lane.worker.subscribed_tables == set(lane.desk.subscribed_tables))` su tre file (10 in phase4, 5 in phase9, 2 in phase13), senza helper estratto. `XT_DeskLane` è la sede naturale. È duplicazione fra sessioni cieche l'una all'altra — la classe di difetto che questa review cerca.
+6. Gli item 2 e 3 di `review.md` (il testo di help in `spa_console.py:22`; `ruff format` in disaccordo con 6 dei 12 file) passano invariati: entrambi sono decisioni del titolare, nessuno dei due è un difetto.
+
+Igiene dei commit: un commit per fase, nessun file estraneo staged, nessun `git add -A`. La Phase 3 ha toccato `spa_worker.py` fuori dai suoi `Files:` docs-only per soddisfare il proprio grep — dichiarato in `> Files:` e in `notes.md`.
+
+**VERIFY-NOTES**: nessuna. Il piano non porta campi `Verify:` né note `> Verify:`/`> Review:`, e la directory non ha `verify.md`. I tre bullet di `## Run inspection` in `notes.md` sono confermati: il `child_stub.py` fuori dai `Files:` (visto nel diff), il test contract eliminato in più (visto nel diff di phase8), la docstring di `subscribeTable` toccata dalla Phase 3 (vista nel diff). Il quarto bullet — il commit della Phase 4 negato dall'hook e fatto dal foreman come `a2e2562` — è coerente con la history.

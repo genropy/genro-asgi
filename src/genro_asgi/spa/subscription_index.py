@@ -73,22 +73,40 @@ class SubscriptionIndex:
             with self.lock:
                 yield
 
-    def subscribe(self, page_id: str, table: str) -> None:
-        """Add the pair to both maps. Idempotent: sets, not counters."""
+    def subscribe(self, page_id: str, table: str) -> bool:
+        """Add the pair to both maps. Idempotent: sets, not counters.
+
+        Returns:
+            Whether the table key was CREATED here — the first subscriber
+            anywhere, which is a transition of the global set.
+        """
         with self.guard():
+            created = table not in self.table_pages
             self.table_pages.setdefault(table, set()).add(page_id)
             self.page_tables.setdefault(page_id, set()).add(table)
+            return created
 
-    def unsubscribe(self, page_id: str, table: str) -> None:
-        """Remove the pair from both maps. Unknown pair: nothing happens."""
-        with self.guard():
-            self._forget(page_id, table)
+    def unsubscribe(self, page_id: str, table: str) -> bool:
+        """Remove the pair from both maps. Unknown pair: nothing happens.
 
-    def drop_page(self, page_id: str) -> None:
-        """Forget a page everywhere: its own entry and every table set it sat in."""
+        Returns:
+            Whether the table key was DELETED — the last subscriber gone.
+        """
         with self.guard():
+            return self._forget(page_id, table)
+
+    def drop_page(self, page_id: str) -> bool:
+        """Forget a page everywhere: its own entry and every table set it sat in.
+
+        Returns:
+            Whether at least one table key was DELETED — the page was the last
+            subscriber of something.
+        """
+        with self.guard():
+            dropped = False
             for table in list(self.page_tables.get(page_id, ())):
-                self._forget(page_id, table)
+                dropped = self._forget(page_id, table) or dropped
+            return dropped
 
     def pages_for(self, table: str) -> set[str]:
         """The pages subscribed to a table, as a copy. Unknown table: empty."""
@@ -100,19 +118,25 @@ class SubscriptionIndex:
         with self.guard():
             return set(self.page_tables.get(page_id, ()))
 
-    def _forget(self, page_id: str, table: str) -> None:
+    def _forget(self, page_id: str, table: str) -> bool:
         """Drop one pair from both maps, under the caller's guard.
 
         The only place that empties a set, so the only place that has to keep
         the "no empty set survives" rule.
+
+        Returns:
+            Whether the table key was deleted: nobody subscribes it any more.
         """
+        deleted = False
         pages = self.table_pages.get(table)
         if pages is not None:
             pages.discard(page_id)
             if not pages:
                 del self.table_pages[table]
+                deleted = True
         tables = self.page_tables.get(page_id)
         if tables is not None:
             tables.discard(table)
             if not tables:
                 del self.page_tables[page_id]
+        return deleted

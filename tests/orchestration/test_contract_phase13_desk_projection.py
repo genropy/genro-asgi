@@ -11,6 +11,8 @@ from __future__ import annotations
 from genro_asgi.spa.orchestration.spa_worker import GUEST_PREFIX
 from genro_asgi.spa.orchestration.worker_handler import PING_OP_PATH
 
+from .conftest import wait_for
+
 
 async def subscribed_guest(lane, table: str = "mytable") -> str:
     """A guest with one page whose subscription went through the lane.
@@ -23,6 +25,7 @@ async def subscribed_guest(lane, table: str = "mytable") -> str:
     guest = f"{GUEST_PREFIX}a1b2"
     lane.commander.user_map[guest] = lane.commander._new_row()
     await lane.verb("subscribeTable", guest, table, "page-0")
+    await wait_for(lambda: lane.worker.subscribed_tables == set(lane.desk.subscribed_tables))
     return guest
 
 
@@ -78,12 +81,20 @@ async def test_the_new_page_announcement_carries_the_rows_subscriptions(desk_lan
     # wf:contract: the new_page worker event carries the row's
     # wf:contract: table_subscriptions — empty at birth, the replayed set at the
     # wf:contract: wake — and the vertex fold files exactly those entries
-    guest = await subscribed_guest(desk_lane)
+    # The births are read BEFORE the subscription: every round-trip on the wire
+    # carries the pending announcements away, and the pushed source filter is one.
+    desk_lane.worker.add_connection("a1b2", sticky_cid="spa-a1b2")
+    desk_lane.worker.add_page("page-0", "a1b2")
     births = [event for event in desk_lane.worker.worker_events if event["op"] == "new_page"]
     assert [event["table_subscriptions"] for event in births] == [[]]
+
+    guest = f"{GUEST_PREFIX}a1b2"
+    desk_lane.commander.user_map[guest] = desk_lane.commander._new_row()
+    await desk_lane.verb("subscribeTable", guest, "mytable", "page-0")
     await sent_events(desk_lane)
     assert await desk_lane.worker.freeze_user(guest) is True
     await sent_events(desk_lane)
+    await desk_lane.wait_filter_synced()
 
     await desk_lane.worker.adopt_connection(guest, "a1b2")
     wakes = [event for event in desk_lane.worker.worker_events if event["op"] == "new_page"]

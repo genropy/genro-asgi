@@ -34,6 +34,8 @@ import pytest
 
 from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker
 
+from .conftest import wait_for
+
 WORKER_NAME = "standard_0001"
 
 
@@ -66,12 +68,14 @@ async def deposits_of(lane, page_id):
 
 async def test_a_subscription_lands_on_the_index_and_on_the_row(lane):
     result = await lane.verb("subscribeTable", "alice", table="glbl.user", page_id="p1")
+    await lane.wait_filter_synced()
 
     assert result == {"page_id": "p1", "table": "glbl.user", "subscribe": True}
     assert lane.desk.page_subscriptions.pages_for("glbl.user") == {"p1"}
     assert lane.worker.page_register.get("p1")["table_subscriptions"] == {"glbl.user"}
-    # The reply refreshed the worker's source filter in the same breath.
-    assert lane.worker.subscribed_tables == {"glbl.user"}
+    # The reply carries no table list: the source filter arrives on the CALL the
+    # commander pushes, within the flight of that call.
+    await wait_for(lambda: lane.worker.subscribed_tables == {"glbl.user"})
 
 
 def test_a_subscription_for_an_unknown_page_is_an_error(worker):
@@ -91,8 +95,10 @@ async def test_subscribe_mode_is_accepted_and_ignored(lane):
 
 async def test_an_unsubscribe_clears_the_row_and_the_index(lane):
     await lane.verb("subscribeTable", "alice", table="glbl.user", page_id="p1")
+    await lane.wait_filter_synced()
 
     await lane.verb("subscribeTable", "alice", table="glbl.user", page_id="p1", subscribe=False)
+    await lane.wait_filter_synced()
 
     assert lane.worker.page_register.get("p1")["table_subscriptions"] == set()
     assert lane.desk.page_subscriptions.pages_for("glbl.user") == set()
@@ -101,6 +107,7 @@ async def test_an_unsubscribe_clears_the_row_and_the_index(lane):
 async def test_a_dropped_page_leaves_no_subscription_behind(lane):
     """The worker forgets the row; the desk forgets the page when the fold reaches it."""
     await lane.verb("subscribeTable", "alice", table="glbl.user", page_id="p1")
+    await lane.wait_filter_synced()
 
     await lane.verb("drop_page", "alice", "p1")
     lane.desk.drop_page("p1")
@@ -116,6 +123,7 @@ async def test_a_dropped_page_leaves_no_subscription_behind(lane):
 
 async def test_a_commit_reaches_the_local_subscribers(lane):
     await lane.verb("subscribeTable", "alice", table="glbl.user", page_id="p1")
+    await lane.wait_filter_synced()
 
     result = await lane.verb(
         "notifyDbEvents", "alice", dbevents={"glbl.user": ["ins:1"]}, reason="commit",
@@ -133,7 +141,9 @@ async def test_a_commit_reaches_the_local_subscribers(lane):
 async def test_two_subscribing_pages_read_the_same_shaped_deposit(lane):
     lane.worker.new_page("alice", page_id="p2", connection_id="s1")
     await lane.verb("subscribeTable", "alice", table="glbl.user", page_id="p1")
+    await lane.wait_filter_synced()
     await lane.verb("subscribeTable", "alice", table="glbl.user", page_id="p2")
+    await lane.wait_filter_synced()
 
     await lane.verb("notifyDbEvents", "alice", dbevents={"glbl.user": ["ins:1"]}, page_id="p0")
 
@@ -156,6 +166,7 @@ async def test_a_commit_nobody_subscribed_deposits_nothing(lane):
 
 async def test_an_empty_batch_is_not_announced_at_all(lane):
     await lane.verb("subscribeTable", "alice", table="glbl.user", page_id="p1")
+    await lane.wait_filter_synced()
 
     result = await lane.verb("notifyDbEvents", "alice", dbevents={"glbl.user": []}, page_id="p1")
 
@@ -166,6 +177,7 @@ async def test_an_empty_batch_is_not_announced_at_all(lane):
 async def test_local_only_deposits_on_the_origin_page_alone(lane):
     """The hidden transaction: its events belong to the page that made them."""
     await lane.verb("subscribeTable", "alice", table="glbl.user", page_id="p1")
+    await lane.wait_filter_synced()
 
     result = await lane.verb(
         "notifyDbEvents", "alice", dbevents={"glbl.user": ["ins:1"]}, page_id="p0",
@@ -184,6 +196,7 @@ async def test_local_only_deposits_on_the_origin_page_alone(lane):
 
 async def test_the_deposit_drains_on_its_own_key_and_never_as_a_datachange(lane):
     await lane.verb("subscribeTable", "alice", table="glbl.user", page_id="p1")
+    await lane.wait_filter_synced()
     await lane.verb(
         "setStoreSubscription", "alice", page_id="p1", storename="page", prefix="form"
     )
