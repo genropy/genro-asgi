@@ -326,8 +326,8 @@ def applications_section(self, cfg):
     groups = commander.groups()
     groups.group(name="stable", occupancy_max_percent=80.0,
                  user_idle_freeze_minutes=60.0,
-                 cpu_grow_rearm_percent=30.0,   # below this a worker admits again
-                 cpu_grow_percent=50.0,         # above this it stops taking new users
+                 cpu_admission_reopen_percent=30.0,   # below this a worker admits again
+                 cpu_admission_close_percent=50.0,         # above this it stops taking new users
                  cpu_offload_percent=75.0,      # above this it cedes one user per beat
                  entry_module="genro_asgi.spa.orchestration.worker_entry",
                  worker_class="myshop.app:ShopWorker",
@@ -372,17 +372,13 @@ of it is IN USE (a `/proc/meminfo` capability) simply alarms nobody.
 
 **The occupancy keys are how full is full.** `occupancy_max_percent` is where a
 worker stops admitting new users; `restart_occupancy_max_percent` is where a
-process is replaced rather than kept; `reception_reserved_percent` is what the
-reception keeps free for the one job only it has (receiving whoever arrives
-unplaced), so its own admission setpoint is the difference;
+process is replaced rather than kept;
 `new_user_occupancy_percent` is what somebody nobody has ever measured is
-expected to cost, and `newcomer_reserve_count` is how many of that size must
-always find room: the group grows at its own round before anybody is refused,
-and no closure may eat into that reserve (default 1).
+expected to cost.
 
-**The CPU keys are the soft admission, and its brake.** `cpu_grow_percent`
+**The CPU keys are the soft admission, and its brake.** `cpu_admission_close_percent`
 (experimental, off when omitted) is the smoothed CPU above which a worker stops
-taking NEW users; it reopens below `cpu_grow_rearm_percent`, and between the two
+taking NEW users; it reopens below `cpu_admission_reopen_percent`, and between the two
 it keeps the state it had — the band is hysteresis. A CPU sample never forks a
 process: capacity is created by a concrete arrival that no open worker can
 admit. `cpu_retirement_quiet_seconds` (default 60) is the other half: how long
@@ -398,9 +394,9 @@ admission protects the workers to come; it does nothing for the users already
 placed on a process that is burning CPU. This key (nullable, `None` by default —
 omitted, no user is ever offloaded) is the smoothed CPU above which the group
 takes at most ONE user per heartbeat off that worker and puts him in the
-freezer. It requires `cpu_grow_percent`, and the thresholds are ordered:
+freezer. It requires `cpu_admission_close_percent`, and the thresholds are ordered:
 
-    cpu_grow_rearm_percent < cpu_grow_percent < cpu_offload_percent <= 100
+    cpu_admission_reopen_percent < cpu_admission_close_percent < cpu_offload_percent <= 100
 
 An offload declared without the admission key, or out of order, is refused at
 boot — the ordering is not decoration: the worker must already be closed to new

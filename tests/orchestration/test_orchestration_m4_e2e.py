@@ -81,8 +81,9 @@ import pytest
 
 from genro_asgi import AsgiServer
 from genro_asgi.applications.spa_app import SPA_CONNECTION_ID_COOKIE
-from genro_asgi.spa.orchestration import FreezeHandler, GroupHandler
+from genro_asgi.spa.orchestration import AssignmentRefused, FreezeHandler, GroupHandler
 from genro_asgi.spa.orchestration.spa_commander import GUEST_PREFIX
+from genro_asgi.spa.orchestration.worker_handler import WorkerHandler
 
 from ..conftest import LifespanRunner, ask_app, get_answer_header
 from .conftest import kill_process, wait_for
@@ -118,8 +119,9 @@ GATE_DELAY = 0.3
 #: afforded; 85 MB, where two processes hold 82% of the concession between them
 #: and the ceiling of a third would not fit, so nothing can grow.
 STORY_RSS_BYTES = 35_000_000
-GROWTH_CONCESSION_BYTES = 100_000_000
-FULL_CONCESSION_BYTES = 85_000_000
+SPARE_RSS_BYTES = 10_000_000
+GROWTH_CONCESSION_BYTES = 80_000_000
+FULL_CONCESSION_BYTES = 26_000_000
 
 #: What the vertex tells a refused browser to wait: the beat times the beats
 #: between two readings of the shape.
@@ -170,7 +172,6 @@ class ServerConfiguration(AsgiConfigBuilder):
                 worker_memory_max_percent=50.0,
                 occupancy_max_percent=80.0,
                 restart_occupancy_max_percent=95.0,
-                reception_reserved_percent=50.0,
                 new_user_occupancy_percent=5.0,
                 user_idle_freeze_minutes={idle_minutes},
                 entry_module="{entry_module}",
@@ -298,6 +299,10 @@ async def server(story_root, monkeypatch):
     """The server of the recipe, up through its own lifespan and down after."""
     # The beat stays alive; only the reading of the SHAPE is taken out of its
     # hands, so the two chapters that need a shape step ask for it themselves.
+    # The thermometer reads nothing either: this story is about identity,
+    # placement and deaths, and the real CPU of a freshly forked worker is not
+    # part of it.
+    monkeypatch.setattr(WorkerHandler, "get_process_cpu_reading", lambda self: None)
     monkeypatch.setattr(GroupHandler.check_occupancy, "every_beats", 10_000)
     monkeypatch.setattr(GroupHandler.check_user_activity, "every_beats", 10_000)
     asgi_server = AsgiServer(config=story_root / "pool_config.py")
@@ -374,20 +379,21 @@ async def test_a_day_of_the_site_from_the_front_to_the_child(server):
     assert vertex.user_is_frozen("anna") is False
     assert trail_of(woken) == f"/invoices {LOGIN_PATH}anna /invoices/7 /invoices/8"
 
-    # 6. THE POOL GROWS, AND STICKINESS IS PROVED ON TWO WORKERS. Against a
-    # hundred megabytes the reception stands at 70% with a cap of 30 and takes
-    # nobody, while the memory still affords one more process.
+    # 6. THE POOL GROWS, AND STICKINESS IS PROVED ON TWO WORKERS. Against eighty
+    # megabytes the reception stands at 87.5% and takes nobody: a newcomer's five
+    # would take it far past the cap every worker shares. The one born now is a
+    # light process, and it is where the next identity lands.
     group.memory_concession_bytes = GROWTH_CONCESSION_BYTES
+    group.worker_settings["worker_kwargs"]["declared_rss_bytes"] = SPARE_RSS_BYTES
 
-    await group.check_occupancy(now=True)
-    spare = group.worker_handler_map[f"{BASE_GROUP}_0002"]
+    spare = await group.start_worker()
 
-    assert group.get_occupancy_percent(reception.worker_snapshot) == 70.0
-    assert group.get_worker_cap(reception) == 30.0
+    assert group.get_occupancy_percent(reception.worker_snapshot) == 87.5
+    assert group.occupancy_max_percent == 80.0
 
     # A second browser of the same person arrives ANONYMOUS, and anonymous
     # requests go to the reception BY CONSTRUCTION, room or no room (doctrine
-    # of 2026-08-21): its reserve is the declared gate, never the walk — the
+    # of 2026-08-21): the cap is the declared gate, never the walk — the
     # capacity-aware landing belongs to identities, and mario_admin exercises
     # it at step 7.
     joining = await browse(server, "/joining")
@@ -424,12 +430,17 @@ async def test_a_day_of_the_site_from_the_front_to_the_child(server):
     assert identity_of(unmoved) == "mario"
     assert trail_of(unmoved) == f"{MARIO_TRAIL} /orders/10"
 
-    # 8. A POOL WITH NO ROOM IS A POLITE 503. Against eighty-five megabytes the
+    # 8. A POOL WITH NO ROOM IS A POLITE 503. Against twenty-six megabytes the
     # two processes hold more than the whole concession: nobody admits, and the
     # growth is refused instead of ordered.
     group.memory_concession_bytes = FULL_CONCESSION_BYTES
 
-    await group.check_occupancy(now=True)
+    # The saturation is written by the placement that was refused: nobody
+    # admits this identity and the quota refuses the worker that would.
+    vertex.connection_user_map["cid-late"] = "late"
+    vertex.resolve_user("cid-late")
+    with pytest.raises(AssignmentRefused):
+        await group.assign_user("late")
     refused = await browse(server, "/catalog")
     resident = await browse(server, "/orders/11", second_cid)
 
@@ -473,10 +484,10 @@ async def test_a_death_where_nothing_of_his_is_left_does_not_take_him(server, st
 
     # A second process, and the person carried onto it by his own login: born at
     # the reception with nothing measured on him, he is placed on the spare —
-    # the reception stands at 70% against a cap of 30 and takes nobody back.
+    # the reception stands at 87.5% against a cap of 80 and takes nobody back.
     group.memory_concession_bytes = GROWTH_CONCESSION_BYTES
-    await group.check_occupancy(now=True)
-    spare = group.worker_handler_map[f"{BASE_GROUP}_0002"]
+    group.worker_settings["worker_kwargs"]["declared_rss_bytes"] = SPARE_RSS_BYTES
+    spare = await group.start_worker()
 
     await browse(server, f"{LOGIN_PATH}mario", cid)
     settled = await browse(server, "/orders", cid)

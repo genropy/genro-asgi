@@ -145,7 +145,7 @@ value and not a cancellation, and a round that fails is written down and
 followed by the next beat.
 
 Observation has a second, deliberately narrower cadence. ``cpu_meter_loop``
-reads two scalar counters from each governed Linux process at the configured
+reads each governed process's cumulative CPU clock through psutil at the configured
 cadence (100 ms by default). It sends no worker RPC and builds no photo; the same
 pass reconciles only CPU admission. Placement observes that gate, while offload
 reads the latest temperature on the ordinary heartbeat.
@@ -211,7 +211,7 @@ DECISIONS_LOGGER_NAME = "genro_asgi.orchestration.decisions"
 #: ``PROCESS_PING_INTERVAL``, which is the cadence a single process is beaten at.
 HEARTBEAT_SECONDS = 5.0
 
-#: Default cadence of the observation-only Linux worker CPU thermometer.
+#: Default cadence of the observation-only worker CPU thermometer.
 CPU_TEMPERATURE_SAMPLE_SECONDS = 0.1
 
 # Beats between two rounds of each task of the vertex — the cadences, each where
@@ -1146,7 +1146,7 @@ class SpaCommander:
                         "memory_accounting": group_handler.get_memory_accounting(
                             worker_handler.worker_snapshot
                         )[1],
-                        "worker_cap": group_handler.get_worker_cap(worker_handler),
+                        "worker_cap": group_handler.occupancy_max_percent,
                         "cpu_temperature_percent": (
                             worker_handler.cpu_temperature_percent
                         ),
@@ -1693,11 +1693,11 @@ class SpaCommander:
         reconciliation = []
         for worker_handler in group.worker_handler_map.values():
             cpu_percent = worker_handler.get_cpu_temperature_percent()
-            if policy.cpu_grow_percent is None or cpu_percent is None:
+            if policy.cpu_admission_close_percent is None or cpu_percent is None:
                 admission_open = True
-            elif cpu_percent > policy.cpu_grow_percent:
+            elif cpu_percent > policy.cpu_admission_close_percent:
                 admission_open = False
-            elif cpu_percent < policy.cpu_grow_rearm_percent:
+            elif cpu_percent < policy.cpu_admission_reopen_percent:
                 admission_open = True
             else:
                 admission_open = worker_handler.cpu_admission_open
@@ -1914,7 +1914,7 @@ class SpaCommander:
                         "Vertex: worker %s CPU temperature failed",
                         worker_handler.name,
                     )
-            if group_handler.cpu_grow_percent is not None:
+            if group_handler.cpu_admission_close_percent is not None:
                 group_handler._judge_cpu_admission(log_scan=False)
 
     async def heartbeat_loop(self) -> None:

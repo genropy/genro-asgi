@@ -54,9 +54,8 @@ DECISIONS_LOGGER = "genro_asgi.orchestration.decisions"
 
 
 async def grown_group(make_group, **policies):
-    """One group with the policy on, its reception unreserved as the experiment runs it."""
-    policies.setdefault("reception_reserved_percent", 0.0)
-    group = make_group(cpu_grow_percent=50.0, **policies)
+    """One group with the CPU admission policy on, as the experiment runs it."""
+    group = make_group(cpu_admission_close_percent=50.0, **policies)
     await group.start_worker()
     return group
 
@@ -129,7 +128,7 @@ async def test_a_crossing_blocks_the_worker_without_growing(make_group, caplog):
     assert group.reception.cpu_admission_open is False
     rows = [record.getMessage() for record in caplog.records]
     assert any("cpu_admission" in row and "blocked" in row for row in rows)
-    assert not any("cpu_grow" in row for row in rows)
+    assert not any("order=grow" in row for row in rows)
 
 
 async def test_admission_decision_names_the_closed_worker(make_group, caplog):
@@ -247,7 +246,7 @@ async def test_repeated_crossings_without_arrivals_never_create_workers(make_gro
 async def test_with_the_policy_off_a_burning_worker_changes_nothing(make_group, commander):
     # 60 is over the experimental threshold and under the admission ceiling:
     # with the policy off, NO road reads it as a reason to grow or to close.
-    group = make_group(reception_reserved_percent=0.0)
+    group = make_group()
     await group.start_worker()
     declare_cpu(group.reception, 60.0)
 
@@ -472,7 +471,7 @@ async def test_concurrent_arrivals_share_one_demand_born_worker(make_group, comm
 
 
 async def test_the_reactive_growth_and_a_placement_cannot_fork_twice(make_group, commander):
-    group = make_group(reception_reserved_percent=0.0)
+    group = make_group()
     await group.start_worker()
     group.reception.worker_snapshot["rss_bytes"] = int(0.79 * WORKER_CEILING)
     known_at_the_vertex(commander, "c_arriving", "arriving")
@@ -579,7 +578,7 @@ async def test_a_dead_only_worker_is_replaced_by_the_availability_judge(make_gro
     group.reception.state = "quitted"
     await group.check_occupancy(now=True)
 
-    # With no living worker, the ordinary availability/reserve judge restores
+    # With no living worker, the empty-group branch of check_occupancy restores
     # a reception. This birth is not caused by the CPU scan.
     assert len(group.worker_handler_map) == 2
     assert group.worker_handler_map["standard_0002"].cpu_admission_open
@@ -641,10 +640,10 @@ async def test_no_spawn_close_spawn_cycle_without_new_load(make_group, group_clo
 async def test_the_thresholds_must_leave_a_hysteresis_band(make_group):
     for grow, rearm in ((50.0, 60.0), (50.0, 50.0), (110.0, 40.0), (50.0, -1.0)):
         with pytest.raises(ValueError, match="hysteresis"):
-            make_group(cpu_grow_percent=grow, cpu_grow_rearm_percent=rearm)
+            make_group(cpu_admission_close_percent=grow, cpu_admission_reopen_percent=rearm)
 
-    make_group(cpu_grow_percent=50.0, cpu_grow_rearm_percent=40.0)
-    make_group(cpu_grow_rearm_percent=60.0)  # policy off: the band is nobody's business
+    make_group(cpu_admission_close_percent=50.0, cpu_admission_reopen_percent=40.0)
+    make_group(cpu_admission_reopen_percent=60.0)  # policy off: the band is nobody's business
 
 
 # --- the retirement stands aside while the CPU speaks ---------------------------
@@ -653,7 +652,7 @@ async def test_the_thresholds_must_leave_a_hysteresis_band(make_group):
 async def test_policy_off_keeps_the_retirement_immediate(make_group):
     # No CPU policy: the gate does not exist and the spare quits at once,
     # exactly as it always did — no cooldown appears from anywhere.
-    group = make_group(reception_reserved_percent=0.0, cpu_retirement_quiet_seconds=3600.0)
+    group = make_group(cpu_retirement_quiet_seconds=3600.0)
     await group.start_worker()
     second = await group.start_worker()
     declare_cpu(group.reception, 1.0)
@@ -667,7 +666,7 @@ async def test_policy_off_keeps_the_retirement_immediate(make_group):
 async def test_policy_off_ignores_even_a_fresh_pressure_stamp(make_group):
     # The gate is inert with the policy off: a timestamp left by a policy that
     # was on — or by an apply that switched it off — holds nothing back.
-    group = make_group(reception_reserved_percent=0.0, cpu_retirement_quiet_seconds=3600.0)
+    group = make_group(cpu_retirement_quiet_seconds=3600.0)
     await group.start_worker()
     second = await group.start_worker()
     declare_cpu(group.reception, 1.0)

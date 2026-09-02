@@ -75,8 +75,8 @@ class GroupStub:
         self.restart_occupancy_max_percent = 95.0
         #: CPU admission stays OFF under this stub, as on a real group by
         #: default: the threshold decides whether a photo rings the wake (#43).
-        self.cpu_grow_percent: float | None = None
-        self.cpu_grow_rearm_percent = 40.0
+        self.cpu_admission_close_percent: float | None = None
+        self.cpu_admission_reopen_percent = 40.0
         #: The handler under this group; the tests assign it after construction.
         self.worker_handler: Any = None
 

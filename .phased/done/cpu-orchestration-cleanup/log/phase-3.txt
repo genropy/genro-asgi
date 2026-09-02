@@ -1,0 +1,3 @@
+✓ Phase 3 completed: A worker is born only for a user who is already there
+
+Il reserve dei newcomer e la crescita periodica sono eliminati; l'unica nascita in `check_occupancy` è la reception di un gruppo senza worker vivi, ogni altra sta dentro `assign_user`. La saturazione l'ha scritta il placement rifiutato, e il check successivo la toglie. Suite completa 1780 passed, `ruff check src/ tests/` pulito, commit `c9c4a4a`.

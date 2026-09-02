@@ -216,14 +216,12 @@ class SpaApplicationGrammar(ApplicationGrammar):
         occupancy_max_percent: float | BagResolver = None,
         restart_occupancy_max_percent: float | BagResolver = None,
         close_occupancy_max_percent: float | BagResolver = None,
-        cpu_grow_percent: float | BagResolver = None,
-        cpu_grow_rearm_percent: float | BagResolver = None,
+        cpu_admission_close_percent: float | BagResolver = None,
+        cpu_admission_reopen_percent: float | BagResolver = None,
         cpu_offload_percent: float | BagResolver | None = None,
         cpu_retirement_quiet_seconds: float | BagResolver | None = None,
         worker_min_life_seconds: float | BagResolver = None,
-        reception_reserved_percent: float | BagResolver = None,
         new_user_occupancy_percent: float | BagResolver = None,
-        newcomer_reserve_count: int | BagResolver = None,
         worker_max_users: int | BagResolver = None,
         user_idle_freeze_minutes: float | BagResolver = None,
         entry_module: str = None,
@@ -258,19 +256,16 @@ class SpaApplicationGrammar(ApplicationGrammar):
         the ceiling every survivor must stay under for a worker to be closed —
         distinctly below the growth setpoint, the band between the two being the
         pool's normal state — and ``worker_min_life_seconds`` the age before
-        which a worker is no closure candidate; ``reception_reserved_percent`` is
-        what the reception keeps free for the trade only it has;
+        which a worker is no closure candidate;
         ``new_user_occupancy_percent`` is what a user nobody has ever measured is
-        expected to cost, and ``newcomer_reserve_count`` how many of that size
-        must always find room — the group grows at its own round before anybody
-        is refused. ``user_idle_freeze_minutes`` is the silence past which the
-        group parks a user in the freezer. ``cpu_grow_percent`` (experimental,
+        expected to cost. ``user_idle_freeze_minutes`` is the silence past which the
+        group parks a user in the freezer. ``cpu_admission_close_percent`` (experimental,
         off when omitted) turns on soft CPU admission: a worker above it is
-        closed to NEW users and reopens below ``cpu_grow_rearm_percent``. CPU
+        closed to NEW users and reopens below ``cpu_admission_reopen_percent``. CPU
         samples do not fork processes. When a concrete arrival finds no open
         worker that can admit it, placement creates one worker and assigns that
         same user. ``cpu_offload_percent`` (off when omitted; requires
-        ``cpu_grow_percent`` and sits above it) makes a CPU-closed worker past
+        ``cpu_admission_close_percent`` and sits above it) makes a CPU-closed worker past
         it slim itself: one active user per beat — the least busy — is parked
         in the freezer, and his next request lands on an open worker or births
         one. ``cpu_retirement_quiet_seconds`` is how long the CPU must

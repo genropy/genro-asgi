@@ -56,11 +56,10 @@ async def offload_group(make_group, commander, users, **policies):
     flag is read at the vertex as a hold), and every identity is known at the
     vertex before the child registers.
     """
-    policies.setdefault("reception_reserved_percent", 0.0)
     group = make_group(
         users=list(users),
         transfer_flag=None,
-        cpu_grow_percent=50.0,
+        cpu_admission_close_percent=50.0,
         cpu_offload_percent=75.0,
         **policies,
     )
@@ -402,4 +401,4 @@ async def test_the_offload_threshold_applies_live(make_group, commander):
 def test_a_group_built_with_offload_but_no_admission_does_not_exist(make_group):
     with pytest.raises(GroupPolicyError) as caught:
         make_group(cpu_offload_percent=75.0)
-    assert "requires cpu_grow_percent" in str(caught.value)
+    assert "requires cpu_admission_close_percent" in str(caught.value)

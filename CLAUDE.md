@@ -172,7 +172,7 @@ front declared without either does not boot (`FatalBootError` →
 `lifespan.startup.failed`) — wanting no pool means declaring no spa front. At
 boot `boot_group_settings` composes `defaults ⊕ recipe_settings ⊕ profile ⊕ env_settings` through
 `GroupPolicy.from_settings` — the frozen dataclass in
-`spa/orchestration/group_policy.py` that holds the 16 setpoints, IS the
+`spa/orchestration/group_policy.py` that holds the 14 setpoints, IS the
 validation and collects every violation — BEFORE the vertex is built; the recipe
 and env levels stay separate dicts, so every later apply recomposes from them.
 A missing or invalid profile raises `FatalBootError` (`lifespan.py`): the one
@@ -207,26 +207,27 @@ worker's admission;
 an apply that moves nobody invents no cooldown. `get_retirement_suspension`
 answers the gate: a living worker still CPU-closed, or an event younger than the
 quiet. `_cpu_pressure_monotonic` is born `None`, so a boot imposes no cooldown,
-and with `cpu_grow_percent` off the gate is never consulted. Past the quiet
+and with `cpu_admission_close_percent` off the gate is never consulted. Past the quiet
 `_spare_worker` and `_order_quit` are exactly what they always were —
 consolidation of a worker with users included.
 
 **CPU pressure gates admission; concrete demand births capacity (landed
 2026-08-29; thermometer channel 2026-09-01).** A fresh commander-side worker
-temperature above `cpu_grow_percent` closes that worker to new users; one below
-`cpu_grow_rearm_percent` reopens it. A photo's `cpu_percent` is not an
+temperature above `cpu_admission_close_percent` closes that worker to new users; one below
+`cpu_admission_reopen_percent` reopens it. A photo's `cpu_percent` is not an
 orchestration input. The CPU judge never forks.
 When an arriving user finds no CPU-open worker that admits it, `assign_user`
 creates one worker under the placement lock and assigns that same user before
 returning. The measured template fork is short, so speculative empty workers
-buy little and amplify noisy samples. The periodic shape judge uses memory,
-not CPU, while this policy is on; otherwise CPU would still pre-fork through a
-second road. The journal ties every such birth to its first user with reason
+buy little and amplify noisy samples. The periodic judge births nothing: a group with no living
+worker gets its reception back when the memory affords it, and every other
+birth happens inside
+`assign_user` for the user who needs it. The journal ties every such birth to its first user with reason
 `new_worker_created_for_placement`.
 
 **Worker CPU temperature is a separate measurement channel (landed
-2026-09-01).** One commander-side task reads each Linux worker's cumulative
-process CPU clock at `cpu_temperature_sample_seconds` (100 ms by default), and
+2026-09-01).** One commander-side task reads each worker's cumulative
+process CPU clock through psutil at `cpu_temperature_sample_seconds` (100 ms by default), and
 derives the share of one core burned over the real interval. It sends no worker
 RPC and writes no worker photo: the pool census exposes the temperature, sample
 width and age alongside each worker. The sampling pass reconciles admission;
@@ -236,7 +237,7 @@ on their existing channels.
 
 **A CPU-hot worker slims one user per beat (landed 2026-09-01).**
 `cpu_offload_percent` (group setpoint, off by default; requires
-`cpu_grow_percent` and sits above it — rearm < grow < offload) arms
+`cpu_admission_close_percent` and sits above it — reopen < close < offload) arms
 `GroupHandler.check_cpu_offload`, run at EVERY heartbeat on fresh photos: the
 hottest CPU-closed `running` worker past the threshold cedes ONE user through
 `freeze_hosted_user`. WHO is judged against the window itself: a MATERIAL
@@ -297,4 +298,4 @@ commits, still to be entered in the register). Decision registers:
 
 **All general policies are inherited from the parent document: [meta-genro-modules CLAUDE.md](https://github.com/softwellsrl/meta-genro-modules/blob/main/CLAUDE.md)**
 
-**Last Updated**: 2026-08-29
+**Last Updated**: 2026-09-01

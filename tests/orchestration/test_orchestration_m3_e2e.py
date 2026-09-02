@@ -39,9 +39,8 @@ The day, in order:
 4. **Her next request wakes her**, lazily: the vertex says frozen, the group says
    where, and the call carries the verdict that authorises the trip home.
 5. **The pool grows on demand.** The machine's concession is measured at last and
-   the reception reads full: a newcomer nobody admits rings the wake, the round
-   brings a second process into being, and his retry lands on it — the reception
-   refuses him with the reserve it keeps for the trade only it has.
+   the reception reads full: a newcomer nobody admits fathers a second process
+   inside his own placement and lands on it — no retry, no round in between.
 6. **The pool shrinks by waste.** The machine grew, so what the second one holds
    the reception can absorb and still admit: the closure runs its six steps over
    the real child, and the round that reads its ended state takes it out.
@@ -103,7 +102,8 @@ GATE_DELAY = 0.3
 #: feel full: one worker of this group may hold HALF the concession, so 35 MB
 #: against a tight 100 MB is 70% of that worker's ceiling.
 STORY_RSS_BYTES = 35_000_000
-TIGHT_CONCESSION_BYTES = 100_000_000
+SPARE_RSS_BYTES = 10_000_000
+TIGHT_CONCESSION_BYTES = 80_000_000
 ROOMY_CONCESSION_BYTES = 1_000_000_000
 
 CALL_TIMEOUT = 10.0
@@ -145,7 +145,6 @@ class ServerConfiguration(AsgiConfigBuilder):
             # The story's spare is closed seconds after its birth: the minimum
             # life would exempt it, and this stanza is how the recipe waives it.
             worker_min_life_seconds=0.0,
-            reception_reserved_percent=20.0,
             new_user_occupancy_percent=5.0,
             user_idle_freeze_minutes={idle_minutes},
             entry_module="{entry_module}",
@@ -300,7 +299,6 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     assert vertex.user_expiry_hours == 240.0
     assert vertex.machine_memory_alarm_percent == 95.0
     assert group.occupancy_max_percent == 80.0
-    assert group.reception_reserved_percent == 20.0
     assert group.user_idle_freeze_minutes == IDLE_MINUTES
 
     # 1. THE RECEPTION IS BORN. One worker, which is a role and not a count: the
@@ -353,22 +351,24 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     assert reception.hosted_users == {mario, anna}
 
     # 5. THE POOL GROWS ON DEMAND. The machine's concession is measured at last,
-    # and against it the reception reads 70% full — over what it may take with the
-    # reserve it keeps for receiving whoever arrives unplaced. Nobody admits the
+    # and against it the reception reads 87.5% full — a newcomer's five would
+    # take it far past the cap every worker shares. Nobody admits the
     # newcomer, so her own placement fathers the worker that takes her: the birth
     # lives INSIDE the placement (owner, 2026-08-25) — she is never sent away.
     group.memory_concession_bytes = TIGHT_CONCESSION_BYTES
+    # What a process born from here on declares: the newborn is a light one, and
+    # room for her is what the reception no longer has.
+    group.worker_settings["worker_kwargs"]["declared_rss_bytes"] = SPARE_RSS_BYTES
     # The newcomer is a person the site has already baptised: reception-first
     # keeps a guest at the reception, so the one who takes the capacity walk is
     # an identity (doctrine of 2026-08-21).
     carla = known_at_the_vertex(vertex, "cid-c", "carla")
-    assert group.get_occupancy_percent(reception.worker_snapshot) == 70.0
+    assert group.get_occupancy_percent(reception.worker_snapshot) == 87.5
 
     assert await group.assign_user(carla) == f"{GROUP}_0002"
 
     assert sorted(group.worker_handler_map) == [f"{GROUP}_0001", f"{GROUP}_0002"]
-    # She landed on the new one: same reading, different setpoint — the
-    # reception has a reserve and the other has not.
+    # She landed on the new one: the reception was full and the newborn empty.
     spare = group.worker_handler_map[f"{GROUP}_0002"]
     served = await serve(group, carla, "cid-c", "/catalog")
     assert body_of(served) == f"GET /catalog for {carla}"
@@ -430,7 +430,7 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     orders = orders_of(story_root)
     # The share each of the two read when the closure was decided, as the group
     # itself computes it: the row carries the number, not a rounding of it.
-    closed_occupancy = group.get_occupancy_percent({"rss_bytes": STORY_RSS_BYTES})
+    closed_occupancy = group.get_occupancy_percent({"rss_bytes": SPARE_RSS_BYTES})
 
     assert [row for row in orders if "order=start_worker" in row] == [
         f"std order=start_worker subject={GROUP}_0001 numbers={{'workers': 1}} outcome=None",

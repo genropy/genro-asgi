@@ -24,10 +24,13 @@ from __future__ import annotations
 import asyncio
 import inspect
 
+import pytest
+
+from genro_asgi.spa.orchestration import AssignmentRefused
 from genro_asgi.spa.orchestration.group_handler import GroupHandler
 from genro_asgi.spa.orchestration.group_policy import GroupPolicy
 
-from .test_orchestration_group_handler import WORKER_CEILING
+from .test_orchestration_group_handler import WORKER_CEILING, known_at_the_vertex
 from .test_orchestration_group_handler import commander  # noqa: F401
 from .test_orchestration_group_handler import group_settings  # noqa: F401
 from .test_orchestration_group_handler import instance_root  # noqa: F401
@@ -43,7 +46,6 @@ SNAPSHOT_DECISIONS = (
     "assign_user",
     "check_occupancy",
     "check_user_activity",
-    "_grow",
     "_spare_worker",
 )
 
@@ -64,12 +66,10 @@ async def test_setpoint_attributes_delegate_to_policy(make_group):
             "occupancy_max_percent": 70.0,
             "restart_occupancy_max_percent": 90.0,
             "close_occupancy_max_percent": 25.0,
-            "cpu_grow_percent": 55.0,
-            "cpu_grow_rearm_percent": 30.0,
+            "cpu_admission_close_percent": 55.0,
+            "cpu_admission_reopen_percent": 30.0,
             "worker_min_life_seconds": 12.0,
-            "reception_reserved_percent": 15.0,
             "new_user_occupancy_percent": 4.0,
-            "newcomer_reserve_count": 3,
             "worker_max_users": 9,
             "user_idle_freeze_minutes": 45.0,
             "memory_max_percent": 60.0,
@@ -98,7 +98,7 @@ async def test_apply_policy_is_synchronous_assignments_only(make_group, caplog):
     group = make_group()
     worker_handler = await group.start_worker()
     worker_handler.cpu_admission_open = False
-    new_policy = GroupPolicy.from_settings({"cpu_grow_percent": 70.0})
+    new_policy = GroupPolicy.from_settings({"cpu_admission_close_percent": 70.0})
 
     assert not inspect.iscoroutinefunction(GroupHandler.apply_policy)
     body = decision_source("apply_policy")
@@ -133,19 +133,17 @@ async def test_decision_binds_policy_snapshot(make_group):
     second = await group.start_worker()
     picture = {first.name: 30.0, second.name: 30.0}
     group.apply_policy(
-        GroupPolicy.from_settings({"reception_reserved_percent": 0.0, "worker_min_life_seconds": 0.0}),
+        GroupPolicy.from_settings({"worker_min_life_seconds": 0.0}),
         [],
     )
     cold = GroupPolicy.from_settings(
         {
-            "reception_reserved_percent": 0.0,
             "worker_min_life_seconds": 0.0,
             "close_occupancy_max_percent": 79.0,
         }
     )
     hot = GroupPolicy.from_settings(
         {
-            "reception_reserved_percent": 0.0,
             "worker_min_life_seconds": 0.0,
             "close_occupancy_max_percent": 10.0,
         }
@@ -155,20 +153,22 @@ async def test_decision_binds_policy_snapshot(make_group):
     assert group._spare_worker(picture, hot) is None
 
 
-async def test_checkpoint_suppresses_effect_after_swap(make_group, caplog):
-    # A group with no room left: its round would grow. The lock is held, so the
-    # growth waits — and the policy is swapped while it waits.
+async def test_checkpoint_suppresses_effect_after_swap(make_group, commander, caplog):
+    # A user nobody admits: his placement would father a worker. The lock is
+    # held, so the birth waits — and the policy is swapped while it waits.
     group = make_group(rss_bytes=int(0.79 * WORKER_CEILING))
     await group.start_worker()
+    known_at_the_vertex(commander, "cid-a", "mario")
     await group._placement_lock.acquire()
-    round_task = asyncio.create_task(group.check_occupancy(now=True))
+    placement = asyncio.create_task(group.assign_user("mario"))
     for _ in range(5):
         await asyncio.sleep(0)
 
     with caplog.at_level("INFO", logger=ORDERS_LOGGER):
         group.apply_policy(GroupPolicy.from_settings({}), [])
         group._placement_lock.release()
-        await round_task
+        with pytest.raises(AssignmentRefused):
+            await placement
 
     assert len(group.worker_handler_map) == 1  # no birth
     assert "suppressed: policy changed while deciding" in caplog.text
