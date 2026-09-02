@@ -102,7 +102,6 @@ re-login — the declared price of a death nobody ordered.
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from .worker_connector import (
@@ -115,15 +114,6 @@ from .worker_connector import (
 #: with its ratified value rather than imported: the vertex owns the module that
 #: declares it and importing it back would close a circle.
 GUEST_PREFIX = "guest_"
-
-#: The weight of the newest CPU reading in the smoothed ``cpu_percent``; the
-#: rest is what the average already said. A policy to tune by trials.
-CPU_SMOOTHING_FACTOR = 0.3
-
-#: The shortest wall-clock window a CPU rate is read over, in seconds. Photos
-#: closer than this carry the standing value forward and leave the anchor
-#: where it is: a rate over milliseconds is noise, not load.
-CPU_WINDOW_MIN_SECONDS = 1.0
 
 __all__ = [
     "CommanderEnvelopeHandler",
@@ -170,8 +160,6 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
     def __init__(self, worker_handler: Any, group_envelope_handler: GroupEnvelopeHandler) -> None:
         self.worker_handler = worker_handler
         self.group_envelope_handler = group_envelope_handler
-        self._last_cpu: tuple[float, float] | None = None
-        self._cpu_percent = 0.0
         #: The previous photo's cumulative service counters, per user:
         #: ``(service_seconds, served_call_count)``. Rebuilt at every photo, so
         #: a user the photo no longer carries costs no memory here.
@@ -226,43 +214,12 @@ class WorkerEnvelopeHandler(EnvelopeHandler):
     def on_worker_snapshot(self, photo: dict[str, Any]) -> None:
         """File the photo as this handler's latest: the gauges everybody judges on.
 
-        Two photos apart, the CPU seconds become a rate: the share of one core
-        this process burned between them, clamped to a whole core, SMOOTHED, and
-        written into the photo as ``cpu_percent`` — the component that sees a
-        worker saturating the GIL while its RSS stands still (#38). The first
-        photo has nothing to compare against and carries no such component.
-
-        Smoothed because two photos may be milliseconds apart: a raw reading
-        makes one busy instant look like saturation, and the CPU admission and
-        growth judges must react to load, not to a spike. Restart is deliberately
-        memory-only: CPU pressure must not destroy a process that owns live
-        sessions. The moving average starts at zero — a newborn is presumed idle — the
-        weight of the newest reading is ``CPU_SMOOTHING_FACTOR``, and no rate
-        is read over less than ``CPU_WINDOW_MIN_SECONDS`` of wall clock:
-        photos closer than that carry the standing value forward. Policies
-        to tune by trials, not by taste.
-
-        The user rows get the same treatment: their cumulative service
-        counters become ``recent_call_count`` and ``recent_service_seconds``,
-        the work done since the previous photo. A user first seen reads 0 —
-        nothing to compare against, like the first CPU photo — and a counter
-        that went backwards (a row reborn after a freeze) is clamped to 0
-        rather than invented negative.
+        The user rows are derived here: their cumulative service counters
+        become ``recent_call_count`` and ``recent_service_seconds``, the work
+        done since the previous photo. A user first seen reads 0 — nothing to
+        compare against — and a counter that went backwards (a row reborn
+        after a freeze) is clamped to 0 rather than invented negative.
         """
-        cpu_seconds = photo.get("cpu_seconds")
-        now = time.monotonic()
-        previous = self._last_cpu
-        if cpu_seconds is not None:
-            if previous is None:
-                self._last_cpu = (cpu_seconds, now)
-            else:
-                elapsed = now - previous[1]
-                if elapsed >= CPU_WINDOW_MIN_SECONDS:
-                    burned = max(0.0, cpu_seconds - previous[0])
-                    sample = 100.0 * min(burned / elapsed, 1.0)
-                    self._cpu_percent += CPU_SMOOTHING_FACTOR * (sample - self._cpu_percent)
-                    self._last_cpu = (cpu_seconds, now)
-                photo["cpu_percent"] = self._cpu_percent
         self._derive_user_service(photo)
         self.worker_handler.worker_snapshot = photo
 

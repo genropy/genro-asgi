@@ -214,8 +214,9 @@ them under `cpu_close_percent` (`null` by default = the reopen threshold itself;
 set while the admission policy is on, `<= cpu_admission_reopen_percent`; it
 replaces the memory-based close setpoint), its memory shared the same way must keep every
 survivor under `worker_memory_admission_percent`, then the heads; a living worker
-with no temperature yet is journaled `cpu_temperature_missing` and nothing
-closes. Consolidation of a worker with users included, as before.
+with no temperature yet is journaled `cpu_temperature_missing` — one row, no
+other retirement row that round — and nothing closes. Consolidation of a
+worker with users included, as before.
 
 **The CPU picks the worker; the memory only refuses (landed 2026-09-02).** A
 filtered temperature above `cpu_admission_close_percent` closes a worker to new
@@ -281,9 +282,8 @@ carries three counters written by the worker — ``served_call_count`` and
 ``service_seconds`` cumulated in the ``finally`` of the actual stitching
 (failed and slow calls counted like any other), ``pending_call_count`` read
 off the pendings — and two derived by ``WorkerEnvelopeHandler`` between two
-photos, ``recent_call_count`` / ``recent_service_seconds``, the same road
-``cpu_seconds`` takes to ``cpu_percent``. The worker keeps no window and takes
-no decision; the counters live in the register item and never reach a frozen
+photos, ``recent_call_count`` / ``recent_service_seconds``. The worker keeps
+no window and takes no decision; the counters live in the register item and never reach a frozen
 parcel (the freeze persists store and connections, not the row).
 
 **Every orchestration decision carries its reason (landed 2026-08-29).**

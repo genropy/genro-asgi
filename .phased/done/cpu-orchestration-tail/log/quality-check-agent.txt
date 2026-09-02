@@ -1,0 +1,42 @@
+STATE: `wf/cpu-orchestration-tail` (dedicated — cut from `feat/cpu-orchestration` at `2d2a50c`, `fd770f8` its first commit) | base `fd770f8` | tree dirty: 1 untracked, `.phased/active/cpu-orchestration-tail/log/quality-check-agent.txt` (this run's own log) | phases 3 done / 3, no `[!]`/`[~]`/`[>]`
+
+Note on shape: `ddf7b0d` ("wf: settle the review's prose leftovers") lands AFTER Phase 3's coherence review and was never itself reviewed by a phase. It settled four of the five items `review.md` flagged.
+
+DONE-CHECK
+
+- **Phase 1 — met, criterion narrower than the code.** The Done grep prints six lines, not one file: `worker_handler.py:428/430/440` and `test_orchestration_cpu_temperature_meter.py:105/109` beyond the enumerated `test_orchestration_cpu_meter_psutil.py:80`. Read all six: `record_cpu_reading`'s own local `cpu_seconds` and a psutil double returning cpu seconds — the commander-side thermometer, not the photo. Nothing of the photo's CPU survives. `ruff check src/ tests/` → All checks passed. Suite is 1784, not the 1786 the criterion recorded, because Phase 2 deleted two tests afterwards.
+- **Phase 2 — met.** `git grep -n cpu_temperature_missing -- src` → exactly one line, `group_handler.py:1052`, inside `check_occupancy` (verified by reading 998–1053: after the `saturated` lift, before the `cpu_admission_close_percent` gate, as `notes.md` claims). The two deleted test names grep to nothing. `pytest tests/ -q` → 1784 passed. `ruff` clean.
+- **Phase 3 — met.** `review.md` present with the three sections; `ruff check src/ tests/` clean; `pytest tests/ -q` → **1784 passed, 3 warnings, 119.01s**.
+- Not re-runnable: none. All three criteria re-ran literally.
+
+FINDINGS
+
+**MECHANICAL**
+
+1. `tests/orchestration/test_orchestration_pss_accounting.py:94` — `test_cpu_never_enters_memory_occupancy` now passes by construction. Phase 1 removed `"cpu_percent": 96.0` from its photo, leaving `{"rss_bytes": 900_000, "pss_bytes": 200_000}` and two identical asserts — the body of `test_valid_pss_wins_over_a_much_larger_rss:87-91` minus one line. There is no CPU key left that could enter the occupancy, so the test cannot observe its own guarantee. This is the category Phase 2 deleted two tests for; Phase 3 listed the file among the 11 reviewed without flagging it. Suggested: delete the test — the guarantee lost its observable when the photo lost the field.
+
+2. `tests/orchestration/test_orchestration_group_handler.py:632-639` — dead middle step in `test_a_photo_past_the_restart_setpoint_brings_the_round_forward`. That `read_envelope` existed to show a photo at `cpu_percent: 96.0` with low memory does NOT wake the round. With the key gone it is a second below-setpoint memory photo (`WORKER_CEILING // 5` after `// 2`) asserting what the first already asserted. Not a wrong assertion, a step that distinguishes nothing.
+
+3. `src/genro_asgi/spa/orchestration/group_handler.py:1006` — 109 columns, past the `line-length = 100` declared in `pyproject.toml:91`. Written by `ddf7b0d`. `ruff` does not catch it: `select = ["E4", "E7", "E9", "F"]` excludes E501. Soft — the repo already carries pre-existing violations (`spa_worker.py:1599` at 135, from `129a73f`), so the limit is declared, not enforced. It is the only >100 line this branch introduces.
+
+**JUDGMENT**
+
+4. Phase 1's `> Review:` note — **CONFIRMED**, see DONE-CHECK.
+5. Phase 3's `> Verify:` note, the five wording items — four **SETTLED** in `ddf7b0d`: `group_handler.py:105` module docstring, `_judge_cpu_admission`'s docstring, `CLAUDE.md:282-286`'s duplicated clause, `check_occupancy`'s docstring gap. One **OPEN**: `review.md` item 3, `group_handler.py:1550` still names its local `cpu_percent` for a thermometer value. The same name lives in five test helpers this plan never touched (`test_orchestration_apply.py:59`, `test_orchestration_cpu_growth.py:63`, `test_orchestration_group_handler.py:62`, `test_orchestration_memory_headroom.py:91`, `test_orchestration_placement.py:92`) — one decision over several files.
+6. `review.md` item 7 — **CONFIRMED new**. `mypy` on `group_handler.py` reports two errors: `:1478` (`Value expression in dictionary comprehension has incompatible type "float | None"; expected "float"`) and `:941` (untouched region, pre-existing). `pyproject.toml` declares mypy non-blocking and forbids the cast/ignore. The honest close is narrowing `WorkerHandler.get_cpu_temperature_percent`'s return — a signature change with other callers.
+7. Phase 2's gate preempts an untested row. Before Phase 2 the CPU-pressure suspension ran first, so pressure + a temperature-less worker journaled `cpu_pressure_holds_retirement`; now it journals `cpu_temperature_missing`. The plan's header permits the WHEN change by name — but `git grep cpu_pressure_holds_retirement -- tests` returns nothing, so no test covers either the row or the new ordering. Pre-existing gap that Phase 2's reordering now sits on top of.
+
+Verified not broken: `WorkerHandler.record_cpu_reading` is still the only writer of `cpu_temperature_percent`; every journal reason code keeps its spelling; the photo keeps `rss_bytes`, `pss_bytes` and the user service counters; `import os` in `spa_worker.py` still has three readers; `sample_cpu_temperatures` is ungated, so temperatures exist with the admission policy off; no orphan helper survived the four deleted envelope tests (`photo_of` 8 uses, `envelope(` 45, `pytest.` 6).
+
+VERIFY-NOTES
+
+`verify.md`, § Phase 3 (verbatim) — *when: at the quality check*:
+> At the quality check: the five wording items in `review.md` (§ Flagged for
+> human) — two stale docstrings in `group_handler.py`, the local named
+> `cpu_percent`, the duplicated clause in `CLAUDE.md`, the `check_occupancy`
+> docstring gap. All are prose or a name, so no test can decide them.
+
+Plan, Phase 3 `> Verify:` field (verbatim) — *when: at the quality check*:
+> at the quality check — the five wording items in `review.md` (§ Flagged for human) are the owner's calls on prose and on one name.
+
+Disposition in finding 5. `notes.md` has no `## Run inspection` section.

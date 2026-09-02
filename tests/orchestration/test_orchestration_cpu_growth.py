@@ -445,19 +445,6 @@ async def test_two_concurrent_cpu_rounds_never_fork(make_group, caplog):
     assert group.reception.cpu_admission_open is False
 
 
-async def test_a_crossing_and_a_placement_race_to_one_spawn(make_group, commander):
-    group = await grown_group(make_group)
-    declare_cpu(group.reception, 60.0)
-    known_at_the_vertex(commander, "c_arriving", "arriving")
-
-    _, home = await asyncio.gather(
-        group.check_occupancy(now=True), group.assign_user("arriving")
-    )
-
-    assert len(group.worker_handler_map) == 2
-    assert home == "standard_0002"
-
-
 async def test_concurrent_arrivals_share_one_demand_born_worker(make_group, commander):
     group = await grown_group(make_group)
     declare_cpu(group.reception, 60.0)
@@ -469,21 +456,6 @@ async def test_concurrent_arrivals_share_one_demand_born_worker(make_group, comm
 
     assert homes == ["standard_0002", "standard_0002"]
     assert len(group.worker_handler_map) == 2
-
-
-async def test_the_reactive_growth_and_a_placement_cannot_fork_twice(make_group, commander):
-    group = make_group()
-    await group.start_worker()
-    group.reception.worker_snapshot["rss_bytes"] = int(0.85 * WORKER_CEILING)  # past the veto
-    known_at_the_vertex(commander, "c_arriving", "arriving")
-
-    _, home = await asyncio.gather(
-        group.check_occupancy(now=True), group.assign_user("arriving")
-    )
-
-    assert len(group.worker_handler_map) == 2
-    assert home == "standard_0002"
-    assert group.user_worker_map["arriving"] == "standard_0002"
 
 
 async def test_two_workers_over_the_threshold_are_one_spawn_per_round(make_group):
@@ -848,8 +820,28 @@ async def test_a_worker_with_no_temperature_suspends_the_retirement(make_group, 
         await group.check_occupancy(now=True)
     assert second.state == "running"
     decisions = [json.loads(r.getMessage()) for r in caplog.records if r.name == DECISIONS_LOGGER]
-    rows = [d for d in decisions if d["reason"] == "cpu_temperature_missing"]
-    assert rows and rows[-1]["numbers"]["missing"] == [second.name]
+    rows = [d for d in decisions if d["decision"] == "retirement"]
+    assert [row["reason"] for row in rows] == ["cpu_temperature_missing"]
+    assert rows[0]["numbers"]["missing"] == [second.name]
+
+
+async def test_a_missing_temperature_is_journaled_before_the_pressure_gate(
+    make_group, caplog
+):
+    # Pressure stands (the reception is CPU-closed) AND the newborn has no
+    # temperature yet: the round says the judgment could not be made, not that
+    # the pressure holds it — one row, the missing one.
+    group = await grown_group(make_group)
+    second = await group.start_worker()
+    declare_cpu(group.reception, 60.0)
+    with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
+        await group.check_occupancy(now=True)
+    assert group.reception.cpu_admission_open is False
+    decisions = [json.loads(r.getMessage()) for r in caplog.records if r.name == DECISIONS_LOGGER]
+    rows = [d for d in decisions if d["decision"] == "retirement"]
+    assert [r["reason"] for r in rows] == ["cpu_temperature_missing"]
+    assert rows[0]["numbers"]["missing"] == [second.name]
+    assert second.state == "running"
 
 
 def test_the_quiet_is_a_duration_and_zero_is_one(make_group):

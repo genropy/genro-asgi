@@ -20,8 +20,8 @@ register item — inside the ``finally`` of the actual stitching, so a call that
 fails or runs long is counted like any other — and projects them into the
 photo with ``pending_call_count``. One layer up, ``WorkerEnvelopeHandler``
 turns the cumulatives into ``recent_call_count`` / ``recent_service_seconds``,
-the deltas between two photos, the same road ``cpu_seconds`` takes to
-``cpu_percent``. The worker keeps no window and takes no decision.
+the deltas between two photos. The worker keeps no window and takes no
+decision.
 """
 
 from __future__ import annotations
