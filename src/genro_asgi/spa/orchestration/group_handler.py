@@ -449,7 +449,7 @@ class GroupHandler:
         return self.policy.cpu_cooling_seconds
 
     @property
-    def worker_admission_interval_seconds(self) -> float:  # wf:phase-2:new
+    def worker_admission_interval_seconds(self) -> float:
         return self.policy.worker_admission_interval_seconds
 
     @property
@@ -820,7 +820,7 @@ class GroupHandler:
         )
         return None
 
-    def _recently_admitted(self, worker_handler: WorkerHandler) -> bool:  # wf:phase-2:new
+    def _recently_admitted(self, worker_handler: WorkerHandler) -> bool:
         """Whether this worker admitted a user less than the admission interval ago."""
         last = worker_handler.last_admission_monotonic
         return (
