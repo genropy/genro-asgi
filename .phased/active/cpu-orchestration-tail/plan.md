@@ -60,3 +60,6 @@ The tail of the CPU orchestration rework: remove what the two previous plans lef
 | Phase 1 | medium | opus |
 | Phase 2 | medium | opus |
 | Phase 3 | xhigh | opus |
+
+## Quality check
+> Quality check: 2026-09-02T06:36:44Z — commit bf13730 — review agent, QA done, findings 7 confirmed (4 fixed at bf13730, 3 recorded: local name cpu_percent, mypy advisory, pressure-gate ordering now tested), 0 dismissed
