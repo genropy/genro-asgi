@@ -638,8 +638,8 @@ class SpaWorker:
             his cumulative service counters — ``served_call_count``,
             ``service_seconds``, ``pending_call_count`` — raw readings the
             envelope layer turns into per-interval deltas. The CPU is measured
-            by the commander through psutil, never by this photo. The counters live in
-            the register item and never reach a frozen parcel: the freeze
+            by the commander through psutil, never by this photo. The counters
+            live in the register item and never reach a frozen parcel: the freeze
             persists the store and the connections, not the row itself.
         """
         with self.dispatch_lock:

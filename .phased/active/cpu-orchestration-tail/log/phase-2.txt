@@ -1,0 +1,5 @@
+No foreman record — notification skipped.
+
+✓ Phase 2 completed: One journal row per suspended retirement, and no test that passes by construction
+
+The missing-temperature check now lives in `check_occupancy` and returns after its single `cpu_temperature_missing` row, so no suspension or `no_absorbable_spare_worker` row follows it; `_spare_worker` reads temperatures as floats with no None branch. The two placement-race tests that passed by construction are gone. `pytest tests/ -q` 1784 passed, `ruff check src/ tests/` clean, committed as `8c307a4`.

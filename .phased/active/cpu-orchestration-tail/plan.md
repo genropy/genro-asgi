@@ -36,7 +36,10 @@ The tail of the CPU orchestration rework: remove what the two previous plans lef
   - Details: `check_occupancy` first, then `_spare_worker`, then the tests, then `CLAUDE.md`; `ruff check src/ tests/`; `pytest tests/orchestration/test_orchestration_cpu_growth.py tests/orchestration/test_orchestration_group_handler.py -q`; `pytest tests/ -q`.
   - Done: `git grep -n cpu_temperature_missing -- src` prints exactly one line, inside `check_occupancy`; `git grep -nE 'def test_a_crossing_and_a_placement_race_to_one_spawn|def test_the_reactive_growth_and_a_placement_cannot_fork_twice' -- tests` prints nothing; `pytest tests/ -q` green; `ruff check src/ tests/` zero errors.
 
-- [ ] **Phase 3**: Coherence review and auto-fix (final, mandatory)
+- [x] **Phase 3**: Coherence review and auto-fix (final, mandatory)
+  > Done: `review.md` written in the plan directory with the three sections. Auto-fixed: one whitespace reflow of the `spa_worker.worker_snapshot` docstring sentence Phase 1 wrote (86-column line inside a 70-79 paragraph). Flagged for human, not touched: `group_handler.py:105` and `:1528` still describe the photo's CPU (`historical cpu_percent`, `smoothed CPU photo`), `_judge_cpu_admission`'s local is named `cpu_percent`, `CLAUDE.md:282-286` says "derived between two photos" twice, `check_occupancy`'s docstring omits the missing-temperature gate, and Phase 2's `temperatures: dict[str, float]` annotation is one NEW mypy advisory error (non-blocking here, and not silenceable by policy). `ruff format` measured and rejected as a convention this repo does not have (103/220 files would reformat). `ruff check` on the file set zero errors; `pytest tests/ -q` 1784 passed.
+  > Verify: at the quality check — the five wording items in `review.md` (§ Flagged for human) are the owner's calls on prose and on one name.
+  > Files: `src/genro_asgi/spa/orchestration/spa_worker.py`, `.phased/active/cpu-orchestration-tail/review.md`, `.phased/active/cpu-orchestration-tail/notes.md`
   - Pattern reference: same as Phases 1..2 (cross-check against them)
   - Files: only the files written by Phases 1..2 (collect them from their `Files:` fields). Never touch a pre-existing file they did not modify.
   - Decisions:
