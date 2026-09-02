@@ -22,8 +22,9 @@ until ``more_body`` is false — always, whatever the content-type, so a
 request never leaves unread ASGI messages behind. genro-tytx is used ONLY as
 a serializer: header values, query values and multipart fields are hydrated
 with ``from_tytx``, an urlencoded body with ``from_qs``, a json/xml/msgpack
-body with ``from_tytx(transport=...)``. The media-type ↔ transport maps live
-in ``media_types``; the protocol reading lives here and nowhere else.
+body with ``from_tytx(transport=...)``. The transport → media type map lives
+in ``media_types``, the inbound content-type is resolved here in
+``get_transport``; the protocol reading lives here and nowhere else.
 
 The body is decoded by content-type:
 
