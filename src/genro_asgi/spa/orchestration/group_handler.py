@@ -102,8 +102,8 @@ With ``cpu_admission_close_percent`` set, the commander's process thermometer sa
 worker independently of traffic. A fresh ``cpu_temperature_percent`` above the
 threshold CLOSES it to new users (``cpu_admission_open``); it reopens only below
 ``cpu_admission_reopen_percent``; between the two thresholds it keeps its state — the
-band is hysteresis. A photo's historical ``cpu_percent`` is not an orchestration
-input. The thermometer never creates a process by itself. When a
+band is hysteresis. The photo carries no CPU: the thermometer is the only
+source, and it never creates a process by itself. When a
 real user arrives, placement first tries the CPU-open workers; only when none
 admits that user does the same placement, under its lock, fork one worker and
 place that same user on it. A transient sample therefore cannot leave empty
@@ -1001,9 +1001,9 @@ class GroupHandler:
 
         Acts on the group: restart when MEMORY is past the restart setpoint,
         update soft CPU admission, give an empty group its reception back when
-        the memory affords it,
-        close a worker the others can absorb — and lift ``saturated`` once the
-        memory quota affords a birth again. No worker is born here for a user
+        the memory affords it, close a worker the others can absorb — or, when a
+        living worker has no temperature yet, journal that and take no step —
+        and lift ``saturated`` once the memory quota affords a birth again. No worker is born here for a user
         who is not there yet: the only birth is the reception of a group with
         no living worker, every other one happens inside ``assign_user`` for
         the user who needs it.
@@ -1525,7 +1525,7 @@ class GroupHandler:
     def _judge_cpu_admission(self, *, log_scan: bool = True) -> None:
         """Open or close workers to newcomers from the CPU hysteresis.
 
-        Off unless ``cpu_admission_close_percent`` is set. The smoothed CPU photo controls
+        Off unless ``cpu_admission_close_percent`` is set. The filtered temperature controls
         admission only: above the close threshold a worker stops taking NEW
         users, below the reopen threshold it takes them again, and inside the
         band it keeps its state. Sticky users never move.
