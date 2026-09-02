@@ -72,3 +72,6 @@ The CPU decides, the memory is a final veto, a worker is born only when nobody a
 - The interval is an ordering rule, never a refusal and never a birth: a group whose open workers are all in their window still places on the hottest that admits.
 - Out of scope, deliberately: memory through psutil; the photo's `cpu_percent` smoothing (`CPU_SMOOTHING_FACTOR`, no reader left) and the test reclassification — next plan, autonomous.
 - The bench that measures the outcome lives in genropy-asgi (`benchmarks/cpu_offload/`), not here.
+
+## Quality check
+> Quality check: 2026-09-02T05:47:35Z — commit 991ad2d — review agent, QA done (Phase 2 verify now; Phase 3 verify deferred to the genropy-asgi bench), findings 11 confirmed (3 fixed at 991ad2d, 6 docs aligned, 2 recorded), 0 dismissed
