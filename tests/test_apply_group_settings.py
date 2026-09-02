@@ -54,7 +54,7 @@ async def test_recompute_independent_of_previous_profile(commander):
     assert after_both["effective_settings"]["worker_min_life_seconds"] == 9.0
     assert after_both["effective_settings"]["worker_max_users"] == 16
     # A key nobody names anywhere is the dataclass default.
-    assert after_both["effective_settings"]["close_occupancy_max_percent"] == 40.0
+    assert after_both["effective_settings"]["cpu_close_percent"] is None
 
     alone = SpaCommander(
         commander.freeze_handler.root_path,
@@ -100,12 +100,12 @@ async def test_generation_advances_on_idempotent_apply(commander):
     # wf:contract: changed_settings, outcome "applied", and a generation that
     # wf:contract: advances anyway: the audit counts successful attempts, not
     # wf:contract: differences.
-    commander.profile_store.write("steady", {"close_occupancy_max_percent": 30.0})
+    commander.profile_store.write("steady", {"cpu_close_percent": 30.0})
 
     first = await commander.apply_group_settings(profile_name="steady", source="reload")
     second = await commander.apply_group_settings(profile_name="steady", source="reload")
 
-    assert first["changed_settings"] == {"close_occupancy_max_percent": 30.0}
+    assert first["changed_settings"] == {"cpu_close_percent": 30.0}
     assert second["changed_settings"] == {}
     assert second["outcome"] == "applied"
     assert (first["generation"], second["generation"]) == (2, 3)

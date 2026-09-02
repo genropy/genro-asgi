@@ -65,7 +65,7 @@ async def test_setpoint_attributes_delegate_to_policy(make_group):
         {
             "worker_memory_admission_percent": 70.0,
             "restart_occupancy_max_percent": 90.0,
-            "close_occupancy_max_percent": 25.0,
+            "cpu_close_percent": 25.0,
             "cpu_admission_close_percent": 55.0,
             "cpu_admission_reopen_percent": 30.0,
             "worker_min_life_seconds": 12.0,
@@ -130,7 +130,8 @@ async def test_decision_binds_policy_snapshot(make_group):
     group = make_group()
     first = await group.start_worker()
     second = await group.start_worker()
-    picture = {first.name: 30.0, second.name: 30.0}
+    first.get_cpu_temperature_percent = lambda: 30.0
+    second.get_cpu_temperature_percent = lambda: 30.0
     group.apply_policy(
         GroupPolicy.from_settings({"worker_min_life_seconds": 0.0}),
         [],
@@ -138,18 +139,18 @@ async def test_decision_binds_policy_snapshot(make_group):
     cold = GroupPolicy.from_settings(
         {
             "worker_min_life_seconds": 0.0,
-            "close_occupancy_max_percent": 79.0,
+            "cpu_close_percent": 79.0,
         }
     )
     hot = GroupPolicy.from_settings(
         {
             "worker_min_life_seconds": 0.0,
-            "close_occupancy_max_percent": 10.0,
+            "cpu_close_percent": 10.0,
         }
     )
 
-    assert group._spare_worker(picture, cold) is second
-    assert group._spare_worker(picture, hot) is None
+    assert group._spare_worker(cold) is second
+    assert group._spare_worker(hot) is None
 
 
 async def test_checkpoint_suppresses_effect_after_swap(make_group, commander, caplog):

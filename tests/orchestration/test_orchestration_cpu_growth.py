@@ -837,6 +837,21 @@ async def test_sticky_users_stand_until_the_intentional_retirement(
     assert newborn.state == "running"
 
 
+async def test_a_worker_with_no_temperature_suspends_the_retirement(make_group, caplog):
+    # The CPU decides the closure: with one worker unmeasured there is no
+    # judgment this round, and the journal says so — nothing is closed.
+    group = make_group()
+    await group.start_worker()
+    second = await group.start_worker()
+    declare_cpu(group.reception, 1.0)
+    with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
+        await group.check_occupancy(now=True)
+    assert second.state == "running"
+    decisions = [json.loads(r.getMessage()) for r in caplog.records if r.name == DECISIONS_LOGGER]
+    rows = [d for d in decisions if d["reason"] == "cpu_temperature_missing"]
+    assert rows and rows[-1]["numbers"]["missing"] == [second.name]
+
+
 def test_the_quiet_is_a_duration_and_zero_is_one(make_group):
     # The validation is the policy's, and it lists what is wrong: a negative
     # quiet is out of range, zero is a legitimate duration.

@@ -208,8 +208,13 @@ an apply that moves nobody invents no cooldown. `get_retirement_suspension`
 answers the gate: a living worker still CPU-closed, or an event younger than the
 quiet. `_cpu_pressure_monotonic` is born `None`, so a boot imposes no cooldown,
 and with `cpu_admission_close_percent` off the gate is never consulted. Past the quiet
-`_spare_worker` and `_order_quit` are exactly what they always were —
-consolidation of a worker with users included.
+`_spare_worker` judges on temperature (landed 2026-09-02): the coldest worker
+is the spare, its temperature shared by the survivors must keep every one of
+them under `cpu_close_percent` (`null` by default = the reopen threshold itself;
+set, `<= cpu_admission_reopen_percent`; it replaces the memory-based close setpoint), its memory shared the same way must keep every
+survivor under `worker_memory_admission_percent`, then the heads; a living worker
+with no temperature yet is journaled `cpu_temperature_missing` and nothing
+closes. Consolidation of a worker with users included, as before.
 
 **The CPU picks the worker; the memory only refuses (landed 2026-09-02).** A
 filtered temperature above `cpu_admission_close_percent` closes a worker to new

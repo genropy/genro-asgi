@@ -36,6 +36,7 @@ import asyncio
 import os
 import shutil
 import tempfile
+import time as real_time
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +57,13 @@ from genro_asgi.spa.orchestration.worker_handler import (
 )
 
 from .conftest import kill_process, wait_for
+
+
+def warm(worker_handler, cpu_percent: float) -> None:
+    """Declare a fresh filtered temperature, as the meter would have measured it."""
+    worker_handler.cpu_temperature_percent = cpu_percent
+    worker_handler.cpu_temperature_sampled_at = real_time.monotonic()
+    worker_handler.cpu_temperature_interval_seconds = 0.1
 
 CHILD_SCRIPT = '''
 """A scripted worker of a group: one photo, one answer, one departure."""
@@ -471,6 +479,8 @@ async def test_the_closure_of_a_spare_worker_goes_through_its_six_steps(make_gro
     spare = await group.start_worker()
     spare.hosted_users.add("mario")
     group.user_worker_map["mario"] = spare.name
+    warm(reception, 1.0)
+    warm(spare, 1.0)
 
     # 1. the group decides on one reading: what the spare one holds, the others
     # can hold and still admit.
@@ -495,25 +505,29 @@ async def test_the_closure_of_a_spare_worker_goes_through_its_six_steps(make_gro
     await wait_for(lambda: not spare.connector.socket_path.exists())
 
 
-async def test_a_closure_that_would_undo_a_growth_is_not_made(make_group):
+async def test_a_closure_the_memory_veto_refuses_is_not_made(make_group):
     group = make_group()
     reception = await group.start_worker()
     spare = await group.start_worker()
     reception.worker_snapshot = {"rss_bytes": int(0.78 * WORKER_CEILING)}
-    spare.worker_snapshot = {"rss_bytes": 0}
+    spare.worker_snapshot = {"rss_bytes": int(0.05 * WORKER_CEILING)}
+    warm(reception, 1.0)
+    warm(spare, 1.0)
 
     await group.check_occupancy(now=True)
 
-    # Alone, the reception would stand at 78 and take nobody: closing the other
-    # one now would only have the next round bring it back.
+    # Cool as both are, the reception would stand at 83 of memory with the
+    # spare's share: the veto refuses a closure the CPU would have allowed.
     assert sorted(group.worker_handler_map) == ["standard_0001", "standard_0002"]
     assert spare.state == "running"
 
 
 async def test_a_worker_in_its_first_seconds_is_no_closure_candidate(make_group):
     group = make_group(worker_min_life_seconds=60.0)
-    await group.start_worker()
+    reception = await group.start_worker()
     young = await group.start_worker()
+    warm(reception, 1.0)
+    warm(young, 1.0)
 
     await group.check_occupancy(now=True)
 
@@ -524,13 +538,16 @@ async def test_a_worker_in_its_first_seconds_is_no_closure_candidate(make_group)
 
 
 async def test_a_closure_leaving_a_survivor_warm_is_not_ordered(make_group):
-    # 35 shared onto 35 puts the survivor at 70: under the growth setpoint —
+    # 35 shared onto 35 puts the survivor at 70 of CPU: under the admission close
+    # threshold —
     # one threshold for both decisions would close here and grow the round
-    # after (#36) — but over close_occupancy_max_percent, so the pool holds:
+    # after (#36) — but over cpu_close_percent, so the pool holds:
     # the band between the two thresholds is its normal state.
-    group = make_group(rss_bytes=int(0.35 * WORKER_CEILING))
-    await group.start_worker()
+    group = make_group()
+    reception = await group.start_worker()
     spare = await group.start_worker()
+    warm(reception, 35.0)
+    warm(spare, 35.0)
 
     await group.check_occupancy(now=True)
 
@@ -548,6 +565,8 @@ async def test_a_closure_the_survivors_cannot_take_by_heads_is_refused(make_grou
     group.user_worker_map.update(
         {"anna": reception.name, "bruno": reception.name, "carla": spare.name, "dario": spare.name}
     )
+    warm(reception, 1.0)
+    warm(spare, 1.0)
 
     await group.check_occupancy(now=True)
 

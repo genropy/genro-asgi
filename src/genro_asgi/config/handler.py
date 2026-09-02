@@ -389,7 +389,7 @@ class ConfigurationHandler(ConfigHandler):
                 "worker_memory_max_percent",
                 "worker_memory_admission_percent",
                 "restart_occupancy_max_percent",
-                "close_occupancy_max_percent",
+                "cpu_close_percent",
                 "cpu_admission_close_percent",
                 "cpu_admission_reopen_percent",
                 "cpu_offload_percent",

@@ -71,7 +71,7 @@ async def test_concurrent_applies_serialize_on_the_lock(configured, make_group):
     # wf:contract: immutable levels, never from the other's result.
     group = make_group()
     configured.profile_store.write("first", {"worker_memory_admission_percent": 60.0})
-    configured.profile_store.write("second", {"close_occupancy_max_percent": 30.0})
+    configured.profile_store.write("second", {"cpu_close_percent": 30.0})
 
     payloads = await asyncio.gather(
         configured.apply_group_settings(profile_name="first", source="reload"),
@@ -83,7 +83,7 @@ async def test_concurrent_applies_serialize_on_the_lock(configured, make_group):
     first, second = payloads
     # Neither apply carries the other's key: each composed from the levels, and
     # the levels are the only thing an apply reads.
-    assert first["effective_settings"]["close_occupancy_max_percent"] == 40.0
+    assert first["effective_settings"]["cpu_close_percent"] is None
     assert second["effective_settings"]["worker_memory_admission_percent"] == 80.0
     # What is in force is the one that landed last, whole.
     last = max(payloads, key=lambda payload: payload["generation"])

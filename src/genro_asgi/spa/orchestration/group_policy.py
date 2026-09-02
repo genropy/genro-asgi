@@ -74,7 +74,7 @@ class GroupPolicy:
     SETPOINTS: ClassVar[dict[str, tuple[bool, bool, float, bool, float | None]]] = {
         "worker_memory_admission_percent": (False, False, 0.0, False, 100.0),
         "restart_occupancy_max_percent": (False, False, 0.0, False, 100.0),
-        "close_occupancy_max_percent": (False, False, 0.0, False, 100.0),
+        "cpu_close_percent": (False, True, 0.0, False, 100.0),
         "cpu_admission_close_percent": (False, True, 0.0, False, 100.0),
         "cpu_admission_reopen_percent": (False, False, 0.0, False, 100.0),
         "cpu_offload_percent": (False, True, 0.0, False, 100.0),
@@ -92,7 +92,7 @@ class GroupPolicy:
 
     worker_memory_admission_percent: float = 80.0
     restart_occupancy_max_percent: float = 95.0
-    close_occupancy_max_percent: float = 40.0
+    cpu_close_percent: float | None = None
     cpu_admission_close_percent: float | None = None
     cpu_admission_reopen_percent: float = 40.0
     cpu_offload_percent: float | None = None
@@ -207,6 +207,16 @@ class GroupPolicy:
                 f"cpu_admission_reopen_percent ({self.cpu_admission_reopen_percent}) "
                 f"must sit below cpu_admission_close_percent "
                 f"({self.cpu_admission_close_percent}), both inside 0-100"
+            )
+        if (
+            self.cpu_close_percent is not None
+            and self.cpu_admission_close_percent is not None
+            and self.cpu_close_percent > self.cpu_admission_reopen_percent
+        ):
+            violations.append(
+                f"cpu_close_percent ({self.cpu_close_percent}) must not exceed "
+                f"cpu_admission_reopen_percent ({self.cpu_admission_reopen_percent}): "
+                "a closure must never reopen the growth cycle"
             )
         if self.cpu_offload_percent is not None:
             if self.cpu_admission_close_percent is None:

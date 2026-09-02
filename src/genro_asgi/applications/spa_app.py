@@ -215,7 +215,7 @@ class SpaApplicationGrammar(ApplicationGrammar):
         worker_memory_max_percent: float | BagResolver = None,
         worker_memory_admission_percent: float | BagResolver = None,
         restart_occupancy_max_percent: float | BagResolver = None,
-        close_occupancy_max_percent: float | BagResolver = None,
+        cpu_close_percent: float | BagResolver | None = None,
         cpu_admission_close_percent: float | BagResolver = None,
         cpu_admission_reopen_percent: float | BagResolver = None,
         cpu_offload_percent: float | BagResolver | None = None,
@@ -254,13 +254,8 @@ class SpaApplicationGrammar(ApplicationGrammar):
         hold of that share (the same word one rung down — the cascade is machine,
         concession, quota, worker); ``worker_memory_admission_percent`` is how full a worker
         gets before it stops admitting and ``restart_occupancy_max_percent`` where
-        a process is replaced instead of kept; ``close_occupancy_max_percent`` is
-        the ceiling every survivor must stay under for a worker to be closed —
-        distinctly below the growth setpoint, the band between the two being the
-        pool's normal state — and ``worker_min_life_seconds`` the age before
-        which a worker is no closure candidate;
-        ``user_idle_freeze_minutes`` is the silence past which the
-        group parks a user in the freezer. ``cpu_admission_close_percent`` (experimental,
+        a process is replaced instead of kept; ``cpu_close_percent`` is the temperature, shared onto the survivors, under
+        which a worker is a closure candidate. ``cpu_admission_close_percent`` (experimental,
         off when omitted) turns on soft CPU admission: a worker above it is
         closed to NEW users and reopens below ``cpu_admission_reopen_percent``. CPU
         samples do not fork processes. When a concrete arrival finds no open

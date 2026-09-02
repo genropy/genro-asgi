@@ -19,7 +19,7 @@ def test_defaults_materialized_from_empty_settings():
     policy = GroupPolicy.from_settings({})
     assert policy.worker_memory_admission_percent == 80.0
     assert policy.restart_occupancy_max_percent == 95.0
-    assert policy.close_occupancy_max_percent == 40.0
+    assert policy.cpu_close_percent is None
     assert policy.cpu_admission_close_percent is None
     assert policy.cpu_admission_reopen_percent == 40.0
     assert policy.cpu_retirement_quiet_seconds == 60.0
@@ -33,7 +33,7 @@ def test_defaults_materialized_from_empty_settings():
 
     sparse = GroupPolicy.from_settings({"worker_memory_admission_percent": 70.0})
     assert sparse.worker_memory_admission_percent == 70.0
-    assert sparse.close_occupancy_max_percent == 40.0
+    assert sparse.cpu_close_percent is None
     assert sparse.worker_max_number == 6
     assert set(sparse.to_settings()) == set(GroupPolicy.SETPOINTS)
 
@@ -57,7 +57,7 @@ def test_validation_rejects_and_lists_all_violations():
                 "engine_factory": "module:factory",
                 "worker_memory_admission_percent": True,
                 "restart_occupancy_max_percent": float("nan"),
-                "close_occupancy_max_percent": float("inf"),
+                "cpu_close_percent": float("inf"),
                 "memory_max_percent": 0.0,
                 "worker_min_life_seconds": -1.0,
                 "worker_max_users": 1.5,
@@ -72,7 +72,7 @@ def test_validation_rejects_and_lists_all_violations():
     for key in (
         "worker_memory_admission_percent",
         "restart_occupancy_max_percent",
-        "close_occupancy_max_percent",
+        "cpu_close_percent",
         "memory_max_percent",
         "worker_min_life_seconds",
         "worker_max_users",
@@ -207,6 +207,26 @@ def test_the_retirement_quiet_is_a_non_negative_duration():
     written = GroupPolicy.from_settings({"cpu_retirement_quiet_seconds": 12.5}).to_settings()
     assert written["cpu_retirement_quiet_seconds"] == 12.5
     assert json.dumps(written, allow_nan=False)
+
+
+def test_the_close_threshold_follows_the_reopen_threshold_unless_set():
+    assert GroupPolicy.from_settings({}).cpu_close_percent is None
+    with pytest.raises(GroupPolicyError) as caught:
+        GroupPolicy.from_settings(
+            {
+                "cpu_admission_close_percent": 50.0,
+                "cpu_admission_reopen_percent": 30.0,
+                "cpu_close_percent": 35.0,
+            }
+        )
+    assert "cpu_close_percent" in caught.value.violations[0]
+    kept = GroupPolicy.from_settings(
+        {"cpu_admission_close_percent": 50.0, "cpu_admission_reopen_percent": 30.0}
+    )
+    assert kept.cpu_close_percent is None
+    # With the admission policy off the retirement still judges on temperature,
+    # and an explicit threshold is its own.
+    assert GroupPolicy.from_settings({"cpu_close_percent": 90.0}).cpu_close_percent == 90.0
 
 
 def test_the_offload_threshold_stands_on_the_admission_closure():

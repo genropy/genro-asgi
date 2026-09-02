@@ -233,7 +233,7 @@ async def test_boot_precedence_four_levels(tmp_path):
     # ...the recipe still owns what nobody above it named...
     assert policy.worker_max_number == 3
     # ...and the dataclass default owns what nobody named at all.
-    assert policy.close_occupancy_max_percent == 40.0
+    assert policy.cpu_close_percent is None
 
 
 async def test_boot_without_named_profile_unchanged(tmp_path):
@@ -458,7 +458,7 @@ async def test_profile_level_replacement(tmp_path):
     # ...the environment still wins on its key...
     assert second["effective_settings"]["worker_max_users"] == 16
     # ...and a key nobody ever named is the default.
-    assert second["effective_settings"]["close_occupancy_max_percent"] == 40.0
+    assert second["effective_settings"]["cpu_close_percent"] is None
     assert second["active_profile"] == "p2"
     assert second["source"] == "profile"
 

@@ -25,3 +25,21 @@
   `close < occupancy` cross rule; it now uses `worker_memory_admission_percent: 99` (>= restart).
 - `test_the_reactive_growth_and_a_placement_cannot_fork_twice` sat at 79% to be refused by the
   old cap plus the 5% estimate; it sits at 85% now, past the veto.
+
+## Phase 3
+
+- Decisions said `cpu_close_percent` default 40 with the cross rule `<= cpu_admission_reopen_percent`
+  whenever the admission policy is on. Implemented, the rule refused every existing profile that
+  lowers the reopen threshold without declaring the close one (the bench recipe at 30, ten tests at
+  10/20/30). Resolved at the gate (owner, 2026-09-02, option c): `cpu_close_percent` is nullable and
+  `null` by default, meaning the reopen threshold itself; an explicit value is validated
+  `<= cpu_admission_reopen_percent` when the admission policy is on. `_spare_worker` reads
+  `policy.cpu_close_percent if not None else policy.cpu_admission_reopen_percent`.
+- Closure tests that relied on memory pictures now declare temperatures (`warm()` helper in
+  `test_orchestration_group_handler.py`); the m3 story takes two real psutil readings of its
+  processes before the shrink step, and its expected `close_worker` row carries the measured
+  temperature. `test_a_closure_that_would_undo_a_growth_is_not_made` became
+  `test_a_closure_the_memory_veto_refuses_is_not_made` (spare at 5% of memory pushes the survivor
+  past the veto).
+- `check_occupancy` logs `no_absorbable_spare_worker` after a `cpu_temperature_missing` round too;
+  the missing-temperature test reads the row by reason, not by position.

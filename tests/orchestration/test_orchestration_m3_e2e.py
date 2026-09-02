@@ -63,6 +63,7 @@ directory is already past it, which is the very reason worker names are short.
 from __future__ import annotations
 
 import asyncio
+import time
 import base64
 import shutil
 import tempfile
@@ -379,7 +380,15 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     # order, the reply that carries everybody flagged, the drain, the process
     # ending BY ITSELF, the awaited end of its wire.
     group.memory_concession_bytes = ROOMY_CONCESSION_BYTES
-
+    # The closure is judged on temperature: two real readings of each process,
+    # 100 ms apart, as the commander's thermometer takes them.
+    for _ in range(2):
+        for worker_handler in group.living_workers:
+            worker_handler.record_cpu_reading(
+                worker_handler.get_process_cpu_reading(), sampled_at=time.monotonic()
+            )
+        await asyncio.sleep(0.1)
+    spare_heat = spare.get_cpu_temperature_percent()
     await group.check_occupancy(now=True)
 
     assert spare.state == "quitted"
@@ -439,7 +448,7 @@ async def test_the_pool_of_a_config_file_lives_its_whole_day(group, story_root):
     assert [row for row in orders if "order=close_worker" in row] == [
         f"std order=close_worker subject={GROUP}_0002 "
         f"numbers={{'memory_occupancy_percent': {closed_occupancy}, "
-            "'cpu_temperature_percent': None, 'workers': 2} outcome=None"
+        f"'cpu_temperature_percent': {spare_heat}, 'workers': 2}} outcome=None"
     ]
     assert [row for row in orders if "order=drop_worker" in row] == [
         f"std order=drop_worker subject={GROUP}_0002 numbers=None outcome=quitted",

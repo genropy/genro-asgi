@@ -410,6 +410,14 @@ several seconds of real silence to reopen, so a user it just ceded does not come
 back on the next request. The raw sample stays visible in the pool census as
 `cpu_temperature_sample_percent`, beside the filtered `cpu_temperature_percent`.
 
+**`cpu_close_percent` is where the pool shrinks.** Past the CPU quiet, the coldest
+worker is closed when its temperature, shared by the survivors, keeps every one
+of them under this key (unset, the reopen threshold itself; set, never above
+`cpu_admission_reopen_percent`),
+and its memory, shared the same way, keeps every survivor under
+`worker_memory_admission_percent`. A worker with no temperature yet suspends the
+judgment. Its users go to the freezer and wake where their next request lands.
+
 **`cpu_offload_percent` is what makes a hot worker slim down.** Closing the
 admission protects the workers to come; it does nothing for the users already
 placed on a process that is burning CPU. This key (nullable, `None` by default —

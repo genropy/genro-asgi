@@ -85,14 +85,15 @@ runs is given another one.
 ``check_occupancy`` takes the occupancy of every living worker once and then does
 the FIRST thing that reading calls for: restart the worker whose MEMORY is past
 ``restart_occupancy_max_percent`` (it will not get better on its own), give a
-group with no living worker its reception back, or close one whose share keeps
-every survivor under ``close_occupancy_max_percent`` — a threshold distinctly
-below the admission close setpoint, because reading both decisions against the
-same number made each one create the condition for its own reversal (#36): the
-band between the two is the pool's normal state. It births nothing for a user
-who is not there yet: the reception of an empty group is the only birth here,
-every other one happens inside ``assign_user`` for the user who needs it. A worker younger than
-``worker_min_life_seconds`` is never the one closed, and a closure is refused
+group with no living worker its reception back when the memory affords it, or
+close the COLDEST worker whose temperature, shared by the survivors, keeps every
+one of them under ``cpu_close_percent`` (unset, the reopen threshold itself), so a
+closure never creates the condition for the next birth (#36) — and whose memory,
+shared the same way, keeps every survivor under the veto. It births nothing for a
+user who is not there yet: the reception of an empty group is the only birth
+here, every other one happens inside ``assign_user`` for the user who needs it.
+A worker younger than ``worker_min_life_seconds`` is never the one closed, a
+worker with no temperature yet suspends the judgment, and a closure is refused
 when the survivors lack room BY HEADS for the spare's placed users. The next
 round re-reads: a decision is never carried over.
 
@@ -254,11 +255,11 @@ class GroupHandler:
         restart_occupancy_max_percent: past this MEMORY occupancy a process is
             restarted rather than kept. CPU pressure grows and closes
             admission; it never replaces a healthy process.
-        close_occupancy_max_percent: a closure is ordered only when the spare's
-            share, redistributed, keeps EVERY survivor under this — distinctly
-            below ``worker_memory_admission_percent``, so the band between the two is the
-            pool's normal state and never a condition to correct. One threshold
-            for both made every growth the evidence for its own reversal (#36).
+        cpu_close_percent: a closure is ordered only when the spare's temperature,
+            shared by the survivors, keeps every one of them under this. None,
+            the default, means ``cpu_admission_reopen_percent`` itself; set, it
+            must not exceed it, so the band between the two is the pool's
+            normal state and never a condition to correct (#36).
         cpu_admission_close_percent: the soft-admission threshold (#43, experimental): a
             worker whose fresh commander-side CPU temperature crosses above it
             stops taking new users. CPU sampling never creates a worker; concrete placement
@@ -311,7 +312,7 @@ class GroupHandler:
         *,
         worker_memory_admission_percent: float = 80.0,
         restart_occupancy_max_percent: float = 95.0,
-        close_occupancy_max_percent: float = 40.0,
+        cpu_close_percent: float | None = None,
         cpu_admission_close_percent: float | None = None,
         cpu_admission_reopen_percent: float = 40.0,
         cpu_offload_percent: float | None = None,
@@ -349,7 +350,7 @@ class GroupHandler:
             {
                 "worker_memory_admission_percent": worker_memory_admission_percent,
                 "restart_occupancy_max_percent": restart_occupancy_max_percent,
-                "close_occupancy_max_percent": close_occupancy_max_percent,
+                "cpu_close_percent": cpu_close_percent,
                 "cpu_admission_close_percent": cpu_admission_close_percent,
                 "cpu_admission_reopen_percent": cpu_admission_reopen_percent,
                 "cpu_offload_percent": cpu_offload_percent,
@@ -421,8 +422,8 @@ class GroupHandler:
         return self.policy.restart_occupancy_max_percent
 
     @property
-    def close_occupancy_max_percent(self) -> float:
-        return self.policy.close_occupancy_max_percent
+    def cpu_close_percent(self) -> float | None:
+        return self.policy.cpu_close_percent
 
     @property
     def cpu_admission_close_percent(self) -> float | None:
@@ -1014,7 +1015,6 @@ class GroupHandler:
                 if self._policy_held(policy, "restart_worker", name):
                     await self.restart_worker(self.worker_handler_map[name])
                 return
-        picture = memory_picture
         self._judge_cpu_admission()
         if not self.living_workers:
             # A group must always have a reception: the ONE birth nobody asked
@@ -1046,11 +1046,11 @@ class GroupHandler:
                     "retirement",
                     "no_action",
                     reason="cpu_pressure_holds_retirement",
-                    numbers={"detail": suspension, "workers": len(picture)},
+                    numbers={"detail": suspension, "workers": len(self.living_workers)},
                     candidates=self._placement_decision_rows(),
                 )
                 return
-        spare = self._spare_worker(picture, policy)
+        spare = self._spare_worker(policy)
         if spare is not None and self._policy_held(policy, "close_worker", spare.name):
             await self._order_quit(spare, "close_worker")
             return
@@ -1059,7 +1059,7 @@ class GroupHandler:
             "retirement",
             "no_action",
             reason="no_absorbable_spare_worker",
-            numbers={"workers": len(picture)},
+            numbers={"workers": len(self.living_workers)},
             candidates=self._placement_decision_rows(),
         )
 
@@ -1431,22 +1431,41 @@ class GroupHandler:
             self.name, "drop_worker", name, outcome=worker_handler.state
         )
 
-    def _spare_worker(
-        self, picture: dict[str, float], policy: GroupPolicy
-    ) -> WorkerHandler | None:
-        """The emptiest worker whose closure leaves the pool cool; None when there is none.
+    def _spare_worker(self, policy: GroupPolicy) -> WorkerHandler | None:
+        """The coldest worker whose closure leaves the pool cool; None when there is none.
 
-        The remaining workers are read as if they shared what this one holds,
-        then asked TWO questions in order: every survivor under
-        ``close_occupancy_max_percent`` — distinctly below the admission close
-        setpoint, so a closure can never create the condition for the next
-        birth (#36) — and, the occupancy settled, room BY HEADS for the spare's
-        placed users within each survivor's ``worker_max_users``. A worker younger
-        than ``worker_min_life_seconds``
-        is no candidate: its occupancy measures its own birth.
+        Args:
+            policy: the setpoints this round decided on.
+
+        Returns:
+            The worker to close, or None — nobody, or a judgment that could not
+            be made: a living worker with no temperature yet is journaled as
+            ``cpu_temperature_missing`` and nothing is closed this round.
+
+        The CPU decides, the memory vetoes. Candidates: not the reception, not
+        on their way out, older than ``worker_min_life_seconds``. The spare is
+        the coldest; its temperature is read as if shared evenly by the
+        survivors, and every survivor must stay under ``cpu_close_percent`` —
+        unset, the reopen threshold itself; set, at or below it — so a closure
+        can never create the condition for the next birth (#36). Then the veto: every survivor, with
+        its even share of the spare's memory, must stay under
+        ``worker_memory_admission_percent``; and, LAST, room BY HEADS for the
+        spare's placed users within each survivor's ``worker_max_users``.
         """
-        # A quitting worker is nobody's spare — its closure is already
-        # somebody's order — and nobody's absorber: its room counts for nobody.
+        temperatures = {
+            worker_handler.name: worker_handler.get_cpu_temperature_percent()
+            for worker_handler in self.living_workers
+        }
+        missing = sorted(name for name, value in temperatures.items() if value is None)
+        if missing:
+            self.spa_commander.log_decision(
+                self.name,
+                "retirement",
+                "no_action",
+                reason="cpu_temperature_missing",
+                numbers={"workers": len(temperatures), "missing": missing},
+            )
+            return None
         candidates = [
             worker_handler
             for worker_handler in self.living_workers
@@ -1456,20 +1475,37 @@ class GroupHandler:
         ]
         if not candidates:
             return None
-        spare = min(candidates, key=lambda worker_handler: picture[worker_handler.name])
-        remaining = {
-            name: pct
-            for name, pct in picture.items()
-            if name != spare.name and self.worker_handler_map[name].state != "quitting"
-        }
+        spare = min(candidates, key=lambda worker_handler: temperatures[worker_handler.name])
+        remaining = [
+            worker_handler
+            for worker_handler in self.living_workers
+            if worker_handler is not spare and worker_handler.state != "quitting"
+        ]
         if not remaining:
             return None
-        shared = picture[spare.name] / len(remaining)
-        after = {name: pct + shared for name, pct in remaining.items()}
-        if max(after.values()) > policy.close_occupancy_max_percent:
+        close_threshold = (
+            policy.cpu_admission_reopen_percent
+            if policy.cpu_close_percent is None
+            else policy.cpu_close_percent
+        )
+        shared_heat = temperatures[spare.name] / len(remaining)
+        if any(
+            temperatures[worker_handler.name] + shared_heat > close_threshold
+            for worker_handler in remaining
+        ):
+            return None
+        shared_memory = self.get_memory_occupancy_percent(spare.worker_snapshot) / len(remaining)
+        if any(
+            self.get_memory_occupancy_percent(worker_handler.worker_snapshot) + shared_memory
+            > policy.worker_memory_admission_percent
+            for worker_handler in remaining
+        ):
             return None
         placed = Counter(self.user_worker_map.values())
-        head_room = sum(max(0, policy.worker_max_users - placed[name]) for name in remaining)
+        head_room = sum(
+            max(0, policy.worker_max_users - placed[worker_handler.name])
+            for worker_handler in remaining
+        )
         if head_room < placed[spare.name]:
             return None
         return spare
@@ -1566,7 +1602,7 @@ class GroupHandler:
         The reopen counts ON PURPOSE: a worker that was closed for minutes and
         reopens must not meet the retirement at the very next beat — the bench
         measured exactly that close, and the regrowth it caused 5 seconds later
-        (churn of 2026-08-28, rearm30).
+        (churn of 2026-08-28, reopen at 30).
         """
         self._cpu_pressure_monotonic = time.monotonic()
 
