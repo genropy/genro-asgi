@@ -78,7 +78,9 @@ async def test_when_every_open_worker_is_in_its_window_the_hottest_admits(
     with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
         assert await arrival(commander, group, "c") == second.name
     row = placements(caplog)[-1]
-    assert row["reason"] == "all_workers_recently_admitted"
+    assert row["reason"] == "admission_interval_waived"
+    winner = [c for c in row["candidates"] if c["name"] == second.name][0]
+    assert "skipped" not in winner  # the one that took him is not marked skipped
     assert len(group.worker_handler_map) == 2  # the interval never births a worker
 
 
@@ -99,3 +101,31 @@ async def test_a_memory_full_worker_is_journaled_as_such(make_group, commander, 
     full = [c for c in row["candidates"] if c["name"] == second.name][0]
     assert full["skipped"] == "worker_memory_full"
     assert "of memory" in full["refusal"]
+
+
+async def test_a_worker_at_its_head_count_is_journaled_as_such(make_group, commander, caplog):
+    # The interval is off, so the refusal the journal sees is the head count alone.
+    group, first, second = await two_open_workers(
+        make_group, worker_max_users=1, worker_admission_interval_seconds=0.0
+    )
+    await arrival(commander, group, "a")  # on the hotter one, now full by heads
+    with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
+        assert await arrival(commander, group, "b") == first.name
+    row = placements(caplog)[-1]
+    full = [c for c in row["candidates"] if c["name"] == second.name][0]
+    assert full["skipped"] == "worker_max_users_reached"
+
+
+async def test_one_worker_in_its_window_and_one_full_waives_the_interval(
+    make_group, commander, caplog
+):
+    # The interval never births a worker: with the cold one full by memory and
+    # the hot one inside its window, the hot one takes him and the journal says
+    # the interval was waived, not that everybody was recently admitted.
+    group, first, second = await two_open_workers(make_group)
+    first.worker_snapshot = {"rss_bytes": int(0.9 * WORKER_CEILING)}
+    await arrival(commander, group, "a")
+    with caplog.at_level("INFO", logger=DECISIONS_LOGGER):
+        assert await arrival(commander, group, "b") == second.name
+    assert placements(caplog)[-1]["reason"] == "admission_interval_waived"
+    assert len(group.worker_handler_map) == 2

@@ -412,8 +412,8 @@ back on the next request. The raw sample stays visible in the pool census as
 
 **`cpu_close_percent` is where the pool shrinks.** Past the CPU quiet, the coldest
 worker is closed when its temperature, shared by the survivors, keeps every one
-of them under this key (unset, the reopen threshold itself; set, never above
-`cpu_admission_reopen_percent`),
+of them under this key (unset, the reopen threshold itself; set while the CPU
+admission is on, never above `cpu_admission_reopen_percent`),
 and its memory, shared the same way, keeps every survivor under
 `worker_memory_admission_percent`. A worker with no temperature yet suspends the
 judgment. Its users go to the freezer and wake where their next request lands.

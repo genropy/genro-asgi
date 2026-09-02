@@ -255,7 +255,12 @@ class SpaApplicationGrammar(ApplicationGrammar):
         concession, quota, worker); ``worker_memory_admission_percent`` is how full a worker
         gets before it stops admitting and ``restart_occupancy_max_percent`` where
         a process is replaced instead of kept; ``cpu_close_percent`` is the temperature, shared onto the survivors, under
-        which a worker is a closure candidate. ``cpu_admission_close_percent`` (experimental,
+        which a worker is a closure candidate (unset, the reopen threshold itself)
+        and ``worker_min_life_seconds`` the age before which a worker is no
+        closure candidate; ``worker_admission_interval_seconds`` is how long after
+        admitting a user a worker is skipped by the placement, so its load shows
+        in the temperature first; ``user_idle_freeze_minutes`` is the silence past
+        which the group parks a user in the freezer. ``cpu_admission_close_percent`` (experimental,
         off when omitted) turns on soft CPU admission: a worker above it is
         closed to NEW users and reopens below ``cpu_admission_reopen_percent``. CPU
         samples do not fork processes. When a concrete arrival finds no open

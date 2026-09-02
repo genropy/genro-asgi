@@ -163,7 +163,7 @@ async def test_a_resident_goes_to_his_own_worker_and_is_placed_again_by_nobody(c
 
     await commander.serve_request("cid-a", request(), hold_timeout=HOLD_TIMEOUT)
 
-    # The fullest-first walk would have chosen the first: a resident is not walked.
+    # The hottest-first walk would have chosen the first: a resident is not walked.
     assert first.connector.calls == []
     assert len(second.connector.calls) == 1
 

@@ -211,7 +211,8 @@ and with `cpu_admission_close_percent` off the gate is never consulted. Past the
 `_spare_worker` judges on temperature (landed 2026-09-02): the coldest worker
 is the spare, its temperature shared by the survivors must keep every one of
 them under `cpu_close_percent` (`null` by default = the reopen threshold itself;
-set, `<= cpu_admission_reopen_percent`; it replaces the memory-based close setpoint), its memory shared the same way must keep every
+set while the admission policy is on, `<= cpu_admission_reopen_percent`; it
+replaces the memory-based close setpoint), its memory shared the same way must keep every
 survivor under `worker_memory_admission_percent`, then the heads; a living worker
 with no temperature yet is journaled `cpu_temperature_missing` and nothing
 closes. Consolidation of a worker with users included, as before.
@@ -222,7 +223,7 @@ users; one below `cpu_admission_reopen_percent` reopens it. `assign_user` walks
 the CPU-open workers HOTTEST first (the filtered temperature, never memory) and
 skips one that admitted somebody less than `worker_admission_interval_seconds`
 ago (1.0 s); when every open worker is in its window the hottest that admits
-takes the user anyway (`all_workers_recently_admitted`) — the interval orders,
+takes the user anyway (`admission_interval_waived`) — the interval orders,
 it never refuses and never births. `WorkerHandler.assign_user` judges state,
 `worker_max_users` and the memory veto `worker_memory_admission_percent` (80,
 `< restart_occupancy_max_percent`); nobody estimates a user's cost any more — the
@@ -232,8 +233,8 @@ worker under the placement lock and assigns that same user before returning;
 refused the birth, a CPU-closed worker under the veto takes him as a logged
 fallback. The periodic judge births nothing: a group with no living worker gets
 its reception back when the memory affords it. Journal: `hottest_cpu_open_candidate`,
-`worker_recently_admitted` / `worker_memory_full` on the candidate rows,
-`all_workers_recently_admitted`, `new_worker_created_for_placement`,
+`worker_recently_admitted` / `worker_memory_full` / `worker_max_users_reached` on
+the candidate rows, `admission_interval_waived`, `new_worker_created_for_placement`,
 `cpu_closed_hard_cap_fallback`.
 
 **Worker CPU temperature is a separate measurement channel (landed
@@ -293,7 +294,7 @@ while `log_decision` records calculations that deliberately issue no order.
 Each JSON row carries schema, process-local sequence, UTC timestamp, decider,
 decision, subject, outcome, a stable reason code, numbers and the candidates
 the judge saw. Group placement records every CPU-open candidate in
-fullest-first order; CPU admission scans record transitions, thresholds, open
+hottest-first order; CPU admission scans record transitions, thresholds, open
 and empty worker counts; a demand-driven birth is recorded on the placement
 that immediately occupies it; retirement records its suppression or the absence of an
 absorbable spare. The journal observes policy — it never changes placement,

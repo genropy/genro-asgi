@@ -43,3 +43,13 @@
   past the veto).
 - `check_occupancy` logs `no_absorbable_spare_worker` after a `cpu_temperature_missing` round too;
   the missing-temperature test reads the row by reason, not by position.
+
+## Quality check
+
+- Three journal defects found by the review agent and fixed (owner, 2026-09-02): a `NoRoomError` for
+  `worker_max_users` was journaled `worker_memory_full` (now `worker_max_users_reached`); the worker
+  winning the second pass kept `skipped: worker_recently_admitted` (now cleared); the second pass
+  runs when ANY candidate was skipped for recency, by design (the interval never births a worker),
+  so its reason code `all_workers_recently_admitted` said the wrong thing and is now
+  `admission_interval_waived`. Docs and the grammar docstring aligned; the cross rule on
+  `cpu_close_percent` is documented as holding only while the admission policy is on.

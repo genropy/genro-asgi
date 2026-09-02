@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Where a user lands: the walk down from the fullest, and the four refusals.
+"""Where a user lands: the walk down from the hottest, and the four refusals.
 
 The subject here is the JUDGEMENT, not the processes: the workers are real
 ``WorkerHandler`` over a real group and a real vertex, but none of them has a

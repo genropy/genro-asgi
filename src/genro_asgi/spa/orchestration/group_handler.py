@@ -766,10 +766,11 @@ class GroupHandler:
         Two passes over the same order. The first skips a worker that admitted
         somebody less than ``worker_admission_interval_seconds`` ago: his load
         is not in the temperature yet, so the next one goes elsewhere. The
-        second, only when every open worker was skipped, ignores the interval
-        — it orders the walk, it refuses nobody — and takes the hottest that
-        admits, journaled as ``all_workers_recently_admitted``. If no open
-        worker admits the user, the placement itself creates capacity.
+        second, only when the first pass skipped somebody for that reason,
+        waives the interval — it orders the walk, it refuses nobody and never
+        births a worker — and takes the hottest that admits, journaled as
+        ``admission_interval_waived``. If no open worker admits the user, the
+        placement itself creates capacity.
         """
         candidates = sorted(
             (
@@ -783,7 +784,7 @@ class GroupHandler:
         rows_by_name = {row["name"]: row for row in decision_rows}
         for reason, skip_recent in (
             ("hottest_cpu_open_candidate", True),
-            ("all_workers_recently_admitted", False),
+            ("admission_interval_waived", False),
         ):
             for worker_handler in candidates:
                 row = rows_by_name[worker_handler.name]
@@ -794,12 +795,17 @@ class GroupHandler:
                     worker_handler.assign_user(user)
                 except NoRoomError as refusal:
                     row["refusal"] = str(refusal)
-                    row["skipped"] = "worker_memory_full"
+                    row["skipped"] = (
+                        "worker_max_users_reached"
+                        if row["users"] >= self.policy.worker_max_users
+                        else "worker_memory_full"
+                    )
                     continue
                 except AssignmentRefused as refusal:
                     self._logger.debug("Group %s: %s", self.name, refusal)
                     row["refusal"] = str(refusal)
                     continue
+                row.pop("skipped", None)
                 self.spa_commander.log_decision(
                     self.name,
                     "placement",
@@ -991,7 +997,7 @@ class GroupHandler:
 
     @every(CHECK_OCCUPANCY_BEATS)
     async def check_occupancy(self) -> None:
-        """Read the group once and take the ONE step that reading calls for.
+        """Read the group and take the ONE step that reading calls for.
 
         Acts on the group: restart when MEMORY is past the restart setpoint,
         update soft CPU admission, give an empty group its reception back when
