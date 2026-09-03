@@ -348,6 +348,27 @@ thread plus its `lock_item`, with no expiry because an in-process `with` always
 exits. Nesting in the core: `dispatch_lock` outside, `item_lock` inside. The
 user store keeps its `user_view` and `new_collector` — another round.
 
+**An addressed datachange goes to the row when it can, to the desk at once when
+it cannot (landed 2026-09-03).** `set_datachange`, `reset_datachanges` and
+`drop_datachanges` addressed at a page of the CALLER'S OWN user, when that page
+lives on this worker, act on the target row directly: the change is appended
+under the row's `item_lock` through `RegisterRegistry.append_page_datachange`,
+which stamps the next `datachanges_idx` — so the addressed write and the
+`serverChange` subscriber share ONE list and ONE index — and the write is in the
+parcel, never through the desk. The same user is the condition because his
+freeze waits for the caller's own pending call, so the write always precedes the
+photo; another user's freeze does not wait. Every other address — a page of
+another user even on this worker, `filters`, the STATE kinds — leaves at once
+from the request thread as ONE CALL, `/desk/on_datachange`
+(`DeliveryDesk.op_on_datachange`), filed the moment the verb runs; the desk is
+the authority on existence and answers `{"filed": False}` for a target nobody
+holds, which the verb raises as `KeyError`. `RequestSlot` carries no
+`datachanges` and `op_exchange` takes none, so a request that never collects
+loses nothing. What the desk hands back at a page's exchange is appended to that
+row through the same `append_page_datachange` before `collect_page` retires the
+list. Compared with the daemon: the same algorithm on the row, with the desk as
+the remote leg the daemon paid one Pyro call per write for.
+
 **Not yet built (second pass).** The deliberate reboot command on `_server`
 (`reboot now`/`reboot wait N`, notify_user, the consumer service-message
 lane); the single-group reboot (needs no photo — the commander survives) and
@@ -362,4 +383,4 @@ commits, still to be entered in the register). Decision registers:
 
 **All general policies are inherited from the parent document: [meta-genro-modules CLAUDE.md](https://github.com/softwellsrl/meta-genro-modules/blob/main/CLAUDE.md)**
 
-**Last Updated**: 2026-09-02
+**Last Updated**: 2026-09-03

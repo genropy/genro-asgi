@@ -51,6 +51,7 @@ from .conftest import XT_DeskLane
 WORKER_NAME = "standard_0001"
 SUBSCRIBE_PATH = f"{DESK_PATH_PREFIX}subscribe_table"
 EXCHANGE_PATH = f"{DESK_PATH_PREFIX}exchange"
+ON_DATACHANGE_PATH = f"{DESK_PATH_PREFIX}on_datachange"
 USER = "mario"
 PAGE = "page_one"
 SIBLING = "page_two"
@@ -59,8 +60,8 @@ SIBLING = "page_two"
 class XT_DeskProtocolLane(XT_DeskLane):
     """The shared lane, plus the two desk calls placed as raw frames.
 
-    ``subscribe`` and ``exchange`` put the CALLs on the wire the way the
-    worker's verbs will place them, and decode the answers.
+    ``subscribe``, ``on_datachange`` and ``exchange`` put the CALLs on the wire
+    the way the worker's verbs place them, and decode the answers.
     """
 
     async def subscribe(self, page_id: str, table: str, subscribe: bool = True) -> Any:
@@ -69,22 +70,20 @@ class XT_DeskProtocolLane(XT_DeskLane):
             SUBSCRIBE_PATH, {"page_id": page_id, "table": table, "subscribe": subscribe}
         )
 
+    async def on_datachange(self, *messages: dict[str, Any]) -> list[Any]:
+        """Place one addressed write per message, the way the verbs place them."""
+        return [await self.worker.call(ON_DATACHANGE_PATH, message) for message in messages]
+
     async def exchange(
         self,
         page_id: str = PAGE,
         user: str = USER,
-        datachanges: list[dict[str, Any]] | None = None,
         dbevents: list[dict[str, Any]] | None = None,
     ) -> Any:
         """Place the end-of-request exchange, and decode what comes back."""
         answer = await self.worker.call(
             EXCHANGE_PATH,
-            {
-                "page_id": page_id,
-                "user": user,
-                "datachanges": datachanges,
-                "dbevents": dbevents,
-            },
+            {"page_id": page_id, "user": user, "dbevents": dbevents},
         )
         return {
             "datachanges": from_tytx(answer["datachanges"], "json"),
@@ -104,6 +103,12 @@ async def lane(short_root, tmp_path):
         frozen_users_path=short_root / "frozen_users",
         entry_module="never.launched",
     )
+    # The desk is the authority on a target's existence, and these tests place
+    # the desk CALLs themselves: the two pages and their user are folded in by
+    # hand, as the envelope chain would have folded them.
+    commander.page_connection_map[PAGE] = "cid-a"
+    commander.page_connection_map[SIBLING] = "cid-a"
+    commander.user_map[USER] = {"group": "standard"}
     built = XT_DeskProtocolLane(commander, group, FreezeHandler(tmp_path / "frozen_users"))
     await built.open()
     yield built
@@ -187,12 +192,9 @@ async def test_the_exchange_returns_the_callers_own_events_in_the_same_round(lan
     # wf:contract: and answers AFTER, so the reply already contains the
     # wf:contract: caller's own events for the tables its page subscribes.
     await asyncio.wait_for(lane.subscribe(PAGE, "invoices"), 5.0)
+    await asyncio.wait_for(lane.on_datachange(addressed(PAGE, a_change("form.name", "Mario"))), 5.0)
     exchanged = await asyncio.wait_for(
-        lane.exchange(
-            datachanges=[addressed(PAGE, a_change("form.name", "Mario"))],
-            dbevents=[a_deposit("invoices", reason="commit")],
-        ),
-        5.0,
+        lane.exchange(dbevents=[a_deposit("invoices", reason="commit")]), 5.0
     )
     assert [deposit["table"] for deposit in exchanged["dbevents"]] == ["invoices"]
     assert exchanged["dbevents"][0]["reason"] == "commit"
@@ -210,13 +212,10 @@ async def test_events_for_another_pages_queue_wait_for_that_pages_own_exchange(l
     # wf:contract: they come back in the reply of that page's own next
     # wf:contract: exchange, and the queue is emptied by it.
     await asyncio.wait_for(lane.subscribe(SIBLING, "invoices"), 5.0)
-    mine = await asyncio.wait_for(
-        lane.exchange(
-            datachanges=[addressed(SIBLING, a_change("form.name", "Mario"))],
-            dbevents=[a_deposit("invoices")],
-        ),
-        5.0,
+    await asyncio.wait_for(
+        lane.on_datachange(addressed(SIBLING, a_change("form.name", "Mario"))), 5.0
     )
+    mine = await asyncio.wait_for(lane.exchange(dbevents=[a_deposit("invoices")]), 5.0)
     assert mine["datachanges"] == [] and mine["dbevents"] == []
     assert lane.desk.page_dbevent_map[SIBLING] and lane.desk.page_datachange_map[SIBLING]
     theirs = await asyncio.wait_for(lane.exchange(page_id=SIBLING), 5.0)
@@ -241,12 +240,10 @@ async def test_replace_coalesces_inside_the_target_queue(lane):
     # wf:contract: target page's queue, so the browser reads the value once —
     # wf:contract: the daemon's own dedup, now applied at the desk.
     await asyncio.wait_for(
-        lane.exchange(
-            datachanges=[
-                addressed(SIBLING, a_change("form.name", "first")),
-                addressed(SIBLING, a_change("form.name", "second"), replace=True),
-                addressed(SIBLING, a_change("form.other", "kept"), replace=True),
-            ]
+        lane.on_datachange(
+            addressed(SIBLING, a_change("form.name", "first")),
+            addressed(SIBLING, a_change("form.name", "second"), replace=True),
+            addressed(SIBLING, a_change("form.other", "kept"), replace=True),
         ),
         5.0,
     )
@@ -269,15 +266,18 @@ async def test_events_older_than_the_threshold_are_discarded(lane):
     # wf:contract: delivery is garbage. One rule for all three queue species.
     stale = lane.desk.event_max_age_seconds + 60.0
     await asyncio.wait_for(lane.subscribe(PAGE, "invoices"), 5.0)
+    await asyncio.wait_for(
+        lane.on_datachange(
+            addressed(PAGE, a_change("form.old", "gone", age=stale)),
+            addressed(PAGE, a_change("form.new", "kept")),
+            addressed(USER, a_change("prefs.old", "gone", age=stale), kind="user_store"),
+            addressed(USER, a_change("prefs.new", "kept"), kind="user_store"),
+        ),
+        5.0,
+    )
     exchanged = await asyncio.wait_for(
         lane.exchange(
-            datachanges=[
-                addressed(PAGE, a_change("form.old", "gone", age=stale)),
-                addressed(PAGE, a_change("form.new", "kept")),
-                addressed(USER, a_change("prefs.old", "gone", age=stale), kind="user_store"),
-                addressed(USER, a_change("prefs.new", "kept"), kind="user_store"),
-            ],
-            dbevents=[a_deposit("invoices", reason="old", age=stale), a_deposit("invoices")],
+            dbevents=[a_deposit("invoices", reason="old", age=stale), a_deposit("invoices")]
         ),
         5.0,
     )
@@ -291,13 +291,9 @@ async def test_a_dropped_page_takes_its_queue_with_it(lane):
     # wf:contract: page's queue and its subscription entries in the same
     # wf:contract: breath — nothing is delivered to a page that is gone.
     await asyncio.wait_for(lane.subscribe(PAGE, "invoices"), 5.0)
+    await asyncio.wait_for(lane.on_datachange(addressed(PAGE, a_change("form.name", "Mario"))), 5.0)
     await asyncio.wait_for(
-        lane.exchange(
-            page_id=SIBLING,
-            datachanges=[addressed(PAGE, a_change("form.name", "Mario"))],
-            dbevents=[a_deposit("invoices")],
-        ),
-        5.0,
+        lane.exchange(page_id=SIBLING, dbevents=[a_deposit("invoices")]), 5.0
     )
     assert lane.desk.page_datachange_map[PAGE] and lane.desk.page_dbevent_map[PAGE]
     lane.commander.drop_page(PAGE)

@@ -27,10 +27,20 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from genro_bag import Bag
+from genro_bag.datachange import DataChangeCollector
+from genro_tytx import to_tytx
 
 from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker
+from genro_asgi.spa.orchestration.worker_handler import PING_OP_PATH
 
 WORKER_NAME = "standard_0001"
+
+
+async def sent_events(lane) -> None:
+    """Flush the worker's announcements to the vertex: a ping's REPLY carries
+    them, and the fold reads the envelope before the caller is unblocked."""
+    await lane.worker_handler.connector.call(PING_OP_PATH)
 
 
 @pytest.fixture
@@ -157,3 +167,131 @@ async def test_a_prefix_subscribed_after_birth_captures_the_next_write(desk_lane
     row["store"]["late.name"] = "after"
 
     assert [c["key"]["path"] for c in row["datachanges"]] == ["late.name"]
+
+
+def foreign_change(path: str, value):
+    """A change born elsewhere, TYTX-encoded the way the site hands it over."""
+    source = Bag()
+    producer = DataChangeCollector(source)
+    source[path] = value
+    return to_tytx(producer.drain()[-1], "json")
+
+
+@pytest.fixture
+def two_pages(desk_lane):
+    """Two pages of the same user on the lane's worker, the second subscribed."""
+    worker = desk_lane.worker
+    worker.new_page("u1", page_id="p1", connection_id="s1")
+    worker.new_page("u1", page_id="p2", connection_id="s1")
+    return desk_lane
+
+
+async def test_a_same_user_local_address_is_appended_to_the_target_row_at_once(two_pages):
+    row = two_pages.worker.page_register.get("p2")
+
+    answer = await two_pages.verb(
+        "set_datachange", "u1", change=foreign_change("srv.x", 1), target="p2"
+    )
+
+    assert answer["local"] is True
+    assert [c["key"]["path"] for c in row["datachanges"]] == ["srv.x"]
+    assert row["datachanges"][0]["change_idx"] == 1
+    assert row["datachanges"][0]["key"]["reason"] is None
+    assert two_pages.desk.page_datachange_map == {}
+
+
+async def test_collect_page_delivers_the_addressed_change_and_empties_the_row(two_pages):
+    await two_pages.verb("set_datachange", "u1", change=foreign_change("srv.x", 1), target="p2")
+
+    collected = await two_pages.verb("collect_page", "p2")
+
+    assert [c["key"]["path"] for c in collected["datachanges"]] == ["srv.x"]
+    assert two_pages.worker.page_register.get("p2")["datachanges"] == []
+
+
+async def test_a_server_write_and_an_addressed_write_share_one_index(two_pages):
+    await two_pages.verb(
+        "setStoreSubscription", "u1", page_id="p2", storename="page", prefix="srv"
+    )
+    row = two_pages.worker.page_register.get("p2")
+
+    row["store"]["srv.a"] = 1
+    await two_pages.verb("set_datachange", "u1", change=foreign_change("srv.b", 2), target="p2")
+
+    assert [c["key"]["path"] for c in row["datachanges"]] == ["srv.a", "srv.b"]
+    assert [c["change_idx"] for c in row["datachanges"]] == [1, 2]
+    assert row["datachanges_idx"] == 2
+
+
+async def test_replace_coalesces_the_pending_change_of_the_same_key(two_pages):
+    row = two_pages.worker.page_register.get("p2")
+
+    await two_pages.verb(
+        "set_datachange", "u1", change=foreign_change("srv.x", 1), target="p2", replace=True
+    )
+    await two_pages.verb(
+        "set_datachange", "u1", change=foreign_change("srv.x", 2), target="p2", replace=True
+    )
+
+    assert len(row["datachanges"]) == 1
+    assert row["datachanges"][0]["value"] == 2
+
+
+async def test_reset_datachanges_empties_the_local_row_and_its_index(two_pages):
+    row = two_pages.worker.page_register.get("p2")
+    await two_pages.verb("set_datachange", "u1", change=foreign_change("srv.x", 1), target="p2")
+
+    await two_pages.verb("reset_datachanges", "u1", target="p2")
+
+    assert row["datachanges"] == []
+    assert row["datachanges_idx"] == 0
+
+
+async def test_drop_datachanges_takes_one_prefix_out_of_the_local_row(two_pages):
+    row = two_pages.worker.page_register.get("p2")
+    for path in ("srv.a", "srv.a.x", "srv.ab"):
+        await two_pages.verb(
+            "set_datachange", "u1", change=foreign_change(path, 1), target="p2"
+        )
+
+    await two_pages.verb("drop_datachanges", "u1", "srv.a", target="p2")
+
+    assert [c["key"]["path"] for c in row["datachanges"]] == ["srv.ab"]
+
+
+async def test_a_page_of_another_user_leaves_at_once_for_the_desk(two_pages):
+    worker = two_pages.worker
+    worker.new_page("u2", page_id="p9", connection_id="s9")
+    await sent_events(two_pages)
+    row = worker.page_register.get("p9")
+
+    await two_pages.verb("set_datachange", "u1", change=foreign_change("srv.x", 1), target="p9")
+
+    assert row["datachanges"] == []
+    assert [c["key"]["path"] for c in two_pages.desk.page_datachange_map["p9"]] == ["srv.x"]
+    assert not hasattr(worker.request_slot, "datachanges")
+
+
+async def test_a_request_that_never_collects_loses_no_addressed_write(two_pages):
+    worker = two_pages.worker
+    worker.new_page("u2", page_id="p9", connection_id="s9")
+    await sent_events(two_pages)
+
+    await two_pages.verb("set_datachange", "u1", change=foreign_change("srv.x", 1), target="p9")
+    await two_pages.open_request()
+
+    assert [c["key"]["path"] for c in two_pages.desk.page_datachange_map["p9"]] == ["srv.x"]
+
+
+async def test_the_desks_change_is_stamped_by_the_row_that_retires_it(two_pages):
+    worker = two_pages.worker
+    worker.new_page("u2", page_id="p9", connection_id="s9")
+    await sent_events(two_pages)
+    await two_pages.verb("set_datachange", "u1", change=foreign_change("srv.x", 1), target="p9")
+
+    collected = await two_pages.verb("collect_page", "p9")
+
+    assert [c["key"]["path"] for c in collected["datachanges"]] == ["srv.x"]
+    assert collected["datachanges"][0]["change_idx"] >= 1
+    row = worker.page_register.get("p9")
+    assert row["datachanges"] == [] and row["datachanges_idx"] == 0

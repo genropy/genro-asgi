@@ -1,0 +1,5 @@
+✓ Phase 2 completed: A non-local address leaves at once as one CALL; the slot and the exchange carry no datachanges
+
+The three verbs now send a non-local address as one CALL to the new desk op `on_datachange`, which judges the target at the vertex and answers `{"filed": …}`; `RequestSlot` and `op_exchange` carry no datachanges, and what the desk returns is appended to the row before the retire. Every Done criterion ran green — 18 tests in `test_contract_page_store_row.py`, 1828 in the full suite, ruff clean, and the three grep checks empty/1 as specified.
+
+The commit is the one step left open: the `pre-commit-rules.sh` hook demands an interactive confirmation this session cannot give, so the seven files sit staged and the plan carries a `Verify: now` note with the drafted message.

@@ -1,0 +1,1 @@
+Phase 4 chiusa e committata (`4882c28`). Nessuna fase pending: il piano è completo (Phase 1 `cb126fc`, Phase 2 `37fe39a`, Phase 3 `d9c3ec5`, Phase 4 `4882c28`). `ruff check src/ tests/` pulito, `pytest tests/ -q` = 1828 passed; una sola auto-fix cosmetica, nessun rilievo da girare al titolare — dettaglio in `.phased/active/datachange-addressing/review.md`.

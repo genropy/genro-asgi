@@ -210,6 +210,30 @@ class RegisterRegistry:
         """
         return DataChangeCollector(store, paths=paths)
 
+    def append_page_datachange(
+        self, page: dict[str, Any], change: dict[str, Any], *, replace: bool = False
+    ) -> None:
+        """Append one change to a page row's queue, stamping the next index.
+
+        Args:
+            page: the page row whose ``datachanges``/``datachanges_idx`` grow.
+            change: the change dict; its ``change_idx`` is stamped here.
+            replace: drop the pending change of the same ``key`` first — same
+                path, same reason, same fired — so a value written over and
+                over reaches the browser once.
+
+        Returns nothing; it acts on the row. The caller holds the row's
+        ``item_lock``. This is the ONE append: the store subscriber and the
+        addressed write share it, so the row has one list and one index.
+        """
+        if replace:
+            page["datachanges"][:] = [
+                pending for pending in page["datachanges"] if pending["key"] != change["key"]
+            ]
+        page["datachanges_idx"] += 1
+        change["change_idx"] = page["datachanges_idx"]
+        page["datachanges"].append(change)
+
     def subscribe_page_store(self, page: dict[str, Any]) -> None:
         """Attach to a page's store the capture that fills the row's queue.
 
@@ -239,16 +263,15 @@ class RegisterRegistry:
                 return
             attributes = dict(node.attr)
             fired = bool(attributes.pop("_fired", False))
-            page["datachanges_idx"] += 1
-            page["datachanges"].append(
+            self.append_page_datachange(
+                page,
                 {
                     "key": {"path": path, "reason": "serverChange", "fired": fired},
                     "value": None if delete else node.static_value,
                     "attributes": attributes or None,
                     "delete": delete,
                     "change_ts": datetime.now(UTC),
-                    "change_idx": page["datachanges_idx"],
-                }
+                },
             )
 
         def node_path(node: Any) -> str:

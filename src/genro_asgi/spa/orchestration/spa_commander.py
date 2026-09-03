@@ -423,17 +423,13 @@ class DeliveryDesk:
         self,
         page_id: str,
         user: str,
-        datachanges: list[dict[str, Any]] | None = None,
         dbevents: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Take a request's events in, and hand back what waits for its page.
+        """Take a request's deposits in, and hand back what waits for its page.
 
         Args:
             page_id: the exchanging page — whose queues are retired.
             user: its owner, whose store queue is retired with them.
-            datachanges: the addressed writes the request produced, each a header
-                (``kind``, ``target``, ``filters``, ``replace``) around a
-                TYTX-encoded ``change``.
             dbevents: the deposits the request produced, as the worker shaped
                 them.
 
@@ -442,11 +438,11 @@ class DeliveryDesk:
             TYTX-encoded: their ``change_ts`` is a datetime, which JSON has no
             word for.
 
-        Acts on all three queue maps: the arrivals are filed first, so what the
-        caller itself produced for itself is in the answer.
+        Acts on all three queue maps: the deposits are filed first, so what the
+        caller itself produced for itself is in the answer. The addressed writes
+        arrive by their own op, ``on_datachange``, the moment their verb is
+        called — they do not ride this exchange.
         """
-        for message in datachanges or ():
-            self.file_datachange(message)
         for deposit in dbevents or ():
             self.file_dbevent(deposit)
         return {
@@ -472,6 +468,33 @@ class DeliveryDesk:
         for deposit in dbevents or ():
             self.file_dbevent(deposit)
         return {}
+
+    def op_on_datachange(self, **message: Any) -> dict[str, Any]:
+        """File one addressed write the moment its own verb is called.
+
+        Args:
+            message: the header the verb shaped — ``op``, ``kind``, ``target``,
+                ``filters``, ``replace``, plus the TYTX-encoded ``change`` of a
+                ``set_datachange`` or the ``path`` of a ``drop_datachanges``.
+
+        Returns:
+            ``{"filed": True}`` when the target exists at the vertex, and
+            ``{"filed": False}`` when nobody holds it — the verb raises on that
+            answer, so no queue is born for a page that never existed.
+
+        Acts on the queue maps through ``file_datachange``. The desk is the
+        authority on a target's existence: a worker knows its own rows only, and
+        an address it does not hold is not thereby unknown.
+        """
+        target = message["target"]
+        if message["kind"] in STATE_KINDS:
+            known = target in self.spa_commander.user_map
+        else:
+            known = target in self.spa_commander.page_connection_map
+        if not known:
+            return {"filed": False}
+        self.file_datachange(message)
+        return {"filed": True}
 
     def file_datachange(self, message: dict[str, Any]) -> None:
         """Put one addressed write in the queue of whoever it is addressed at.

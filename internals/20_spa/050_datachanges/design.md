@@ -1,6 +1,6 @@
 # Datachanges distribution
 
-**Version**: 0.1 · **Last Updated**: 2026-09-02 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.1 · **Last Updated**: 2026-09-03 · **Status**: 🔴 DA REVISIONARE
 
 **The need.** What one page changes, the other pages that care must see — without every page polling the world.
 
@@ -19,6 +19,19 @@ empties the queue and resets the index. The queue is a row field, so it travels
 in the parcel through a freeze and a transfer. Every access to a row and to its
 Bag takes the row's exclusive re-entrant `item_lock`. The user store keeps its
 `user_view` — another round.
+
+**Where an addressed change goes.** `set_datachange`, `reset_datachanges` and
+`drop_datachanges` name a target. A target page of the CALLER'S OWN user living
+on this worker is served on the spot: `RegisterRegistry.append_page_datachange`
+appends the change to that row under its `item_lock` and stamps the next
+`datachanges_idx`, so the addressed write and the `serverChange` subscriber share
+one list and one index. The same user is the condition because his freeze waits
+for the caller's own pending call. Any other address — a page of another user
+even on this worker, `filters`, the STATE kinds — leaves at once from the request
+thread as one CALL to `/desk/on_datachange`, filed the moment the verb runs; the
+desk judges existence and a target nobody holds comes back as a `KeyError` at the
+verb. What the desk hands back at a page's exchange is appended to that row
+through the same `append_page_datachange`, then retired by `collect_page`.
 
 Interactions: dbevents (same desk) · global-store · orchestration (the lane carries them).
 
