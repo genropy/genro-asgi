@@ -1041,7 +1041,8 @@ class SpaWorker:
         the exchange — the page's queues at the desk. What the desk hands back is
         appended to the row through the same append a local write takes, so the
         row has ONE list and ONE index, and the retire that follows empties it.
-        The exchange happens on EVERY request, empty-handed included: retiring what waits is the reason it exists. The
+        The exchange happens on EVERY request, empty-handed included: retiring
+        what waits is the reason it exists. The
         STATE writes it brings back are applied to the user's own Bag BEFORE
         the drain, so the page that retired them reads them in this very
         delivery and its siblings capture them on their own ``user_view``.
@@ -1108,26 +1109,66 @@ class SpaWorker:
             )
         slot.dbevents = []
 
-    def _refuse_unservable_address(self, op: str, kind: str, filters: str | None) -> None:
-        """Refuse at the verb what this pass does not deliver: the bad call fails alone.
+    def _route_datachange(
+        self,
+        op: str,
+        identity: str,
+        kind: str,
+        target: str | None,
+        filters: str | None,
+        message: dict[str, Any],
+        act_on_row: Callable[[dict[str, Any]], None],
+    ) -> bool:
+        """Take one addressed write to its road: the target row here, or the desk.
 
         Args:
-            op: the refusing verb, named in the error.
-            kind: what the address names.
+            op: the verb being routed, named in the errors and in the message.
+            identity: the user the calling site speaks for.
+            kind: what ``target`` names — a page (the SIGNAL address) or a store.
+            target: the addressed page.
             filters: the broadcast address, whose delivery is the second pass's.
+            message: what the op adds to the desk message — ``change`` and
+                ``replace`` for a write, ``path`` for a drop.
+            act_on_row: what the verb does on the row when the road is local;
+                called with the row, under its ``item_lock``.
+
+        Returns:
+            True when the write stayed here, False when the desk filed it.
 
         Raises:
             NotImplementedError: a ``filters`` broadcast, or a STATE kind other
                 than ``user_store`` — nothing local can serve them yet, and a
                 silent success would be a write into nowhere.
+            KeyError: a target nobody at the vertex holds.
+            CommanderCallFailed: the desk refused the write.
 
-        Whether the target EXISTS is not judged here: the desk is the authority
-        on that, and it answers when the write is filed.
+        A page of the caller's OWN user, living here, is acted on at once, under
+        ``dispatch_lock`` then the row's ``item_lock`` — the row cannot leave the
+        register between the two — so the write is in the parcel before any
+        freeze. Every other address leaves at once as ONE CALL to the desk, from
+        this very thread: an unservable write fails alone, in the caller's own
+        call, and a request that never collects loses nothing. Whether the
+        target EXISTS is the desk's judgment: a worker knows its own rows only.
         """
         if filters is not None:
             raise NotImplementedError(f"{op}: filtered addresses are not delivered by this pass")
         if kind in STATE_KINDS and kind != "user_store":
             raise NotImplementedError(f"{op}: kind {kind!r} is not delivered by this pass")
+        with self.dispatch_lock:
+            page = self.page_register.get(target) if kind == SIGNAL_KIND else None
+            if page is not None and self.registry.page_user(target) == identity:
+                with page["item_lock"]:
+                    act_on_row(page)
+                return True
+        answer = self.run_on_loop(
+            self.call(
+                DESK_ON_DATACHANGE_PATH,
+                {"op": op, "kind": kind, "target": target, "filters": filters, **message},
+            )
+        )
+        if answer["filed"] is False:
+            raise KeyError(f"{op}: no target {target!r}")
+        return False
 
     def set_datachange(
         self,
@@ -1156,54 +1197,35 @@ class SpaWorker:
                 call and never the target of the write.
 
         Returns:
-            The address the write took, as it was resolved.
+            The address the write took, as it was resolved; ``local`` is True
+            when it stayed on a row here.
 
         Raises:
-            NotImplementedError: a ``filters`` broadcast, or a STATE kind other
-                than ``user_store`` — addresses this pass does not deliver.
-            KeyError: a target nobody at the vertex holds.
-            CommanderCallFailed: the desk refused the write.
+            NotImplementedError, KeyError, CommanderCallFailed: see
+                ``_route_datachange``.
 
-        A page of the caller's OWN user, living here, is written on its row at
-        once: under the row's ``item_lock``, through the same append the store
-        subscriber uses, so the row keeps one list and one index and the write
-        is in the parcel before any freeze. Every other address leaves at once
-        as ONE CALL to the desk, from this very thread: an unservable write
-        fails alone, in the caller's own call, and a request that never
-        collects loses nothing.
+        On the local road the change goes on the target row through the same
+        append the store subscriber uses, so the row keeps one list and one
+        index.
         """
-        self._refuse_unservable_address("set_datachange", kind, filters)
-        with self.dispatch_lock:
-            page = self.page_register.get(target) if kind == SIGNAL_KIND else None
-            local = page is not None and self.registry.page_user(target) == identity
-        if local:
-            with page["item_lock"]:
-                self.registry.append_page_datachange(
-                    page, from_tytx(change, "json"), replace=replace
-                )
-            return {
-                "kind": kind,
-                "target": target,
-                "filters": filters,
-                "replace": replace,
-                "local": True,
-            }
-        answer = self.run_on_loop(
-            self.call(
-                DESK_ON_DATACHANGE_PATH,
-                {
-                    "op": "set_datachange",
-                    "kind": kind,
-                    "target": target,
-                    "filters": filters,
-                    "replace": replace,
-                    "change": change,
-                },
-            )
+        local = self._route_datachange(
+            "set_datachange",
+            identity,
+            kind,
+            target,
+            filters,
+            {"replace": replace, "change": change},
+            lambda page: self.registry.append_page_datachange(
+                page, from_tytx(change, "json"), replace=replace
+            ),
         )
-        if answer["filed"] is False:
-            raise KeyError(f"set_datachange: no target {target!r}")
-        return {"kind": kind, "target": target, "filters": filters, "replace": replace}
+        return {
+            "kind": kind,
+            "target": target,
+            "filters": filters,
+            "replace": replace,
+            "local": local,
+        }
 
     def reset_datachanges(
         self,
@@ -1221,40 +1243,26 @@ class SpaWorker:
             addressing: the caller's own ``page_id``.
 
         Returns:
-            The address the reset took.
+            The address the reset took; ``local`` is True when it emptied a row
+            here.
 
         Raises:
-            NotImplementedError: a ``filters`` address, undelivered by this pass.
-            KeyError: a target nobody at the vertex holds.
-            CommanderCallFailed: the desk refused the write.
+            NotImplementedError, KeyError, CommanderCallFailed: see
+                ``_route_datachange``.
 
-        A page of the caller's OWN user, living here, is emptied on its row at
-        once, under the row's ``item_lock``. Every other address leaves at once
-        as ONE CALL: the desk empties the queue it keeps for that page.
+        On the local road the row's list and index go back to empty; on the
+        desk's, the queue it keeps for that page.
         """
-        self._refuse_unservable_address("reset_datachanges", SIGNAL_KIND, filters)
-        with self.dispatch_lock:
-            page = self.page_register.get(target)
-            local = page is not None and self.registry.page_user(target) == identity
-        if local:
-            with page["item_lock"]:
-                page["datachanges"] = []
-                page["datachanges_idx"] = 0
-            return {"target": target, "filters": filters, "local": True}
-        answer = self.run_on_loop(
-            self.call(
-                DESK_ON_DATACHANGE_PATH,
-                {
-                    "op": "reset_datachanges",
-                    "kind": SIGNAL_KIND,
-                    "target": target,
-                    "filters": filters,
-                },
-            )
+        local = self._route_datachange(
+            "reset_datachanges",
+            identity,
+            SIGNAL_KIND,
+            target,
+            filters,
+            {},
+            lambda page: page.update(datachanges=[], datachanges_idx=0),
         )
-        if answer["filed"] is False:
-            raise KeyError(f"reset_datachanges: no target {target!r}")
-        return {"target": target, "filters": filters}
+        return {"target": target, "filters": filters, "local": local}
 
     def drop_datachanges(
         self,
@@ -1274,48 +1282,31 @@ class SpaWorker:
             addressing: the caller's own ``page_id``.
 
         Returns:
-            The address the drop took, and the path it named.
+            The address the drop took and the path it named; ``local`` is True
+            when it pruned a row here.
 
         Raises:
-            NotImplementedError: a ``filters`` address, undelivered by this pass.
-            KeyError: a target nobody at the vertex holds.
-            CommanderCallFailed: the desk refused the write.
+            NotImplementedError, KeyError, CommanderCallFailed: see
+                ``_route_datachange``.
 
-        A page of the caller's OWN user, living here, is pruned on its row at
-        once, under the row's ``item_lock``, the prefix matched on segment
-        boundaries. Every other address leaves at once as ONE CALL: the desk
-        drops that prefix from the queue it keeps for that page.
+        The prefix is matched on segment boundaries, on the row here or in the
+        desk's queue for that page.
         """
-        self._refuse_unservable_address("drop_datachanges", SIGNAL_KIND, filters)
-        with self.dispatch_lock:
-            page = self.page_register.get(target)
-            local = page is not None and self.registry.page_user(target) == identity
-        if local:
-            with page["item_lock"]:
-                page["datachanges"][:] = [
-                    pending
-                    for pending in page["datachanges"]
-                    if not (
-                        pending["key"]["path"] == path
-                        or pending["key"]["path"].startswith(f"{path}.")
-                    )
-                ]
-            return {"target": target, "filters": filters, "path": path, "local": True}
-        answer = self.run_on_loop(
-            self.call(
-                DESK_ON_DATACHANGE_PATH,
-                {
-                    "op": "drop_datachanges",
-                    "kind": SIGNAL_KIND,
-                    "target": target,
-                    "filters": filters,
-                    "path": path,
-                },
-            )
+
+        def prune(page: dict[str, Any]) -> None:
+            page["datachanges"][:] = [
+                pending
+                for pending in page["datachanges"]
+                if not (
+                    pending["key"]["path"] == path
+                    or pending["key"]["path"].startswith(f"{path}.")
+                )
+            ]
+
+        local = self._route_datachange(
+            "drop_datachanges", identity, SIGNAL_KIND, target, filters, {"path": path}, prune
         )
-        if answer["filed"] is False:
-            raise KeyError(f"drop_datachanges: no target {target!r}")
-        return {"target": target, "filters": filters, "path": path}
+        return {"target": target, "filters": filters, "path": path, "local": local}
 
     # ------------------------------------------------------------------
     # The table events: their own ops, their own index, their own species in
