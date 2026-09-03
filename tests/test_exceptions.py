@@ -27,6 +27,7 @@ from genro_asgi.exceptions import (
     HTTPForbidden,
     HTTPNotFound,
     HTTPUnauthorized,
+    HTTPUnprocessableContent,
     Redirect,
 )
 
@@ -50,6 +51,7 @@ class TestSubclasses:
         assert HTTPNotFound().status == 404
         assert HTTPUnauthorized().status == 401
         assert HTTPForbidden().status == 403
+        assert HTTPUnprocessableContent().status == 422
 
     def test_subclasses_forward_headers(self) -> None:
         challenge = [(b"www-authenticate", b"Bearer")]
