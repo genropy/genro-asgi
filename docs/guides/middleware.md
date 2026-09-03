@@ -123,6 +123,14 @@ With `logging` armed, requests appear in the server's log output.
 
 - `errors` is the only stage on by default — it is why an unknown path is a clean
   `404` in the hello-world. The rest are off until you arm them.
+- A call the handler cannot take is answered by the dispatcher, never a `500`,
+  on two distinct codes: a call that does not fit the signature — an unknown
+  keyword, a missing required argument, one positional too many — answers
+  **`400`**, while values the signature accepts and the handler's validation
+  rejects answer **`422` Unprocessable Content** (RFC 9110 §15.5.21: the
+  request is well formed, its semantics are not). What the handler BODY raises
+  is mapped to neither and reaches `errors` as a `500`; a handler raising
+  `HTTPBadRequest` itself still answers `400`, never remapped.
 - An unknown middleware name in `middleware={...}` raises `ValueError`. If you are
   arming a custom stage, register it in `middleware_registry` first.
 - Ordering is by priority, lower = more outer. A custom stage lands according to
