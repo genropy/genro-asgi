@@ -55,6 +55,7 @@ from .exceptions import (
     HTTPForbidden,
     HTTPNotFound,
     HTTPUnauthorized,
+    HTTPUnprocessableContent,
     Redirect,
 )
 from .mcp import McpEngine, McpError
@@ -110,6 +111,7 @@ __all__ = [
     "HTTPForbidden",
     "HTTPNotFound",
     "HTTPUnauthorized",
+    "HTTPUnprocessableContent",
     "McpApplication",
     "McpEngine",
     "McpError",
