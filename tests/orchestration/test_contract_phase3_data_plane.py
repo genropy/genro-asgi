@@ -117,7 +117,7 @@ def test_a_subscription_for_an_unknown_page_is_an_error(worker):
 
 
 # ----------------------------------------------------------------------
-# collect_page: one drain point, two species, merged by change_ts
+# collect_page: one drain point, two species, merged in arrival order
 # ----------------------------------------------------------------------
 
 
@@ -194,6 +194,7 @@ def test_the_signature_carries_the_addressing_it_will_grow_into(worker):
     assert answer["filters"] is None
     assert answer["replace"] is False
     assert "kind" in answer
+    assert answer["local"] is True
 
 
 async def test_replace_coalesces_the_pending_change_of_the_same_key(desk_lane):

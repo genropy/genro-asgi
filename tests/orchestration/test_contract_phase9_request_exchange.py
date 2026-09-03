@@ -39,6 +39,7 @@ from genro_bag.datachange import DataChangeCollector
 from genro_tytx import to_tytx
 
 from genro_asgi.spa.orchestration.spa_worker import RequestSlot
+from genro_asgi.spa.orchestration.worker_handler import PING_OP_PATH
 
 from .conftest import wait_for
 
@@ -53,6 +54,9 @@ async def lane(desk_lane):
     """The live lane with alice's two pages already on the worker."""
     desk_lane.worker.new_page(USER, page_id=SIBLING, connection_id="s1")
     desk_lane.worker.new_page(USER, page_id=PAGE, connection_id="s1")
+    # The desk judges a target's existence at the vertex: a ping's REPLY carries
+    # the births up, and the fold reads the envelope before it answers.
+    await desk_lane.worker_handler.connector.call(PING_OP_PATH)
     return desk_lane
 
 
@@ -155,7 +159,7 @@ async def test_the_exchange_happens_on_every_request_even_empty_handed(lane):
     collected = await lane.verb("collect_page", PAGE)
 
     assert collected == {"datachanges": [], "dbevents": []}
-    assert served == [{"page_id": PAGE, "user": USER, "datachanges": [], "dbevents": []}]
+    assert served == [{"page_id": PAGE, "user": USER, "dbevents": []}]
 
 
 def _recording_exchange(original, served, **payload):
@@ -180,9 +184,10 @@ async def test_own_generated_events_come_back_in_the_same_requests_collect(lane)
 
 async def test_collect_merges_own_collectors_with_the_retired_pendings(lane):
     # wf:contract: the response's datachanges merge the page's own captured
-    # wf:contract: changes (its collector and its user_view, still local) with
-    # wf:contract: the datachanges retired from the commander, ordered by
-    # wf:contract: change_ts; dbevents stay their own species, never mixed.
+    # wf:contract: changes (its row and its user_view, still local) with the
+    # wf:contract: datachanges retired from the commander, in ARRIVAL order —
+    # wf:contract: the order one list would have had; dbevents stay their own
+    # wf:contract: species, never mixed.
     worker = lane.worker
     await lane.verb("setStoreSubscription", USER, page_id=PAGE, storename="page", prefix="form")
     await lane.verb("setStoreSubscription", USER, page_id=PAGE, storename="user", prefix="prefs")
@@ -213,11 +218,11 @@ async def test_collect_merges_own_collectors_with_the_retired_pendings(lane):
 # ----------------------------------------------------------------------
 
 
-async def test_set_datachange_to_any_target_travels_through_the_commander(lane):
+async def test_set_datachange_to_a_page_of_the_caller_lands_on_its_row(lane):
     # wf:contract: set_datachange keeps its full pre_refactoring signature
     # wf:contract: (identity, change, kind=, target=, filters=, replace=) and
-    # wf:contract: ALWAYS routes through the desk — the own page included: no
-    # wf:contract: local shortcut exists, the exchange happens anyway.
+    # wf:contract: a page of the CALLER'S OWN user living here is written on
+    # wf:contract: its row at once, never through the desk (D-DC4).
     answer = await lane.verb(
         "set_datachange",
         USER,
@@ -228,9 +233,17 @@ async def test_set_datachange_to_any_target_travels_through_the_commander(lane):
         replace=False,
     )
 
-    assert answer == {"kind": "page", "target": PAGE, "filters": None, "replace": False}
-    # Nothing landed locally: the write is at the desk, and only the exchange brings it back.
-    assert lane.worker.page_register.get(PAGE)["datachanges"] == []
+    assert answer == {
+        "kind": "page",
+        "target": PAGE,
+        "filters": None,
+        "replace": False,
+        "local": True,
+        "filed": True,
+    }
+    assert [c["key"]["path"] for c in lane.worker.page_register.get(PAGE)["datachanges"]] == [
+        "untold.x"
+    ]
     collected = await lane.verb("collect_page", PAGE)
     assert [c["key"]["path"] for c in collected["datachanges"]] == ["untold.x"]
     assert lane.desk.page_datachange_map == {}

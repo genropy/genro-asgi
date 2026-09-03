@@ -496,3 +496,31 @@ def test_connection_parcel_leaves_the_row_locks_behind(tmp_path) -> None:
 
     assert "item_lock" not in parcel["connection"]
     assert [page for page in parcel["pages"].values() if "item_lock" in page] == []
+
+
+def test_append_page_datachange_stamps_consecutive_indexes() -> None:
+    """The one append of a change to a page row numbers what it appends."""
+    registry = RegisterRegistry()
+    registry.new_user("u1")
+    registry.new_connection("s1", "u1")
+    page = registry.new_page("p1", user="u1", connection_id="s1")
+
+    for path in ("a", "b"):
+        registry.append_page_datachange(page, {"key": {"path": path}, "value": 1})
+
+    assert [change["change_idx"] for change in page["datachanges"]] == [1, 2]
+    assert page["datachanges_idx"] == 2
+
+
+def test_append_page_datachange_with_replace_keeps_one_pending_per_key() -> None:
+    """``replace`` drops the pending change of the same key before appending."""
+    registry = RegisterRegistry()
+    registry.new_user("u1")
+    registry.new_connection("s1", "u1")
+    page = registry.new_page("p1", user="u1", connection_id="s1")
+
+    registry.append_page_datachange(page, {"key": {"path": "a"}, "value": 1}, replace=True)
+    registry.append_page_datachange(page, {"key": {"path": "a"}, "value": 2}, replace=True)
+
+    assert [change["value"] for change in page["datachanges"]] == [2]
+    assert page["datachanges"][0]["change_idx"] == 2

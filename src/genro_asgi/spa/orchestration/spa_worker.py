@@ -232,6 +232,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import functools
+import heapq
 import logging
 import os
 import threading
@@ -313,6 +314,11 @@ DESK_EXCHANGE_PATH = "/desk/exchange"
 #: when no collect carried it away goes up alone, and nothing comes back.
 DESK_DEPOSIT_PATH = "/desk/deposit"
 
+#: The routing key one addressed write climbs the moment its verb is called:
+#: it is filed at the desk at once, so a request that never collects loses
+#: nothing, and the answer says whether the target exists at all.
+DESK_ON_DATACHANGE_PATH = "/desk/on_datachange"
+
 #: The routing keys of the global store, which lives on the commander and
 #: nowhere else: two blind writes, and the two halves of one grant.
 DESK_STORE_SET_PATH = "/desk/store_set"
@@ -386,6 +392,7 @@ __all__ = [
     "DEPOSIT_LOCK_WAIT_LIMIT",
     "DESK_DEPOSIT_PATH",
     "DESK_EXCHANGE_PATH",
+    "DESK_ON_DATACHANGE_PATH",
     "DESK_STORE_DEL_PATH",
     "DESK_STORE_GET_PATH",
     "DESK_STORE_LOCK_PATH",
@@ -409,16 +416,16 @@ class RequestSlot:
     """What one request has produced so far, waiting for its own exchange.
 
     The events of a request belong to THAT request: they accumulate here and
-    leave together at its end. ``datachanges`` are the addressed writes and
-    ``dbevents`` the table-event deposits that go up the lane; ``own_dbevents``
-    are the ``local_only`` deposits of the hidden transaction, which never
-    leave this process and reach the origin page's own collect alone.
+    leave together at its end. ``dbevents`` are the table-event deposits that go
+    up the lane; ``own_dbevents`` are the ``local_only`` deposits of the hidden
+    transaction, which never leave this process and reach the origin page's own
+    collect alone. The addressed writes are NOT here: each one leaves at once,
+    on its own CALL, the moment its verb is called.
     ``connection_id`` is the one field that travels back OUT: the front reads
     it off the reply to write its cookie with.
     """
 
     def __init__(self) -> None:
-        self.datachanges: list[dict[str, Any]] = []
         self.dbevents: list[dict[str, Any]] = []
         self.own_dbevents: list[dict[str, Any]] = []
         #: The connection the site named while serving this request — born, or
@@ -1021,10 +1028,11 @@ class SpaWorker:
             page_id: the page the delivery is for.
 
         Returns:
-            ``{"datachanges": [...], "dbevents": [...]}`` — the page's own
-            queue and its ``user_view`` merged with the changes the desk
-            handed back, sorted by ``change_ts`` with a stable sort; the
-            deposits are their own species in their own key, never dressed as
+            ``{"datachanges": [...], "dbevents": [...]}`` — the row's queue and
+            the queue the desk handed back, merged in ARRIVAL order (the
+            ``arrival_ts`` each list was stamped with as it grew), with the
+            ``user_view`` drain merged in on its own ``change_ts``; the deposits
+            are their own species in their own key, never dressed as
             datachanges.
 
         Raises:
@@ -1032,12 +1040,18 @@ class SpaWorker:
             CommanderCallFailed: the desk refused the exchange.
 
         Empties the request slot, the row's queue, the user view and — through
-        the exchange —
-        the page's queues at the desk. The exchange happens on EVERY request,
-        empty-handed included: retiring what waits is the reason it exists. The
-        STATE writes it brings back are applied to the user's own Bag BEFORE
-        the drain, so the page that retired them reads them in this very
-        delivery and its siblings capture them on their own ``user_view``.
+        the exchange — the page's queues at the desk. Each list is already in
+        its own arrival order — the row is appended under its lock, the desk's
+        queue on the commander's one loop, the two on the same wall clock — so
+        a two-way merge reproduces the order the daemon's single list would
+        have had, and nothing is sorted; the merged list is numbered as one
+        list, then the row's index goes back to zero. Nothing is discarded for
+        its age: what waits is delivered whatever its age, as the daemon did.
+        The exchange happens on EVERY request, empty-handed included: retiring
+        what waits is the reason it exists. The STATE writes it brings back are
+        applied to the user's own Bag BEFORE the drain, so the page that retired
+        them reads them in this very delivery and its siblings capture them on
+        their own ``user_view``.
         """
         with self.dispatch_lock:
             if self.page_register.get(page_id) is None:
@@ -1047,15 +1061,9 @@ class SpaWorker:
         reply = self.run_on_loop(
             self.call(
                 DESK_EXCHANGE_PATH,
-                {
-                    "page_id": page_id,
-                    "user": user,
-                    "datachanges": slot.datachanges,
-                    "dbevents": slot.dbevents,
-                },
+                {"page_id": page_id, "user": user, "dbevents": slot.dbevents},
             )
         )
-        slot.datachanges = []
         slot.dbevents = []
         with self.dispatch_lock:
             page = self.page_register.get(page_id)
@@ -1067,16 +1075,33 @@ class SpaWorker:
                 for change in from_tytx(reply["store_changes"], "json"):
                     self.apply_forwarded(store, change)
             with page["item_lock"]:
-                datachanges = page["datachanges"]
+                desk_changes = from_tytx(reply["datachanges"], "json")
+                datachanges = list(
+                    heapq.merge(page["datachanges"], desk_changes, key=self._arrival_order)
+                )
                 page["datachanges"] = []
                 page["datachanges_idx"] = 0
                 if page["user_view"] is not None:
-                    datachanges.extend(page["user_view"].drain())
-            datachanges.extend(from_tytx(reply["datachanges"], "json"))
+                    datachanges = list(
+                        heapq.merge(
+                            datachanges, page["user_view"].drain(), key=self._arrival_order
+                        )
+                    )
+            for index, change in enumerate(datachanges, start=1):
+                change["change_idx"] = index
             dbevents = reply["dbevents"] + slot.own_dbevents
             slot.own_dbevents = []
-        datachanges.sort(key=lambda change: change["change_ts"])
         return {"datachanges": datachanges, "dbevents": dbevents}
+
+    def _arrival_order(self, change: dict[str, Any]) -> float:
+        """The instant a change joined its queue: ``arrival_ts``, or the write's own clock.
+
+        The row and the desk stamp ``arrival_ts``; the ``user_view`` collector
+        does not (the user store is another round), so its changes take their
+        ``change_ts`` — the same wall clock, read at the write.
+        """
+        arrival_ts = change.get("arrival_ts")
+        return arrival_ts if arrival_ts is not None else change["change_ts"].timestamp()
 
     def deliver_slot_deposits(self) -> None:
         """Deliver what the slot still holds, at the end of a request that never collected.
@@ -1106,32 +1131,69 @@ class SpaWorker:
             )
         slot.dbevents = []
 
-    def _refuse_unservable_address(
-        self, op: str, kind: str, target: str | None, filters: str | None
-    ) -> None:
-        """Refuse at the verb what this pass does not deliver: the bad call fails alone.
+    def _route_datachange(
+        self,
+        op: str,
+        identity: str,
+        kind: str,
+        target: str | None,
+        filters: str | None,
+        message: dict[str, Any],
+        act_on_row: Callable[[dict[str, Any]], None],
+    ) -> dict[str, bool]:
+        """Take one addressed write to its road: the target row here, or the desk.
 
         Args:
-            op: the refusing verb, named in the error.
-            kind: what ``target`` names.
-            target: the addressed page, or the addressed user's own store.
+            op: the verb being routed, named in the errors and in the message.
+            identity: the user the calling site speaks for.
+            kind: what ``target`` names — a page (the SIGNAL address) or a store.
+            target: the addressed page.
             filters: the broadcast address, whose delivery is the second pass's.
+            message: what the op adds to the desk message — ``change`` and
+                ``replace`` for a write, ``path`` for a drop.
+            act_on_row: what the verb does on the row when the road is local;
+                called with the row, under its ``item_lock``.
+
+        Returns:
+            ``{"local": ..., "filed": ...}`` — ``local`` True when the write
+            stayed here; ``filed`` False when the desk holds nobody by that
+            name and the write went nowhere, as the daemon's silent return on a
+            missing item. The verbs carry both into their answer.
 
         Raises:
             NotImplementedError: a ``filters`` broadcast, or a STATE kind other
                 than ``user_store`` — nothing local can serve them yet, and a
                 silent success would be a write into nowhere.
-            KeyError: a target this worker does not hold — with one worker of
-                fact, a target not held does not exist.
+            CommanderCallFailed: the desk refused the write.
+
+        A page of the caller's OWN user, living here, is acted on at once, under
+        ``dispatch_lock`` then the row's ``item_lock`` — the row cannot leave the
+        register between the two — so the write is in the parcel before any
+        freeze. Every other address leaves at once as ONE CALL to the desk, from
+        this very thread: an unservable write fails alone, in the caller's own
+        call, and a request that never collects loses nothing. Whether the
+        target EXISTS is the desk's judgment: a worker knows its own rows only,
+        and an unknown target is reported, never raised — a page closed a moment
+        ago, or born in this very request and not yet announced, is not an
+        error of the caller's.
         """
         if filters is not None:
             raise NotImplementedError(f"{op}: filtered addresses are not delivered by this pass")
         if kind in STATE_KINDS and kind != "user_store":
             raise NotImplementedError(f"{op}: kind {kind!r} is not delivered by this pass")
-        register = self.user_register if kind == "user_store" else self.page_register
         with self.dispatch_lock:
-            if target not in register:
-                raise KeyError(f"{op}: no target {target!r} here")
+            page = self.page_register.get(target) if kind == SIGNAL_KIND else None
+            if page is not None and self.registry.page_user(target) == identity:
+                with page["item_lock"]:
+                    act_on_row(page)
+                return {"local": True, "filed": True}
+        answer = self.run_on_loop(
+            self.call(
+                DESK_ON_DATACHANGE_PATH,
+                {"op": op, "kind": kind, "target": target, "filters": filters, **message},
+            )
+        )
+        return {"local": False, "filed": bool(answer["filed"])}
 
     def set_datachange(
         self,
@@ -1160,31 +1222,35 @@ class SpaWorker:
                 call and never the target of the write.
 
         Returns:
-            The address the write took, as it was resolved.
+            The address the write took, as it was resolved; ``local`` is True
+            when it stayed on a row here, ``filed`` False when nobody holds the
+            target and the write went nowhere.
 
         Raises:
-            NotImplementedError: a ``filters`` broadcast, or a STATE kind other
-                than ``user_store`` — addresses this pass does not deliver.
-            KeyError: a target this worker does not hold.
+            NotImplementedError, CommanderCallFailed: see ``_route_datachange``.
 
-        Lays the message on the request slot: the desk resolves every address,
-        the own page included — there is no local shortcut, because the exchange
-        that carries it happens at the end of the request anyway. The address is
-        validated HERE, before the slot: an unservable write fails alone, in the
-        caller's own call, and never poisons the request's exchange.
+        On the local road the change goes on the target row through the same
+        append the store subscriber uses, so the row keeps one list and one
+        index.
         """
-        self._refuse_unservable_address("set_datachange", kind, target, filters)
-        self.request_slot.datachanges.append(
-            {
-                "op": "set_datachange",
-                "kind": kind,
-                "target": target,
-                "filters": filters,
-                "replace": replace,
-                "change": change,
-            }
+        road = self._route_datachange(
+            "set_datachange",
+            identity,
+            kind,
+            target,
+            filters,
+            {"replace": replace, "change": change},
+            lambda page: self.registry.append_page_datachange(
+                page, from_tytx(change, "json"), replace=replace
+            ),
         )
-        return {"kind": kind, "target": target, "filters": filters, "replace": replace}
+        return {
+            "kind": kind,
+            "target": target,
+            "filters": filters,
+            "replace": replace,
+            **road,
+        }
 
     def reset_datachanges(
         self,
@@ -1202,25 +1268,25 @@ class SpaWorker:
             addressing: the caller's own ``page_id``.
 
         Returns:
-            The address the reset took.
+            The address the reset took; ``local`` is True when it emptied a row
+            here, ``filed`` False when nobody holds the target.
 
         Raises:
-            NotImplementedError: a ``filters`` address, undelivered by this pass.
-            KeyError: a target this worker does not hold.
+            NotImplementedError, CommanderCallFailed: see ``_route_datachange``.
 
-        Lays the message on the request slot: the desk empties the queue it
-        keeps for that page.
+        On the local road the row's list and index go back to empty; on the
+        desk's, the queue it keeps for that page.
         """
-        self._refuse_unservable_address("reset_datachanges", SIGNAL_KIND, target, filters)
-        self.request_slot.datachanges.append(
-            {
-                "op": "reset_datachanges",
-                "kind": SIGNAL_KIND,
-                "target": target,
-                "filters": filters,
-            }
+        road = self._route_datachange(
+            "reset_datachanges",
+            identity,
+            SIGNAL_KIND,
+            target,
+            filters,
+            {},
+            lambda page: page.update(datachanges=[], datachanges_idx=0),
         )
-        return {"target": target, "filters": filters}
+        return {"target": target, "filters": filters, **road}
 
     def drop_datachanges(
         self,
@@ -1240,26 +1306,31 @@ class SpaWorker:
             addressing: the caller's own ``page_id``.
 
         Returns:
-            The address the drop took, and the path it named.
+            The address the drop took and the path it named; ``local`` is True
+            when it pruned a row here, ``filed`` False when nobody holds the
+            target.
 
         Raises:
-            NotImplementedError: a ``filters`` address, undelivered by this pass.
-            KeyError: a target this worker does not hold.
+            NotImplementedError, CommanderCallFailed: see ``_route_datachange``.
 
-        Lays the message on the request slot: the desk drops that prefix from
-        the queue it keeps for that page.
+        The prefix is matched on segment boundaries, on the row here or in the
+        desk's queue for that page.
         """
-        self._refuse_unservable_address("drop_datachanges", SIGNAL_KIND, target, filters)
-        self.request_slot.datachanges.append(
-            {
-                "op": "drop_datachanges",
-                "kind": SIGNAL_KIND,
-                "target": target,
-                "filters": filters,
-                "path": path,
-            }
+
+        def prune(page: dict[str, Any]) -> None:
+            page["datachanges"][:] = [
+                pending
+                for pending in page["datachanges"]
+                if not (
+                    pending["key"]["path"] == path
+                    or pending["key"]["path"].startswith(f"{path}.")
+                )
+            ]
+
+        road = self._route_datachange(
+            "drop_datachanges", identity, SIGNAL_KIND, target, filters, {"path": path}, prune
         )
-        return {"target": target, "filters": filters, "path": path}
+        return {"target": target, "filters": filters, "path": path, **road}
 
     # ------------------------------------------------------------------
     # The table events: their own ops, their own index, their own species in

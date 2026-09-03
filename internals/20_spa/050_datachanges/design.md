@@ -1,6 +1,6 @@
 # Datachanges distribution
 
-**Version**: 0.1 · **Last Updated**: 2026-09-02 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.1 · **Last Updated**: 2026-09-03 · **Status**: 🔴 DA REVISIONARE
 
 **The need.** What one page changes, the other pages that care must see — without every page polling the world.
 
@@ -19,6 +19,23 @@ empties the queue and resets the index. The queue is a row field, so it travels
 in the parcel through a freeze and a transfer. Every access to a row and to its
 Bag takes the row's exclusive re-entrant `item_lock`. The user store keeps its
 `user_view` — another round.
+
+**Where an addressed change goes.** `set_datachange`, `reset_datachanges` and
+`drop_datachanges` name a target. A target page of the CALLER'S OWN user living
+on this worker is served on the spot: `RegisterRegistry.append_page_datachange`
+appends the change to that row under its `item_lock` and stamps the next
+`datachanges_idx`, so the addressed write and the `serverChange` subscriber share
+one list and one index. The same user is the condition because his freeze waits
+for the caller's own pending call. Any other address — a page of another user
+even on this worker, `filters`, the STATE kinds — leaves at once from the request
+thread as one CALL to `/desk/on_datachange`, filed the moment the verb runs; the
+desk judges existence and a target nobody holds comes back as `filed: False` in
+the verb's answer — reported, never raised, as the daemon's silent return on a
+missing item. Every queued change carries `arrival_ts`, the wall-clock instant it
+joined its queue (row or desk), and `collect_page` merges the row's list with what
+the desk hands back on that stamp — arrival order, the order one list would have
+had — with the writer's own `change_ts` untouched; nothing waiting expires, the
+queue dies with the page.
 
 Interactions: dbevents (same desk) · global-store · orchestration (the lane carries them).
 

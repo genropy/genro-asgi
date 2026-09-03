@@ -172,7 +172,6 @@ function renderCommander() {
     deskCard.appendChild(make("h3", null, "delivery desk"));
     deskCard.appendChild(keyValues([
       ["subscribed tables", desk.subscribed_tables.join(", ") || "none"],
-      ["event max age s", desk.event_max_age_seconds],
       ["queued dbevents", total(desk.page_dbevent_map)],
       ["queued datachanges", total(desk.page_datachange_map)],
       ["queued store changes", total(desk.user_store_change_map)],

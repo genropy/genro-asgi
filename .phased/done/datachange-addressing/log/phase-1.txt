@@ -1,0 +1,5 @@
+Phase 1 committed (`cb126fc`).
+
+✓ Phase 1 completed: A same-user local address is appended to the target row, as in the daemon
+
+`pytest tests/ -q` = 1826 passed, `ruff check src/ tests/` clean, `test_contract_page_store_row.py` = 16 tests. One contract test in `test_contract_phase9_request_exchange.py` asserted the "no local shortcut" rule that D-DC4 replaces — rewritten here rather than in Phase 2, recorded as a `> Decision:` note in the plan.
