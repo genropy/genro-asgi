@@ -43,6 +43,7 @@ def test_root_exports_public_api():
         "HTTPForbidden",
         "HTTPNotFound",
         "HTTPUnauthorized",
+        "HTTPUnprocessableContent",
         "McpApplication",
         "McpEngine",
         "McpError",

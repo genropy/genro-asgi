@@ -41,13 +41,14 @@ core exceptions (``ROUTER_ERRORS``: unknown or unavailable path →
 ``HTTPNotFound``; a ruled entry denied with no identity → ``HTTPUnauthorized``,
 with an identity whose tags do not match → ``HTTPForbidden``) that propagate to
 the server's ``ErrorMiddleware``.
-Invalid handler arguments become ``HTTPBadRequest`` (400) — never a 500:
-genro-routes channels every bad-argument error (a ``pydantic.ValidationError``
-and an unbindable-argument ``TypeError`` alike) through the node's single
-``validation_error`` exception mapping, so the dispatcher catches one marker.
-A ``TypeError`` raised inside a SYNC handler body is indistinguishable from
-a binding error and maps to 400 too; an async body's ``TypeError`` surfaces
-at await time and reaches ``ErrorMiddleware`` as a 500. There is no local
+A call the handler cannot take becomes an HTTP answer — never a 500 — on the
+two exception codes genro-routes distinguishes: ``signature_error`` (the bind
+against the handler signature fails: unknown keyword, missing required
+argument, too many positionals) → ``HTTPBadRequest`` (400);
+``validation_error`` (the signature is satisfied and pydantic rejects the
+values) → ``HTTPUnprocessableContent`` (422). The handler BODY is mapped to
+neither: whatever it raises — a ``TypeError`` included, sync body or async —
+propagates and reaches ``ErrorMiddleware`` as a 500. There is no local
 cleanup drain: the server ``finally`` owns end-of-request cleanups.
 
 Kwargs binding: ``bind_kwargs`` starts from ``request.handler_kwargs()``
@@ -70,7 +71,13 @@ from typing import TYPE_CHECKING, Any
 from genro_routes import RoutingClass, is_result_wrapper
 
 from .application import BaseApplication
-from .exceptions import HTTPBadRequest, HTTPForbidden, HTTPNotFound, HTTPUnauthorized
+from .exceptions import (
+    HTTPBadRequest,
+    HTTPForbidden,
+    HTTPNotFound,
+    HTTPUnauthorized,
+    HTTPUnprocessableContent,
+)
 from .request import Request
 from .streaming import StreamingResponse
 
@@ -82,14 +89,22 @@ if TYPE_CHECKING:
 __all__ = ["RoutedApplication"]
 
 
+class _HandlerSignatureInvalid(Exception):
+    """Marker raised by the node's ``signature_error`` exception mapping.
+
+    genro-routes binds the call against the handler signature before running
+    it: an unknown keyword, a missing required argument or too many positionals
+    re-raise as this class, the binding ``TypeError`` kept as ``__cause__``.
+    """
+
+
 class _HandlerArgumentsInvalid(Exception):
     """Marker raised by the node's ``validation_error`` exception mapping.
 
-    genro-routes re-raises every escaping bad-argument error — a handler's
-    ``pydantic.ValidationError`` and an unbindable-argument ``TypeError`` alike —
-    as the class mapped to the ``validation_error`` code, with the original error
-    as ``__cause__``; the dispatcher catches invalid handler arguments through
-    this class without importing pydantic (the sibling of the MCP engine's marker).
+    The signature is satisfied and pydantic rejects the values: genro-routes
+    re-raises the ``pydantic.ValidationError`` as this class, the original error
+    kept as ``__cause__``; the dispatcher catches rejected values without
+    importing pydantic (the sibling of the MCP engine's marker).
     """
 
 
@@ -159,11 +174,12 @@ class RoutedApplication(BaseApplication, RoutingClass):
         """Resolve the request in the app router, execute, respond.
 
         Raises the mapped ``ROUTER_ERRORS`` exception when resolution fails;
-        the server's ``ErrorMiddleware`` answers it. A handler called with
-        invalid arguments — a ``pydantic.ValidationError`` or an
-        unbindable-argument ``TypeError``, both mapped through the node's single
-        ``validation_error`` seam — surfaces as ``HTTPBadRequest`` (400, never a
-        500), the original error kept as ``__cause__``.
+        the server's ``ErrorMiddleware`` answers it. A call that does not fit
+        the handler signature surfaces as ``HTTPBadRequest`` (400); values the
+        handler's pydantic validation rejects surface as
+        ``HTTPUnprocessableContent`` (422). Both keep the original error as
+        ``__cause__``. What the handler body raises is mapped to neither: it
+        propagates as a 500.
 
         A handler that answers with a ``StreamingResponse`` — an SSE stream, a
         long download — speaks the wire itself: it is called with the ASGI
@@ -174,7 +190,11 @@ class RoutedApplication(BaseApplication, RoutingClass):
             raise RuntimeError(f"{type(self).__name__} dispatch requires an owning server")
         request = Request(scope, receive, server=server, application=self)
         await request.init()
-        errors = {**self.ROUTER_ERRORS, "validation_error": _HandlerArgumentsInvalid}
+        errors = {
+            **self.ROUTER_ERRORS,
+            "signature_error": _HandlerSignatureInvalid,
+            "validation_error": _HandlerArgumentsInvalid,
+        }
         node = self.route.node(request.path, errors=errors, **self.auth_filters(scope))
         call = self.make_callable(node, request)
         try:
@@ -182,9 +202,12 @@ class RoutedApplication(BaseApplication, RoutingClass):
                 result = await call()
             else:
                 result = await server.run_sync(call)
+        except _HandlerSignatureInvalid as exc:
+            detail = exc.__cause__ or exc
+            raise HTTPBadRequest(f"Arguments do not fit the handler: {detail}") from exc
         except _HandlerArgumentsInvalid as exc:
             detail = exc.__cause__ or exc
-            raise HTTPBadRequest(f"Invalid request arguments: {detail}") from exc
+            raise HTTPUnprocessableContent(f"Invalid argument values: {detail}") from exc
         if isinstance(result, StreamingResponse):
             await result(scope, receive, send)
             return

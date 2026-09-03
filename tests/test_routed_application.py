@@ -264,18 +264,18 @@ class TestBodyBinding:
 
 
 class TestArgumentErrors:
-    """Bad handler arguments surface as 400, never 500.
+    """Bad handler arguments surface as an HTTP answer, never 500.
 
-    genro-routes 0.28.0 channels both a ``pydantic.ValidationError`` (an
-    uncoercible typed argument) and the binding ``TypeError`` (an unbindable
-    extra argument) through the node's single ``validation_error`` mapping, so
-    the dispatcher catches one marker and answers ``HTTPException(400)``.
+    genro-routes keeps the two failures apart: an unbindable extra argument is
+    a ``signature_error`` and answers 400, an uncoercible typed argument is a
+    ``validation_error`` and answers 422. The dispatcher catches one marker per
+    code.
     """
 
-    async def test_uncoercible_typed_arg_is_400(self, query_request, response_status) -> None:
+    async def test_uncoercible_typed_arg_is_422(self, query_request, response_status) -> None:
         server = AsgiServer(applications=[TypedApp(mount="")])
         sent = await query_request(server, "/add", b"x=abc")
-        assert response_status(sent) == 400
+        assert response_status(sent) == 422
 
     async def test_unbindable_extra_arg_is_400(self, query_request, response_status) -> None:
         server = AsgiServer(applications=[TypedApp(mount="")])
@@ -392,16 +392,32 @@ class TestRouteCleanup:
         assert app.cleanups == []
 
 
-class TestAsyncBodyTypeError:
+class TestBodyTypeError:
+    """The handler body is mapped to no error code: its TypeError is a 500.
+
+    Binding happens before the handler runs, so a body failure is never
+    mistaken for a bad call — sync path and async path alike.
+    """
+
     async def test_async_handler_body_typeerror_is_500(
         self, http_request, response_status
     ) -> None:
-        # Docstring contract: only a SYNC body TypeError folds into the 400
-        # mapping; an async body's TypeError surfaces at await time -> 500.
         class Exploding(RoutedApplication):
             @route()
             async def boom(self) -> dict:
                 raise TypeError("async body failure")
+
+        server = AsgiServer(applications=[Exploding(mount="")])
+        sent = await http_request(server, "/boom")
+        assert response_status(sent) == 500
+
+    async def test_sync_handler_body_typeerror_is_500(
+        self, http_request, response_status
+    ) -> None:
+        class Exploding(RoutedApplication):
+            @route()
+            def boom(self) -> dict:
+                raise TypeError("sync body failure")
 
         server = AsgiServer(applications=[Exploding(mount="")])
         sent = await http_request(server, "/boom")
