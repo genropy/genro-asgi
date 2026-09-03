@@ -184,9 +184,10 @@ async def test_own_generated_events_come_back_in_the_same_requests_collect(lane)
 
 async def test_collect_merges_own_collectors_with_the_retired_pendings(lane):
     # wf:contract: the response's datachanges merge the page's own captured
-    # wf:contract: changes (its collector and its user_view, still local) with
-    # wf:contract: the datachanges retired from the commander, ordered by
-    # wf:contract: change_ts; dbevents stay their own species, never mixed.
+    # wf:contract: changes (its row and its user_view, still local) with the
+    # wf:contract: datachanges retired from the commander, in ARRIVAL order —
+    # wf:contract: the order one list would have had; dbevents stay their own
+    # wf:contract: species, never mixed.
     worker = lane.worker
     await lane.verb("setStoreSubscription", USER, page_id=PAGE, storename="page", prefix="form")
     await lane.verb("setStoreSubscription", USER, page_id=PAGE, storename="user", prefix="prefs")
@@ -238,6 +239,7 @@ async def test_set_datachange_to_a_page_of_the_caller_lands_on_its_row(lane):
         "filters": None,
         "replace": False,
         "local": True,
+        "filed": True,
     }
     assert [c["key"]["path"] for c in lane.worker.page_register.get(PAGE)["datachanges"]] == [
         "untold.x"

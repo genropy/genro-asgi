@@ -217,7 +217,8 @@ class RegisterRegistry:
 
         Args:
             page: the page row whose ``datachanges``/``datachanges_idx`` grow.
-            change: the change dict; its ``change_idx`` is stamped here.
+            change: the change dict; its ``change_idx`` and ``arrival_ts`` are
+                stamped here.
             replace: drop the pending change of the same ``key`` first — same
                 path, same reason, same fired — so a value written over and
                 over reaches the browser once.
@@ -225,6 +226,10 @@ class RegisterRegistry:
         Returns nothing; it acts on the row. The caller holds the row's
         ``item_lock``. This is the ONE append: the store subscriber and the
         addressed write share it, so the row has one list and one index.
+        ``arrival_ts`` is the wall-clock instant of the append — the instant the
+        daemon's single list would have received it — and it is what
+        ``collect_page`` merges the row with the desk's queue on; the writer's
+        own ``change_ts`` is left as it came.
         """
         if replace:
             page["datachanges"][:] = [
@@ -232,6 +237,7 @@ class RegisterRegistry:
             ]
         page["datachanges_idx"] += 1
         change["change_idx"] = page["datachanges_idx"]
+        change["arrival_ts"] = time.time()
         page["datachanges"].append(change)
 
     def subscribe_page_store(self, page: dict[str, Any]) -> None:

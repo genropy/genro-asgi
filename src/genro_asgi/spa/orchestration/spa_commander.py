@@ -170,7 +170,7 @@ import logging
 import os
 import time
 from collections import Counter
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -254,11 +254,6 @@ DESK_PATH_PREFIX = "/desk/"
 #: child's, and the vertex does not depend on the child.
 STATE_KINDS = frozenset({"page_store", "user_store", "connection_store"})
 
-#: How long a queued event is worth delivering. Past it a delivery is garbage —
-#: the browser would paint a value the machine has long moved on from — so the
-#: drain discards it instead of shipping it. One rule for all three species.
-EVENT_MAX_AGE_SECONDS = 300.0
-
 #: Where the container's own memory limit is written, cgroup v2 first and v1
 #: after: the limit file and the usage file of each layout. Outside a container
 #: none of them is there, and the host figures stand.
@@ -282,7 +277,6 @@ __all__ = [
     "CGROUP_MEMORY_FILES",
     "DECISIONS_LOGGER_NAME",
     "DESK_PATH_PREFIX",
-    "EVENT_MAX_AGE_SECONDS",
     "GUEST_PREFIX",
     "HEARTBEAT_SECONDS",
     "ORDERS_LOGGER_NAME",
@@ -324,16 +318,20 @@ class DeliveryDesk:
     come back in the same round; a sibling page's events wait in its own queue
     for its own next exchange, since nothing is ever pushed from here.
 
+    **Nothing waiting here expires.** A queue lives as long as its page: what a
+    page has not collected yet is delivered at its next exchange whatever its
+    age, as the daemon's single list did, and ``drop_page`` is what empties it.
+    Every queued item is stamped ``arrival_ts``, the wall-clock instant it was
+    filed here — the same clock the workers stamp their own rows with — so a
+    collect can merge this queue with the row's in the order one list would
+    have had.
+
     Args:
         spa_commander: the vertex this desk belongs to.
-        event_max_age_seconds: how long a queued event stays deliverable.
     """
 
-    def __init__(
-        self, spa_commander: Any, *, event_max_age_seconds: float = EVENT_MAX_AGE_SECONDS
-    ) -> None:
+    def __init__(self, spa_commander: Any) -> None:
         self.spa_commander = spa_commander
-        self.event_max_age_seconds = event_max_age_seconds
         #: Which pages want which table, both directions, one mutator each.
         self.page_subscriptions = SubscriptionIndex()
         #: The pending changes of each page, in arrival order.
@@ -513,7 +511,10 @@ class DeliveryDesk:
         pending change of the same key — path, reason, fired — so a value
         written over and over reaches the browser once. ``reset_datachanges``
         empties that queue and ``drop_datachanges`` takes one prefix out of it,
-        the semantics the page collector had before the queue moved here.
+        the semantics the page collector had before the queue moved here. A
+        filed change is stamped ``arrival_ts`` — the instant of THIS append,
+        after a ``replace`` has removed its predecessor, as the daemon's pop and
+        append put the newcomer last.
         """
         if message.get("filters") is not None:
             raise NotImplementedError(f"desk: the filtered address {message['filters']!r}")
@@ -534,6 +535,7 @@ class DeliveryDesk:
         change = from_tytx(message["change"], "json")
         if message.get("replace"):
             queue[:] = [pending for pending in queue if pending["key"] != change["key"]]
+        change["arrival_ts"] = time.time()
         queue.append(change)
 
     def file_dbevent(self, deposit: dict[str, Any]) -> None:
@@ -541,31 +543,28 @@ class DeliveryDesk:
 
         Args:
             deposit: the deposit as the worker shaped it — ``table``, ``batch``,
-                ``from_page_id``, ``reason``, ``ts``.
+                ``from_page_id``, ``reason``, ``ts``; ``arrival_ts`` is stamped
+                here, once, the same instant for every subscriber's queue.
 
         Acts on ``page_dbevent_map``. A table nobody subscribes anywhere costs
         one dict lookup that misses and the deposit dies here: a dbevent is a
         signal, and there is no queue for a listener that does not exist.
         """
+        deposit["arrival_ts"] = time.time()
         for page_id in self.page_subscriptions.pages_for(deposit["table"]):
             self.page_dbevent_map.setdefault(page_id, []).append(deposit)
 
     def drain_page_datachanges(self, page_id: str) -> list[dict[str, Any]]:
-        """Retire a page's pending changes, the stale ones discarded."""
-        return self._fresh_changes(self.page_datachange_map.pop(page_id, []))
+        """Retire a page's pending changes, all of them, in arrival order."""
+        return self.page_datachange_map.pop(page_id, [])
 
     def drain_page_dbevents(self, page_id: str) -> list[dict[str, Any]]:
-        """Retire a page's pending deposits, the stale ones discarded."""
-        horizon = time.time() - self.event_max_age_seconds
-        return [
-            deposit
-            for deposit in self.page_dbevent_map.pop(page_id, [])
-            if deposit["ts"] >= horizon
-        ]
+        """Retire a page's pending deposits, all of them, in arrival order."""
+        return self.page_dbevent_map.pop(page_id, [])
 
     def drain_user_store_changes(self, user: str) -> list[dict[str, Any]]:
-        """Retire a user's pending store writes, the stale ones discarded."""
-        return self._fresh_changes(self.user_store_change_map.pop(user, []))
+        """Retire a user's pending store writes, all of them, in arrival order."""
+        return self.user_store_change_map.pop(user, [])
 
     def op_store_set(self, path: str, value: Any = None) -> dict[str, Any]:
         """Write one path of the store, and answer once it holds the value.
@@ -710,11 +709,6 @@ class DeliveryDesk:
         """Whether a pending change's path falls under a dropped prefix."""
         return path == prefix or path.startswith(f"{prefix}.")
 
-    def _fresh_changes(self, changes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """The changes still young enough to deliver, in the order they arrived."""
-        horizon = datetime.now(UTC) - timedelta(seconds=self.event_max_age_seconds)
-        return [change for change in changes if change["change_ts"] >= horizon]
-
 
 class SingleGroupRequired(Exception):
     """A profile names setpoints and this machine has no single group to give them to."""
@@ -745,8 +739,6 @@ class SpaCommander:
         memory_max_percent: what this server may hold OF THE MACHINE — the
             concession every percentage below it is a share of. All of it by
             default.
-        event_max_age_seconds: how long an event waiting at the delivery desk
-            stays deliverable; past it the drain discards it.
         profiles_path: the folder of the stored profiles, when this machine may
             be reconfigured by name; None leaves only the inline apply.
         recipe_settings: the setpoints the recipe declared, kept as their own
@@ -769,7 +761,6 @@ class SpaCommander:
         guest_expiry_hours: float = 24.0,
         machine_memory_alarm_percent: float = 90.0,
         memory_max_percent: float = 100.0,
-        event_max_age_seconds: float = EVENT_MAX_AGE_SECONDS,
         profiles_path: str | Path | None = None,
         recipe_settings: dict[str, Any] | None = None,
         env_settings: dict[str, Any] | None = None,
@@ -796,7 +787,7 @@ class SpaCommander:
         self.global_lock = GlobalStoreLock()
         #: The desk of the deliveries: the subscriptions and the three queue
         #: species, held here alone and outside everything that is pickled.
-        self.delivery_desk = DeliveryDesk(self, event_max_age_seconds=event_max_age_seconds)
+        self.delivery_desk = DeliveryDesk(self)
         self.envelope_handler = CommanderEnvelopeHandler(self)
         #: Where the whole machine stands: ``running`` or ``saturated`` (no room
         #: for a newcomer anywhere). Written by the check of the resources, which
@@ -1162,7 +1153,6 @@ class SpaCommander:
             "groups": {},
             "delivery_desk": {
                 "subscribed_tables": desk.subscribed_tables,
-                "event_max_age_seconds": desk.event_max_age_seconds,
                 "page_dbevent_map": {
                     page_id: len(queue) for page_id, queue in desk.page_dbevent_map.items()
                 },

@@ -232,6 +232,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import functools
+import heapq
 import logging
 import os
 import threading
@@ -1027,10 +1028,11 @@ class SpaWorker:
             page_id: the page the delivery is for.
 
         Returns:
-            ``{"datachanges": [...], "dbevents": [...]}`` — the page's own
-            queue and its ``user_view`` merged with the changes the desk
-            handed back, sorted by ``change_ts`` with a stable sort; the
-            deposits are their own species in their own key, never dressed as
+            ``{"datachanges": [...], "dbevents": [...]}`` — the row's queue and
+            the queue the desk handed back, merged in ARRIVAL order (the
+            ``arrival_ts`` each list was stamped with as it grew), with the
+            ``user_view`` drain merged in on its own ``change_ts``; the deposits
+            are their own species in their own key, never dressed as
             datachanges.
 
         Raises:
@@ -1038,14 +1040,18 @@ class SpaWorker:
             CommanderCallFailed: the desk refused the exchange.
 
         Empties the request slot, the row's queue, the user view and — through
-        the exchange — the page's queues at the desk. What the desk hands back is
-        appended to the row through the same append a local write takes, so the
-        row has ONE list and ONE index, and the retire that follows empties it.
+        the exchange — the page's queues at the desk. Each list is already in
+        its own arrival order — the row is appended under its lock, the desk's
+        queue on the commander's one loop, the two on the same wall clock — so
+        a two-way merge reproduces the order the daemon's single list would
+        have had, and nothing is sorted; the merged list is numbered as one
+        list, then the row's index goes back to zero. Nothing is discarded for
+        its age: what waits is delivered whatever its age, as the daemon did.
         The exchange happens on EVERY request, empty-handed included: retiring
-        what waits is the reason it exists. The
-        STATE writes it brings back are applied to the user's own Bag BEFORE
-        the drain, so the page that retired them reads them in this very
-        delivery and its siblings capture them on their own ``user_view``.
+        what waits is the reason it exists. The STATE writes it brings back are
+        applied to the user's own Bag BEFORE the drain, so the page that retired
+        them reads them in this very delivery and its siblings capture them on
+        their own ``user_view``.
         """
         with self.dispatch_lock:
             if self.page_register.get(page_id) is None:
@@ -1069,17 +1075,33 @@ class SpaWorker:
                 for change in from_tytx(reply["store_changes"], "json"):
                     self.apply_forwarded(store, change)
             with page["item_lock"]:
-                for change in from_tytx(reply["datachanges"], "json"):
-                    self.registry.append_page_datachange(page, change)
-                datachanges = page["datachanges"]
+                desk_changes = from_tytx(reply["datachanges"], "json")
+                datachanges = list(
+                    heapq.merge(page["datachanges"], desk_changes, key=self._arrival_order)
+                )
                 page["datachanges"] = []
                 page["datachanges_idx"] = 0
                 if page["user_view"] is not None:
-                    datachanges.extend(page["user_view"].drain())
+                    datachanges = list(
+                        heapq.merge(
+                            datachanges, page["user_view"].drain(), key=self._arrival_order
+                        )
+                    )
+            for index, change in enumerate(datachanges, start=1):
+                change["change_idx"] = index
             dbevents = reply["dbevents"] + slot.own_dbevents
             slot.own_dbevents = []
-        datachanges.sort(key=lambda change: change["change_ts"])
         return {"datachanges": datachanges, "dbevents": dbevents}
+
+    def _arrival_order(self, change: dict[str, Any]) -> float:
+        """The instant a change joined its queue: ``arrival_ts``, or the write's own clock.
+
+        The row and the desk stamp ``arrival_ts``; the ``user_view`` collector
+        does not (the user store is another round), so its changes take their
+        ``change_ts`` — the same wall clock, read at the write.
+        """
+        arrival_ts = change.get("arrival_ts")
+        return arrival_ts if arrival_ts is not None else change["change_ts"].timestamp()
 
     def deliver_slot_deposits(self) -> None:
         """Deliver what the slot still holds, at the end of a request that never collected.
@@ -1118,7 +1140,7 @@ class SpaWorker:
         filters: str | None,
         message: dict[str, Any],
         act_on_row: Callable[[dict[str, Any]], None],
-    ) -> bool:
+    ) -> dict[str, bool]:
         """Take one addressed write to its road: the target row here, or the desk.
 
         Args:
@@ -1133,13 +1155,15 @@ class SpaWorker:
                 called with the row, under its ``item_lock``.
 
         Returns:
-            True when the write stayed here, False when the desk filed it.
+            ``{"local": ..., "filed": ...}`` — ``local`` True when the write
+            stayed here; ``filed`` False when the desk holds nobody by that
+            name and the write went nowhere, as the daemon's silent return on a
+            missing item. The verbs carry both into their answer.
 
         Raises:
             NotImplementedError: a ``filters`` broadcast, or a STATE kind other
                 than ``user_store`` — nothing local can serve them yet, and a
                 silent success would be a write into nowhere.
-            KeyError: a target nobody at the vertex holds.
             CommanderCallFailed: the desk refused the write.
 
         A page of the caller's OWN user, living here, is acted on at once, under
@@ -1148,7 +1172,10 @@ class SpaWorker:
         freeze. Every other address leaves at once as ONE CALL to the desk, from
         this very thread: an unservable write fails alone, in the caller's own
         call, and a request that never collects loses nothing. Whether the
-        target EXISTS is the desk's judgment: a worker knows its own rows only.
+        target EXISTS is the desk's judgment: a worker knows its own rows only,
+        and an unknown target is reported, never raised — a page closed a moment
+        ago, or born in this very request and not yet announced, is not an
+        error of the caller's.
         """
         if filters is not None:
             raise NotImplementedError(f"{op}: filtered addresses are not delivered by this pass")
@@ -1159,16 +1186,14 @@ class SpaWorker:
             if page is not None and self.registry.page_user(target) == identity:
                 with page["item_lock"]:
                     act_on_row(page)
-                return True
+                return {"local": True, "filed": True}
         answer = self.run_on_loop(
             self.call(
                 DESK_ON_DATACHANGE_PATH,
                 {"op": op, "kind": kind, "target": target, "filters": filters, **message},
             )
         )
-        if answer["filed"] is False:
-            raise KeyError(f"{op}: no target {target!r}")
-        return False
+        return {"local": False, "filed": bool(answer["filed"])}
 
     def set_datachange(
         self,
@@ -1198,17 +1223,17 @@ class SpaWorker:
 
         Returns:
             The address the write took, as it was resolved; ``local`` is True
-            when it stayed on a row here.
+            when it stayed on a row here, ``filed`` False when nobody holds the
+            target and the write went nowhere.
 
         Raises:
-            NotImplementedError, KeyError, CommanderCallFailed: see
-                ``_route_datachange``.
+            NotImplementedError, CommanderCallFailed: see ``_route_datachange``.
 
         On the local road the change goes on the target row through the same
         append the store subscriber uses, so the row keeps one list and one
         index.
         """
-        local = self._route_datachange(
+        road = self._route_datachange(
             "set_datachange",
             identity,
             kind,
@@ -1224,7 +1249,7 @@ class SpaWorker:
             "target": target,
             "filters": filters,
             "replace": replace,
-            "local": local,
+            **road,
         }
 
     def reset_datachanges(
@@ -1244,16 +1269,15 @@ class SpaWorker:
 
         Returns:
             The address the reset took; ``local`` is True when it emptied a row
-            here.
+            here, ``filed`` False when nobody holds the target.
 
         Raises:
-            NotImplementedError, KeyError, CommanderCallFailed: see
-                ``_route_datachange``.
+            NotImplementedError, CommanderCallFailed: see ``_route_datachange``.
 
         On the local road the row's list and index go back to empty; on the
         desk's, the queue it keeps for that page.
         """
-        local = self._route_datachange(
+        road = self._route_datachange(
             "reset_datachanges",
             identity,
             SIGNAL_KIND,
@@ -1262,7 +1286,7 @@ class SpaWorker:
             {},
             lambda page: page.update(datachanges=[], datachanges_idx=0),
         )
-        return {"target": target, "filters": filters, "local": local}
+        return {"target": target, "filters": filters, **road}
 
     def drop_datachanges(
         self,
@@ -1283,11 +1307,11 @@ class SpaWorker:
 
         Returns:
             The address the drop took and the path it named; ``local`` is True
-            when it pruned a row here.
+            when it pruned a row here, ``filed`` False when nobody holds the
+            target.
 
         Raises:
-            NotImplementedError, KeyError, CommanderCallFailed: see
-                ``_route_datachange``.
+            NotImplementedError, CommanderCallFailed: see ``_route_datachange``.
 
         The prefix is matched on segment boundaries, on the row here or in the
         desk's queue for that page.
@@ -1303,10 +1327,10 @@ class SpaWorker:
                 )
             ]
 
-        local = self._route_datachange(
+        road = self._route_datachange(
             "drop_datachanges", identity, SIGNAL_KIND, target, filters, {"path": path}, prune
         )
-        return {"target": target, "filters": filters, "path": path, "local": local}
+        return {"target": target, "filters": filters, "path": path, **road}
 
     # ------------------------------------------------------------------
     # The table events: their own ops, their own index, their own species in

@@ -255,23 +255,26 @@ async def test_replace_coalesces_inside_the_target_queue(lane):
 
 
 # ----------------------------------------------------------------------
-# Hygiene: the age threshold and the fold
+# Hygiene: nothing waiting expires, and the fold
 # ----------------------------------------------------------------------
 
 
-async def test_events_older_than_the_threshold_are_discarded(lane):
-    # wf:contract: every queued event carries its timestamp; events older than
-    # wf:contract: the configured age (a parameter with a default) are removed
-    # wf:contract: and never delivered — the notify_user criterion: a stale
-    # wf:contract: delivery is garbage. One rule for all three queue species.
-    stale = lane.desk.event_max_age_seconds + 60.0
+async def test_nothing_waiting_at_the_desk_expires(lane):
+    # wf:contract: what waits for a page is delivered at its next exchange
+    # wf:contract: whatever its age — the daemon's single list never discarded a
+    # wf:contract: change, the queue dies with the page (drop_page) and with
+    # wf:contract: nothing else. Every filed item is stamped arrival_ts, the
+    # wf:contract: instant it joined the queue, so the worker can merge the desk's
+    # wf:contract: queue with its row in arrival order (decision 2026-09-03).
+    stale = 3600.0
     await asyncio.wait_for(lane.subscribe(PAGE, "invoices"), 5.0)
+    before = time.time()
     await asyncio.wait_for(
         lane.on_datachange(
-            addressed(PAGE, a_change("form.old", "gone", age=stale)),
-            addressed(PAGE, a_change("form.new", "kept")),
-            addressed(USER, a_change("prefs.old", "gone", age=stale), kind="user_store"),
-            addressed(USER, a_change("prefs.new", "kept"), kind="user_store"),
+            addressed(PAGE, a_change("form.old", "old", age=stale)),
+            addressed(PAGE, a_change("form.new", "new")),
+            addressed(USER, a_change("prefs.old", "old", age=stale), kind="user_store"),
+            addressed(USER, a_change("prefs.new", "new"), kind="user_store"),
         ),
         5.0,
     )
@@ -281,9 +284,12 @@ async def test_events_older_than_the_threshold_are_discarded(lane):
         ),
         5.0,
     )
-    assert [c["value"] for c in exchanged["datachanges"]] == ["kept"]
-    assert [c["value"] for c in exchanged["store_changes"]] == ["kept"]
-    assert [deposit["reason"] for deposit in exchanged["dbevents"]] == [None]
+    assert [c["value"] for c in exchanged["datachanges"]] == ["old", "new"]
+    assert [c["value"] for c in exchanged["store_changes"]] == ["old", "new"]
+    assert [deposit["reason"] for deposit in exchanged["dbevents"]] == ["old", None]
+    arrivals = [c["arrival_ts"] for c in exchanged["datachanges"]]
+    assert arrivals == sorted(arrivals) and arrivals[0] >= before
+    assert all(deposit["arrival_ts"] >= before for deposit in exchanged["dbevents"])
 
 
 async def test_a_dropped_page_takes_its_queue_with_it(lane):

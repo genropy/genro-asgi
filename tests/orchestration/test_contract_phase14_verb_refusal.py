@@ -59,7 +59,10 @@ async def test_a_filtered_address_fails_alone(desk_lane):
 async def test_nothing_refused_ever_reaches_the_desk(desk_lane):
     # wf:contract: after the refusals above, the desk queues hold nothing of the
     # wf:contract: refused messages — no half-filed batch, and the exchange of
-    # wf:contract: the request completes without error
+    # wf:contract: the request completes without error. A target nobody holds
+    # wf:contract: is not a refusal: the verb answers filed=False and raises
+    # wf:contract: nothing, as the daemon returned in silence on a missing item
+    # wf:contract: (genropy #1253 gives that silence a boolean).
     desk_lane.worker.new_page("u1", page_id="p1", connection_id="s1")
     await desk_lane.open_request()
 
@@ -67,12 +70,11 @@ async def test_nothing_refused_ever_reaches_the_desk(desk_lane):
         await desk_lane.verb(
             "set_datachange", "u1", change=foreign_change("bad.x", 2), filters="user:alice"
         )
-    with pytest.raises(KeyError, match="ghost"):
-        await desk_lane.verb(
-            "set_datachange", "u1", change=foreign_change("bad.y", 3), target="ghost"
-        )
-    with pytest.raises(KeyError):
-        await desk_lane.verb("reset_datachanges", "u1")
+    unknown = await desk_lane.verb(
+        "set_datachange", "u1", change=foreign_change("bad.y", 3), target="ghost"
+    )
+    assert unknown["filed"] is False and unknown["local"] is False
+    assert (await desk_lane.verb("reset_datachanges", "u1"))["filed"] is False
 
     delivery = await desk_lane.verb("collect_page", "p1")
     assert delivery["datachanges"] == []

@@ -29,9 +29,13 @@ one list and one index. The same user is the condition because his freeze waits
 for the caller's own pending call. Any other address — a page of another user
 even on this worker, `filters`, the STATE kinds — leaves at once from the request
 thread as one CALL to `/desk/on_datachange`, filed the moment the verb runs; the
-desk judges existence and a target nobody holds comes back as a `KeyError` at the
-verb. What the desk hands back at a page's exchange is appended to that row
-through the same `append_page_datachange`, then retired by `collect_page`.
+desk judges existence and a target nobody holds comes back as `filed: False` in
+the verb's answer — reported, never raised, as the daemon's silent return on a
+missing item. Every queued change carries `arrival_ts`, the wall-clock instant it
+joined its queue (row or desk), and `collect_page` merges the row's list with what
+the desk hands back on that stamp — arrival order, the order one list would have
+had — with the writer's own `change_ts` untouched; nothing waiting expires, the
+queue dies with the page.
 
 Interactions: dbevents (same desk) · global-store · orchestration (the lane carries them).
 

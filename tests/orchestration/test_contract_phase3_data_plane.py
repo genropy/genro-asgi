@@ -117,7 +117,7 @@ def test_a_subscription_for_an_unknown_page_is_an_error(worker):
 
 
 # ----------------------------------------------------------------------
-# collect_page: one drain point, two species, merged by change_ts
+# collect_page: one drain point, two species, merged in arrival order
 # ----------------------------------------------------------------------
 
 

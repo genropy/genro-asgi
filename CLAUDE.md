@@ -362,12 +362,24 @@ another user even on this worker, `filters`, the STATE kinds — leaves at once
 from the request thread as ONE CALL, `/desk/on_datachange`
 (`DeliveryDesk.op_on_datachange`), filed the moment the verb runs; the desk is
 the authority on existence and answers `{"filed": False}` for a target nobody
-holds, which the verb raises as `KeyError`. `RequestSlot` carries no
-`datachanges` and `op_exchange` takes none, so a request that never collects
-loses nothing. What the desk hands back at a page's exchange is appended to that
-row through the same `append_page_datachange` before `collect_page` retires the
-list. Compared with the daemon: the same algorithm on the row, with the desk as
-the remote leg the daemon paid one Pyro call per write for.
+holds, which the verb REPORTS in its answer (`filed`) and never raises — the
+daemon returned in silence on a missing item, genropy #1253 gives that silence a
+boolean, and a page closed a moment ago or born in this very request is not the
+caller's error. `RequestSlot` carries no `datachanges` and `op_exchange` takes
+none, so a request that never collects loses nothing. **Delivery is in arrival
+order and nothing expires (landed 2026-09-03).** Every queued item is stamped
+`arrival_ts` — `time.time()` at the append, on the row
+(`append_page_datachange`) and at the desk (`file_datachange`, `file_dbevent`),
+one wall clock for every process of the machine — and `collect_page` merges the
+row's list with the desk's queue on it (`heapq.merge`, each list monotonic by
+construction: the row grows under its lock, the desk's queue on the commander's
+one loop) instead of appending and sorting by `change_ts`: the order the
+daemon's single list would have had, the writer's own `change_ts` untouched.
+The merged list is numbered as one list; the deposits stay their own key. The
+300 s age bound is gone: what waits is delivered whatever its age, as the
+daemon did, and the queue dies with the page. Compared with the daemon: the same
+algorithm on the row, with the desk as the remote leg the daemon paid one Pyro
+call per write for.
 
 **Not yet built (second pass).** The deliberate reboot command on `_server`
 (`reboot now`/`reboot wait N`, notify_user, the consumer service-message
