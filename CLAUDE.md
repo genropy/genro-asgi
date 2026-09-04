@@ -324,23 +324,21 @@ that immediately occupies it; retirement records its suppression or the absence 
 absorbable spare. The journal observes policy — it never changes placement,
 growth, retirement or restart behaviour.
 
-**The page store lives on the row, under the row's lock (landed 2026-09-02).**
-The page register row carries `datachanges` and `datachanges_idx`, the daemon's
-names, and no collector object: pending changes used to live outside the parcel
-and were lost on a freeze and on a transfer, the queue as a row field travels
-with the row. `RegisterRegistry.subscribe_page_store` attaches to the row's
-store the subscriber that queues, with `key.reason == "serverChange"`, every
-update, insert, delete and transaction mutation whose path falls under a prefix
-of `page["subscribed_paths"]` — autocreated parents skipped, prefixes matched
-segment-aware, the set read at event time so a prefix added later captures from
-then on. `SpaWorker.collect_page` empties the queue and resets the index, its
-two jobs unchanged. Every register row — user, connection, page — is born with
-`item_lock`, an exclusive re-entrant `threading.RLock()` never carried by a
+**The row's lock is the core's; what a page queues is the consumer's (#59
+block 4, 2026-09-04).** Every register row — user, connection, page — is born
+with `item_lock`, an exclusive re-entrant `threading.RLock()` never carried by a
 parcel, and every access to the row and to its Bag takes it: one access at a
 time per item, items in parallel, the in-process image of the daemon's single
 thread plus its `lock_item`, with no expiry because an in-process `with` always
 exits. Nesting in the core: `dispatch_lock` outside, `item_lock` inside. The
-user store keeps its `user_view` and `new_collector` — another round.
+page row of the core carries `store` and the worker's own fields, nothing of a
+hosted site: the daemon's `datachanges`/`datachanges_idx` queue, the
+`serverChange` subscriber, the user view and the three subscription sets left
+with the delivery machinery and live in genropy-asgi's row class and registry.
+The core keeps the two seams they hang from — `RegisterRegistry.subscribe_page_store`,
+called by `new_page` after the birth, and `detach_page`, called before a row is
+dropped and before its store is copied for a parcel — both empty here, beside
+`new_store`.
 
 **Worker events travel on two channels, never through one queue (landed
 2026-09-04, #60).** An event born while a CALL is being served — a site verb on

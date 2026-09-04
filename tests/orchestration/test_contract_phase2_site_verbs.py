@@ -95,8 +95,6 @@ def test_the_new_rows_carry_the_data_plane_from_birth(worker):
 
     page = worker.page_register.get("p1")
     assert isinstance(page["store"], Bag)
-    assert page["dbevents"] == []
-    assert page["user_view"] is None
 
 
 # ----------------------------------------------------------------------

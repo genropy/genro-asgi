@@ -60,17 +60,27 @@ class XT_PageRow(PageRow):
     """A consumer's page row: one field of its own in every category."""
 
     fields_left_behind = PageRow.fields_left_behind | {"xt_live"}
-    fields_replayed = (*PageRow.fields_replayed, "xt_replayed")
+    fields_replayed = (*PageRow.fields_replayed, "xt_replayed", "xt_tables")
 
     def default_fields(self) -> dict[str, Any]:
-        return {**super().default_fields(), "xt_marker": "born", "xt_live": object()}
+        return {
+            **super().default_fields(),
+            "xt_marker": "born",
+            "xt_live": object(),
+            "xt_tables": set(),
+        }
 
     def replay_fields(self, registry: Any, fields: dict[str, Any]) -> None:
         super().replay_fields(registry, fields)
         self["xt_replayed_seen"] = fields.get("xt_replayed")
+        self["xt_tables"].update(fields.get("xt_tables", ()))
 
     def announcement_fields(self) -> dict[str, Any]:
-        return {**super().announcement_fields(), "xt_marker": self["xt_marker"]}
+        return {
+            **super().announcement_fields(),
+            "xt_marker": self["xt_marker"],
+            "xt_tables": sorted(self["xt_tables"]),
+        }
 
 
 class XT_Registry(RegisterRegistry):
@@ -145,13 +155,13 @@ def test_rows_are_dicts_of_the_registrys_row_classes():
     assert isinstance(page, PageRow) and isinstance(page, dict)
     assert isinstance(registry.connection_items.get("c1"), ConnectionRow)
     assert isinstance(registry.user_items.get("mario"), UserRow)
-    assert page["datachanges"] == [] and page["register_item_id"] == "p1"
+    assert page["register_item_id"] == "p1" and "item_lock" in page
 
 
 def test_a_row_born_with_fields_keeps_them_over_the_defaults():
     registry = RegisterRegistry()
-    page = registry.new_page("p1", user="mario", connection_id="c1", datachanges=[{"x": 1}])
-    assert page["datachanges"] == [{"x": 1}]
+    page = registry.new_page("p1", user="mario", connection_id="c1", last_refresh_ts=1.0)
+    assert page["last_refresh_ts"] == 1.0
 
 
 def test_the_consumers_row_class_is_what_the_registry_builds(worker):
@@ -159,7 +169,7 @@ def test_the_consumers_row_class_is_what_the_registry_builds(worker):
     page = worker.add_page("p1", "c1")
     assert isinstance(page, XT_PageRow)
     assert page["xt_marker"] == "born"
-    assert page["datachanges"] == []
+    assert page["xt_tables"] == set()
 
 
 def test_the_parcel_leaves_behind_what_the_row_says_and_carries_the_rest(worker):
@@ -167,7 +177,8 @@ def test_the_parcel_leaves_behind_what_the_row_says_and_carries_the_rest(worker)
     worker.add_page("p1", "c1")
     parcel = worker._connection_parcel("c1")
     page = parcel["pages"]["p1"]
-    assert "xt_live" not in page and "item_lock" not in page and "user_view" not in page
+    assert "xt_live" not in page and "item_lock" not in page
+    assert "connection_id" not in page
     assert page["xt_marker"] == "born"
 
 
@@ -176,15 +187,15 @@ def test_the_birth_announces_what_the_row_says(worker):
     worker.add_page("p1", "c1")
     announced = [event for event in worker.request_slot.worker_events if event["op"] == "new_page"]
     assert announced[-1]["xt_marker"] == "born"
-    assert announced[-1]["table_subscriptions"] == []
+    assert announced[-1]["xt_tables"] == []
 
 
 def test_the_row_class_replays_what_travelled(worker):
     worker.add_connection("c1", "mario")
     page = worker.add_page("p1", "c1")
-    page.replay_fields(worker.registry, {"xt_replayed": 7, "table_subscriptions": ["t"]})
+    page.replay_fields(worker.registry, {"xt_replayed": 7, "xt_tables": ["t"]})
     assert page["xt_replayed_seen"] == 7
-    assert page["table_subscriptions"] == {"t"}
+    assert page["xt_tables"] == {"t"}
 
 
 # ----------------------------------------------------------------------

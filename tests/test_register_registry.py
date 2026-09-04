@@ -134,13 +134,9 @@ def test_new_page_born_fields_and_passthrough() -> None:
     page = registry.new_page("p1", user="alice", connection_id="c1")
     assert page["avatar_key"] == "root"
     assert page["data"] is None
-    assert page["dbevents"] == []
-    assert page["store_subscriptions"] == set()
-    assert page["table_subscriptions"] == set()
     assert page["connection_id"] == "c1"
-    page["dbevents"].append("x")
     other = registry.new_page("p2", user="bob", connection_id="s2")
-    assert other["dbevents"] == []
+    assert other["item_lock"] is not page["item_lock"]
     registry.add_index("page_items", "connection_id")
     assert registry.page_items.keys_by("connection_id", "c1") == ["p1"]
 
@@ -331,16 +327,20 @@ def test_drop_connection_without_cascade_leaves_the_user_standing() -> None:
     assert len(registry.page_items) == 0
 
 
-def test_drop_connection_detaches_the_capture_of_its_pages() -> None:
-    registry = RegisterRegistry()
-    page = registry.new_page("p1", user="alice", connection_id="s1")
-    registry.subscribe_store_path("p1", "prefs")
-    page["subscribed_paths"].add("x")
-    view = page["user_view"]
+def test_drop_connection_detaches_every_page_it_takes() -> None:
+    class SeamRegistry(RegisterRegistry):
+        def __init__(self) -> None:
+            super().__init__()
+            self.detached: list[str] = []
+
+        def detach_page(self, page: dict[str, Any]) -> None:
+            self.detached.append(page["register_item_id"])
+
+    registry = SeamRegistry()
+    registry.new_page("p1", user="alice", connection_id="s1")
+    registry.new_page("p2", user="alice", connection_id="s1")
     registry.drop_connection("s1")
-    page["store"]["x"] = 1
-    assert page["datachanges"] == []
-    assert view.changes == []
+    assert sorted(registry.detached) == ["p1", "p2"]
 
 
 # ----------------------------------------------------------------------
@@ -439,12 +439,6 @@ def test_page_user_unknown_raises_key_error() -> None:
         registry.page_user("nope")
 
 
-def test_subscribe_store_path_unknown_page_raises_key_error() -> None:
-    registry = RegisterRegistry()
-    with pytest.raises(KeyError, match="nope"):
-        registry.subscribe_store_path("nope", "prefs")
-
-
 def test_the_factory_seams_own_every_store_and_capture() -> None:
     """A subclass owning the three seams owns every live object a row is born with."""
 
@@ -452,18 +446,12 @@ def test_the_factory_seams_own_every_store_and_capture() -> None:
         def __init__(self) -> None:
             super().__init__()
             self.stores: list[Any] = []
-            self.collectors: list[Any] = []
             self.subscribed_pages: list[str] = []
 
         def new_store(self) -> Any:
             store = super().new_store()
             self.stores.append(store)
             return store
-
-        def new_collector(self, store: Any, paths: set[str] | None = None) -> Any:
-            collector = super().new_collector(store, paths=paths)
-            self.collectors.append(collector)
-            return collector
 
         def subscribe_page_store(self, page: dict[str, Any]) -> None:
             super().subscribe_page_store(page)
@@ -472,7 +460,6 @@ def test_the_factory_seams_own_every_store_and_capture() -> None:
     registry = SeamRegistry()
     registry.new_user("alice")
     page = registry.new_page("p1", user="sess-1", connection_id="sess-1")
-    registry.subscribe_store_path("p1", "prefs")
     registry.change_connection_user("sess-1", "alice")
 
     # Every store born through the seam: alice's, the guest's, the page's.
@@ -480,10 +467,6 @@ def test_the_factory_seams_own_every_store_and_capture() -> None:
     assert page["store"] in registry.stores
     # The page's own store goes through its own seam, once.
     assert registry.subscribed_pages == ["p1"]
-    # The collector seam is the user_view's alone: the first one and the
-    # re-attach of the resident login, which is the last one built.
-    assert page["user_view"] is registry.collectors[-1]
-    assert len(registry.collectors) == 2
 
 
 def test_connection_parcel_leaves_the_row_locks_behind(tmp_path) -> None:
@@ -500,31 +483,3 @@ def test_connection_parcel_leaves_the_row_locks_behind(tmp_path) -> None:
 
     assert "item_lock" not in parcel["connection"]
     assert [page for page in parcel["pages"].values() if "item_lock" in page] == []
-
-
-def test_append_page_datachange_stamps_consecutive_indexes() -> None:
-    """The one append of a change to a page row numbers what it appends."""
-    registry = RegisterRegistry()
-    registry.new_user("u1")
-    registry.new_connection("s1", "u1")
-    page = registry.new_page("p1", user="u1", connection_id="s1")
-
-    for path in ("a", "b"):
-        registry.append_page_datachange(page, {"key": {"path": path}, "value": 1})
-
-    assert [change["change_idx"] for change in page["datachanges"]] == [1, 2]
-    assert page["datachanges_idx"] == 2
-
-
-def test_append_page_datachange_with_replace_keeps_one_pending_per_key() -> None:
-    """``replace`` drops the pending change of the same key before appending."""
-    registry = RegisterRegistry()
-    registry.new_user("u1")
-    registry.new_connection("s1", "u1")
-    page = registry.new_page("p1", user="u1", connection_id="s1")
-
-    registry.append_page_datachange(page, {"key": {"path": "a"}, "value": 1}, replace=True)
-    registry.append_page_datachange(page, {"key": {"path": "a"}, "value": 2}, replace=True)
-
-    assert [change["value"] for change in page["datachanges"]] == [2]
-    assert page["datachanges"][0]["change_idx"] == 2

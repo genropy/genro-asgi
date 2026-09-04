@@ -2426,9 +2426,7 @@ class SpaWorker:
         not pickle at all. The birth on the other side attaches its own.
         """
         for page_id, fields in parcel["pages"].items():
-            self.registry.detach_page(
-                {**fields, "register_item_id": page_id, "user_view": None}
-            )
+            self.registry.detach_page({**fields, "register_item_id": page_id})
 
     def _write_parcels(
         self, user: str, store: Any, connection_parcels: dict[str, dict[str, Any]]

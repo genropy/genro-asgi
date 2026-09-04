@@ -32,9 +32,9 @@ worker used to hard-code about the row (#59, block 3):
 
 A consumer subclasses a row and names it on its registry
 (``RegisterRegistry.page_row_class`` and siblings); the worker asks the row and
-knows nothing of the fields. ``PageRow`` still seeds the genropy fields —
-the queue and its index, the user view, the deposits, the three subscription
-sets — for as long as that machinery stays in the core.
+knows nothing of the fields. The three rows of the core carry no data of a
+hosted site: what a page queues, subscribes or watches is the consumer's row
+class's to add (genropy-asgi does).
 """
 
 from __future__ import annotations
@@ -85,46 +85,6 @@ class ConnectionRow(RegisterRow):
 
 
 class PageRow(RegisterRow):
-    """The page's row, with the genropy fields for as long as they stay in the core.
+    """The page's row: the parcel leaves the edge to the connection behind."""
 
-    Born with an empty ``datachanges`` queue and its ``datachanges_idx`` at
-    zero, ``user_view`` None until the first ``subscribe_store_path``, an empty
-    ``dbevents`` list and the three empty subscription sets. The parcel leaves
-    behind the edge to the connection and the two live objects; the three sets
-    travel and are subscribed again on the woken row, so the page wakes
-    capturing what it captured before it went to the deposit.
-    """
-
-    fields_left_behind = RegisterRow.fields_left_behind | {"connection_id", "user_view", "dbevents"}
-    fields_replayed = ("subscribed_paths", "store_subscriptions", "table_subscriptions")
-
-    def default_fields(self) -> dict[str, Any]:
-        return {
-            **super().default_fields(),
-            "datachanges": [],
-            "datachanges_idx": 0,
-            "user_view": None,
-            "dbevents": [],
-            "subscribed_paths": set(),
-            "store_subscriptions": set(),
-            "table_subscriptions": set(),
-        }
-
-    def replay_fields(self, registry: Any, fields: dict[str, Any]) -> None:
-        """Subscribe again what the parcel carried: tables, store prefixes, user-store prefixes.
-
-        Args:
-            registry: the registry the row lives in — the user-store prefixes
-                go through its ``subscribe_store_path``, which builds the view.
-            fields: the replayed fields as the parcel carried them.
-        """
-        for table in fields.get("table_subscriptions", ()):
-            self["table_subscriptions"].add(table)
-        for prefix in fields.get("subscribed_paths", ()):
-            self["subscribed_paths"].add(prefix)
-        for prefix in fields.get("store_subscriptions", ()):
-            registry.subscribe_store_path(self["register_item_id"], prefix)
-
-    def announcement_fields(self) -> dict[str, Any]:
-        """The tables this page subscribes: what the vertex rebuilds its index from."""
-        return {"table_subscriptions": sorted(self["table_subscriptions"])}
+    fields_left_behind = RegisterRow.fields_left_behind | {"connection_id"}

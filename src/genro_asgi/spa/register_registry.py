@@ -62,10 +62,9 @@ table.
 
 **The login is a mutation.** ``change_connection_user`` re-labels a live
 connection onto the logged-in user and moves its id between the two users'
-``connections`` sets, re-attaching each page's ``user_view`` to the new
-owner's store. The pages need no re-labelling — their owner was never written
-down. Nothing is re-keyed and nothing is re-born: keys, live stores and
-collectors survive the login. The old user is dropped only once its
+``connections`` sets. The pages need no re-labelling — their owner was never written
+down. Nothing is re-keyed and nothing is re-born: keys and live stores
+survive the login. The old user is dropped only once its
 ``connections`` set is empty. The one exception is the anonymous entry claiming
 its first real identity: there the user item itself is TRANSFERRED onto the new
 key, store included — see ``change_connection_user`` for the rule and its two
@@ -81,27 +80,13 @@ already tearing down. Both "last one" checks read the emptied set on the parent
 item; the descending walks iterate a COPY of it, since each drop discards from
 the very set being walked.
 
-**The live stores.** A user row carries ``store``, a live Bag; a page row
-carries its own ``store`` plus the queue that store fills: ``datachanges``,
-the list of pending changes, and ``datachanges_idx``, their counter.
-``subscribe_page_store`` attaches the subscriber that writes them, born
-FILTERED AND EMPTY: a write is queued only under a prefix the page has
-subscribed, read from ``subscribed_paths`` at event time, and an autocreated
-parent is never a change. The queue is a plain field, so it travels with the
-row on a freeze and a move. A page interested in part of its
-user's store gets ``user_view``: a second collector attached to the OWNER
-USER's Bag and filtered on ``store_subscriptions``, created lazily at the
-first ``subscribe_store_path`` and widened by the next ones. That view IS the
-API — a write into the user store is found by every interested page in its own
-collector, with no smear loop and no offset machinery. What makes it possible
-is usersticky: all the pages of a user live in the same process as the user's
-store.
-
-The capture is attached and detached by the lifecycle: ``drop_page`` detaches
-both the store subscriber and the ``user_view`` of a page, and
-``drop_connection``/``drop_user`` detach those of every page they cascade
-over. Detaching keeps what is already pending — dropping the row is what
-discards it.
+**The live stores.** A user row and a page row each carry ``store``, a live
+Bag born of ``new_store`` — the seam a consumer overrides with its own type.
+What a page captures of its own store or of its user's, and how, is the
+consumer's: its row class adds the fields, its registry subclass attaches the
+capture (``new_page`` calls ``subscribe_page_store`` after the birth, and the
+lifecycle calls ``detach_page`` before a row leaves or its store is copied —
+both empty here).
 
 **The row's own lock.** Every row of the three registers — user, connection
 and page — is born with ``item_lock``, an exclusive re-entrant lock. Every
@@ -119,11 +104,9 @@ ValueError, an unknown register name raises KeyError.
 from __future__ import annotations
 
 import time
-from datetime import UTC, datetime
 from typing import Any
 
 from genro_bag import Bag
-from genro_bag.datachange import DataChangeCollector
 
 from ..session.session import Session
 from .register import Register
@@ -208,121 +191,15 @@ class RegisterRegistry:
         """
         return Bag()
 
-    def new_collector(self, store: Any, paths: set[str] | None = None) -> Any:
-        """The collector factory: the capture attached to a row's store.
-
-        One seam for the two attach points of the ``user_view`` — the one born
-        of the first subscription and the re-attach of the login — so a
-        consumer pairing its own store type overrides the capture with it. The
-        page's own store is not among them: its queue lives on the row and is
-        filled by ``subscribe_page_store``.
-        """
-        return DataChangeCollector(store, paths=paths)
-
-    def append_page_datachange(
-        self, page: dict[str, Any], change: dict[str, Any], *, replace: bool = False
-    ) -> None:
-        """Append one change to a page row's queue, stamping the next index.
-
-        Args:
-            page: the page row whose ``datachanges``/``datachanges_idx`` grow.
-            change: the change dict; its ``change_idx`` and ``arrival_ts`` are
-                stamped here.
-            replace: drop the pending change of the same ``key`` first — same
-                path, same reason, same fired — so a value written over and
-                over reaches the browser once.
-
-        Returns nothing; it acts on the row. The caller holds the row's
-        ``item_lock``. This is the ONE append: the store subscriber and the
-        addressed write share it, so the row has one list and one index.
-        ``arrival_ts`` is the wall-clock instant of the append — the instant the
-        daemon's single list would have received it — and it is what
-        ``collect_page`` merges the row with the desk's queue on; the writer's
-        own ``change_ts`` is left as it came.
-        """
-        if replace:
-            page["datachanges"][:] = [
-                pending for pending in page["datachanges"] if pending["key"] != change["key"]
-            ]
-        page["datachanges_idx"] += 1
-        change["change_idx"] = page["datachanges_idx"]
-        change["arrival_ts"] = time.time()
-        page["datachanges"].append(change)
-
     def subscribe_page_store(self, page: dict[str, Any]) -> None:
-        """Attach to a page's store the capture that fills the row's queue.
+        """Attach to a page's store whatever must capture its writes: nothing here.
 
         Args:
-            page: the page row — its ``store`` is subscribed, its
-                ``datachanges``/``datachanges_idx`` are what the capture writes.
+            page: the page row just born, its ``store`` on it.
 
-        Returns nothing; it acts on the row.
-
-        The four handlers mirror :class:`DataChangeCollector`'s: the path is
-        rebuilt per event kind, and a transaction's mutations are walked in
-        order with the reason at index 6 for ``upd`` and at 4 otherwise. An
-        ``autocreate`` event is skipped — the parent nodes a write brings into
-        being are not the write. The prefixes are read from
-        ``subscribed_paths`` at EVENT time and matched on segment boundaries,
-        so a prefix added later captures from then on with no re-subscription.
-        Every queued change carries the reason ``serverChange``. This is the
-        seam a consumer pairing its own Bag type overrides.
+        Called by ``new_page`` after the birth. The seam a consumer overrides
+        to pair its capture with its row class.
         """
-        store = page["store"]
-
-        def queue(node: Any, path: str, reason: Any, delete: bool) -> None:
-            if reason == "autocreate":
-                return
-            paths = page["subscribed_paths"]
-            if not any(path == p or path.startswith(f"{p}.") for p in paths):
-                return
-            attributes = dict(node.attr)
-            fired = bool(attributes.pop("_fired", False))
-            self.append_page_datachange(
-                page,
-                {
-                    "key": {"path": path, "reason": "serverChange", "fired": fired},
-                    "value": None if delete else node.static_value,
-                    "attributes": attributes or None,
-                    "delete": delete,
-                    "change_ts": datetime.now(UTC),
-                },
-            )
-
-        def node_path(node: Any) -> str:
-            """The path of a node relative to the store, walked up the backrefs."""
-            labels = [node.label]
-            bag = node.parent_bag
-            while bag is not None and bag is not store:
-                parent_node = bag.parent_node
-                if parent_node is None:
-                    break
-                labels.append(parent_node.label)
-                bag = parent_node.parent_bag
-            return ".".join(reversed(labels))
-
-        def on_update(**kwargs: Any) -> None:
-            node = kwargs["node"]
-            queue(node, ".".join(kwargs["pathlist"] or []), kwargs.get("reason"), False)
-
-        def on_node_event(delete: bool, kwargs: dict[str, Any]) -> None:
-            node = kwargs["node"]
-            path = ".".join(list(kwargs["pathlist"] or []) + [node.label])
-            queue(node, path, kwargs.get("reason"), delete)
-
-        def on_transaction(**kwargs: Any) -> None:
-            for mutation in kwargs["mutations"]:
-                kind, node = mutation[0], mutation[1]
-                reason = mutation[6] if kind == "upd" else mutation[4]
-                queue(node, node_path(node), reason, kind == "del")
-
-        store.subscribe(
-            f"page_store:{page['register_item_id']}",
-            update=on_update,
-            insert=lambda **kwargs: on_node_event(False, kwargs),
-            delete=lambda **kwargs: on_node_event(True, kwargs),
-            transaction=on_transaction,
-        )
 
     def new_user(self, user: str, **fields: Any) -> dict[str, Any]:
         """Create the entry of ``user`` in the ``user_items`` register.
@@ -410,18 +287,12 @@ class RegisterRegistry:
         stored on the page row, whose owner is derived by ``page_user``.
         The new page id joins its connection row's ``pages``.
 
-        Rows are born with a live ``store`` Bag under the subscriber
-        ``subscribe_page_store`` attaches, and with whatever ``page_row_class``
-        seeds as its defaults — the queue and its index, the subscription sets,
-        the lock — a passed field winning over a default, so a woken page
-        arrives with its queue in ``fields`` and keeps it. Nothing of the
-        page's own store is queued until the page subscribes one. The row is
-        born STAMPED with the server's clock, like the connection and the user
-        above it. Every other keyword passes through verbatim (schemaless).
-
-        The store may carry a SECOND subscription this registry neither creates
-        nor removes: the worker's table-cache observer, which needs the worker's
-        own index and is therefore attached — and unsubscribed — up there.
+        Rows are born with a live ``store`` Bag, then handed to
+        ``subscribe_page_store``, and with whatever ``page_row_class`` seeds as
+        its defaults — a passed field winning over a default, so a woken page
+        arrives with what its parcel carried and keeps it. The row is born
+        STAMPED with the server's clock, like the connection and the user above
+        it. Every other keyword passes through verbatim (schemaless).
         """
         if parent_page_id is not None and root_page_id is None:
             raise ValueError(f"page {page_id!r} has a parent but no root_page_id")
@@ -477,24 +348,16 @@ class RegisterRegistry:
         anonymous (its user name carries ``GUEST_PREFIX``, the born-guest rule)
         and the target user has no
         entry yet, the entry is TRANSFERRED: only the key changes, the values —
-        the live store above all — are conserved. The store being the same Bag
-        object, every attached ``user_view`` keeps capturing with nothing to
-        re-attach, and the ``connections`` set travels inside the entry already
-        naming this connection. Two boundaries hold it in place: a RESIDENT wins
+        the live store above all — are conserved, and the ``connections`` set
+        travels inside the entry already naming this connection. Two boundaries hold it in place: a RESIDENT wins
         — a login onto a user that already exists leaves that entry and its
         store the truth, and the orphaned guest still dies with its data — and
         only an ANONYMOUS item transfers: a real user's entry never changes key.
 
         On the non-transfer paths the connection id moves between the two users'
-        ``connections`` sets in the same gesture, the destination user entry is
-        brought into being when unseen with its own live store, and each page
-        that watches its owner's store has its ``user_view`` re-attached: the
-        old collector is detached and a new one is created on the NEW owner's
-        Bag with the very same ``store_subscriptions`` prefixes, then
-        re-deposited with everything the old one still held. The view is
-        re-attached, never drained — a change captured before the login is still
-        pending after it. The previous user leaves only when its ``connections``
-        set came out empty: this was its last connection, and its store dies
+        ``connections`` sets in the same gesture, and the destination user entry
+        is brought into being when unseen with its own live store. The previous
+        user leaves only when its ``connections`` set came out empty: this was its last connection, and its store dies
         with it.
 
         ``GUEST_PREFIX`` is RESERVED: a login target carrying it raises
@@ -521,64 +384,34 @@ class RegisterRegistry:
             return self.connection_items.update(connection_id, user=user, **fields)
         if user not in self.user_items:
             self.new_user(user, **fields)
-        user_store = self.user_items.get(user)["store"]
         connection = self.connection_items.update(connection_id, user=user, **fields)
         self.user_items.get(previous_user)["connections"].discard(connection_id)
         self.user_items.get(user)["connections"].add(connection_id)
-        for page_id in connection["pages"]:
-            page = self.page_items.get(page_id)
-            view = page["user_view"]
-            if view is not None:
-                view.detach()
-                fresh = self.new_collector(user_store, paths=set(page["store_subscriptions"]))
-                for change in view.changes:
-                    fresh.append(change)
-                page["user_view"] = fresh
         if not self.user_items.get(previous_user)["connections"]:
             self.user_items.drop(previous_user)
         return connection
-
-    def subscribe_store_path(self, page_id: str, prefix: str) -> dict[str, Any]:
-        """Subscribe a page to a prefix of its user's store, returning its row.
-
-        The first subscription creates ``user_view`` — a collector on the
-        owner user's store Bag filtered on that prefix; the next ones widen it
-        through ``subscribe_path``. Raises ``KeyError`` if the page is unknown.
-        """
-        page = self.page_items.get(page_id)
-        if page is None:
-            raise KeyError(f"subscribe_store_path: unknown page {page_id!r}")
-        page["store_subscriptions"].add(prefix)
-        view = page["user_view"]
-        if view is None:
-            user_store = self.user_items.get(self.page_user(page_id))["store"]
-            page["user_view"] = self.new_collector(user_store, paths={prefix})
-        else:
-            view.subscribe_path(prefix)
-        return page
 
     def update_page(self, page_id: str, **fields: Any) -> dict[str, Any]:
         """Merge ``fields`` into a page row; ``KeyError`` if it is not there."""
         return self.page_items.update(page_id, **fields)
 
     def detach_page(self, page: dict[str, Any]) -> None:
-        """Stop the capture of a page row: its store subscriber and its user view.
+        """Stop whatever captures into a page row: nothing here.
 
-        The two are all this knows about: a worker watching the store for its
-        own purposes unsubscribes its own observer.
+        Args:
+            page: the page row leaving the register, or a copy of it about to
+                be pickled.
+
+        Called before a row is dropped and before its store is copied for a
+        parcel. The seam a consumer overrides together with
+        ``subscribe_page_store``.
         """
-        page["store"].unsubscribe(
-            f"page_store:{page['register_item_id']}", any=True, transaction=True
-        )
-        if page["user_view"] is not None:
-            page["user_view"].detach()
 
     def drop_page(self, page_id: str, cascade: bool = True) -> dict[str, Any]:
         """Drop a page row, taking its connection with it if it was the last one.
 
-        The store subscriber and the user view are detached first: the row
-        leaves the register with nothing still capturing into it, and its id leaves its
-        connection's ``pages`` — the edge dies with the row. ``cascade=False``
+        ``detach_page`` runs first: the row leaves the register with nothing
+        still capturing into it, and its id leaves its connection's ``pages`` — the edge dies with the row. ``cascade=False``
         is how a descending demolition drops a page without climbing back up
         the branch it is already tearing down.
 
@@ -622,9 +455,8 @@ class RegisterRegistry:
 
         A copy of ``connections`` is walked — each drop discards from that very
         set — and every connection goes down with ``cascade=False``: this user
-        is already being demolished and must not be dropped twice. The pages
-        travel with their capture detached — the user view of each dies with
-        the store it was watching.
+        is already being demolished and must not be dropped twice. Every page
+        goes through ``detach_page`` on its way out.
 
         Returns the dropped user entry; raises ``KeyError`` if ``user`` has
         no entry.
