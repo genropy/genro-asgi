@@ -362,33 +362,6 @@ STATE_KINDS = frozenset({"page_store", "user_store", "connection_store"})
 # with a legitimate None.
 _NOT_JSON_SAFE = object()
 
-# The connection-row fields a parcel leaves behind: the edges of the ownership
-# tree, which the adoption rebuilds from the rows it lands, the reserved key
-# the register seeds itself and refuses as a keyword, and the row's own lock,
-# which is neither pickled nor deep-copied — the rebirth makes a new one.
-PARCEL_CONNECTION_REBUILT_FIELDS = frozenset(
-    {"register_item_id", "user", "pages", "item_lock"}
-)
-
-# The page-row fields a parcel leaves behind: the reserved key, the two edges to
-# its connection, the row's own lock, and the live objects bound to THIS
-# process's Bags — the user view and the deposit container — which the rebirth
-# builds itself. The page's own queue is NOT among them: ``datachanges`` is a
-# plain list and travels with the row.
-PARCEL_PAGE_REBUILT_FIELDS = frozenset(
-    {
-        "register_item_id",
-        "connection_id",
-        "item_lock",
-        "user_view",
-        "dbevents",
-    }
-)
-
-# The page-row fields the birth seeds itself and would refuse as keywords: they
-# travel in the parcel and are put back on the row once it exists.
-PARCEL_PAGE_REPLAYED_FIELDS = ("subscribed_paths", "store_subscriptions", "table_subscriptions")
-
 # The worker events that mean the population changed — a user entering or
 # leaving — and therefore that the next envelope out owes a fresh photo.
 POPULATION_WORKER_EVENTS = frozenset(
@@ -416,9 +389,6 @@ __all__ = [
     "DESK_STORE_UNLOCK_PATH",
     "DESK_SUBSCRIBE_TABLE_PATH",
     "GUEST_PREFIX",
-    "PARCEL_CONNECTION_REBUILT_FIELDS",
-    "PARCEL_PAGE_REBUILT_FIELDS",
-    "PARCEL_PAGE_REPLAYED_FIELDS",
     "SIGNAL_KIND",
     "STATE_KINDS",
     "TRANSFER_START_DELAY",
@@ -696,6 +666,24 @@ class SpaWorker:
         """
         return RegisterRegistry()
 
+    def build_request_slot(self) -> RequestSlot:
+        """Build the slot of one request: the seam a consumer replaces with its own slot class.
+
+        Returns:
+            A fresh ``RequestSlot``; a subclass adds the per-request state its
+            verbs carry.
+        """
+        return RequestSlot()
+
+    def on_request_served(self) -> None:
+        """What runs at the end of every served request, failed ones included.
+
+        Called in the ``finally`` of the stitching, on the pool thread, with the
+        request's slot still open. The seam a consumer overrides to deliver what
+        its verbs left on the slot; here it sends the slot's deposits up.
+        """
+        self.deliver_slot_deposits()
+
     @property
     def user_register(self) -> Register:
         """The users this worker holds, by identity.
@@ -920,7 +908,7 @@ class SpaWorker:
                 user=self.registry.page_user(page_id),
                 page_id=page_id,
                 connection_id=cid,
-                table_subscriptions=sorted(item["table_subscriptions"]),
+                **item.announcement_fields(),
             )
             return item
 
@@ -1104,7 +1092,7 @@ class SpaWorker:
         the pool thread the stitching runs on inherits it through the copied
         context. Whatever a previous slot of this context held goes with it.
         """
-        slot = RequestSlot()
+        slot = self.build_request_slot()
         self._request_slot_var.set(slot)
         return slot
 
@@ -2171,10 +2159,12 @@ class SpaWorker:
             self.add_connection(cid, user, **parcel.get("connection", {}))
             for page_id, fields in parcel.get("pages", {}).items():
                 replayed = {
-                    key: fields.pop(key) for key in PARCEL_PAGE_REPLAYED_FIELDS if key in fields
+                    key: fields.pop(key)
+                    for key in self.registry.page_row_class.fields_replayed
+                    if key in fields
                 }
                 page = self._add_page_item(page_id, cid, **fields)
-                self._install_page_subscriptions(page_id, replayed)
+                page.replay_fields(self.registry, replayed)
                 # Announced AFTER the replay, so the event carries the
                 # subscriptions the vertex rebuilds its index from.
                 self.add_worker_event(
@@ -2182,7 +2172,7 @@ class SpaWorker:
                     user=self.registry.page_user(page_id),
                     page_id=page_id,
                     connection_id=cid,
-                    table_subscriptions=sorted(page["table_subscriptions"]),
+                    **page.announcement_fields(),
                 )
             self._install_carried_store(user, parcel.get("store"), resident)
             return self.connection_register.get(cid)
@@ -2774,7 +2764,7 @@ class SpaWorker:
         try:
             answer = seam.serve(payload["http"], payload.get("identity"))
         finally:
-            self.deliver_slot_deposits()
+            self.on_request_served()
         answer["connection_id"] = self.request_slot.connection_id
         return answer
 
@@ -2891,7 +2881,7 @@ class SpaWorker:
         and what it announces goes up the second channel — ONE CALL of this
         worker's per departure, placed once the departure is over.
         """
-        slot_token = self._request_slot_var.set(RequestSlot())
+        slot_token = self._request_slot_var.set(self.build_request_slot())
         try:
             await self._execute_transfer_in_slot(user, flag)
         finally:
@@ -3058,31 +3048,27 @@ class SpaWorker:
     def _connection_parcel(self, cid: str) -> dict[str, Any]:
         """One connection with its pages, in the shape the adoption reads back.
 
-        The edges of the tree are left out on purpose: the folder already says
-        whose the connection is, and the pages half is what rebuilds the rest.
-        A page leaves its user view and its deposit container behind as well —
-        objects bound to the Bags of THIS process, which the birth on the other
-        side makes anew — while the prefixes the capture is filtered on travel
-        as plain sets and are subscribed again there. Its own ``datachanges``
-        queue is a plain list and travels with the row.
+        What each row leaves behind is the row's own knowledge
+        (``fields_left_behind`` on its class): the edges of the tree, which the
+        folder already says; the lock; the live objects bound to the Bags of
+        THIS process, which the birth on the other side makes anew. What
+        travels but must be put back after the birth is the row's too
+        (``fields_replayed``), and the wake asks it.
         """
         item = self.connection_register.get(cid)
+        pages = {page_id: self.page_register.get(page_id) for page_id in sorted(item["pages"])}
         return {
             # The parcel names its own connection: the deposit filename hashes
             # the id one-way, and the wake reads it back from here.
             "connection_id": cid,
             "connection": {
-                key: value
-                for key, value in item.items()
-                if key not in PARCEL_CONNECTION_REBUILT_FIELDS
+                key: value for key, value in item.items() if key not in item.fields_left_behind
             },
             "pages": {
                 page_id: {
-                    key: value
-                    for key, value in self.page_register.get(page_id).items()
-                    if key not in PARCEL_PAGE_REBUILT_FIELDS
+                    key: value for key, value in page.items() if key not in page.fields_left_behind
                 }
-                for page_id in sorted(item["pages"])
+                for page_id, page in pages.items()
             },
         }
 
@@ -3175,21 +3161,6 @@ class SpaWorker:
     def _get_register_rows(self, register: Register) -> list[tuple[str, dict[str, Any]]]:
         """Every key of a register paired with its live item, in one snapshot."""
         return [(key, register.get(key)) for key in register.keys()]
-
-    def _install_page_subscriptions(self, page_id: str, replayed: dict[str, Any]) -> None:
-        """Put back on a woken page the subscriptions its parcel carried.
-
-        The row is born with its sets empty and its capture filtered on nothing:
-        the prefixes are subscribed again here, so the page wakes capturing what
-        it captured before it went to the deposit.
-        """
-        page = self.page_register.get(page_id)
-        for table in replayed.get("table_subscriptions", ()):
-            page["table_subscriptions"].add(table)
-        for prefix in replayed.get("subscribed_paths", ()):
-            page["subscribed_paths"].add(prefix)
-        for prefix in replayed.get("store_subscriptions", ()):
-            self.registry.subscribe_store_path(page_id, prefix)
 
     def _drop_emptied_user(self, user: str) -> None:
         """Take the user away when the connection just removed was his last."""

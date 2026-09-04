@@ -118,7 +118,6 @@ ValueError, an unknown register name raises KeyError.
 
 from __future__ import annotations
 
-import threading
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -128,6 +127,7 @@ from genro_bag.datachange import DataChangeCollector
 
 from ..session.session import Session
 from .register import Register
+from .register_row import ConnectionRow, PageRow, UserRow
 
 __all__ = ["GUEST_PREFIX", "RegisterRegistry"]
 
@@ -142,14 +142,23 @@ GUEST_PREFIX = "guest_"
 class RegisterRegistry:
     """A host of named registers, with the two generic ones built in."""
 
+    #: The row classes the three registers build their items as: a consumer
+    #: pairing its own fields with the chain subclasses the row and names it here.
+    user_row_class: type[UserRow] = UserRow
+    connection_row_class: type[ConnectionRow] = ConnectionRow
+    page_row_class: type[PageRow] = PageRow
+
     def __init__(self) -> None:
         """Create the host with the three primary registers of the chain."""
         self._registers: dict[str, Register] = {
-            "user_items": Register("user_items"),
-            "connection_items": Register("connection_items"),
+            "user_items": Register("user_items", row_class=self.user_row_class),
+            "connection_items": Register(
+                "connection_items", row_class=self.connection_row_class
+            ),
             "page_items": Register(
                 "page_items",
                 index_attrs=("connection_id", "root_page_id"),
+                row_class=self.page_row_class,
             ),
         }
 
@@ -335,7 +344,7 @@ class RegisterRegistry:
             fields["store"] = self.new_store()
         fields.setdefault("last_refresh_ts", time.time())
         return self.user_items.create(
-            user, connections=set(), item_lock=threading.RLock(), **fields
+            user, connections=set(), **fields
         )
 
     def new_connection(
@@ -369,7 +378,7 @@ class RegisterRegistry:
         if user not in self.user_items:
             self.new_user(user)
         connection = self.connection_items.create(
-            connection_id, user=user, pages=set(), item_lock=threading.RLock(), **fields
+            connection_id, user=user, pages=set(), **fields
         )
         self.user_items.get(user)["connections"].add(connection_id)
         return connection
@@ -402,15 +411,13 @@ class RegisterRegistry:
         The new page id joins its connection row's ``pages``.
 
         Rows are born with a live ``store`` Bag under the subscriber
-        ``subscribe_page_store`` attaches, an empty ``datachanges`` queue and
-        its ``datachanges_idx`` at zero, an empty ``dbevents`` list and empty
-        subscription sets, ``subscribed_paths`` among them: the prefixes the
-        capture is filtered on. Nothing of the page's own store is queued until
-        the page subscribes one. A woken page arrives with its queue in
-        ``fields`` and keeps it. ``user_view`` stays None until
-        the first ``subscribe_store_path``. The row is born STAMPED with the
-        server's clock, like the connection and the user above it. Every other
-        keyword passes through verbatim (schemaless).
+        ``subscribe_page_store`` attaches, and with whatever ``page_row_class``
+        seeds as its defaults — the queue and its index, the subscription sets,
+        the lock — a passed field winning over a default, so a woken page
+        arrives with its queue in ``fields`` and keeps it. Nothing of the
+        page's own store is queued until the page subscribes one. The row is
+        born STAMPED with the server's clock, like the connection and the user
+        above it. Every other keyword passes through verbatim (schemaless).
 
         The store may carry a SECOND subscription this registry neither creates
         nor removes: the worker's table-cache observer, which needs the worker's
@@ -427,8 +434,6 @@ class RegisterRegistry:
         store = fields.pop("store", None)
         if store is None:
             store = self.new_store()
-        datachanges = fields.pop("datachanges", None) or []
-        datachanges_idx = fields.pop("datachanges_idx", 0)
         fields.setdefault("last_refresh_ts", time.time())
         page = self.page_items.create(
             page_id,
@@ -438,14 +443,6 @@ class RegisterRegistry:
             avatar_key=avatar_key,
             data=data,
             store=store,
-            item_lock=threading.RLock(),
-            datachanges=datachanges,
-            datachanges_idx=datachanges_idx,
-            user_view=None,
-            dbevents=[],
-            subscribed_paths=set(),
-            store_subscriptions=set(),
-            table_subscriptions=set(),
             **fields,
         )
         self.connection_items.get(connection_id)["pages"].add(page_id)

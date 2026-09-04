@@ -41,7 +41,10 @@ def test_generic_registers_exist_with_ratified_indexes() -> None:
 def test_generic_registers_are_stable_references() -> None:
     registry = RegisterRegistry()
     registry.user_items.create("alice")
-    assert registry.user_items.get("alice") == {"register_item_id": "alice"}
+    # Born as the registry's row class: the reserved id, plus the row's own lock.
+    alice = registry.user_items.get("alice")
+    assert alice["register_item_id"] == "alice"
+    assert set(alice) == {"register_item_id", "item_lock"}
     assert len(registry.user_items) == 1
 
 

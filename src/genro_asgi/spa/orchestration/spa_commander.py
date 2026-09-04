@@ -684,7 +684,7 @@ class GlobalStoreOperations(RoutingClass):
                 "desk: the release of the grant %s is no longer in force", request_id
             )
             return {"applied": False}
-        GlobalStore(self.spa_commander.global_register).apply_changes(from_tytx(changes, "json"))
+        self.spa_commander.apply_global_store_changes(from_tytx(changes, "json"))
         self.spa_commander.global_lock.release()
         return {"applied": True}
 
@@ -818,7 +818,7 @@ class SpaCommander:
         #: The global store itself: not a master over replicas any more, the
         #: ONLY copy there is. Every read and every write of the hosted sites
         #: reaches it as a CALL on the lane, answered once it has landed.
-        self.global_register = Bag()
+        self.global_register = self.new_global_store()
         #: The grant of that store for a read-modify-write hold: FIFO, one
         #: holder, and a holder whose process dies releases it applying nothing.
         self.global_lock = GlobalStoreLock()
@@ -1144,6 +1144,25 @@ class SpaCommander:
         for group_handler in self.group_map.values():
             for worker_handler in group_handler.living_workers:
                 worker_handler.push_subscribed_tables()
+
+    def new_global_store(self) -> Any:
+        """The vertex's data at birth: the seam a consumer overrides with its own type.
+
+        Returns:
+            A new Bag — the fourth opaque datum, beside the three rows'.
+        """
+        return Bag()
+
+    def apply_global_store_changes(self, changes: list[dict[str, Any]]) -> None:
+        """Apply a holder's drained changes to the vertex's data.
+
+        Args:
+            changes: what the body captured on its working copy, decoded.
+
+        Acts on ``global_register``. The seam a consumer overrides together
+        with ``new_global_store``, so the writes speak its own type's API.
+        """
+        GlobalStore(self.global_register).apply_changes(changes)
 
     def publish_observation(self, kind: str, source: str, data: dict[str, Any]) -> None:
         """Put one observation on every watching queue, and never raise.

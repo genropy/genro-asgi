@@ -434,6 +434,26 @@ and puts the departure on a task of its own, so the REPLY is on the wire first
 (`SpaWorker.begin_quit`). `child_stub` resolves on a tree of its own and is no
 longer taught op by op.
 
+**The rows are classes, and the seams a consumer overrides are named (landed
+2026-09-04, #59 block 3).** Every register row is a `dict` of the registry's row
+class — `UserRow`, `ConnectionRow`, `PageRow` in `spa/register_row.py` — so
+`row["field"]` reads everywhere as before, and the class carries what the worker
+used to hard-code: `default_fields` (born with, the row's own `item_lock`
+included), `fields_left_behind` (what the parcel does not carry), `fields_replayed`
++ `replay_fields` (what travels but is put back after the birth), and
+`announcement_fields` (what the `new_page` event carries beside the identities).
+`Register` builds its items as its `row_class`; `RegisterRegistry` names the three
+classes (`user_row_class`, `connection_row_class`, `page_row_class`) and a
+consumer subclasses the row and the registry, as genropy-asgi already does for
+`new_store`. Beside the rows: `SpaWorker.build_request_slot` (the slot of every
+request, on the loop and on the pool thread), `SpaWorker.on_request_served` (the
+`finally` of the stitching; here it delivers the slot's deposits),
+`SpaCommander.new_global_store` and `apply_global_store_changes` (the vertex's
+data — the fourth opaque datum, a new Bag by default at all four levels, the type
+a consumer chooses must be one the TYTX codec knows because the grant carries the
+whole store down the lane). The parcel stays a plain dict built from the row:
+no row class reaches the disk.
+
 **Not yet built (second pass).** The deliberate reboot command on `_server`
 (`reboot now`/`reboot wait N`, notify_user, the consumer service-message
 lane); the single-group reboot (needs no photo — the commander survives) and

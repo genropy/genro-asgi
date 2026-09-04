@@ -28,9 +28,14 @@ from ``genro_asgi`` top-level.
 
 from .register import Register
 from .register_registry import GUEST_PREFIX, RegisterRegistry
+from .register_row import ConnectionRow, PageRow, RegisterRow, UserRow
 
 __all__ = [
     "GUEST_PREFIX",
+    "ConnectionRow",
+    "PageRow",
     "Register",
     "RegisterRegistry",
+    "RegisterRow",
+    "UserRow",
 ]
