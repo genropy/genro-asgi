@@ -9,7 +9,6 @@ lines are read-only.
 from __future__ import annotations
 
 from genro_asgi.spa.orchestration.spa_worker import GUEST_PREFIX
-from genro_asgi.spa.orchestration.worker_handler import PING_OP_PATH
 
 from .conftest import wait_for
 
@@ -30,9 +29,9 @@ async def subscribed_guest(lane, table: str = "mytable") -> str:
 
 
 async def sent_events(lane) -> None:
-    """Flush the worker's announcements to the vertex: a ping's REPLY carries
-    them, and the fold reads the envelope before the caller is unblocked."""
-    await lane.worker_handler.connector.call(PING_OP_PATH)
+    """Flush the worker's announcements to the vertex on the worker's own channel:
+    the fold reads the envelope before the announcement is answered."""
+    await lane.announce()
 
 
 async def test_freezing_a_user_clears_his_pages_at_the_desk(desk_lane):

@@ -490,6 +490,7 @@ def test_connection_parcel_leaves_the_row_locks_behind(tmp_path) -> None:
         freeze_handler=FreezeHandler(tmp_path / "frozen_users"),
         deposit_lock_retry_interval=0.01,
     )
+    worker.open_request_slot()
     worker.add_page("p1", "cid-a")
 
     parcel = worker._connection_parcel("cid-a")

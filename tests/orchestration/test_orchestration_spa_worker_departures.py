@@ -44,6 +44,8 @@ from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker
 from genro_asgi.spa.orchestration import spa_worker as spa_worker_module
 from genro_asgi.spa.orchestration.worker_connector import ENVELOPE_SLOT_WORKER_SNAPSHOT
 
+from .conftest import attach_wire
+
 WORKER_NAME = "standard_0001"
 OTHER_WORKER = "standard_0002"
 GROUP = "standard"
@@ -92,13 +94,15 @@ def deposit(tmp_path):
 def build_worker(deposit, **kwargs):
     """A worker whose gate is short enough to watch inside a test."""
     kwargs.setdefault("transfer_start_delay", 0.1)
-    return SpaWorker(
+    worker = SpaWorker(
         WORKER_NAME,
         freeze_handler=deposit,
         group=GROUP,
         deposit_lock_retry_interval=0.01,
         **kwargs,
     )
+    attach_wire(worker)
+    return worker
 
 
 @pytest.fixture
@@ -107,7 +111,12 @@ def worker(deposit):
 
 
 def announced(worker):
-    """The protocol names queued for the envelope out, in order."""
+    """The protocol names the departures announced up the worker's own channel, in order."""
+    return [event["op"] for event in worker.stream.announced_events()]
+
+
+def offered(worker):
+    """The protocol names a verb called HERE, as an op would, left for this context's reply."""
     return [event["op"] for event in worker.worker_events]
 
 
@@ -207,13 +216,13 @@ async def test_the_gate_holds_the_departure_until_its_delay_has_passed(worker, d
 
 async def test_a_ceded_user_leaves_with_his_placement_to_be_assigned(worker):
     worker.add_page("page-1", "cid-a", "mario")
-    worker.worker_events.clear()
+    worker.stream.frames.clear()
     worker.plan_transfers(transfer_users=["mario"])
 
     await worker.execute_transfers()
 
     assert announced(worker) == ["user_frozen", "drop_pages"]
-    assert worker.worker_events[0] == {
+    assert worker.stream.announced_events()[0] == {
         "op": "user_frozen",
         "worker": WORKER_NAME,
         "user": "mario",
@@ -273,7 +282,7 @@ async def test_a_call_closing_before_the_gate_takes_nobody_away(worker):
 async def test_a_call_closing_on_a_user_nobody_asked_for_changes_nothing(worker):
     worker.add_page("page-1", "cid-a", "mario")
     worker.open_request("mario")
-    worker.worker_events.clear()
+    worker.stream.frames.clear()
 
     await worker.close_request("mario")
 
@@ -327,7 +336,7 @@ async def test_a_deposit_that_refuses_leaves_the_user_alive(tmp_path):
     assert frozen is False
     assert worker.user_register.get("mario")["state"] == "active"
     assert worker.connection_register.get("cid-a")["pages"] == {"page-1"}
-    assert announced(worker) == []
+    assert offered(worker) == []
     assert worker.freeze_failures == 1
     assert deposit.lock_holder("mario") is None
     assert deposit.user_folders == set()
@@ -359,7 +368,7 @@ async def test_a_row_being_adopted_is_not_parked_under_the_adoption(worker, depo
 
     assert await worker.freeze_user("mario") is False
     assert worker.user_register.get("mario")["state"] == "unfreezing"
-    assert announced(worker) == []
+    assert offered(worker) == []
     assert deposit.read_user_register_item("mario") is None
     assert deposit.user_folders == set()
 
@@ -373,7 +382,7 @@ async def test_the_cycle_and_the_hook_never_park_the_same_user_twice(tmp_path):
     deposit = SlowDeposit(tmp_path / "frozen_users")
     worker = build_worker(deposit)
     worker.add_page("page-1", "cid-a", "mario")
-    worker.worker_events.clear()
+    worker.stream.frames.clear()
     worker.plan_transfers(transfer_users=["mario"])
     cycle = asyncio.ensure_future(worker.execute_transfers())
     await wait_until(deposit.writing.is_set)
@@ -394,7 +403,7 @@ async def test_a_call_born_while_the_parcels_were_written_does_not_stop_the_depa
     deposit = SlowDeposit(tmp_path / "frozen_users")
     worker = build_worker(deposit)
     worker.add_page("page-1", "cid-a", "mario")
-    worker.worker_events.clear()
+    worker.stream.frames.clear()
     worker.plan_transfers(transfer_users=["mario"])
     cycle = asyncio.ensure_future(worker.execute_transfers())
     await wait_until(deposit.writing.is_set)
@@ -482,7 +491,7 @@ async def test_a_folder_nobody_gives_back_ends_the_departure_loud(deposit):
     assert await asyncio.wait_for(worker.freeze_user("mario"), 2.0) is False
     assert worker.user_register.get("mario")["state"] == "active"
     assert worker.freeze_failures == 1
-    assert announced(worker) == []
+    assert offered(worker) == []
     assert deposit.lock_holder("mario") == OTHER_WORKER
 
 
@@ -513,7 +522,7 @@ async def test_the_freeze_order_parks_a_user_with_no_call_in_flight(worker, depo
     assert outcome == {"frozen": "mario"}
     assert "mario" not in worker.user_register
     assert deposit.read_user_register_item("mario") is not None
-    assert announced(worker) == ["user_frozen", "drop_pages"]
+    assert offered(worker) == ["user_frozen", "drop_pages"]
 
 
 async def test_the_freeze_order_does_not_return_before_the_call_in_flight_ends(worker, deposit):
@@ -563,7 +572,7 @@ async def test_the_freeze_order_for_a_stranger_is_refused_by_name(worker):
 async def test_quit_parks_everybody_and_reaches_the_exit(worker, deposit):
     worker.add_page("page-1", "cid-a", "mario")
     worker.add_page("page-2", "cid-b", "anna")
-    worker.worker_events.clear()
+    worker.stream.frames.clear()
 
     await worker.quit()
 
@@ -574,7 +583,7 @@ async def test_quit_parks_everybody_and_reaches_the_exit(worker, deposit):
     assert announced(worker) == ["user_frozen", "drop_pages", "user_frozen", "drop_pages"]
     assert all(
         event["placement"] is None
-        for event in worker.worker_events
+        for event in worker.stream.announced_events()
         if event["op"] == "user_frozen"
     )
 

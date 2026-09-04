@@ -43,6 +43,7 @@ WORKER_NAME = "standard_0001"
 def worker(tmp_path):
     deposit = FreezeHandler(tmp_path / "frozen_users")
     made = SpaWorker(WORKER_NAME, freeze_handler=deposit, deposit_lock_retry_interval=0.01)
+    made.open_request_slot()
     made.new_page("alice", page_id="p0", connection_id="s1")
     made.new_page("alice", page_id="p1", connection_id="s1")
     return made

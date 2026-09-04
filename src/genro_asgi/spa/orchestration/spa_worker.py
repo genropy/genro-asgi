@@ -74,13 +74,24 @@ fold. An adopted CONNECTION announces nothing of its own: it is born through the
 ordinary mutators and emits the ordinary ``new_connection``/``new_page`` — one
 birth path in the machine, not two.
 
-**Announcements ride the envelope out.** Every mutation queues its protocol name
-in ``events``, the sub-envelope the reply carries up to the fold: the inherited
+**Announcements ride the reply of the CALL that caused them — two channels,
+never one queue** (owner, 2026-09-04; #60). Every mutation queues its protocol
+name in the ``worker_events`` of the ``RequestSlot`` of the CALL being served:
+each CALL is served on a task of its own, the stitching runs on the pool under a
+copy of that task's context, and ``send_reply`` sends that slot's events and no
+other's, then closes the slot. The names are the inherited
 ``new_user``/``new_connection``/``new_page`` and
 ``drop_user``/``drop_connection``/``drop_connections``/``drop_page``/
-``drop_pages``, plus ``user_adopted``. A cascade speaks the plural: dropping a
-connection announces its pages as one ``drop_pages``, dropping a user its
-connections as one ``drop_connections``.
+``drop_pages``, plus ``user_adopted``, ``user_frozen``,
+``connection_user_changed``, ``user_rows_released``. A cascade speaks the
+plural: dropping a connection announces its pages as one ``drop_pages``, dropping
+a user its connections as one ``drop_connections``. Outside any CALL there is no
+slot and a mutation raises. The ONE producer that answers no CALL — the transfer
+cycle, which is the quit's — gives each departure a slot of its own and sends
+what it announced with ONE CALL of this worker's, ``/op/announce``, folded at the
+vertex exactly as a reply's envelope is; the REPLY is the acknowledgement, and a
+vertex that does not answer loses that announcement, counted and logged, never
+retried.
 
 **A drop asks for absence.** Dropping something already gone is that same
 outcome — no error, and nothing announced, because nothing happened.
@@ -207,9 +218,10 @@ explicitly. A subclass assigns it, which is the whole contract with the bridge.
 **The photo rides out.** ``worker_snapshot`` is a slot ANY envelope leaving here
 may carry beside its own payload: the presentation carries it (a live process is
 never without a photo), every population change carries it (a user entering or
-leaving is when the thing the photo describes really changes), and any reply
-carries it once ``worker_snapshot_ttl`` has run out on the last one. So there is
-one road instead of three, and the beat keeps the only question its name asks.
+leaving is when the thing the photo describes really changes) — on the reply or
+on the announcement, whichever carries the change — and any reply carries it
+once ``worker_snapshot_ttl`` has run out on the last one. So there is one road
+instead of three, and the beat keeps the only question its name asks.
 
 **The global store is NOT here at all.** There is no replica: the one copy lives
 on the commander, and every access is a CALL on the lane. ``store_set`` and
@@ -230,6 +242,7 @@ worker events stay unsaid: whoever finds the parcels needs no telling.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import copy
 import functools
 import heapq
@@ -260,6 +273,7 @@ from .worker_connector import (
     CommanderCallFailed,
 )
 from .worker_handler import (
+    ANNOUNCE_OP_PATH,
     CENSUS_OP_PATH,
     DROP_CONNECTION_OP_PATH,
     DROP_USER_OP_PATH,
@@ -297,6 +311,11 @@ WORKER_SNAPSHOT_TTL = 0.5
 #: How long a quit waits for a user whose call is still in flight, in seconds.
 #: Past it the wait is dropped and he is parked without that call.
 PENDING_CALL_GRACE_SECONDS = 5.0
+
+#: How long the worker waits for the vertex to take an announcement, in
+#: seconds. Past it the announcement is counted lost: a wire that answers
+#: nothing is a vertex that is gone, and the cycle must not hang on it.
+ANNOUNCE_TIMEOUT_SECONDS = 10.0
 
 #: The three clocks every register item carries, in the order of their rank.
 CLOCK_NAMES = ("last_refresh_ts", "last_user_ts", "last_rpc_ts")
@@ -416,22 +435,30 @@ class RequestSlot:
     """What one request has produced so far, waiting for its own exchange.
 
     The events of a request belong to THAT request: they accumulate here and
-    leave together at its end. ``dbevents`` are the table-event deposits that go
-    up the lane; ``own_dbevents`` are the ``local_only`` deposits of the hidden
-    transaction, which never leave this process and reach the origin page's own
-    collect alone. The addressed writes are NOT here: each one leaves at once,
-    on its own CALL, the moment its verb is called.
+    leave together at its end. ``worker_events`` are what happened on the
+    registers while this CALL was being served, and they ride ITS reply — never
+    another's (owner, 2026-09-04). ``dbevents`` are the table-event deposits
+    that go up the lane; ``own_dbevents`` are the ``local_only`` deposits of the
+    hidden transaction, which never leave this process and reach the origin
+    page's own collect alone. The addressed writes are NOT here: each one leaves
+    at once, on its own CALL, the moment its verb is called.
     ``connection_id`` is the one field that travels back OUT: the front reads
-    it off the reply to write its cookie with.
+    it off the reply to write its cookie with. ``login_previous_user`` is set
+    when THIS request logged the connection in, and it is what makes the tail of
+    this request, and of no other, carry that connection to the deposit.
     """
 
     def __init__(self) -> None:
+        self.worker_events: list[dict[str, Any]] = []
         self.dbevents: list[dict[str, Any]] = []
         self.own_dbevents: list[dict[str, Any]] = []
         #: The connection the site named while serving this request — born, or
         #: changed owner. None when it named none, which is every request that
         #: reused the connection its cookie already carried.
         self.connection_id: str | None = None
+        #: Who owned the connection before this request logged it in; None when
+        #: this request logged nobody in.
+        self.login_previous_user: str | None = None
 
 
 class SpaWorker:
@@ -506,11 +533,14 @@ class SpaWorker:
         #: lane as it happens. Off until somebody watches, and switched only by
         #: the vertex: a debug surface must not cost anything when unobserved.
         self.observation_on = False
-        #: One slot per traffic-pool thread. A request is served on one thread
-        #: from end to end, so the thread IS the request and two of them served
-        #: at once never see each other's events.
-        self._request_slots = threading.local()
-        self._worker_events: list[dict[str, Any]] = []
+        #: One slot per CALL being served. Each CALL is served on a task of its
+        #: own, and the stitching runs on the pool under a copy of that task's
+        #: context, so the loop and the thread of one request see ONE slot and
+        #: two requests never see each other's. None outside any CALL.
+        self._request_slot_var: contextvars.ContextVar[RequestSlot | None] = (
+            contextvars.ContextVar(f"request_slot:{name}", default=None)
+        )
+        self._announce_failures = 0
         self._observation_tasks: set[asyncio.Task[None]] = set()
         self._unfreeze_waits: dict[str, asyncio.Event] = {}
         self._pendings: dict[str, int] = {}
@@ -521,7 +551,6 @@ class SpaWorker:
         #: One entry per connection that logged in during a call and is
         #: waiting for that call's tail to carry it away: the identity it
         #: belonged to BEFORE, which is the only fact the tail needs.
-        self._login_previous_user_map: dict[str, str] = {}
         self._departing_users: set[str] = set()
         self._transfers_start_ts = 0.0
         self._transfers_done = asyncio.Event()
@@ -576,12 +605,16 @@ class SpaWorker:
 
     @property
     def worker_events(self) -> list[dict[str, Any]]:
-        """The worker events waiting for the next envelope out.
+        """The worker events of the CALL being served, waiting for its reply.
 
         Returns:
-            The live list: whoever composes the envelope takes them from here.
+            The live list of the current request slot: whoever composes the
+            envelope takes them from here.
+
+        Raises:
+            RuntimeError: no CALL is being served in this context.
         """
-        return self._worker_events
+        return self.request_slot.worker_events
 
     @property
     def freeze_failures(self) -> int:
@@ -686,11 +719,13 @@ class SpaWorker:
         Returns:
             The worker event as it was queued.
 
-        Appends to ``events``, and marks the photo due when what happened is a
-        user entering or leaving.
+        Appends to the ``worker_events`` of the CALL being served, and marks the
+        photo due when what happened is a user entering or leaving. Outside any
+        CALL there is no slot and this raises: an event nobody would ever send
+        is a fault, not a queue.
         """
         event = {"op": op, "worker": self.name, **payload}
-        self._worker_events.append(event)
+        self.request_slot.worker_events.append(event)
         if self.observation_on:
             self.report_observation(op, payload)
         if op in POPULATION_WORKER_EVENTS:
@@ -929,21 +964,29 @@ class SpaWorker:
 
     @property
     def request_slot(self) -> RequestSlot:
-        """The slot of the request being served on this thread, born on first touch."""
-        slot = getattr(self._request_slots, "slot", None)
+        """The slot of the CALL being served in this context.
+
+        Raises:
+            RuntimeError: no CALL is being served here — nothing opened a slot.
+        """
+        slot = self._request_slot_var.get()
         if slot is None:
-            slot = RequestSlot()
-            self._request_slots.slot = slot
+            raise RuntimeError(f"Worker {self.name}: no request slot open in this context")
         return slot
 
-    def open_request_slot(self) -> None:
-        """Put a fresh slot on this thread, so no request inherits another's events.
+    def open_request_slot(self) -> RequestSlot:
+        """Put a fresh slot in this context, so no CALL inherits another's events.
 
-        Called on the traffic-pool thread the request is about to be served on:
-        whatever the previous one left there — a request that never collected —
-        goes with it instead of leaking into this one.
+        Returns:
+            The slot just opened.
+
+        Called on the task that serves a CALL before anything is done for it;
+        the pool thread the stitching runs on inherits it through the copied
+        context. Whatever a previous slot of this context held goes with it.
         """
-        self._request_slots.slot = RequestSlot()
+        slot = RequestSlot()
+        self._request_slot_var.set(slot)
+        return slot
 
     def apply_forwarded(self, bag: Bag, change: dict[str, Any]) -> None:
         """Apply a change born elsewhere to a local Bag (a STATE delivery).
@@ -1841,13 +1884,17 @@ class SpaWorker:
             result: the answer, when there is one.
             error: what went wrong instead.
 
-        Empties ``events`` onto the envelope — the worker events are delivered
-        once, and the send IS the delivery — and attaches the photo when it is
-        due.
+        Empties the ``worker_events`` of this CALL's slot onto the envelope — the
+        worker events are delivered once, and the send IS the delivery — and
+        attaches the photo when it is due. Then the slot is closed: an event
+        offered after the reply of the CALL that could have carried it is a
+        fault, and ``request_slot`` says so.
         """
         with self.dispatch_lock:
-            events = self._worker_events
-            self._worker_events = []
+            slot = self.request_slot
+            events = slot.worker_events
+            slot.worker_events = []
+        self._request_slot_var.set(None)
         data: dict[str, Any] = {ENVELOPE_SLOT_WORKER_EVENTS: events}
         if error is not None:
             data["error"] = error
@@ -2097,7 +2144,8 @@ class SpaWorker:
             KeyError: this worker holds no such connection.
 
         Acts on the registers AT ONCE — the row changes owner, the user is born
-        here if he was unknown, and the pages follow their connection without
+        here if he was unknown (the worker's way, with ``state`` and the three
+        clocks the photo reads), and the pages follow their connection without
         being touched, their owner being derived through it — on the flag the
         tail of this call reads, and on the departure a GUEST may have been
         promised: one that is ceasing to exist is not carried to the deposit, so
@@ -2117,11 +2165,18 @@ class SpaWorker:
             if connection is None:
                 raise KeyError(f"change_connection_user: no connection {cid!r} here")
             previous_user = connection["user"]
+            if user not in self.user_register and not previous_user.startswith(GUEST_PREFIX):
+                # An avatar switch onto an identity unknown here: the registry
+                # would bring his row into being bare, and the photo reads
+                # ``state`` and the three clocks off every row. Born here, the
+                # worker's way, so the registry finds him and joins.
+                self._add_user_item(user)
             self.registry.change_connection_user(cid, user, **fields)
-            self._login_previous_user_map[cid] = previous_user
             if previous_user.startswith(GUEST_PREFIX):
                 self._transfer_flags.pop(previous_user, None)
-            self.request_slot.connection_id = cid
+            slot = self.request_slot
+            slot.connection_id = cid
+            slot.login_previous_user = previous_user
             self.add_worker_event(
                 "connection_user_changed",
                 user=user,
@@ -2277,17 +2332,18 @@ class SpaWorker:
             self.freeze_handler.release_lock(user, self.name)
         return True
 
-    async def freeze_connection(self, cid: str) -> bool | None:
+    async def freeze_connection(self, cid: str, previous_user: str) -> bool:
         """Carry one logged-in connection to the deposit, under its new identity.
 
         Args:
-            cid: the connection whose call has just ended.
+            cid: the connection the call that has just ended logged in.
+            previous_user: who owned it before that login — read off the slot of
+                that very call, so no other call's tail can do this.
 
         Returns:
-            None when this connection did not log in — the ordinary tail of an
-            ordinary call; True when it went to the deposit; False when it stayed
-            (somebody else is already taking the previous identity away, or the
-            deposit refused the parcel, which is counted).
+            True when it went to the deposit; False when it stayed (somebody else
+            is already taking the previous identity away, or the deposit refused
+            the parcel, which is counted).
 
         Writes ONE parcel under the identity the connection now belongs to — the
         connection, its pages, and the store the previous identity accumulated
@@ -2301,14 +2357,11 @@ class SpaWorker:
         attached, which is a legitimate shape of the machine, and the failure is
         counted. BOTH ways of not happening end there — a folder that never comes
         free and a deposit that refuses the parcel — so the claim taken on the
-        previous identity and the flag of this login are given back on every road
-        out. A claim kept by a departure that gave up would be held forever, and
-        the whole worker could never finish leaving.
+        previous identity is given back on every road out. A claim kept by a
+        departure that gave up would be held forever, and the whole worker could
+        never finish leaving.
         """
         with self.dispatch_lock:
-            previous_user = self._login_previous_user_map.get(cid)
-            if previous_user is None:
-                return None
             user = self.connection_register.get(cid)["user"]
         if not self._claim_departure(previous_user):
             return False
@@ -2354,8 +2407,6 @@ class SpaWorker:
             finally:
                 self.freeze_handler.release_lock(user, self.name)
         finally:
-            with self.dispatch_lock:
-                del self._login_previous_user_map[cid]
             self._release_departure(previous_user)
         with self.dispatch_lock:
             self._release_login_rows(cid, user, previous_user)
@@ -2560,7 +2611,14 @@ class SpaWorker:
         self.plan_transfers(transfer_users=self.user_register.keys())
 
     async def _guarded_call(self, frame: Frame) -> None:
-        """Serve one CALL with the guard inside the task, so nothing dies unretrieved."""
+        """Serve one CALL on a slot of its own, with the guard inside the task.
+
+        The slot is opened HERE, on the task that is this CALL's and nobody
+        else's: whatever the service announces — on the loop or on the pool
+        thread the stitching runs on — lands in it and leaves with THIS reply.
+        The guard keeps the task from dying unretrieved.
+        """
+        self.open_request_slot()
         try:
             await self.answer_call(frame)
         except Exception:
@@ -2603,21 +2661,22 @@ class SpaWorker:
         finally:
             if user is not None:
                 await self.close_request(user)
-            await self.freeze_connection(served.get("connection_id") or cid)
+            slot = self.request_slot
+            if slot.login_previous_user is not None:
+                await self.freeze_connection(slot.connection_id, slot.login_previous_user)
 
     def _serve_on_thread(self, seam: WsgiSeam, payload: dict[str, Any]) -> dict[str, Any]:
-        """Serve the stitching on the pool thread, under a slot of its own.
+        """Serve the stitching on the pool thread, in the slot of its CALL.
 
-        The slot is opened HERE and not on the loop, because the thread is what
-        makes it this request's: the site's verbs are called on this very
-        thread and find it by asking for it. What the site named while serving
-        LEAVES with the answer — the front has no other way of learning the
-        connection this request settled on, and its cookie is written off it.
-        What the slot still holds is delivered in the ``finally``, so a request
-        that never collected — and one that failed after its commit — announces
-        its deposits before the exception goes on its way.
+        The thread runs under a copy of the CALL's context, so the site's verbs,
+        called on this very thread, find the slot the task opened and their
+        events ride this CALL's reply. What the site named while serving LEAVES
+        with the answer — the front has no other way of learning the connection
+        this request settled on, and its cookie is written off it. What the slot
+        still holds is delivered in the ``finally``, so a request that never
+        collected — and one that failed after its commit — announces its
+        deposits before the exception goes on its way.
         """
-        self.open_request_slot()
         try:
             answer = seam.serve(payload["http"], payload.get("identity"))
         finally:
@@ -2708,8 +2767,15 @@ class SpaWorker:
         return row
 
     async def _run_in_pool(self, pool: ThreadPoolExecutor, work: Callable[[], Any]) -> Any:
-        """Run one piece of synchronous work on the pool it belongs to."""
-        return await asyncio.get_running_loop().run_in_executor(pool, work)
+        """Run one piece of synchronous work on the pool it belongs to.
+
+        The work runs under a COPY of the calling task's context, so the thread
+        finds the request slot of the CALL it serves: what the site announces
+        there lands in that CALL's events.
+        """
+        return await asyncio.get_running_loop().run_in_executor(
+            pool, contextvars.copy_context().run, work
+        )
 
     async def _execute_transfer(self, user: str, flag: str) -> None:
         """Let one flagged user go to the deposit.
@@ -2726,7 +2792,22 @@ class SpaWorker:
         deferred to a call's tail keeps it, and the wakeup set below lets the
         quit's cycle find it again, so no instant between a closing call and a
         releasing claim can drop a man between two hands.
+
+        No CALL is being answered here, so the departure gets a slot of its own
+        and what it announces goes up the second channel — ONE CALL of this
+        worker's per departure, placed once the departure is over.
         """
+        slot_token = self._request_slot_var.set(RequestSlot())
+        try:
+            await self._execute_transfer_in_slot(user, flag)
+        finally:
+            announced = self.request_slot.worker_events
+            self._request_slot_var.reset(slot_token)
+        if announced:
+            await self.announce_worker_events(announced)
+
+    async def _execute_transfer_in_slot(self, user: str, flag: str) -> None:
+        """The departure itself: claim, wait out an adoption, freeze, settle the flag."""
         with self.dispatch_lock:
             if self._transfer_flags.get(user) != flag:
                 return
@@ -2752,6 +2833,30 @@ class SpaWorker:
                     self._transfer_flags.pop(user, None)
                 self._release_departure(user)
                 self._transfers_changed.set()
+
+    async def announce_worker_events(self, worker_events: list[dict[str, Any]]) -> None:
+        """Send up what happened while no CALL was being served — the second channel.
+
+        Args:
+            worker_events: the events of a slot no reply will ever carry.
+
+        ONE CALL to the vertex, its envelope shaped as a reply's — the photo
+        rides it when due — and folded there the same way. The REPLY is the
+        acknowledgement. A vertex that answers an error or nothing within
+        ``ANNOUNCE_TIMEOUT_SECONDS`` has lost this announcement: counted and
+        logged, never retried — a wire that does not answer is a vertex that is
+        gone, and its death settles what this process held.
+        """
+        data = self._outbound({ENVELOPE_SLOT_WORKER_EVENTS: worker_events})
+        try:
+            await self.call(ANNOUNCE_OP_PATH, data, timeout=ANNOUNCE_TIMEOUT_SECONDS)
+        except (CommanderCallFailed, TimeoutError):
+            self._announce_failures += 1
+            self._logger.exception(
+                "Worker %s: %d worker event(s) lost, the vertex did not take the announcement",
+                self.name,
+                len(worker_events),
+            )
 
     def _claim_departure(self, user: str) -> bool:
         """Take the one departure a user is allowed at a time.

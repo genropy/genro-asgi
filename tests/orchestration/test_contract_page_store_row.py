@@ -32,21 +32,21 @@ from genro_bag.datachange import DataChangeCollector
 from genro_tytx import to_tytx
 
 from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker
-from genro_asgi.spa.orchestration.worker_handler import PING_OP_PATH
 
 WORKER_NAME = "standard_0001"
 
 
 async def sent_events(lane) -> None:
-    """Flush the worker's announcements to the vertex: a ping's REPLY carries
-    them, and the fold reads the envelope before the caller is unblocked."""
-    await lane.worker_handler.connector.call(PING_OP_PATH)
+    """Flush the worker's announcements to the vertex on the worker's own channel:
+    the fold reads the envelope before the announcement is answered."""
+    await lane.announce()
 
 
 @pytest.fixture
 def worker(tmp_path):
     deposit = FreezeHandler(tmp_path / "frozen_users")
     made = SpaWorker(WORKER_NAME, freeze_handler=deposit, deposit_lock_retry_interval=0.01)
+    made.open_request_slot()
     made.new_page("u1", page_id="p1", connection_id="s1")
     return made
 

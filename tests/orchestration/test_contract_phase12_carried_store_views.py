@@ -14,6 +14,7 @@ from genro_asgi.spa.orchestration.spa_worker import GUEST_PREFIX
 
 def watching_guest(lane) -> str:
     """A guest with one page holding a user-store window on ``gnr.batch``."""
+    lane.worker.open_request_slot()
     lane.worker.add_connection("a1b2")
     lane.worker.add_page("page-0", "a1b2")
     guest = f"{GUEST_PREFIX}a1b2"
@@ -30,7 +31,7 @@ async def test_a_page_still_captures_its_user_store_after_the_deposit_round_trip
     # wf:contract: comes back from collect_page — the window is alive, not deaf
     watching_guest(desk_lane)
     desk_lane.worker.change_connection_user("a1b2", "mario")
-    await desk_lane.worker.freeze_connection("a1b2")
+    await desk_lane.worker.freeze_connection("a1b2", f"{GUEST_PREFIX}a1b2")
     await desk_lane.worker.adopt_connection("mario", "a1b2")
 
     desk_lane.worker.user_register.get("mario")["store"]["gnr.batch.b1"] = "running"
@@ -48,7 +49,7 @@ async def test_the_views_watch_the_rows_current_store_bag_after_adoption(desk_la
     desk_lane.worker.add_page("page-1", "a1b2")
     desk_lane.worker.setStoreSubscription(f"{GUEST_PREFIX}a1b2", "page-1", "user", "gnr.other")
     desk_lane.worker.change_connection_user("a1b2", "mario")
-    await desk_lane.worker.freeze_connection("a1b2")
+    await desk_lane.worker.freeze_connection("a1b2", f"{GUEST_PREFIX}a1b2")
     await desk_lane.worker.adopt_connection("mario", "a1b2")
 
     row_store = desk_lane.worker.user_register.get("mario")["store"]

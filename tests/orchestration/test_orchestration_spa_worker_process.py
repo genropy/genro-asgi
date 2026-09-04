@@ -466,7 +466,7 @@ async def test_the_second_request_of_a_connection_costs_no_new_row(wire):
 async def test_a_frozen_user_comes_home_when_the_envelope_says_so(wire, deposit):
     worker = await wire.take()
     await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
-    await worker.freeze_user("mario")
+    await wire.connector.call(FREEZE_USER_OP_PATH, {"user": "mario"}, timeout=5.0)
     assert deposit.read_user_register_item("mario") is not None
 
     reply = await wire.connector.call(
@@ -493,7 +493,7 @@ async def test_a_deposit_that_never_frees_the_folder_answers_the_call_with_its_f
 
 
 async def test_a_site_that_falls_over_answers_with_its_failure_and_frees_the_user(wire):
-    worker = await wire.take()
+    await wire.take()
     # A first request baptises him: the broken one below must not hold him.
     await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
 
@@ -502,7 +502,8 @@ async def test_a_site_that_falls_over_answers_with_its_failure_and_frees_the_use
     )
 
     assert reply["error"] == "RuntimeError: the site fell over"
-    assert await worker.freeze_user("mario") is True
+    frozen = await wire.connector.call(FREEZE_USER_OP_PATH, {"user": "mario"}, timeout=5.0)
+    assert frozen["result"] == {"frozen": "mario"}
 
 
 async def test_a_request_that_names_no_connection_is_answered_with_its_failure(wire):
@@ -565,22 +566,20 @@ async def test_a_user_arriving_puts_the_photo_on_the_envelope_whatever_the_ttl(w
 
 
 async def test_a_user_leaving_puts_the_photo_on_the_envelope_too(wire):
-    worker = await wire.take()
+    await wire.take()
     await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
     await wire.connector.call(PING_OP_PATH, timeout=5.0)
-    worker.plan_transfers(transfer_users=["mario"])
 
-    await worker.freeze_user("mario")
-    reply = await wire.connector.call(PING_OP_PATH, timeout=5.0)
+    frozen = await wire.connector.call(FREEZE_USER_OP_PATH, {"user": "mario"}, timeout=5.0)
 
-    assert announced(reply) == ["user_frozen"]
-    assert reply[ENVELOPE_SLOT_WORKER_SNAPSHOT]["user_count"] == 0
+    assert announced(frozen) == ["user_frozen"]
+    assert frozen[ENVELOPE_SLOT_WORKER_SNAPSHOT]["user_count"] == 0
 
 
 async def test_a_user_waking_puts_the_photo_on_the_envelope_too(wire, deposit):
-    worker = await wire.take()
+    await wire.take()
     await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
-    await worker.freeze_user("mario")
+    await wire.connector.call(FREEZE_USER_OP_PATH, {"user": "mario"}, timeout=5.0)
     await wire.connector.call(PING_OP_PATH, timeout=5.0)
 
     woken = await wire.connector.call(

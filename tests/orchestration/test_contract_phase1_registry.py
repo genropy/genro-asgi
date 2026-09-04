@@ -49,7 +49,9 @@ def deposit(tmp_path):
 
 @pytest.fixture
 def worker(deposit):
-    return SpaWorker(WORKER_NAME, freeze_handler=deposit, deposit_lock_retry_interval=0.01)
+    worker = SpaWorker(WORKER_NAME, freeze_handler=deposit, deposit_lock_retry_interval=0.01)
+    worker.open_request_slot()
+    return worker
 
 
 def announced(worker):
