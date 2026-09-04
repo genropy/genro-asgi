@@ -26,7 +26,7 @@ same person, whatever happened to the process it used to talk to.
 changes for the life of the page. ``user_map`` is the anagraph, one row per
 identity:
 
-    user_map[user] = {group, frozen, on_hold, pending_dbevents, pending_datachanges}
+    user_map[user] = {group, frozen, on_hold}
 
 Reading a row's meaning goes through the predicates (``user_is_frozen``), and
 ``on_hold`` is not read at all: it is RAISED, as ``UserOnHold``, by the one step
@@ -902,8 +902,6 @@ class SpaCommander:
                     "group": row["group"],
                     "frozen": row["frozen"],
                     "on_hold": row["on_hold"],
-                    "pending_dbevents": len(row["pending_dbevents"]),
-                    "pending_datachanges": len(row["pending_datachanges"]),
                 }
                 for user, row in self.user_map.items()
             },
@@ -1152,17 +1150,13 @@ class SpaCommander:
             Whether the freezer was holding anything of his.
 
         Acts on all three indexes, on his barrier — whoever waited for him is
-        woken to find him gone and starts over — and on the freezer, counting
-        what was waiting for him and will now never be delivered.
+        woken to find him gone and starts over — and on the freezer.
         """
-        row = self.user_map.pop(user, None) or {}
+        self.user_map.pop(user, None)
         self._release_hold(user)
         for cid in [cid for cid, owner in self.connection_user_map.items() if owner == user]:
             self.drop_connection(cid)
             del self.connection_user_map[cid]
-        self.counters["pendings_lost"] += len(row.get("pending_dbevents") or ()) + len(
-            row.get("pending_datachanges") or ()
-        )
         had_state = self.freeze_handler.drop_user_folder(user)
         if had_state:
             self.counters["frozen_users_discarded"] += 1
@@ -1222,15 +1216,12 @@ class SpaCommander:
         Args:
             user: the identity now living in a process again.
 
-        Acts on his row and on his barrier: the mark goes off, the wait is over,
-        the slots of what was waiting are emptied.
+        Acts on his row and on his barrier: the mark goes off, the wait is over.
         """
         row = self.user_map[user]
         row["frozen"] = False
         row["on_hold"] = None
         self._release_hold(user)
-        row["pending_dbevents"] = []
-        row["pending_datachanges"] = []
 
     def drop_users(self, users: list[str], *, cause: str) -> None:
         """Take these users out of the machine and discard whatever they left on disk.
@@ -1647,7 +1638,7 @@ class SpaCommander:
         """
         return {
             "user_map": {
-                user: dict(row, frozen=True, on_hold=None, pending_dbevents=[], pending_datachanges=[])
+                user: dict(row, frozen=True, on_hold=None)
                 for user, row in self.user_map.items()
             },
             "connection_user_map": dict(self.connection_user_map),
@@ -1929,13 +1920,7 @@ class SpaCommander:
 
     def _new_row(self) -> dict[str, Any]:
         """The row of an identity nobody knows anything about yet."""
-        return {
-            "group": None,
-            "frozen": False,
-            "on_hold": None,
-            "pending_dbevents": [],
-            "pending_datachanges": [],
-        }
+        return {"group": None, "frozen": False, "on_hold": None}
 
     def _build_orders_logger(
         self, path: str | Path | None, max_bytes: int, backup_count: int

@@ -231,7 +231,6 @@ async def test_a_user_who_is_gone_leaves_nothing_behind(handler, commander, grou
     handler.read_envelope(
         envelope({"op": "new_page", "worker": WORKER_NAME, "page_id": "p1", "connection_id": "cid-a"})
     )
-    commander.user_map[user]["pending_dbevents"] = [{"table": "invoices"}]
 
     handler.read_envelope(envelope({"op": "drop_user", "worker": WORKER_NAME, "user": user}))
 
@@ -239,7 +238,6 @@ async def test_a_user_who_is_gone_leaves_nothing_behind(handler, commander, grou
     assert commander.connection_user_map == {}
     assert commander.page_connection_map == {}
     assert group.user_worker_map == {}
-    assert commander.counters["pendings_lost"] == 1
 
 
 async def test_the_photo_is_read_before_the_worker_events_of_its_own_envelope(
@@ -298,14 +296,12 @@ async def test_an_adoption_turns_the_mark_off_and_drains_what_was_waiting(handle
             {"op": "user_frozen", "worker": WORKER_NAME, "user": user, "placement": None}
         )
     )
-    commander.user_map[user]["pending_datachanges"] = [{"path": "a.b"}]
 
     handler.read_envelope(
         envelope({"op": "user_adopted", "worker": WORKER_NAME, "user": user})
     )
 
     assert commander.user_is_frozen(user) is False
-    assert commander.user_map[user]["pending_datachanges"] == []
 
 
 async def test_a_hold_is_lifted_by_the_freeze_it_was_waiting_for(handler, commander):
