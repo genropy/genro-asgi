@@ -198,6 +198,8 @@ import time
 from collections import Counter
 from typing import Any
 
+from genro_routes import RoutingClass, route
+
 from .envelope_handler import GroupEnvelopeHandler
 from .group_policy import GroupPolicy
 from .exceptions import AssignmentRefused, NoRoomError
@@ -236,6 +238,83 @@ SECONDS_PER_MINUTE = 60.0
 DEPARTURE_ORDER_WAIT_LIMIT = 5.0
 
 __all__ = ["DEAD_STATES", "GroupHandler"]
+
+
+class GroupOperations(RoutingClass):
+    """The ``group`` branch of the group's dispatcher: what a worker may call on its group.
+
+    Today one operation, the announcement — the worker's own channel for what
+    happened while no CALL was being served (#60): the envelope goes into the
+    same fold a REPLY's does, on the handler of the worker that sent it.
+
+    Args:
+        group_handler: the group whose handlers serve the announcements.
+    """
+
+    def __init__(self, group_handler: Any) -> None:
+        self.group_handler = group_handler
+
+    @route()
+    def announce(self, worker: str, **envelope: Any) -> dict[str, Any]:
+        """Fold one announced envelope on the handler of the worker that sent it.
+
+        Args:
+            worker: the name of the announcing process, put in the payload by
+                the worker itself — the tree does not know which wire a CALL
+                came in on.
+            envelope: the payload as the worker shaped it: the events, and the
+                photo when due.
+
+        Returns:
+            Nothing: the REPLY is the acknowledgement.
+        """
+        self.group_handler.worker_handler_map[worker].read_envelope(envelope)
+        return {}
+
+
+class ForwardToCommander(RoutingClass):
+    """The ``commander`` branch of the group's dispatcher: every path under it is forwarded.
+
+    The worker talks to its group; what is the vertex's goes on to the
+    commander's own dispatcher from here, path unconsumed, so the group can move
+    to a process of its own without a path changing (roadmap seed 2). A
+    catch-all on ``default_entry`` (genro-routes' best-match resolution) hands
+    the remaining segments over as they are; a path the commander does not
+    serve raises ``NotFound`` from ITS tree.
+
+    Args:
+        spa_commander: the vertex whose ``commander_dispatcher`` serves the path.
+    """
+
+    def __init__(self, spa_commander: Any) -> None:
+        self.spa_commander = spa_commander
+        self.route.default_entry = "forward"
+
+    @route()
+    def forward(self, *segments: str, **data: Any) -> Any:
+        """Resolve the remaining path on the commander's dispatcher and call it."""
+        return self.spa_commander.commander_dispatcher.route.node("/".join(segments))(**data)
+
+
+class GroupDispatcher(RoutingClass):
+    """The root of what a worker may call up the lane: ``group/…`` here, ``commander/…`` onward.
+
+    One per group. The first segment of a path names the level that serves it,
+    and the tree is the table: ``route.nodes()`` lists both branches without a
+    call being placed.
+
+    Args:
+        group_handler: the group this dispatcher belongs to.
+    """
+
+    def __init__(self, group_handler: Any) -> None:
+        self.group_handler = group_handler
+        self.add_branches(
+            [
+                {"name": "group", "instance": GroupOperations(group_handler)},
+                {"name": "commander", "instance": ForwardToCommander(group_handler.spa_commander)},
+            ]
+        )
 
 
 class GroupHandler:
@@ -383,6 +462,8 @@ class GroupHandler:
             )
         )
         self.envelope_handler = GroupEnvelopeHandler(self, spa_commander.envelope_handler)
+        #: What a worker of this group may call up the lane, as a tree (#59).
+        self.group_dispatcher = GroupDispatcher(self)
         #: Where each user of this group lives, by worker name; None says his
         #: state is somewhere else and he is to be assigned on his next request.
         self.user_worker_map: dict[str, str | None] = {}

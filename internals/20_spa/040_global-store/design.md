@@ -10,7 +10,7 @@ the grant carries the true master state, the release applies exactly what
 the holder drained. All-or-nothing without rollback machinery. Never files
 or shared memory between processes.
 
-Interactions: orchestration (the lane, the lock) · datachanges (its writes travel as changes).
+Interactions: orchestration (the lane, the lock).
 
 ## The lock: grant and release
 

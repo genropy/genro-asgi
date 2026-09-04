@@ -41,9 +41,9 @@ longer serving, which is what the surveillance kills. Whatever it was holding in
 the deposit when the SIGKILL lands stays there: nothing in this stub tidies up,
 because nothing in the foundations does.
 
-The routing keys below are this stub's own: the parent side of the protocol is
-Macro 2's and its names are baptised there. The one exception is the beat, which
-travels on the ratified ping path the handler already uses.
+The stub resolves what the parent asks on a routing tree, as a real worker does
+(#59): the beat under ``group``, the source filter under ``commander``, and its
+own test orders as root-level entries — the keys below are this stub's own.
 """
 
 from __future__ import annotations
@@ -53,6 +53,8 @@ import json
 import os
 from typing import Any
 
+from genro_routes import RoutingClass, route
+
 from genro_asgi.channel.frame import REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
 from genro_asgi.spa.orchestration import FreezeHandler
 from genro_asgi.spa.orchestration.worker_connector import (
@@ -61,8 +63,6 @@ from genro_asgi.spa.orchestration.worker_connector import (
     ENVELOPE_SLOT_WORKER_SNAPSHOT,
 )
 from genro_asgi.spa.orchestration.worker_handler import (
-    PING_OP_PATH,
-    SUBSCRIBED_TABLES_OP_PATH,
     WORKER_ENV_VAR,
 )
 
@@ -91,7 +91,19 @@ __all__ = [
 ]
 
 
-class ChildStub:
+class XT_StubGroupOrders(RoutingClass):
+    """The ``group`` branch: the beat is the one group order this stub takes."""
+
+    def __init__(self, stub: Any) -> None:
+        self.stub = stub
+
+    @route()
+    def ping(self) -> dict[str, Any]:
+        """The health beat: an answer is the whole point of it."""
+        return {}
+
+
+class ChildStub(RoutingClass):
     """One scripted worker process: its wire, its deposit, and its mute switch."""
 
     def __init__(self) -> None:
@@ -102,16 +114,11 @@ class ChildStub:
         self.answering = True
         self.stream: FrameStream | None = None
         self.worker_events: list[dict[str, Any]] = []
-        self.operations = {
-            PING_OP_PATH: self.answer_ping,
-            ANNOUNCE_OP: self.announce,
-            TAKE_LOCK_OP: self.take_deposit_lock,
-            WRITE_CONNECTION_REGISTER_ITEM_OP: self.write_connection_register_item,
-            RELEASE_LOCK_OP: self.release_deposit_lock,
-            GO_MUTE_OP: self.go_mute,
-            SUBSCRIBED_TABLES_OP_PATH: self.take_subscribed_tables,
-        }
-        self.subscribed_tables: set[str] = set()
+        self.add_branches(
+            [
+                {"name": "group", "instance": XT_StubGroupOrders(self)},
+            ]
+        )
 
     @property
     def photo(self) -> dict[str, Any]:
@@ -167,7 +174,7 @@ class ChildStub:
         Empties ``worker_events``: they are delivered once.
         """
         if frame.method == CALL_METHOD and self.answering:
-            result = await self.operations[frame.path](frame.data)
+            result = self.route.node(frame.path)(**(frame.data or {}))
             worker_events, self.worker_events = self.worker_events, []
             await self.stream.write(
                 Frame(
@@ -182,27 +189,12 @@ class ChildStub:
                 )
             )
 
-    async def take_subscribed_tables(self, data: dict[str, Any]) -> dict[str, Any]:
-        """Take the source filter the parent pushes, as a real worker does."""
-        self.subscribed_tables = set(data.get("tables", ()))
-        return {}
-
-    async def answer_ping(self, data: Any) -> dict[str, Any]:
-        """The health beat: an answer is the whole point of it.
-
-        Args:
-            data: whatever the beat carried; the beat carries nothing.
-
-        Returns:
-            Nothing of substance — the photo rides the envelope, not the result.
-        """
-        return {}
-
-    async def announce(self, data: Any) -> dict[str, Any]:
+    @route()
+    def announce(self, worker_events: list[dict[str, Any]]) -> dict[str, Any]:
         """Take the worker events the parent handed down and say them back up.
 
         Args:
-            data: the worker events to make, under ``worker_events``.
+            worker_events: the worker events to make.
 
         Returns:
             How many were taken.
@@ -210,14 +202,15 @@ class ChildStub:
         Sets ``worker_events``: they leave on the reply to this very order, which
         is the only road anything has out of here.
         """
-        self.worker_events.extend(data["worker_events"])
+        self.worker_events.extend(worker_events)
         return {"announcing": len(self.worker_events)}
 
-    async def take_deposit_lock(self, data: Any) -> dict[str, Any]:
+    @route()
+    def take_deposit_lock(self, user: str) -> dict[str, Any]:
         """Take the semaphore of a user.
 
         Args:
-            data: the user whose folder is being entered.
+            user: whose folder is being entered.
 
         Returns:
             Whether the semaphore is now this process's.
@@ -226,13 +219,16 @@ class ChildStub:
         the deposit's own mechanism, and what the vertex must know it knows from
         the suspension it granted before any of this.
         """
-        return {"taken": self.freeze_handler.take_lock(data["user"], self.name)}
+        return {"taken": self.freeze_handler.take_lock(user, self.name)}
 
-    async def write_connection_register_item(self, data: Any) -> dict[str, Any]:
+    @route()
+    def write_connection_register_item(self, user: str, cid: str, payload: Any) -> dict[str, Any]:
         """Write one connection parcel under the semaphore this process holds.
 
         Args:
-            data: the user, the connection identity and the payload to park.
+            user: whose connection is parked.
+            cid: the connection identity.
+            payload: what to park.
 
         Returns:
             The connection identity written.
@@ -240,35 +236,33 @@ class ChildStub:
         Writes the parcel in the deposit.
         """
         self.freeze_handler.write_connection_register_item(
-            data["user"],
-            data["cid"],
-            data["payload"],
+            user,
+            cid,
+            payload,
             writer=self.name,
             cause="freeze",
             group=self.group,
         )
-        return {"written": data["cid"]}
+        return {"written": cid}
 
-    async def release_deposit_lock(self, data: Any) -> dict[str, Any]:
+    @route()
+    def release_deposit_lock(self, user: str) -> dict[str, Any]:
         """Give the semaphore back; whatever was parked stays behind.
 
         Args:
-            data: the user whose folder is being left.
+            user: whose folder is being left.
 
         Returns:
             The user released.
 
         Removes the lock from the deposit.
         """
-        user = data["user"]
         self.freeze_handler.release_lock(user, self.name)
         return {"released": user}
 
-    async def go_mute(self, data: Any) -> dict[str, Any]:
+    @route()
+    def go_mute(self) -> dict[str, Any]:
         """Answer this one, then stop answering: the mute worker of the drill.
-
-        Args:
-            data: whatever the order carried; the order carries nothing.
 
         Returns:
             That it has gone mute — the last thing this process ever says.

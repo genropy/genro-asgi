@@ -96,7 +96,7 @@ frozen tag.
 two-stage demux, HTTP translation — 503 with `Retry-After` for a refusal,
 502 for a site failure) → `SpaCommander` (global indexes, lifecycle,
 barrier, request chain, single-writer fold via `EnvelopeHandler`, freezer
-via `FreezeHandler`, `DeliveryDesk`) → n `GroupHandler` (placement,
+via `FreezeHandler`) → n `GroupHandler` (placement,
 capacity, growth and shrink) → n `WorkerHandler` (process, wire,
 surveillance) → `SpaWorker` (the live users/connections/pages state and the
 hosted WSGI site behind `WsgiSeam`). Usersticky principle unchanged: ALL
@@ -117,32 +117,31 @@ it differs from the one that came in). `connection_user_map` and
 files one parcel per connection under that same id. The cookie lives 24
 hours, the life the site gives its own connection.
 
-**Data plane (landed 2026-08-20, 14 phases).** Datachanges and dbevents are
-delivered ADDRESSED through the `DeliveryDesk` (subscriptions, pending
-mailboxes, age-bounded events); the global store lives ONLY on the
-commander — no replicas — with reads as calls on the lane (`store_get`) and
-read-modify-write through the lock grant/release, the grant carrying the
-true master state; never files or shared memory between processes.
-
-**The source filter is pushed, and the slot always delivers (landed
-2026-09-02).** A worker filters the commits of its site with
-`subscribed_tables`, fed ONLY by the commander's `/op/subscribed_tables` CALL:
-`SpaCommander.broadcast_subscribed_tables` sends the whole set to every living
-worker of every group on every transition of the global set — the first
-subscriber of a table, the last one gone, through `subscribe_table`,
-`drop_page` and the wake's `install_page_subscriptions` — and a newborn gets it
-at its first presentation. The replies of `subscribe_table` and `exchange`
-carry no table list any more. A worker filters with a set at most one CALL's
-flight out of date: the accepted risk, measured against the tens of seconds
-that separate a page's subscription from its first commit. And every request
-delivers what its slot still holds before it returns:
-`SpaWorker.deliver_slot_deposits` sits in the `finally` of `_serve_on_thread`
-and sends the slot's deposits up `/desk/deposit`, which files them in the
-subscribers' queues and retires nothing — there is no page to answer — so a
-`rootPage` webhook, or a request that failed after its commit, announces like
-any page. `collect_page` keeps its two jobs, delivering AND retiring, and
-after it the slot is empty, so nothing is delivered twice. `own_dbevents`, the
-hidden transaction, never leave the process.
+**The global store is the core's; the genropy delivery machinery is not (#59
+block 4, 2026-09-04).** The global store lives ONLY on the commander — no
+replicas — with reads as calls on the lane (`store_get`) and read-modify-write
+through the lock grant/release, the grant carrying the true master state; never
+files or shared memory between processes. Datachanges, dbevents, the table
+subscriptions and their source filter, the addressed writes and the
+end-of-request exchange left the core with `DeliveryDesk`, `SubscriptionIndex`
+and the twelve site verbs of `SpaWorker` (`subscribeTable`, `notifyDbEvents`,
+`collect_page`, `set_datachange`…): they live in genropy-asgi, attached through
+the seams below. What the core offers them: `CommanderOperations.add_branches`
+for the consumer's own branch under `/commander/…`, `CommanderOrders.add_branches`
+for its orders to the worker, `build_request_slot` for what a request carries,
+`on_request_served` for the tail of every request, and
+`SpaCommander.on_worker_presented(worker_handler)` — called by
+`WorkerHandler.read_envelope` on the envelope that carries the presentation (the
+`pid` slot, said at birth and never again), once per process, a no-op in the
+core: the seam the bridge pushes its source filter from, on a task of its own,
+never holding up the envelope — and `SpaCommander.envelope_handler`, a property
+returning the last layer of the envelope chain (`CommanderEnvelopeHandler`),
+read once by every `GroupHandler` at birth: the bridge's commander returns its
+subclass, whose `on_new_page` calls the core's and then reads the tables the
+newborn page subscribes, which the core's layer ignores (owner, 2026-09-04: a
+property, not a `_class` attribute nor a factory method). `RequestSlot` carries `worker_events`,
+`connection_id` and `login_previous_user` and nothing else; the census of the
+worker and of the vertex show no genropy entry.
 
 **Mobility and deaths.** One path only: hold → freeze → reassign →
 unfreeze, used for compaction, ordered replacement and wake — the direct
@@ -330,56 +329,21 @@ that immediately occupies it; retirement records its suppression or the absence 
 absorbable spare. The journal observes policy — it never changes placement,
 growth, retirement or restart behaviour.
 
-**The page store lives on the row, under the row's lock (landed 2026-09-02).**
-The page register row carries `datachanges` and `datachanges_idx`, the daemon's
-names, and no collector object: pending changes used to live outside the parcel
-and were lost on a freeze and on a transfer, the queue as a row field travels
-with the row. `RegisterRegistry.subscribe_page_store` attaches to the row's
-store the subscriber that queues, with `key.reason == "serverChange"`, every
-update, insert, delete and transaction mutation whose path falls under a prefix
-of `page["subscribed_paths"]` — autocreated parents skipped, prefixes matched
-segment-aware, the set read at event time so a prefix added later captures from
-then on. `SpaWorker.collect_page` empties the queue and resets the index, its
-two jobs unchanged. Every register row — user, connection, page — is born with
-`item_lock`, an exclusive re-entrant `threading.RLock()` never carried by a
+**The row's lock is the core's; what a page queues is the consumer's (#59
+block 4, 2026-09-04).** Every register row — user, connection, page — is born
+with `item_lock`, an exclusive re-entrant `threading.RLock()` never carried by a
 parcel, and every access to the row and to its Bag takes it: one access at a
 time per item, items in parallel, the in-process image of the daemon's single
 thread plus its `lock_item`, with no expiry because an in-process `with` always
 exits. Nesting in the core: `dispatch_lock` outside, `item_lock` inside. The
-user store keeps its `user_view` and `new_collector` — another round.
-
-**An addressed datachange goes to the row when it can, to the desk at once when
-it cannot (landed 2026-09-03).** `set_datachange`, `reset_datachanges` and
-`drop_datachanges` addressed at a page of the CALLER'S OWN user, when that page
-lives on this worker, act on the target row directly: the change is appended
-under the row's `item_lock` through `RegisterRegistry.append_page_datachange`,
-which stamps the next `datachanges_idx` — so the addressed write and the
-`serverChange` subscriber share ONE list and ONE index — and the write is in the
-parcel, never through the desk. The same user is the condition because his
-freeze waits for the caller's own pending call, so the write always precedes the
-photo; another user's freeze does not wait. Every other address — a page of
-another user even on this worker, `filters`, the STATE kinds — leaves at once
-from the request thread as ONE CALL, `/desk/on_datachange`
-(`DeliveryDesk.op_on_datachange`), filed the moment the verb runs; the desk is
-the authority on existence and answers `{"filed": False}` for a target nobody
-holds, which the verb REPORTS in its answer (`filed`) and never raises — the
-daemon returned in silence on a missing item, genropy #1253 gives that silence a
-boolean, and a page closed a moment ago or born in this very request is not the
-caller's error. `RequestSlot` carries no `datachanges` and `op_exchange` takes
-none, so a request that never collects loses nothing. **Delivery is in arrival
-order and nothing expires (landed 2026-09-03).** Every queued item is stamped
-`arrival_ts` — `time.time()` at the append, on the row
-(`append_page_datachange`) and at the desk (`file_datachange`, `file_dbevent`),
-one wall clock for every process of the machine — and `collect_page` merges the
-row's list with the desk's queue on it (`heapq.merge`, each list monotonic by
-construction: the row grows under its lock, the desk's queue on the commander's
-one loop) instead of appending and sorting by `change_ts`: the order the
-daemon's single list would have had, the writer's own `change_ts` untouched.
-The merged list is numbered as one list; the deposits stay their own key. The
-300 s age bound is gone: what waits is delivered whatever its age, as the
-daemon did, and the queue dies with the page. Compared with the daemon: the same
-algorithm on the row, with the desk as the remote leg the daemon paid one Pyro
-call per write for.
+page row of the core carries `store` and the worker's own fields, nothing of a
+hosted site: the daemon's `datachanges`/`datachanges_idx` queue, the
+`serverChange` subscriber, the user view and the three subscription sets left
+with the delivery machinery and live in genropy-asgi's row class and registry.
+The core keeps the two seams they hang from — `RegisterRegistry.subscribe_page_store`,
+called by `new_page` after the birth, and `detach_page`, called before a row is
+dropped and before its store is copied for a parcel — both empty here, beside
+`new_store`.
 
 **Worker events travel on two channels, never through one queue (landed
 2026-09-04, #60).** An event born while a CALL is being served — a site verb on
@@ -394,14 +358,64 @@ and only that request's tail calls `freeze_connection` — a ping ending during 
 `doLogin` evicts nobody (the shared `_login_previous_user_map` let it, reproduced
 in the bridge on 2026-09-04). The ONE producer answering no CALL, the quit's
 transfer cycle, gives each departure a slot of its own and sends what it
-announced with ONE CALL of the worker's, `/op/announce`, which `WorkerHandler`
-hands to the same fold a reply's envelope goes through; the REPLY is the
+announced with ONE CALL of the worker's, `/group/announce`, which the group's
+dispatcher hands to the same fold a reply's envelope goes through; the REPLY is the
 acknowledgement, a vertex that answers an error or nothing within
 `ANNOUNCE_TIMEOUT_SECONDS` loses it, counted and logged, never retried. This is
 the two-channel mechanism of the pre_refactoring stack (`offer_event` on the
 per-CALL sink, `offer_lifecycle` on the outbox) without the outbox's `seq`/ack.
 In tests, `XT_DeskLane.verb` announces after each verb and `attach_wire` gives a
 unit-test worker a stub wire and a slot.
+
+**What a worker calls up the lane is a routing tree (landed 2026-09-04, #59
+block 1).** The CALLs a worker places on the lane are resolved by name with
+genro-routes, the same machinery the HTTP side uses — no chain of `if` on the
+path, no hand-written `getattr`. The first segment names the LEVEL that serves:
+`group/…` for the group's own operations, `commander/…` for the vertex's. Each
+`GroupHandler` hosts `group_dispatcher` (`GroupDispatcher`): its `group` branch is
+`GroupOperations` (today `announce`, the worker's second channel, folded on the
+handler of the worker named in the payload), its `commander` branch forwards the
+rest, path unconsumed, to `SpaCommander.commander_dispatcher`
+(`CommanderOperations`: the leaf `observation`, the branch `store` =
+`GlobalStoreOperations` with `set`/`get`/`del`/`lock`/`unlock`).
+`WorkerHandler.serve_child_call` is
+one line: resolve on the group's tree and call. A path nobody serves raises
+`NotFound`, a payload that does not fit the signature raises before the body
+runs, and `route.nodes()` on either dispatcher lists what it offers. A consumer
+attaches its own operation class under the commander's dispatcher with
+`add_branches`, once, from its subclass of the commander — composition, never a
+subclass of the worker or the vertex. The worker's parent will be its group
+(roadmap seed 2): the boundary is drawn today and the paths survive it. The
+orders going DOWN are the same picture on the other end (block 2): `SpaWorker`
+hosts `worker_dispatcher` (`WorkerDispatcher`) with the branch `group` =
+`GroupOrders` — who ISSUES the order: `ping`, `quit`, `drop_user`,
+`drop_connection`, `freeze_user` — and the branch `commander` = `CommanderOrders`
+(`observe`, `census`, `eval`); `answer_call` resolves the
+path, awaits a coroutine, and sends the one REPLY, result or error; the http
+form is told by its payload and stays out of the tree. `quit` flags everybody
+and puts the departure on a task of its own, so the REPLY is on the wire first
+(`SpaWorker.begin_quit`). `child_stub` resolves on a tree of its own and is no
+longer taught op by op.
+
+**The rows are classes, and the seams a consumer overrides are named (landed
+2026-09-04, #59 block 3).** Every register row is a `dict` of the registry's row
+class — `UserRow`, `ConnectionRow`, `PageRow` in `spa/register_row.py` — so
+`row["field"]` reads everywhere as before, and the class carries what the worker
+used to hard-code: `default_fields` (born with, the row's own `item_lock`
+included), `fields_left_behind` (what the parcel does not carry), `fields_replayed`
++ `replay_fields` (what travels but is put back after the birth), and
+`announcement_fields` (what the `new_page` event carries beside the identities).
+`Register` builds its items as its `row_class`; `RegisterRegistry` names the three
+classes (`user_row_class`, `connection_row_class`, `page_row_class`) and a
+consumer subclasses the row and the registry, as genropy-asgi already does for
+`new_store`. Beside the rows: `SpaWorker.build_request_slot` (the slot of every
+request, on the loop and on the pool thread), `SpaWorker.on_request_served` (the
+`finally` of the stitching; the core leaves nothing on the slot),
+`SpaCommander.new_global_store` and `apply_global_store_changes` (the vertex's
+data — the fourth opaque datum, a new Bag by default at all four levels, the type
+a consumer chooses must be one the TYTX codec knows because the grant carries the
+whole store down the lane). The parcel stays a plain dict built from the row:
+no row class reaches the disk.
 
 **Not yet built (second pass).** The deliberate reboot command on `_server`
 (`reboot now`/`reboot wait N`, notify_user, the consumer service-message

@@ -116,12 +116,6 @@ def test_rows_are_born_with_live_stores(worker):
     page = worker.page_register.get("p1")
     assert isinstance(user["store"], Bag)
     assert isinstance(page["store"], Bag)
-    assert page["datachanges"] == []
-    assert page["datachanges_idx"] == 0
-    assert page["user_view"] is None
-    assert page["dbevents"] == []
-    assert page["subscribed_paths"] == set()
-    assert page["store_subscriptions"] == set()
 
 
 def test_caller_fields_are_stored_verbatim_on_the_rows(worker):

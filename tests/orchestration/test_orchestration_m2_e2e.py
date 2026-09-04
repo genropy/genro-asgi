@@ -285,13 +285,7 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     # The fold read that envelope: the births it announced are the ones the vertex
     # had already written at the minting, so they change nothing — and the photo is
     # filed on the handler, which is the only thing the bottom layer does with it.
-    assert commander.user_map["mario"] == {
-        "group": None,
-        "frozen": False,
-        "on_hold": None,
-        "pending_dbevents": [],
-        "pending_datachanges": [],
-    }
+    assert commander.user_map["mario"] == {"group": None, "frozen": False, "on_hold": None}
     assert handler.worker_snapshot == photo
 
     # A second user arrives: one of them is about to be parked, the other has

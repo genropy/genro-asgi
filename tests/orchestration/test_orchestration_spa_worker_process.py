@@ -389,9 +389,9 @@ async def test_the_beat_is_answered_and_asks_for_nothing_else(wire):
 async def test_an_op_nobody_here_knows_is_refused_by_name(wire):
     await wire.take()
 
-    reply = await wire.connector.call("/op/nothing_of_the_kind", timeout=5.0)
+    reply = await wire.connector.call("/group/nothing_of_the_kind", timeout=5.0)
 
-    assert reply["error"] == "unknown op: '/op/nothing_of_the_kind'"
+    assert reply["error"].startswith("NotFound")
 
 
 # ----------------------------------------------------------------------

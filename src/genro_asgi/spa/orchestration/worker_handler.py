@@ -116,68 +116,62 @@ from .exceptions import (
     NoRoomError,
     WorkerQuittingError,
 )
-from .worker_connector import WorkerConnector
+from .worker_connector import ENVELOPE_SLOT_PRESENTATION, WorkerConnector
 from .worker_process import ForkedProcess, SpawnedProcess, WorkerProcess
 
 #: The environment variable the spawn payload travels in, as today.
 WORKER_ENV_VAR = "GENRO_ASGI_WORKER"
 
-#: The routing key of the health beat, and nothing else: it asks whether the
-#: process is alive, it does not ask for the photo, which rides every envelope
-#: on its own. Redefined here with its ratified value rather than imported: the
-#: legacy machine dies at the cutover.
-PING_OP_PATH = "/op/ping"
+#: The orders going DOWN are paths on the worker's own tree (#59, D59-14): the
+#: first segment names who ISSUES the order — ``group`` for the group's
+#: (orchestration), ``commander`` for the vertex's — and the last one the
+#: operation, a ``@route`` method of ``GroupOrders`` or ``CommanderOrders``.
+#:
+#: The health beat, and nothing else: it asks whether the process is alive, it
+#: does not ask for the photo, which rides every envelope on its own.
+PING_OP_PATH = "/group/ping"
 
 #: The debug door: evaluate one expression inside the child, repr back.
-EVAL_OP_PATH = "/op/eval"
+EVAL_OP_PATH = "/commander/eval"
 
 #: The structured reading of a whole process: every register, JSON-safe, in
 #: one answer. Unlike the photo it is not periodic and nobody acts on it — it
 #: exists to be shown to a human.
-CENSUS_OP_PATH = "/op/census"
+CENSUS_OP_PATH = "/commander/census"
 
 #: The switch of the observation: whether the process reports every register
 #: mutation of its own up the lane, as it happens. Off unless somebody is
 #: watching — an observer must not change what it observes.
-OBSERVE_OP_PATH = "/op/observe"
-
-#: The routing key of the source filter: the whole set of tables somebody
-#: subscribes somewhere, pushed down by the commander on every transition of it
-#: and at a worker's first presentation. The worker never asks for it.
-SUBSCRIBED_TABLES_OP_PATH = "/op/subscribed_tables"
+OBSERVE_OP_PATH = "/commander/observe"
 
 #: The routing key of the order to leave: the process drains and ends itself.
 #: Its answer comes back at once, carrying the photo with every user flagged for
 #: cession — the level above parks them all in one read.
-QUIT_OP_PATH = "/op/quit"
+QUIT_OP_PATH = "/group/quit"
 
 #: The routing key that takes one user off the process, and the one that takes
 #: off a single connection of his. Each names the verb of ``SpaWorker`` that
 #: serves it, and carries that verb's own argument.
-DROP_USER_OP_PATH = "/op/drop_user"
-DROP_CONNECTION_OP_PATH = "/op/drop_connection"
+DROP_USER_OP_PATH = "/group/drop_user"
+DROP_CONNECTION_OP_PATH = "/group/drop_connection"
 
 #: The routing key of the ordered freeze of ONE user: the worker waits for
 #: whatever holds him — a pull bringing him home, his calls in flight — parks
 #: him, and only then answers, so the REPLY IS the confirmation. A user this
 #: process does not host is refused out loud in that same REPLY.
-FREEZE_USER_OP_PATH = "/op/freeze_user"
+FREEZE_USER_OP_PATH = "/group/freeze_user"
 
 #: The routing key of the worker's OWN announcement: the envelope of what
 #: happened in this process while no CALL was being served — the transfer cycle
 #: of a quit — folded exactly as the envelope of a REPLY is. Every other worker
-#: event rides the REPLY of the CALL that caused it (owner, 2026-09-04).
-ANNOUNCE_OP_PATH = "/op/announce"
+#: event rides the REPLY of the CALL that caused it (owner, 2026-09-04). It is
+#: the group's operation: the worker announces to ITS group (#59, D59-14).
+ANNOUNCE_OP_PATH = "/group/announce"
 
 #: How long an ordered departure may take before this handler stops waiting for
 #: it, in seconds. Past it the process is killed and the death that follows is an
 #: abort like any other: whoever was leaving had its time.
 QUIT_TIMEOUT_SECONDS = 30.0
-
-#: How long a subscribed-tables push waits for the worker's answer before the
-#: task gives up: a worker alive but deaf must not pile one parked task per
-#: transition of the set. The next transition sends the whole set again.
-SUBSCRIBED_TABLES_PUSH_TIMEOUT_SECONDS = 5.0
 
 #: Seconds between two beats of the same process — the cadence, not a clock.
 PROCESS_PING_INTERVAL = 5.0
@@ -207,8 +201,6 @@ __all__ = [
     "PROCESS_PING_TIMEOUT",
     "QUIT_OP_PATH",
     "QUIT_TIMEOUT_SECONDS",
-    "SUBSCRIBED_TABLES_PUSH_TIMEOUT_SECONDS",
-    "SUBSCRIBED_TABLES_OP_PATH",
     "WORKER_ENV_VAR",
     "WorkerHandler",
 ]
@@ -323,8 +315,6 @@ class WorkerHandler:
         self._running_since: float | None = None
         self._observation_switched = False
         self._observation_switch_tasks: set[asyncio.Task[Any]] = set()
-        self._subscribed_tables_pushed = False
-        self._subscribed_tables_push_tasks: set[asyncio.Task[Any]] = set()
 
     @property
     def life_seconds(self) -> float:
@@ -495,15 +485,18 @@ class WorkerHandler:
             What goes back down, as the chain composed it — nothing at all when
             there is no envelope going the other way.
 
-        Stamps the instant this process was last heard from.
+        Stamps the instant this process was last heard from. The envelope that
+        carries the presentation — the ``pid`` slot, said at birth and never
+        again — is told to the vertex through ``on_worker_presented``, the seam
+        a consumer overrides to speak to a newborn process.
         """
         self._last_envelope_ts = time.monotonic()
-        if not self._observation_switched and self.group_handler.spa_commander.observation_watched:
+        spa_commander = self.group_handler.spa_commander
+        if not self._observation_switched and spa_commander.observation_watched:
             self._observation_switched = True
             self._fire_observation_switch()
-        if not self._subscribed_tables_pushed:
-            self._subscribed_tables_pushed = True
-            self.push_subscribed_tables()
+        if ENVELOPE_SLOT_PRESENTATION in envelope:
+            spa_commander.on_worker_presented(self)
         return self.envelope_handler(envelope)
 
     def _fire_observation_switch(self) -> None:
@@ -512,56 +505,26 @@ class WorkerHandler:
         self._observation_switch_tasks.add(task)
         task.add_done_callback(self._observation_switch_tasks.discard)
 
-    def push_subscribed_tables(self) -> None:
-        """Send this process the current source filter, without waiting for it."""
-        task = asyncio.create_task(self._push_subscribed_tables())
-        self._subscribed_tables_push_tasks.add(task)
-        task.add_done_callback(self._subscribed_tables_push_tasks.discard)
-
-    async def _push_subscribed_tables(self) -> None:
-        """Read the desk's set at send time and put it on this process's wire.
-
-        A process whose wire is gone is logged at debug level and left alone: a
-        dead worker has no commits left to filter. One that does not answer
-        within ``SUBSCRIBED_TABLES_PUSH_TIMEOUT_SECONDS`` is logged the same way:
-        the next transition carries the whole set again.
-        """
-        tables = self.group_handler.spa_commander.delivery_desk.subscribed_tables
-        try:
-            await self.connector.call(
-                SUBSCRIBED_TABLES_OP_PATH,
-                {"tables": tables},
-                timeout=SUBSCRIBED_TABLES_PUSH_TIMEOUT_SECONDS,
-            )
-        except ConnectionError:
-            self._logger.debug("Worker %s: the subscribed-tables push found no wire", self.name)
-        except TimeoutError:
-            self._logger.debug("Worker %s: the subscribed-tables push got no answer", self.name)
-
     def serve_child_call(self, path: str, data: dict[str, Any]) -> Any:
-        """Hand a CALL the child placed on the lane to the desk that serves it.
+        """Resolve a CALL the child placed on the lane on the group's dispatcher, and call it.
 
         Args:
-            path: the routing key the child chose.
-            data: its payload.
+            path: the routing key the child chose — ``/group/…`` or ``/commander/…``.
+            data: its payload, handed over as the operation's keyword arguments.
 
         Returns:
-            Whatever the desk answers, which the wire puts in the REPLY; an empty
-            answer for the announcement, whose whole effect is the fold.
+            Whatever the operation answers, sync or awaitable; the wire awaits
+            it if needed and puts it in the REPLY.
 
         Raises:
-            AttributeError: the desk serves no op of that name; the wire turns it
-                into an error REPLY, so the child is answered either way.
+            NotFound: no operation at that path, on either tree; the wire turns
+                it into an error REPLY, so the child is answered either way.
+            TypeError: the payload does not fit the operation's signature —
+                refused before the body runs, the same way.
 
-        The announcement is the second channel of the worker events: the
-        envelope goes into the same fold a REPLY's does. Nothing else is written
-        here: the queues and the subscriptions are the vertex's, and this
-        handler is only the rung the call climbs.
+        This handler is only the rung the call climbs: nothing is written here.
         """
-        if path == ANNOUNCE_OP_PATH:
-            self.read_envelope(data)
-            return {}
-        return self.group_handler.spa_commander.delivery_desk.serve_child_call(path, data)
+        return self.group_handler.group_dispatcher.route.node(path)(**data)
 
     async def launch_process(self) -> None:
         """Open the wire if it is closed, spawn the child, wait for it to present itself.
@@ -723,10 +686,12 @@ class WorkerHandler:
         """The wire died: the parked wait says whether anybody was expecting it.
 
         Sets ``state`` — ``quitted`` when a wait was live, ``aborted`` when the
-        death was nobody's order — rings the group's wake, and gives the desk
+        death was nobody's order — rings the group's wake, and gives the vertex
         back the store grant this process was holding, if it held one.
         """
-        self.group_handler.spa_commander.delivery_desk.release_worker_lock(self.name)
+        self.group_handler.spa_commander.commander_dispatcher.global_store.release_worker_lock(
+            self.name
+        )
         ordered = self._settle_death_wait()
         if ordered:
             self.state = "quitted"

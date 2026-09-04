@@ -130,7 +130,6 @@ function keyValues(pairs) {
   return grid;
 }
 
-function total(counts) { return Object.values(counts || {}).reduce((sum, n) => sum + n, 0); }
 
 /* ---------- the commander, one card per SPA front ---------- */
 function renderCommander() {
@@ -167,16 +166,6 @@ function renderCommander() {
       ]));
       card.appendChild(groupCard);
     }
-    const desk = pool.delivery_desk;
-    const deskCard = make("div", "card");
-    deskCard.appendChild(make("h3", null, "delivery desk"));
-    deskCard.appendChild(keyValues([
-      ["subscribed tables", desk.subscribed_tables.join(", ") || "none"],
-      ["queued dbevents", total(desk.page_dbevent_map)],
-      ["queued datachanges", total(desk.page_datachange_map)],
-      ["queued store changes", total(desk.user_store_change_map)],
-    ]));
-    card.appendChild(deskCard);
     target.appendChild(card);
   }
 }
@@ -238,8 +227,6 @@ function renderWorkers() {
       }
       card.appendChild(workerTree(worker));
       card.appendChild(keyValues([
-        ["subscribed tables", worker.subscribed_tables.join(", ") || "none"],
-        ["dbevent deposits", total(worker.dbevent_deposit)],
         ["cookies mapped", Object.keys(worker.cid_connection_map).length],
       ]));
       target.appendChild(card);

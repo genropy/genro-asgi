@@ -52,10 +52,15 @@ __all__ = ["Register"]
 class Register:
     """One in-process dataset with secondary indexes."""
 
-    def __init__(self, name: str, index_attrs: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self, name: str, index_attrs: tuple[str, ...] = (), row_class: type = dict
+    ) -> None:
         """Initialize an empty register named ``name`` indexing ``index_attrs``."""
         self._name = name
         self._index_attrs = index_attrs
+        #: The class every item is built as: a dict, or a consumer's dict subclass
+        #: that seeds its own defaults (see ``register_row``).
+        self.row_class = row_class
         self._items: dict[str, dict[str, Any]] = {}
         self._indexes: dict[str, dict[Any, set[str]]] = {attr: {} for attr in index_attrs}
 
@@ -94,7 +99,7 @@ class Register:
             raise ValueError(f"key already exists in register {self._name!r}: {key!r}")
         if "register_item_id" in fields:
             raise ValueError(f"register_item_id is reserved, seeded by create: {key!r}")
-        item = {"register_item_id": key, **fields}
+        item = self.row_class({"register_item_id": key, **fields})
         self._items[key] = item
         for attr in self._index_attrs:
             self._indexes[attr].setdefault(item.get(attr), set()).add(key)

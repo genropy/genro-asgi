@@ -5,9 +5,9 @@
 The world that hosts a single-page site with live server-side state, standing on
 the machine of [10_server](../10_server/README.md). A stateless front takes the request, an
 orchestration chain places every user in one process and keeps all his pages
-there, and a data plane carries what one page changes to the pages that care. The
-last entry states the contract the hosted site implements, so the core never
-learns the site's own logic.
+there, and the hosted site's own data plane lives in its bridge, attached through
+named seams. The last entry states the contract the hosted site implements, so
+the core never learns the site's own logic.
 
 | Entry | In one line |
 |---|---|
@@ -15,7 +15,5 @@ learns the site's own logic.
 | [020 orchestration](020_orchestration/README.md) | many users with live state, scaled across processes, never split |
 | [030 channel](030_channel/README.md) | the wire: frames, hub, the lane |
 | [040 global-store](040_global-store/README.md) | one shared state, safe read-modify-write |
-| [050 datachanges](050_datachanges/README.md) | what one page changes, the others must see |
-| [060 dbevents](060_dbevents/README.md) | the database changed a table; the page must learn it |
 | [070 console](070_console/README.md) | ask a live pool the questions nobody predicted |
 | [080 bridge-contract](080_bridge-contract/README.md) | what genropy-asgi implements and consumes — generalized core, site logic in the bridge |

@@ -72,13 +72,7 @@ def test_whoever_shows_up_is_minted_before_anything_descends(commander):
 
     assert user == f"{GUEST_PREFIX}cid-a"
     assert commander.connection_user_map == {"cid-a": user}
-    assert commander.user_map[user] == {
-        "group": None,
-        "frozen": False,
-        "on_hold": None,
-        "pending_dbevents": [],
-        "pending_datachanges": [],
-    }
+    assert commander.user_map[user] == {"group": None, "frozen": False, "on_hold": None}
 
 
 def test_a_cid_already_known_is_answered_and_nothing_is_written_twice(commander):
@@ -136,15 +130,12 @@ def test_a_freeze_ends_the_wait_it_was_the_reason_for(commander):
     assert minted(commander, "cid-a") == user
 
 
-def test_an_adoption_empties_the_row_of_what_was_waiting(commander):
+def test_an_adoption_takes_the_mark_off(commander):
     user = minted(commander, "cid-a")
     commander.mark_user_frozen(user)
-    commander.user_map[user]["pending_dbevents"] = [{"table": "invoices"}]
 
     commander.mark_user_adopted(user)
 
-    assert commander.user_map[user]["pending_dbevents"] == []
-    assert commander.user_map[user]["pending_datachanges"] == []
     assert commander.user_is_frozen(user) is False
 
 
@@ -162,7 +153,6 @@ def test_a_user_who_is_gone_takes_his_connections_pages_and_freezer_state_with_h
     commander.connection_user_map["cid-b"] = user
     commander.page_connection_map["p1"] = "cid-a"
     commander.page_connection_map["p2"] = "cid-b"
-    commander.user_map[user]["pending_datachanges"] = [{"path": "a.b"}, {"path": "a.c"}]
     parked_state(commander, user)
 
     assert commander.drop_user(user) is True
@@ -170,7 +160,6 @@ def test_a_user_who_is_gone_takes_his_connections_pages_and_freezer_state_with_h
     assert commander.user_map == {}
     assert commander.connection_user_map == {}
     assert commander.page_connection_map == {}
-    assert commander.counters["pendings_lost"] == 2
     # Nothing of an identity nobody answers for is left behind: what the sweep of
     # the freezer finds later is only what a row lost WITHOUT a drop.
     assert commander.freeze_handler.user_folders == set()
@@ -429,7 +418,6 @@ async def test_the_saved_rows_are_normalised_for_a_boot_that_adopts_nobody(comma
     commander.group_map["standard"] = QuietGroup()
     commander.record_connection_user("cid-a", "mario")
     commander.hold_user("mario", "moving")
-    commander.user_map["mario"]["pending_datachanges"] = [{"stale": True}]
 
     await commander.quit()
 
@@ -437,7 +425,6 @@ async def test_the_saved_rows_are_normalised_for_a_boot_that_adopts_nobody(comma
     row = saved["user_map"]["mario"]
     assert row["frozen"] is True
     assert row["on_hold"] is None
-    assert row["pending_datachanges"] == []
 
 
 async def test_a_quit_that_dies_before_the_rename_leaves_no_photo(commander, monkeypatch):
