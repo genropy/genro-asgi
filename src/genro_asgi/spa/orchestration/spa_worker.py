@@ -160,7 +160,7 @@ cannot open, because whoever comes back either is already in the pendings and
 his freeze waits for him, or arrives after the fold parked him and starts again
 from the vertex with the verdict in hand.
 
-**The ordered freeze.** ``/op/freeze_user`` parks ONE user on the parent's
+**The ordered freeze.** ``/group/freeze_user`` parks ONE user on the parent's
 order. The worker only executes: it waits for whatever holds him — a pull
 bringing him home, his calls in flight — parks him through the same departure
 every road uses, and only then answers, so the REPLY IS the confirmation and
@@ -201,13 +201,16 @@ for a busy folder is a coroutine on the loop, because whoever holds that
 semaphore is working, and a thread parked here would be a thread not doing that
 work.
 
-**Four ops, and one form.** ``/op/ping`` answers the health beat and nothing else
-— are you alive. The other three are named after the verb of this class that
-serves them and carry that verb's own argument: ``/op/quit``, answered AT ONCE
-with the photo that shows every user flagged for cession, the departures running
-after the answer because the process ends with them; ``/op/drop_user`` and
-``/op/drop_connection``, answered when the drop is done, so the worker events it
-made ride that same reply. The http CALL form (an ``http`` dict beside the
+**The orders are a tree, and one form.** Every order the parent gives is
+resolved by name on ``worker_dispatcher`` (#59): the first segment names who
+issues it — ``group`` for the orchestration, ``commander`` for the vertex — and
+the last one is a ``@route`` method of ``GroupOrders`` or ``CommanderOrders``.
+``/group/ping`` answers the health beat and nothing else — are you alive.
+``/group/quit`` is answered AT ONCE with the photo that shows every user flagged
+for cession, the departure running on a task of its own after the answer because
+the process ends with it; ``/group/drop_user`` and ``/group/drop_connection`` are
+answered when the drop is done, so the worker events it made ride that same
+reply. A path nobody serves answers ``NotFound``. The http CALL form (an ``http`` dict beside the
 ``identity`` and the ``user_frozen`` verdict) is a request the front packed
 whole: it lands on the unified row FIRST — the store adopted when the verdict
 authorises it, the connection looked up in the deposit by itself, the clocks
@@ -243,6 +246,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import inspect
 import copy
 import functools
 import heapq
@@ -256,6 +260,7 @@ from typing import Any, Callable
 
 import psutil
 from genro_bag import Bag
+from genro_routes import RoutingClass, route
 from genro_tytx import from_tytx, to_tytx
 
 from ...channel.frame import REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
@@ -272,18 +277,7 @@ from .worker_connector import (
     REPLY_METHOD,
     CommanderCallFailed,
 )
-from .worker_handler import (
-    ANNOUNCE_OP_PATH,
-    CENSUS_OP_PATH,
-    DROP_CONNECTION_OP_PATH,
-    DROP_USER_OP_PATH,
-    EVAL_OP_PATH,
-    FREEZE_USER_OP_PATH,
-    OBSERVE_OP_PATH,
-    PING_OP_PATH,
-    QUIT_OP_PATH,
-    SUBSCRIBED_TABLES_OP_PATH,
-)
+from .worker_handler import ANNOUNCE_OP_PATH
 
 #: The reserved prefix that names an anonymous user — the daemon's own
 #: convention, so the name itself carries the guest rule. Redefined here with
@@ -464,6 +458,126 @@ class RequestSlot:
         self.login_previous_user: str | None = None
 
 
+class GroupOrders(RoutingClass):
+    """The ``group`` branch of the worker's dispatcher: the orders the GROUP gives.
+
+    Orchestration, all of it: placement undone (``drop_user``,
+    ``drop_connection``), the ordered freeze of one user, the departure, the
+    beat. Each is a ``@route`` method the vertex reaches on
+    ``/group/<order>``; what it answers is the ``result`` of the REPLY, what it
+    raises is the ``error``.
+
+    Args:
+        spa_worker: the process these orders act on.
+    """
+
+    def __init__(self, spa_worker: Any) -> None:
+        self.spa_worker = spa_worker
+
+    @route()
+    def ping(self) -> dict[str, Any]:
+        """The beat: an answer is the whole point — the photo rides the envelope."""
+        return {}
+
+    @route()
+    def drop_user(self, user: str) -> dict[str, Any]:
+        """Take one user off this process."""
+        self.spa_worker.drop_user(user)
+        return {}
+
+    @route()
+    def drop_connection(self, cid: str) -> dict[str, Any]:
+        """Take one connection off this process; one nobody holds is answered quietly."""
+        connection = self.spa_worker.connection_register.get(cid)
+        if connection is not None:
+            self.spa_worker.drop_connection(connection["user"], cid)
+        return {}
+
+    @route()
+    async def freeze_user(self, user: str) -> dict[str, Any]:
+        """Park ONE user and answer only then: the REPLY is the confirmation."""
+        return await self.spa_worker.freeze_designated_user(user)
+
+    @route()
+    def quit(self, freezer_path: str | None = None) -> dict[str, Any]:
+        """Flag everybody for departure, answer, THEN leave.
+
+        Args:
+            freezer_path: where the parcels of this departure go, when not the
+                working deposit — the reboot directory of a soft quit.
+
+        Acts on the flags before the answer, so the photo riding it shows every
+        user ceded and the level above parks them all in one read; the
+        departure itself is put on a task of its own, so the REPLY goes down
+        the wire first.
+        """
+        self.spa_worker.begin_quit(freezer_path=freezer_path)
+        return {}
+
+
+class CommanderOrders(RoutingClass):
+    """The ``commander`` branch of the worker's dispatcher: the orders the VERTEX gives.
+
+    Reading and switching, nothing of the placement: the census, the eval
+    door, the observation switch — and ``subscribed_tables``, the genropy
+    source filter, for as long as that machinery stays in the core (#59). A
+    consumer attaches its own order class under here with ``add_branches``.
+
+    Args:
+        spa_worker: the process these orders act on.
+    """
+
+    def __init__(self, spa_worker: Any) -> None:
+        self.spa_worker = spa_worker
+
+    @route()
+    def observe(self, on: bool) -> dict[str, Any]:
+        """Turn this process's observation on or off."""
+        self.spa_worker.observation_on = bool(on)
+        return {}
+
+    @route()
+    def census(self) -> dict[str, Any]:
+        """The structured reading of the whole process, JSON-safe."""
+        return self.spa_worker.census()
+
+    @route()
+    def eval(self, expr: str) -> dict[str, Any]:
+        """Evaluate one expression inside the process, ``repr`` back."""
+        return {"repr": self.spa_worker.eval_expression(expr)}
+
+    @route()
+    def subscribed_tables(self, tables: list[str] | None = None) -> dict[str, Any]:
+        """Replace the source filter with the whole set the commander pushes."""
+        with self.spa_worker.dispatch_lock:
+            self.spa_worker.subscribed_tables = set(tables or ())
+        return {}
+
+
+class WorkerDispatcher(RoutingClass):
+    """The root of the orders a worker takes: ``group/…`` and ``commander/…``.
+
+    The first segment of a path names who issues the order; the tree is the
+    table, and ``route.nodes()`` lists it without an order being placed. The two
+    branches are kept as attributes so a consumer can attach its own class under
+    the issuer it extends.
+
+    Args:
+        spa_worker: the process this dispatcher belongs to.
+    """
+
+    def __init__(self, spa_worker: Any) -> None:
+        self.spa_worker = spa_worker
+        self.group_orders = GroupOrders(spa_worker)
+        self.commander_orders = CommanderOrders(spa_worker)
+        self.add_branches(
+            [
+                {"name": "group", "instance": self.group_orders},
+                {"name": "commander", "instance": self.commander_orders},
+            ]
+        )
+
+
 class SpaWorker:
     """The users, connections and pages one worker process holds.
 
@@ -528,7 +642,7 @@ class SpaWorker:
         #: moves them: the shared registry, built through its own hook.
         self.registry = self.build_registry()
         #: The tables somebody subscribes somewhere: the source filter of this
-        #: worker. Fed ONLY by the commander's ``/op/subscribed_tables`` CALL,
+        #: worker. Fed ONLY by the commander's ``/commander/subscribed_tables`` CALL,
         #: sent on every transition of the global set and at this worker's first
         #: presentation. Stale for the flight of one CALL — the accepted risk.
         self.subscribed_tables: set[str] = set()
@@ -563,6 +677,9 @@ class SpaWorker:
         self._freeze_failures = 0
         self._exited = False
         self._service_tasks: set[asyncio.Task[None]] = set()
+        self._quit_task: asyncio.Task[None] | None = None
+        #: The orders this process takes, as a tree: ``group/…`` and ``commander/…``.
+        self.worker_dispatcher = WorkerDispatcher(self)
         self._snapshot_sent_ts = 0.0
         self._population_changed = False
         self._logger = logging.getLogger(__name__)
@@ -1802,53 +1919,28 @@ class SpaWorker:
         return _NOT_JSON_SAFE
 
     async def answer_call(self, frame: Frame) -> None:
-        """Answer one CALL: the beat, the http form, one of the four ops, or nothing known.
+        """Answer one CALL: the http form, or an order resolved on the dispatcher.
 
         Args:
             frame: the CALL as it came off the wire.
 
-        Sends exactly one REPLY, whatever the outcome.
+        Sends exactly one REPLY, whatever the outcome: the order's result, or
+        its error — ``NotFound`` for a path nobody serves, ``TypeError`` for a
+        payload that does not fit the order's signature, both raised before any
+        body runs. The http form is told by its payload, not by its path.
         """
         payload = frame.data or {}
-        if frame.path == PING_OP_PATH:
-            await self.send_reply(frame, result={})
-        elif "http" in payload:
+        if "http" in payload:
             await self.serve_http(frame, payload)
-        elif frame.path == QUIT_OP_PATH:
-            await self._answer_then_quit(frame, payload)
-        elif frame.path == DROP_USER_OP_PATH:
-            self.drop_user(payload["user"])
-            await self.send_reply(frame, result={})
-        elif frame.path == DROP_CONNECTION_OP_PATH:
-            connection = self.connection_register.get(payload["cid"])
-            if connection is not None:
-                self.drop_connection(connection["user"], payload["cid"])
-            await self.send_reply(frame, result={})
-        elif frame.path == FREEZE_USER_OP_PATH:
-            try:
-                result = await self.freeze_designated_user(payload["user"])
-            except Exception as exc:
-                await self.send_reply(frame, error=f"{type(exc).__name__}: {exc}")
-            else:
-                await self.send_reply(frame, result=result)
-        elif frame.path == OBSERVE_OP_PATH:
-            self.observation_on = bool(payload["on"])
-            await self.send_reply(frame, result={})
-        elif frame.path == SUBSCRIBED_TABLES_OP_PATH:
-            with self.dispatch_lock:
-                self.subscribed_tables = set(payload.get("tables", ()))
-            await self.send_reply(frame, result={})
-        elif frame.path == CENSUS_OP_PATH:
-            await self.send_reply(frame, result=self.census())
-        elif frame.path == EVAL_OP_PATH:
-            try:
-                result = {"repr": self.eval_expression(payload["expr"])}
-            except Exception as exc:
-                await self.send_reply(frame, error=f"{type(exc).__name__}: {exc}")
-            else:
-                await self.send_reply(frame, result=result)
+            return
+        try:
+            result = self.worker_dispatcher.route.node(frame.path)(**payload)
+            if inspect.isawaitable(result):
+                result = await result
+        except Exception as exc:
+            await self.send_reply(frame, error=f"{type(exc).__name__}: {exc}")
         else:
-            await self.send_reply(frame, error=f"unknown op: {frame.path!r}")
+            await self.send_reply(frame, result=result)
 
     async def serve_http(self, frame: Frame, payload: dict[str, Any]) -> None:
         """Serve the http CALL form through the WSGI seam, or refuse it.
@@ -2594,19 +2686,18 @@ class SpaWorker:
         self._population_changed = False
         return data
 
-    async def _answer_then_quit(self, frame: Frame, payload: dict[str, Any]) -> None:
-        """Answer the order to leave with everybody already flagged, then leave.
+    def begin_quit(self, *, freezer_path: str | None = None) -> None:
+        """Flag everybody for departure now, and leave on a task of its own.
 
         Args:
-            frame: the CALL being answered.
-            payload: its payload; ``freezer_path`` is where the parcels go.
+            freezer_path: where the parcels of THIS departure go; see ``quit``.
 
-        Acts on the flags before the answer, so the photo riding it shows every
-        user ceded and the level above parks them all in one read.
+        Acts on the flags before it returns, so the REPLY the caller sends next
+        carries the photo with every user ceded; ``quit`` runs on
+        ``_quit_task`` and reaches the wire only after that REPLY is on it.
         """
         self._flag_everybody_for_departure()
-        await self.send_reply(frame, result={})
-        await self.quit(freezer_path=payload.get("freezer_path"))
+        self._quit_task = asyncio.create_task(self.quit(freezer_path=freezer_path))
 
     def _flag_everybody_for_departure(self) -> None:
         """Cede every user and make the plan terminal: sets ``_quitting`` and the flags."""

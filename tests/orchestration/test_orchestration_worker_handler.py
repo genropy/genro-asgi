@@ -213,10 +213,10 @@ async def test_the_photo_arrives_with_the_presentation_and_every_envelope_after(
 
     assert handler.worker_snapshot == {
         "pid": handler.process.pid,
-        "asked_on": "/op/ping",
+        "asked_on": "/group/ping",
         "rss_mb": 42,
     }
-    assert PING_OP_PATH == "/op/ping"
+    assert PING_OP_PATH == "/group/ping"
 
 
 async def test_the_beat_gives_back_what_the_process_answered(make_handler):

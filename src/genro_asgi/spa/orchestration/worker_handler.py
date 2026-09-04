@@ -122,46 +122,49 @@ from .worker_process import ForkedProcess, SpawnedProcess, WorkerProcess
 #: The environment variable the spawn payload travels in, as today.
 WORKER_ENV_VAR = "GENRO_ASGI_WORKER"
 
-#: The routing key of the health beat, and nothing else: it asks whether the
-#: process is alive, it does not ask for the photo, which rides every envelope
-#: on its own. Redefined here with its ratified value rather than imported: the
-#: legacy machine dies at the cutover.
-PING_OP_PATH = "/op/ping"
+#: The orders going DOWN are paths on the worker's own tree (#59, D59-14): the
+#: first segment names who ISSUES the order — ``group`` for the group's
+#: (orchestration), ``commander`` for the vertex's — and the last one the
+#: operation, a ``@route`` method of ``GroupOrders`` or ``CommanderOrders``.
+#:
+#: The health beat, and nothing else: it asks whether the process is alive, it
+#: does not ask for the photo, which rides every envelope on its own.
+PING_OP_PATH = "/group/ping"
 
 #: The debug door: evaluate one expression inside the child, repr back.
-EVAL_OP_PATH = "/op/eval"
+EVAL_OP_PATH = "/commander/eval"
 
 #: The structured reading of a whole process: every register, JSON-safe, in
 #: one answer. Unlike the photo it is not periodic and nobody acts on it — it
 #: exists to be shown to a human.
-CENSUS_OP_PATH = "/op/census"
+CENSUS_OP_PATH = "/commander/census"
 
 #: The switch of the observation: whether the process reports every register
 #: mutation of its own up the lane, as it happens. Off unless somebody is
 #: watching — an observer must not change what it observes.
-OBSERVE_OP_PATH = "/op/observe"
+OBSERVE_OP_PATH = "/commander/observe"
 
 #: The routing key of the source filter: the whole set of tables somebody
 #: subscribes somewhere, pushed down by the commander on every transition of it
 #: and at a worker's first presentation. The worker never asks for it.
-SUBSCRIBED_TABLES_OP_PATH = "/op/subscribed_tables"
+SUBSCRIBED_TABLES_OP_PATH = "/commander/subscribed_tables"
 
 #: The routing key of the order to leave: the process drains and ends itself.
 #: Its answer comes back at once, carrying the photo with every user flagged for
 #: cession — the level above parks them all in one read.
-QUIT_OP_PATH = "/op/quit"
+QUIT_OP_PATH = "/group/quit"
 
 #: The routing key that takes one user off the process, and the one that takes
 #: off a single connection of his. Each names the verb of ``SpaWorker`` that
 #: serves it, and carries that verb's own argument.
-DROP_USER_OP_PATH = "/op/drop_user"
-DROP_CONNECTION_OP_PATH = "/op/drop_connection"
+DROP_USER_OP_PATH = "/group/drop_user"
+DROP_CONNECTION_OP_PATH = "/group/drop_connection"
 
 #: The routing key of the ordered freeze of ONE user: the worker waits for
 #: whatever holds him — a pull bringing him home, his calls in flight — parks
 #: him, and only then answers, so the REPLY IS the confirmation. A user this
 #: process does not host is refused out loud in that same REPLY.
-FREEZE_USER_OP_PATH = "/op/freeze_user"
+FREEZE_USER_OP_PATH = "/group/freeze_user"
 
 #: The routing key of the worker's OWN announcement: the envelope of what
 #: happened in this process while no CALL was being served — the transfer cycle

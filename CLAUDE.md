@@ -126,7 +126,7 @@ true master state; never files or shared memory between processes.
 
 **The source filter is pushed, and the slot always delivers (landed
 2026-09-02).** A worker filters the commits of its site with
-`subscribed_tables`, fed ONLY by the commander's `/op/subscribed_tables` CALL:
+`subscribed_tables`, fed ONLY by the commander's `/commander/subscribed_tables` CALL:
 `SpaCommander.broadcast_subscribed_tables` sends the whole set to every living
 worker of every group on every transition of the global set — the first
 subscriber of a table, the last one gone, through `subscribe_table`,
@@ -422,8 +422,17 @@ runs, and `route.nodes()` on either dispatcher lists what it offers. A consumer
 attaches its own operation class under the commander's dispatcher with
 `add_branches`, once, from its subclass of the commander — composition, never a
 subclass of the worker or the vertex. The worker's parent will be its group
-(roadmap seed 2): the boundary is drawn today and the paths survive it. Orders
-going DOWN (`/op/…`) are still the `if` chain in `SpaWorker.answer_call`: block 2.
+(roadmap seed 2): the boundary is drawn today and the paths survive it. The
+orders going DOWN are the same picture on the other end (block 2): `SpaWorker`
+hosts `worker_dispatcher` (`WorkerDispatcher`) with the branch `group` =
+`GroupOrders` — who ISSUES the order: `ping`, `quit`, `drop_user`,
+`drop_connection`, `freeze_user` — and the branch `commander` = `CommanderOrders`
+(`observe`, `census`, `eval`, `subscribed_tables`); `answer_call` resolves the
+path, awaits a coroutine, and sends the one REPLY, result or error; the http
+form is told by its payload and stays out of the tree. `quit` flags everybody
+and puts the departure on a task of its own, so the REPLY is on the wire first
+(`SpaWorker.begin_quit`). `child_stub` resolves on a tree of its own and is no
+longer taught op by op.
 
 **Not yet built (second pass).** The deliberate reboot command on `_server`
 (`reboot now`/`reboot wait N`, notify_user, the consumer service-message
