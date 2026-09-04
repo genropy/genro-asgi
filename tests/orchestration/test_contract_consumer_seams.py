@@ -26,8 +26,11 @@ on its registry (``page_row_class``); the worker asks the row and knows nothing
 of the fields. Beside the rows: the request slot comes from
 ``SpaWorker.build_request_slot``, the vertex's data from
 ``SpaCommander.new_global_store`` and its writes go through
-``apply_global_store_changes``, and every served request ends in
-``SpaWorker.on_request_served``.
+``apply_global_store_changes``, every served request ends in
+``SpaWorker.on_request_served``, and a process that has just presented itself
+is told to the vertex through ``SpaCommander.on_worker_presented`` — the seam
+the source filter of a hosted site is pushed from, once per process, on the
+envelope that carries the presentation and no other.
 """
 
 from __future__ import annotations
@@ -48,6 +51,7 @@ from genro_asgi.spa.register_row import ConnectionRow, PageRow, UserRow
 
 from .conftest import XT_DeskLane, attach_wire
 
+STORE_GET = "/commander/store/get"
 STORE_LOCK = "/commander/store/lock"
 STORE_UNLOCK = "/commander/store/unlock"
 
@@ -108,6 +112,7 @@ class XT_Commander(SpaCommander):
         self.built: list[str] = []
         super().__init__(*args, **kwargs)
         self.applied: list[list[dict[str, Any]]] = []
+        self.presented: list[str] = []
 
     def new_global_store(self) -> Any:
         self.built.append("xt")
@@ -116,6 +121,9 @@ class XT_Commander(SpaCommander):
     def apply_global_store_changes(self, changes: list[dict[str, Any]]) -> None:
         self.applied.append(changes)
         super().apply_global_store_changes(changes)
+
+    def on_worker_presented(self, worker_handler: Any) -> None:
+        self.presented.append(worker_handler.name)
 
 
 @pytest.fixture
@@ -241,3 +249,24 @@ async def test_the_vertex_data_and_its_writes_are_the_commanders_seams(short_roo
     assert commander.applied == [changes]
     assert commander.global_register["a"] == 1
     await asyncio.sleep(0)
+
+
+async def test_a_newborn_process_is_told_to_the_vertex_once(short_root, tmp_path):
+    commander = XT_Commander(short_root / "frozen_users")
+    group = GroupHandler(
+        commander,
+        "standard",
+        memory_concession_bytes=8 * 1024 * 1024 * 1024,
+        instance_dir=short_root / "i",
+        frozen_users_path=short_root / "frozen_users",
+        entry_module="never.launched",
+    )
+    lane = XT_DeskLane(commander, group, FreezeHandler(tmp_path / "frozen_users"))
+    await lane.open()
+    try:
+        assert commander.presented == [lane.worker_name]
+        await lane.worker.call(STORE_GET, {"path": "a"})
+        await lane.announce()
+    finally:
+        await lane.close()
+    assert commander.presented == [lane.worker_name]

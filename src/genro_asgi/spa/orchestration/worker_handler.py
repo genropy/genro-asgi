@@ -116,7 +116,7 @@ from .exceptions import (
     NoRoomError,
     WorkerQuittingError,
 )
-from .worker_connector import WorkerConnector
+from .worker_connector import ENVELOPE_SLOT_PRESENTATION, WorkerConnector
 from .worker_process import ForkedProcess, SpawnedProcess, WorkerProcess
 
 #: The environment variable the spawn payload travels in, as today.
@@ -143,11 +143,6 @@ CENSUS_OP_PATH = "/commander/census"
 #: mutation of its own up the lane, as it happens. Off unless somebody is
 #: watching — an observer must not change what it observes.
 OBSERVE_OP_PATH = "/commander/observe"
-
-#: The routing key of the source filter: the whole set of tables somebody
-#: subscribes somewhere, pushed down by the commander on every transition of it
-#: and at a worker's first presentation. The worker never asks for it.
-SUBSCRIBED_TABLES_OP_PATH = "/commander/subscribed_tables"
 
 #: The routing key of the order to leave: the process drains and ends itself.
 #: Its answer comes back at once, carrying the photo with every user flagged for
@@ -178,11 +173,6 @@ ANNOUNCE_OP_PATH = "/group/announce"
 #: abort like any other: whoever was leaving had its time.
 QUIT_TIMEOUT_SECONDS = 30.0
 
-#: How long a subscribed-tables push waits for the worker's answer before the
-#: task gives up: a worker alive but deaf must not pile one parked task per
-#: transition of the set. The next transition sends the whole set again.
-SUBSCRIBED_TABLES_PUSH_TIMEOUT_SECONDS = 5.0
-
 #: Seconds between two beats of the same process — the cadence, not a clock.
 PROCESS_PING_INTERVAL = 5.0
 
@@ -211,8 +201,6 @@ __all__ = [
     "PROCESS_PING_TIMEOUT",
     "QUIT_OP_PATH",
     "QUIT_TIMEOUT_SECONDS",
-    "SUBSCRIBED_TABLES_PUSH_TIMEOUT_SECONDS",
-    "SUBSCRIBED_TABLES_OP_PATH",
     "WORKER_ENV_VAR",
     "WorkerHandler",
 ]
@@ -327,8 +315,6 @@ class WorkerHandler:
         self._running_since: float | None = None
         self._observation_switched = False
         self._observation_switch_tasks: set[asyncio.Task[Any]] = set()
-        self._subscribed_tables_pushed = False
-        self._subscribed_tables_push_tasks: set[asyncio.Task[Any]] = set()
 
     @property
     def life_seconds(self) -> float:
@@ -499,15 +485,18 @@ class WorkerHandler:
             What goes back down, as the chain composed it — nothing at all when
             there is no envelope going the other way.
 
-        Stamps the instant this process was last heard from.
+        Stamps the instant this process was last heard from. The envelope that
+        carries the presentation — the ``pid`` slot, said at birth and never
+        again — is told to the vertex through ``on_worker_presented``, the seam
+        a consumer overrides to speak to a newborn process.
         """
         self._last_envelope_ts = time.monotonic()
-        if not self._observation_switched and self.group_handler.spa_commander.observation_watched:
+        spa_commander = self.group_handler.spa_commander
+        if not self._observation_switched and spa_commander.observation_watched:
             self._observation_switched = True
             self._fire_observation_switch()
-        if not self._subscribed_tables_pushed:
-            self._subscribed_tables_pushed = True
-            self.push_subscribed_tables()
+        if ENVELOPE_SLOT_PRESENTATION in envelope:
+            spa_commander.on_worker_presented(self)
         return self.envelope_handler(envelope)
 
     def _fire_observation_switch(self) -> None:
@@ -515,32 +504,6 @@ class WorkerHandler:
         task = asyncio.create_task(self.connector.call(OBSERVE_OP_PATH, {"on": True}))
         self._observation_switch_tasks.add(task)
         task.add_done_callback(self._observation_switch_tasks.discard)
-
-    def push_subscribed_tables(self) -> None:
-        """Send this process the current source filter, without waiting for it."""
-        task = asyncio.create_task(self._push_subscribed_tables())
-        self._subscribed_tables_push_tasks.add(task)
-        task.add_done_callback(self._subscribed_tables_push_tasks.discard)
-
-    async def _push_subscribed_tables(self) -> None:
-        """Read the desk's set at send time and put it on this process's wire.
-
-        A process whose wire is gone is logged at debug level and left alone: a
-        dead worker has no commits left to filter. One that does not answer
-        within ``SUBSCRIBED_TABLES_PUSH_TIMEOUT_SECONDS`` is logged the same way:
-        the next transition carries the whole set again.
-        """
-        tables = self.group_handler.spa_commander.delivery_desk.subscribed_tables
-        try:
-            await self.connector.call(
-                SUBSCRIBED_TABLES_OP_PATH,
-                {"tables": tables},
-                timeout=SUBSCRIBED_TABLES_PUSH_TIMEOUT_SECONDS,
-            )
-        except ConnectionError:
-            self._logger.debug("Worker %s: the subscribed-tables push found no wire", self.name)
-        except TimeoutError:
-            self._logger.debug("Worker %s: the subscribed-tables push got no answer", self.name)
 
     def serve_child_call(self, path: str, data: dict[str, Any]) -> Any:
         """Resolve a CALL the child placed on the lane on the group's dispatcher, and call it.
@@ -723,7 +686,7 @@ class WorkerHandler:
         """The wire died: the parked wait says whether anybody was expecting it.
 
         Sets ``state`` — ``quitted`` when a wait was live, ``aborted`` when the
-        death was nobody's order — rings the group's wake, and gives the desk
+        death was nobody's order — rings the group's wake, and gives the vertex
         back the store grant this process was holding, if it held one.
         """
         self.group_handler.spa_commander.commander_dispatcher.global_store.release_worker_lock(

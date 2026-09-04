@@ -18,8 +18,7 @@ The CALLs that come DOWN the lane to a worker are resolved by name on the tree
 the worker hosts, ``worker_dispatcher`` — not by a chain of ``if`` on the path.
 The first segment names who ISSUES the order: ``group`` for the group's
 (freeze_user, drop_user, drop_connection, quit, ping), ``commander`` for the
-vertex's (observe, census, eval, and subscribed_tables while the genropy
-machinery stays in the core). ``answer_call`` resolves, calls, awaits when the
+vertex's (observe, census, eval). ``answer_call`` resolves, calls, awaits when the
 operation is a coroutine, and sends the one REPLY: the result, or the error —
 ``NotFound`` for a path nobody serves, ``TypeError`` for a payload that does
 not fit the signature, both before any body runs. The http form is not an
@@ -45,7 +44,6 @@ from genro_asgi.spa.orchestration.worker_handler import (
     EVAL_OP_PATH,
     OBSERVE_OP_PATH,
     PING_OP_PATH,
-    SUBSCRIBED_TABLES_OP_PATH,
 )
 
 from .conftest import XT_DeskLane
@@ -75,7 +73,6 @@ async def order(lane: XT_DeskLane, path: str, data: dict[str, Any] | None = None
 async def test_the_paths_name_who_issues_the_order():
     assert PING_OP_PATH == "/group/ping"
     assert CENSUS_OP_PATH == "/commander/census"
-    assert SUBSCRIBED_TABLES_OP_PATH == "/commander/subscribed_tables"
 
 
 async def test_the_beat_is_answered(lane):
@@ -100,13 +97,6 @@ async def test_observe_switches_the_workers_observation(lane):
     assert lane.worker.observation_on is True
 
 
-async def test_subscribed_tables_replaces_the_source_filter(lane):
-    await order(lane, SUBSCRIBED_TABLES_OP_PATH, {"tables": ["invoices", "clients"]})
-    assert lane.worker.subscribed_tables == {"invoices", "clients"}
-    await order(lane, SUBSCRIBED_TABLES_OP_PATH, {"tables": []})
-    assert lane.worker.subscribed_tables == set()
-
-
 async def test_dropping_a_connection_nobody_holds_is_answered_quietly(lane):
     assert (await order(lane, DROP_CONNECTION_OP_PATH, {"cid": "nobody"}))["result"] == {}
 
@@ -128,9 +118,7 @@ async def test_the_dispatcher_says_what_orders_the_worker_takes(lane):
     assert set(tree["routers"]["group"]["entries"]) == {
         "ping", "quit", "drop_user", "drop_connection", "freeze_user"
     }
-    assert set(tree["routers"]["commander"]["entries"]) == {
-        "observe", "census", "eval", "subscribed_tables"
-    }
+    assert set(tree["routers"]["commander"]["entries"]) == {"observe", "census", "eval"}
 
 
 async def test_a_consumer_attaches_its_own_orders_and_the_vertex_reaches_them(lane):

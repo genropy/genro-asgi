@@ -16,8 +16,8 @@
 
 Everything here serves single-page applications: the register machinery
 (`Register`, `RegisterRegistry` — in-process datasets with secondary
-indexes and the users/pages lifecycle vocabulary), the shared stores
-(`global_store`, `subscription_index`) and the orchestration package above
+indexes and the users/pages lifecycle vocabulary), the shared store
+(`global_store`) and the orchestration package above
 them (`SpaCommander`, `GroupHandler`, `WorkerHandler`, `SpaWorker`).
 Nothing in the base server instantiates any of it: this package is inert
 until a runtime (or genropy-asgi) mounts it. It is reached by subpackage

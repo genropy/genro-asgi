@@ -401,15 +401,10 @@ class CommanderEnvelopeHandler(EnvelopeHandler):
         )
 
     def on_new_page(self, worker_event: dict[str, Any]) -> None:
-        """A page was born (or woke): it belongs to its connection, and the desk
-        files the subscriptions the announcement carries — the index is a
-        projection of the page rows, and this is where it is rebuilt."""
+        """A page was born (or woke): it belongs to its connection."""
         self.spa_commander.page_connection_map[worker_event["page_id"]] = worker_event[
             "connection_id"
         ]
-        self.spa_commander.delivery_desk.install_page_subscriptions(
-            worker_event["page_id"], worker_event["table_subscriptions"]
-        )
 
     def on_drop_page(self, worker_event: dict[str, Any]) -> None:
         """A page is gone."""

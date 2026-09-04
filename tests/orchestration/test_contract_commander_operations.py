@@ -18,7 +18,7 @@ The CALLs a worker places on the lane are resolved by name on genro-routes
 trees — not by a chain of ``if`` nor by a hand-written ``getattr``. The first
 segment of the path names the LEVEL that serves: ``group`` for the group's own
 operations (the announcement), ``commander`` for the vertex's (the global
-store, the observation, the genropy delivery until it leaves the core). The
+store, the observation). The
 worker talks to its group: the group's dispatcher serves ``group/…`` itself and
 forwards ``commander/…`` to the commander's dispatcher, so the boundary between
 group and vertex is drawn today and the paths survive the group moving to a
@@ -52,7 +52,6 @@ STORE_DEL = "/commander/store/del"
 STORE_LOCK = "/commander/store/lock"
 STORE_UNLOCK = "/commander/store/unlock"
 OBSERVATION = "/commander/observation"
-SUBSCRIBE_TABLE = "/commander/delivery/subscribe_table"
 
 
 class XT_ExtraOperations(RoutingClass):
@@ -112,14 +111,6 @@ async def test_an_observation_call_reaches_the_watchers(lane):
     assert observed["source"] == lane.worker_name
 
 
-async def test_a_delivery_operation_answers_under_its_own_branch(lane):
-    """The genropy operations live under their own segment until they leave the core."""
-    reply = await lane.worker.call(
-        SUBSCRIBE_TABLE, {"page_id": "p1", "table": "invoices", "subscribe": True}
-    )
-    assert reply == {"page_id": "p1", "table": "invoices", "subscribe": True}
-
-
 async def test_an_unknown_path_is_refused_by_name(lane):
     with pytest.raises(CommanderCallFailed) as refusal:
         await lane.worker.call("/commander/nothing_here", {})
@@ -150,7 +141,7 @@ async def test_each_dispatcher_says_what_it_serves(lane):
     assert "announce" in group["routers"]["group"]["entries"]
     commander = lane.commander.commander_dispatcher.route.nodes()
     assert "observation" in commander["entries"]
-    assert {"store", "delivery"} <= set(commander["routers"])
+    assert set(commander["routers"]) == {"store"}
     assert set(commander["routers"]["store"]["entries"]) == {"set", "get", "del", "lock", "unlock"}
 
 

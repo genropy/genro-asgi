@@ -103,19 +103,6 @@ class XT_StubGroupOrders(RoutingClass):
         return {}
 
 
-class XT_StubCommanderOrders(RoutingClass):
-    """The ``commander`` branch: the source filter the parent pushes."""
-
-    def __init__(self, stub: Any) -> None:
-        self.stub = stub
-
-    @route()
-    def subscribed_tables(self, tables: list[str] | None = None) -> dict[str, Any]:
-        """Take the source filter the parent pushes, as a real worker does."""
-        self.stub.subscribed_tables = set(tables or ())
-        return {}
-
-
 class ChildStub(RoutingClass):
     """One scripted worker process: its wire, its deposit, and its mute switch."""
 
@@ -127,11 +114,9 @@ class ChildStub(RoutingClass):
         self.answering = True
         self.stream: FrameStream | None = None
         self.worker_events: list[dict[str, Any]] = []
-        self.subscribed_tables: set[str] = set()
         self.add_branches(
             [
                 {"name": "group", "instance": XT_StubGroupOrders(self)},
-                {"name": "commander", "instance": XT_StubCommanderOrders(self)},
             ]
         )
 

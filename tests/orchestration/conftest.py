@@ -156,10 +156,10 @@ def attach_wire(worker: SpaWorker) -> XT_Wire:
 
 
 class XT_DeskLane:
-    """A worker and its real handler on one UDS, the commander's desk above it.
+    """A worker and its real handler on one UDS, the commander above it.
 
     Args:
-        commander: the vertex whose desk the lane calls reach.
+        commander: the vertex the lane calls reach.
         group: the group the handler hangs under.
         freeze_handler: the deposit the worker is built with.
         worker_name: the name shared by the handler and the worker.
@@ -181,11 +181,6 @@ class XT_DeskLane:
         )
         self.request_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="xt-request")
         self._reader_task = None
-
-    @property
-    def desk(self):
-        """The desk the calls of this lane land on."""
-        return self.commander.delivery_desk
 
     async def open(self) -> None:
         """Bind, connect, present, and put the worker's read loop on the air."""
@@ -269,18 +264,10 @@ class XT_DeskLane:
         if events:
             await worker.announce_worker_events(events)
 
-    async def wait_filter_synced(self) -> None:
-        """Wait until the worker's source filter equals the desk's set.
-
-        The commander pushes the set as a task, so a test that reads the
-        worker's ``subscribed_tables`` right after a subscription waits here.
-        """
-        await wait_for(lambda: self.worker.subscribed_tables == set(self.desk.subscribed_tables))
-
 
 @pytest.fixture
 async def desk_lane(short_root, tmp_path):
-    """A live lane: the site's verbs on a worker, the real desk on a real commander."""
+    """A live lane: the site's verbs on a worker, a real handler on a real commander."""
     commander = SpaCommander(short_root / "frozen_users")
     group = GroupHandler(
         commander,
