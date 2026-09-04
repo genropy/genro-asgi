@@ -163,6 +163,12 @@ DROP_CONNECTION_OP_PATH = "/op/drop_connection"
 #: process does not host is refused out loud in that same REPLY.
 FREEZE_USER_OP_PATH = "/op/freeze_user"
 
+#: The routing key of the worker's OWN announcement: the envelope of what
+#: happened in this process while no CALL was being served — the transfer cycle
+#: of a quit — folded exactly as the envelope of a REPLY is. Every other worker
+#: event rides the REPLY of the CALL that caused it (owner, 2026-09-04).
+ANNOUNCE_OP_PATH = "/op/announce"
+
 #: How long an ordered departure may take before this handler stops waiting for
 #: it, in seconds. Past it the process is killed and the death that follows is an
 #: abort like any other: whoever was leaving had its time.
@@ -189,6 +195,7 @@ WAIT_POLL_INTERVAL = 0.05
 CPU_TEMPERATURE_MIN_STALE_SECONDS = 1.0
 
 __all__ = [
+    "ANNOUNCE_OP_PATH",
     "CENSUS_OP_PATH",
     "DROP_CONNECTION_OP_PATH",
     "DROP_USER_OP_PATH",
@@ -539,15 +546,21 @@ class WorkerHandler:
             data: its payload.
 
         Returns:
-            Whatever the desk answers, which the wire puts in the REPLY.
+            Whatever the desk answers, which the wire puts in the REPLY; an empty
+            answer for the announcement, whose whole effect is the fold.
 
         Raises:
             AttributeError: the desk serves no op of that name; the wire turns it
                 into an error REPLY, so the child is answered either way.
 
-        Nothing is written here: the queues and the subscriptions are the
-        vertex's, and this handler is only the rung the call climbs.
+        The announcement is the second channel of the worker events: the
+        envelope goes into the same fold a REPLY's does. Nothing else is written
+        here: the queues and the subscriptions are the vertex's, and this
+        handler is only the rung the call climbs.
         """
+        if path == ANNOUNCE_OP_PATH:
+            self.read_envelope(data)
+            return {}
         return self.group_handler.spa_commander.delivery_desk.serve_child_call(path, data)
 
     async def launch_process(self) -> None:

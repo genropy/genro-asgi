@@ -38,11 +38,13 @@ WORKER_NAME = "standard_0001"
 
 @pytest.fixture
 def worker(tmp_path):
-    return SpaWorker(
+    worker = SpaWorker(
         WORKER_NAME,
         freeze_handler=FreezeHandler(tmp_path / "frozen_users"),
         deposit_lock_retry_interval=0.01,
     )
+    worker.open_request_slot()
+    return worker
 
 
 def serving_app(environ, start_response):

@@ -381,6 +381,28 @@ daemon did, and the queue dies with the page. Compared with the daemon: the same
 algorithm on the row, with the desk as the remote leg the daemon paid one Pyro
 call per write for.
 
+**Worker events travel on two channels, never through one queue (landed
+2026-09-04, #60).** An event born while a CALL is being served — a site verb on
+the stitching thread, an op on the loop — is queued in the `worker_events` of
+the `RequestSlot` of THAT CALL and rides ITS reply: `_guarded_call` opens the slot
+on the CALL's own task, `_run_in_pool` runs the stitching under a copy of that
+context so the thread finds the same slot, `send_reply` sends that slot's events
+and no other's, then closes the slot; outside any CALL a mutation raises. The
+login's tail is the first case this protects: `change_connection_user` writes
+`login_previous_user` on the slot of the request that logged the connection in,
+and only that request's tail calls `freeze_connection` — a ping ending during a
+`doLogin` evicts nobody (the shared `_login_previous_user_map` let it, reproduced
+in the bridge on 2026-09-04). The ONE producer answering no CALL, the quit's
+transfer cycle, gives each departure a slot of its own and sends what it
+announced with ONE CALL of the worker's, `/op/announce`, which `WorkerHandler`
+hands to the same fold a reply's envelope goes through; the REPLY is the
+acknowledgement, a vertex that answers an error or nothing within
+`ANNOUNCE_TIMEOUT_SECONDS` loses it, counted and logged, never retried. This is
+the two-channel mechanism of the pre_refactoring stack (`offer_event` on the
+per-CALL sink, `offer_lifecycle` on the outbox) without the outbox's `seq`/ack.
+In tests, `XT_DeskLane.verb` announces after each verb and `attach_wire` gives a
+unit-test worker a stub wire and a slot.
+
 **Not yet built (second pass).** The deliberate reboot command on `_server`
 (`reboot now`/`reboot wait N`, notify_user, the consumer service-message
 lane); the single-group reboot (needs no photo — the commander survives) and
@@ -395,4 +417,4 @@ commits, still to be entered in the register). Decision registers:
 
 **All general policies are inherited from the parent document: [meta-genro-modules CLAUDE.md](https://github.com/softwellsrl/meta-genro-modules/blob/main/CLAUDE.md)**
 
-**Last Updated**: 2026-09-03
+**Last Updated**: 2026-09-04

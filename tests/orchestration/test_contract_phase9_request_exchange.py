@@ -39,7 +39,6 @@ from genro_bag.datachange import DataChangeCollector
 from genro_tytx import to_tytx
 
 from genro_asgi.spa.orchestration.spa_worker import RequestSlot
-from genro_asgi.spa.orchestration.worker_handler import PING_OP_PATH
 
 from .conftest import wait_for
 
@@ -54,9 +53,9 @@ async def lane(desk_lane):
     """The live lane with alice's two pages already on the worker."""
     desk_lane.worker.new_page(USER, page_id=SIBLING, connection_id="s1")
     desk_lane.worker.new_page(USER, page_id=PAGE, connection_id="s1")
-    # The desk judges a target's existence at the vertex: a ping's REPLY carries
-    # the births up, and the fold reads the envelope before it answers.
-    await desk_lane.worker_handler.connector.call(PING_OP_PATH)
+    # The desk judges a target's existence at the vertex: the births go up on the
+    # worker's own channel, and the fold reads them before the announcement is answered.
+    await desk_lane.announce()
     return desk_lane
 
 
@@ -99,7 +98,7 @@ async def test_events_of_a_request_accumulate_on_that_requests_own_slot(lane):
     assert isinstance(slot.dbevents[0]["ts"], float)
 
     with ThreadPoolExecutor(max_workers=1) as other_request:
-        other = await on_thread(other_request, lambda: lane.worker.request_slot)
+        other = await on_thread(other_request, lane.worker.open_request_slot)
     assert isinstance(other, RequestSlot)
     assert other.dbevents == []
 

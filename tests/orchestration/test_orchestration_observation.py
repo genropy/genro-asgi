@@ -40,9 +40,11 @@ async def test_a_watcher_switches_the_worker_on_and_hears_a_birth(desk_lane):
     await wait_for(lambda: queue.qsize() >= 2)
     await asyncio.sleep(0)
 
-    events = {event["kind"]: event for event in [queue.get_nowait() for _ in range(queue.qsize())]}
+    # The vertex reports the same births when it folds the announcement; what
+    # this test listens for is the worker's own report.
+    heard = [queue.get_nowait() for _ in range(queue.qsize())]
+    events = {event["kind"]: event for event in heard if event["source"] == "standard_0001"}
     assert set(events) == {"new_user", "new_connection"}
-    assert events["new_connection"]["source"] == "standard_0001"
     assert events["new_connection"]["data"]["user"].startswith("guest_")
 
 

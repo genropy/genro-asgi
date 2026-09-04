@@ -40,8 +40,10 @@ from genro_asgi.spa.orchestration import (
     SpaCommander,
     SpaWorker,
 )
-from genro_asgi.spa.orchestration.worker_handler import WorkerHandler
+from genro_asgi.spa.orchestration.worker_handler import ANNOUNCE_OP_PATH, WorkerHandler
 from genro_asgi.spa.orchestration.spa_worker import GUEST_PREFIX
+
+from .conftest import attach_wire
 
 WORKER_NAME = "standard_0001"
 
@@ -53,7 +55,9 @@ def deposit(tmp_path):
 
 @pytest.fixture
 def worker(deposit):
-    return SpaWorker(WORKER_NAME, freeze_handler=deposit, deposit_lock_retry_interval=0.01)
+    worker = SpaWorker(WORKER_NAME, freeze_handler=deposit, deposit_lock_retry_interval=0.01)
+    worker.open_request_slot()
+    return worker
 
 
 def browsing_guest(worker: SpaWorker, cid: str = "a1b2", pages: int = 1) -> str:
@@ -149,6 +153,7 @@ async def test_an_avatar_switch_does_not_strand_the_wait_on_the_person_who_stays
     group, worker_handler = login_rungs(tmp_path)
     vertex = group.spa_commander
     worker = SpaWorker(WORKER_NAME, freeze_handler=FreezeHandler(tmp_path / "frozen_users"))
+    wire = attach_wire(worker)
     worker.add_connection("a1b2")
     worker.add_connection("c3d4")
     worker.change_connection_user("a1b2", "mario")
@@ -161,7 +166,8 @@ async def test_an_avatar_switch_does_not_strand_the_wait_on_the_person_who_stays
     vertex.hold_user("mario", "transfer_flag T")
     worker.change_connection_user("a1b2", "carlo")
     await worker.execute_transfers()
-    worker_handler.read_envelope({"worker_events": list(worker.worker_events)})
+    for announcement in wire.calls(ANNOUNCE_OP_PATH):
+        worker_handler.read_envelope(announcement.data)
 
     assert vertex.user_map["mario"]["on_hold"] is None
     assert vertex.user_hold_event_map == {}
@@ -182,6 +188,22 @@ async def test_the_login_travels_on_the_reply(worker):
             "connection_id": "a1b2",
         }
     ]
+
+
+async def test_an_avatar_switch_onto_a_stranger_leaves_a_row_the_photo_can_read(worker):
+    """The identity a real prior hands his connection to is born the worker's way.
+
+    Found on 2026-09-04: the registry brought him into being bare, and the next
+    photo raised on his missing ``state`` — so the reply that would have carried
+    it never left.
+    """
+    worker.add_connection("a1b2", "mario")
+
+    worker.change_connection_user("a1b2", "carlo")
+
+    row = worker.user_register.get("carlo")
+    assert row["state"] == "active"
+    assert worker.worker_snapshot["users"]["carlo"]["item"]["state"] == "active"
 
 
 async def test_a_login_makes_the_photo_due(worker):
@@ -223,7 +245,7 @@ async def test_the_tail_carries_the_connection_and_the_guests_store(worker, depo
     guest = browsing_guest(worker)
 
     worker.change_connection_user("a1b2", "mario")
-    assert await worker.freeze_connection("a1b2") is True
+    assert await worker.freeze_connection("a1b2", "guest_a1b2") is True
 
     # On disk, under the identity he logged in as.
     parcel = deposit.read_connection_register_item("mario", "a1b2")
@@ -244,7 +266,7 @@ async def test_an_avatar_switch_carries_no_store(worker, deposit):
     worker.user_register.get("mario")["store"]["cart.item"] = "a lamp"
 
     worker.change_connection_user("a1b2", "carlo")
-    assert await worker.freeze_connection("a1b2") is True
+    assert await worker.freeze_connection("a1b2", "mario") is True
 
     parcel = deposit.read_connection_register_item("carlo", "a1b2")
     assert "store" not in parcel
@@ -261,7 +283,7 @@ async def test_a_deposit_that_refuses_leaves_everything_alive(worker, monkeypatc
 
     monkeypatch.setattr(worker.freeze_handler, "write_connection_register_item", refuse)
 
-    assert await worker.freeze_connection("a1b2") is False
+    assert await worker.freeze_connection("a1b2", "guest_a1b2") is False
 
     # The legitimate degraded shape: he is resident here with his connection.
     assert worker.connection_register.get("a1b2")["user"] == "mario"
@@ -290,12 +312,13 @@ async def test_a_folder_that_never_comes_free_leaves_everything_alive_too(tmp_pa
         deposit_lock_retry_interval=0.01,
         deposit_lock_wait_limit=0.05,
     )
+    worker.open_request_slot()
     guest = browsing_guest(worker)
     worker.change_connection_user("a1b2", "mario")
     # Somebody else is inside mario's folder and does not come out.
     assert deposit.take_lock("mario", "standard_0002") is True
 
-    assert await worker.freeze_connection("a1b2") is False
+    assert await worker.freeze_connection("a1b2", "guest_a1b2") is False
 
     # The declared degraded shape, exactly as for a refused write.
     assert worker.connection_register.get("a1b2")["user"] == "mario"
@@ -306,7 +329,6 @@ async def test_a_folder_that_never_comes_free_leaves_everything_alive_too(tmp_pa
     assert events_of(worker, "user_frozen") == []
     # And nothing of the attempt is left behind to block what comes next.
     assert worker._departing_users == set()
-    assert worker._login_previous_user_map == {}
     assert deposit.lock_holder("mario") == "standard_0002"
 
 
@@ -327,10 +349,11 @@ async def test_a_departure_that_gave_up_does_not_hold_the_process_here(tmp_path)
         deposit_lock_wait_limit=0.05,
         transfer_start_delay=0.0,
     )
+    attach_wire(worker)
     browsing_guest(worker)
     worker.change_connection_user("a1b2", "mario")
     deposit.take_lock("mario", "standard_0002")
-    await worker.freeze_connection("a1b2")
+    await worker.freeze_connection("a1b2", "guest_a1b2")
 
     await asyncio.wait_for(worker.quit(), timeout=5.0)
 
@@ -344,7 +367,7 @@ async def test_a_departure_that_gave_up_does_not_hold_the_process_here(tmp_path)
 async def test_the_guests_store_becomes_his_own_on_a_row_just_born(worker, deposit):
     browsing_guest(worker)
     worker.change_connection_user("a1b2", "mario")
-    await worker.freeze_connection("a1b2")
+    await worker.freeze_connection("a1b2", "guest_a1b2")
 
     await worker.adopt_connection("mario", "a1b2")
 
@@ -356,7 +379,7 @@ async def test_a_resident_keeps_his_own_store_and_the_guests_dies(worker, deposi
     """The RESIDENT wins, applied where the resident is."""
     browsing_guest(worker)
     worker.change_connection_user("a1b2", "mario")
-    await worker.freeze_connection("a1b2")
+    await worker.freeze_connection("a1b2", "guest_a1b2")
     # He is already living here under another connection of his own.
     worker.add_connection("c3d4", "mario")
     worker.user_register.get("mario")["store"]["cart.item"] = "his own lamp"
@@ -371,7 +394,7 @@ async def test_a_parked_connection_comes_home_on_its_own_id(worker, deposit):
     the cookie carries, and the wake asks for that one and no other."""
     browsing_guest(worker)
     worker.change_connection_user("a1b2", "mario")
-    assert await worker.freeze_connection("a1b2") is True
+    assert await worker.freeze_connection("a1b2", "guest_a1b2") is True
 
     await worker.adopt_connection("mario", "a1b2")
 
@@ -389,7 +412,7 @@ async def test_the_user_parcel_is_installed_before_the_connection_one(worker, de
     """
     browsing_guest(worker)
     worker.change_connection_user("a1b2", "mario")
-    await worker.freeze_connection("a1b2")
+    await worker.freeze_connection("a1b2", "guest_a1b2")
     deposit.take_lock("mario", "standard_0002")
     hibernated = Bag()
     hibernated["cart.item"] = "what he had before"

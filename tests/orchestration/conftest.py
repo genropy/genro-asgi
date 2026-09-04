@@ -37,9 +37,15 @@ from pathlib import Path
 
 import pytest
 
+from genro_asgi.channel.frame import Frame
 from genro_asgi.spa.orchestration import FreezeHandler, GroupHandler, SpaCommander, SpaWorker
 from genro_asgi.spa.orchestration import spa_worker as spa_worker_module
-from genro_asgi.spa.orchestration.worker_handler import WorkerHandler
+from genro_asgi.spa.orchestration.worker_connector import (
+    CALL_METHOD,
+    ENVELOPE_SLOT_WORKER_EVENTS,
+    REPLY_METHOD,
+)
+from genro_asgi.spa.orchestration.worker_handler import ANNOUNCE_OP_PATH, WorkerHandler
 
 #: The name the lane's handler and worker share: short, because a UDS path is.
 WORKER_NAME = "standard_0001"
@@ -88,6 +94,67 @@ def repo_on_pythonpath(monkeypatch):
     )
 
 
+class XT_Wire:
+    """The handler's side of the wire, as a worker sees it: it keeps what is written.
+
+    A CALL the worker places is answered at once with an empty result, on the
+    worker's own loop, so ``call`` resolves the way it does on a live lane. Tests
+    read each REPLY and each announcement off ``frames``.
+    """
+
+    class XT_Writer:
+        """What ``exit_process`` closes: the transport under a real ``FrameStream``."""
+
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    def __init__(self, worker: SpaWorker) -> None:
+        self.worker = worker
+        self.frames: list[Frame] = []
+        self.writer = self.XT_Writer()
+
+    async def write(self, frame: Frame) -> None:
+        self.frames.append(frame)
+        if frame.method == CALL_METHOD:
+            self.worker.handle_frame(
+                Frame(id=frame.id, method=REPLY_METHOD, path=frame.path, data={"result": {}})
+            )
+
+    def replies(self) -> list[Frame]:
+        return [frame for frame in self.frames if frame.method == REPLY_METHOD]
+
+    def calls(self, path: str) -> list[Frame]:
+        return [
+            frame for frame in self.frames if frame.method == CALL_METHOD and frame.path == path
+        ]
+
+    def reply_to(self, frame_id: str) -> Frame | None:
+        return next((frame for frame in self.replies() if frame.id == frame_id), None)
+
+    def announced_events(self) -> list[dict]:
+        """Every worker event the announcements carried, in order."""
+        return [
+            event
+            for frame in self.calls(ANNOUNCE_OP_PATH)
+            for event in frame.data[ENVELOPE_SLOT_WORKER_EVENTS]
+        ]
+
+
+def attach_wire(worker: SpaWorker) -> XT_Wire:
+    """Give a worker a stub wire and a slot: the shape a unit test drives it in.
+
+    The stream is set directly and not through ``attach_stream``, which reads the
+    running loop: a sync fixture has none, and the stub needs none.
+    """
+    wire = XT_Wire(worker)
+    worker.stream = wire
+    worker.open_request_slot()
+    return wire
+
+
 class XT_DeskLane:
     """A worker and its real handler on one UDS, the commander's desk above it.
 
@@ -129,6 +196,10 @@ class XT_DeskLane:
         await self.worker.send_presentation({})
         self._reader_task = asyncio.create_task(self.worker.receive_frames())
         await connector.wait_connected()
+        # A request slot on both sides a test drives verbs from: the request
+        # thread, and the loop context the fixture is built in.
+        await self.open_request()
+        self.worker.open_request_slot()
 
     async def close(self) -> None:
         if self._reader_task is not None:
@@ -143,26 +214,60 @@ class XT_DeskLane:
         self.group.worker_handler_map.pop(self.worker_name, None)
 
     async def verb(self, name, *args, **kwargs):
-        """Call one of the worker's site verbs where the site calls it: off the loop."""
-        return await asyncio.get_running_loop().run_in_executor(
+        """Call one of the worker's site verbs where the site calls it: off the loop.
+
+        What the verb announced is sent up at once: on a live lane a verb runs
+        inside a CALL and its events ride that CALL's reply, and here nothing
+        answers the request thread, so the lane plays the reply's part.
+        """
+        answer = await asyncio.get_running_loop().run_in_executor(
             self.request_pool, functools.partial(getattr(self.worker, name), *args, **kwargs)
         )
+        await self.announce()
+        return answer
 
     async def verb_on(self, pool, name, *args, **kwargs):
         """Call a site verb on ANOTHER request thread than ``verb``'s.
 
-        The request slot is thread-local, so a test that needs two concurrent
-        requests on one worker runs the second one here, on a pool of its own.
+        A thread has a request slot of its own, so a test that needs two
+        concurrent requests on one worker runs the second one here, on a pool of
+        its own; the first verb on that pool opens its slot.
         """
-        return await asyncio.get_running_loop().run_in_executor(
-            pool, functools.partial(getattr(self.worker, name), *args, **kwargs)
-        )
+        worker = self.worker
+
+        def in_own_slot():
+            try:
+                worker.request_slot
+            except RuntimeError:
+                worker.open_request_slot()
+            return getattr(worker, name)(*args, **kwargs)
+
+        return await asyncio.get_running_loop().run_in_executor(pool, in_own_slot)
 
     async def open_request(self) -> None:
         """Start a fresh request on the thread the verbs run on."""
         await asyncio.get_running_loop().run_in_executor(
             self.request_pool, self.worker.open_request_slot
         )
+
+    async def announce(self) -> None:
+        """Send the vertex what the verbs announced, on the request thread and here.
+
+        No CALL answers either context in a test, so their events would never
+        leave: this takes them off both slots and sends them up the worker's own
+        channel, the way the transfer cycle does for its own.
+        """
+        worker = self.worker
+
+        def take_events() -> list:
+            events = list(worker.worker_events)
+            worker.worker_events.clear()
+            return events
+
+        events = await asyncio.get_running_loop().run_in_executor(self.request_pool, take_events)
+        events += take_events()
+        if events:
+            await worker.announce_worker_events(events)
 
     async def wait_filter_synced(self) -> None:
         """Wait until the worker's source filter equals the desk's set.

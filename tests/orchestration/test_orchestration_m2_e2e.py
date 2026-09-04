@@ -327,14 +327,10 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     # all. His store and his connection are readable from the parent side.
     parked = await handler.connector.call(EXECUTE_ORDER, timeout=CALL_TIMEOUT)
 
-    assert parked["worker_events"] == [
-        {
-            "op": "user_frozen",
-            "worker": WORKER_NAME,
-            "user": "mario",
-            "placement": None,
-        }
-    ]
+    # The cycle answers no CALL: what it announced went up on the worker's own
+    # channel and was folded before the order was answered — the order's own
+    # reply carries nothing (genro-asgi #60).
+    assert parked["worker_events"] == []
     assert deposit.read_user_register_item("mario") is not None
     assert deposit.read_connection_register_item("mario", "cid-a") is not None
     assert deposit.get_item_header("mario")["writer"] == WORKER_NAME
@@ -344,7 +340,8 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     assert commander.user_is_frozen("mario") is True
     assert commander.user_map["mario"]["on_hold"] is None
     assert group.user_worker_map == {"mario": None, "anna": "standard_0001"}
-    photo = parked[ENVELOPE_SLOT_WORKER_SNAPSHOT]
+    # The photo rode the announcement, and the handler holds it as the last one.
+    photo = handler.worker_snapshot
     assert "mario" not in photo["users"]
     assert photo["users"]["anna"]["item"]["state"] == "active"
     assert list(photo["connections"]) == ["cid-b"]
@@ -378,12 +375,12 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     # the fold acts on while the departures are still running.
     await handler.quit_process()
 
-    flags = handler.worker_snapshot["users"]
-    assert {user: pair["transfer_flag"] for user, pair in flags.items()} == {
-        "mario": "T",
-        "anna": "T",
-    }
-    assert handler.worker_snapshot["user_count"] == 2
+    # Each departure of the cycle was announced on the worker's own channel and
+    # folded as it happened (genro-asgi #60): the vertex marks both frozen, and
+    # the last photo the handler holds shows the process empty.
+    assert commander.user_is_frozen("mario") is True
+    assert commander.user_is_frozen("anna") is True
+    assert handler.worker_snapshot["user_count"] == 0
 
     # Past the gate everybody is in the deposit and the process ends BY ITSELF:
     # the exit code is its own clean 0, and nothing in this test killed it. What
@@ -404,18 +401,19 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     # THE SEAM M2 DECLARED IS CLOSED. That departure is the death somebody was
     # waiting for: the wait the order parked is what classifies it, so the state
     # says `quitted` and nothing in the log says WILD. The group was woken to read
-    # exactly that, with the users the vertex had on board.
+    # exactly that, with the users the vertex still had on board — nobody: each
+    # departure was announced and folded as it happened (genro-asgi #60).
     await wait_for(lambda: group.wakes == ["quitted"])
     assert handler.state == "quitted"
-    assert group.users_on_board == [{"mario", "anna"}]
+    assert group.users_on_board == [set()]
     assert "WILD death" not in caplog.text
     assert handler.connector.connected is False
 
     # AND THE ROUND CONSUMES IT. What the group does at that round is Macro 3's
     # own; what the CHAIN does with it exists already, so the driver plays the
     # round: the ended state becomes the worker event, the group takes the handler
-    # out, and the vertex writes the freezer marks of the two the last photo had
-    # flagged — whose own worker events died with the wire.
+    # out, and the freezer marks of the two — written when their departures were
+    # announced — stay as they are.
     handler.envelope_handler.report_death()
 
     assert group.dropped_workers == [WORKER_NAME]
