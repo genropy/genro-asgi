@@ -366,8 +366,6 @@ flowchart TB
 | [020 orchestration](../20_spa/020_orchestration/README.md) | many users with live state, scaled across processes, never split |
 | [030 channel](../20_spa/030_channel/README.md) | the wire: frames, hub, the lane (shelf) |
 | [040 global-store](../20_spa/040_global-store/README.md) | one shared state, safe read-modify-write |
-| [050 datachanges](../20_spa/050_datachanges/README.md) | what one page changes, the others must see |
-| [060 dbevents](../20_spa/060_dbevents/README.md) | the database changed a table; the page must learn it |
 | [070 console](../20_spa/070_console/README.md) | ask a live pool the questions nobody predicted |
 | [080 bridge-contract](../20_spa/080_bridge-contract/README.md) | what genropy-asgi implements and consumes — generalized core, legacy logic in the bridge |
 
@@ -385,10 +383,7 @@ flowchart TB
 flowchart LR
     SPA[spa-application] --> ORC[orchestration]
     GS[global-store] --> ORC
-    DC[datachanges] --> ORC
-    DB[dbevents] --> ORC
     BRC[bridge-contract] --> SPA
-    DC <-->|one DeliveryDesk| DB
     CON[console] -->|eval over the lane| ORC
     ORC --> CH[channel]
     BUN[deployment-bundles] --> ORC
