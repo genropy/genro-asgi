@@ -30,7 +30,10 @@ of the fields. Beside the rows: the request slot comes from
 ``SpaWorker.on_request_served``, and a process that has just presented itself
 is told to the vertex through ``SpaCommander.on_worker_presented`` — the seam
 the source filter of a hosted site is pushed from, once per process, on the
-envelope that carries the presentation and no other.
+envelope that carries the presentation and no other. The last layer of the
+envelope chain is the commander's ``envelope_handler`` property: a consumer
+returns its subclass of ``CommanderEnvelopeHandler`` and reads, in an
+``on_<op>`` that calls the core's, what a worker event carries for it.
 """
 
 from __future__ import annotations
@@ -46,6 +49,7 @@ from genro_tytx import to_tytx
 from genro_asgi.spa import RegisterRegistry
 from genro_asgi.spa.environ import WsgiSeam
 from genro_asgi.spa.orchestration import FreezeHandler, GroupHandler, SpaCommander, SpaWorker
+from genro_asgi.spa.orchestration.envelope_handler import CommanderEnvelopeHandler
 from genro_asgi.spa.orchestration.spa_worker import RequestSlot
 from genro_asgi.spa.register_row import ConnectionRow, PageRow, UserRow
 
@@ -111,6 +115,16 @@ class XT_Worker(SpaWorker):
         self.served.append(type(self.request_slot).__name__)
 
 
+class XT_EnvelopeHandler(CommanderEnvelopeHandler):
+    """A consumer's last layer: it reads what a page's birth carries for it."""
+
+    def on_new_page(self, worker_event: dict[str, Any]) -> None:
+        super().on_new_page(worker_event)
+        self.spa_commander.announced_pages.append(
+            (worker_event["page_id"], worker_event["xt_tables"])
+        )
+
+
 class XT_Commander(SpaCommander):
     """A consumer's commander: it builds the vertex data and applies the writes itself.
 
@@ -123,6 +137,11 @@ class XT_Commander(SpaCommander):
         super().__init__(*args, **kwargs)
         self.applied: list[list[dict[str, Any]]] = []
         self.presented: list[str] = []
+        self.announced_pages: list[tuple[str, list[str]]] = []
+
+    @property
+    def envelope_handler(self) -> CommanderEnvelopeHandler:
+        return XT_EnvelopeHandler(self)
 
     def new_global_store(self) -> Any:
         self.built.append("xt")
@@ -281,3 +300,27 @@ async def test_a_newborn_process_is_told_to_the_vertex_once(short_root, tmp_path
     finally:
         await lane.close()
     assert commander.presented == [lane.worker_name]
+
+
+async def test_the_consumers_envelope_layer_reads_what_a_pages_birth_carries(short_root, tmp_path):
+    commander = XT_Commander(short_root / "frozen_users")
+    group = GroupHandler(
+        commander,
+        "standard",
+        memory_concession_bytes=8 * 1024 * 1024 * 1024,
+        instance_dir=short_root / "i",
+        frozen_users_path=short_root / "frozen_users",
+        entry_module="never.launched",
+    )
+    lane = XT_DeskLane(commander, group, FreezeHandler(tmp_path / "frozen_users"))
+    await lane.open()
+    try:
+        # The lane's worker is the core's, so the event a consumer's row would
+        # announce is sent by hand, on the worker's own channel.
+        await lane.worker.announce_worker_events(
+            [{"op": "new_page", "worker": lane.worker_name, "page_id": "p1", "connection_id": "c1", "xt_tables": ["t"]}]
+        )
+    finally:
+        await lane.close()
+    assert commander.page_connection_map == {"p1": "c1"}
+    assert commander.announced_pages == [("p1", ["t"])]

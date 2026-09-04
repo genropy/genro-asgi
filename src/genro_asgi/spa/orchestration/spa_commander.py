@@ -528,7 +528,6 @@ class SpaCommander:
         #: The tree of what a worker may call on the vertex: ``store/…``,
         #: ``observation`` and whatever a consumer attaches.
         self.commander_dispatcher = CommanderOperations(self)
-        self.envelope_handler = CommanderEnvelopeHandler(self)
         #: Where the whole machine stands: ``running`` or ``saturated`` (no room
         #: for a newcomer anywhere). Written by the check of the resources, which
         #: arrives with the heartbeat.
@@ -833,6 +832,18 @@ class SpaCommander:
                     self._logger.debug(
                         "Observation switch %s refused by %s (%s)", on, worker_handler.name, exc
                     )
+
+    @property
+    def envelope_handler(self) -> CommanderEnvelopeHandler:
+        """The last layer of the envelope chain: what the fold does at this level.
+
+        Read once by every ``GroupHandler`` at its birth, which hands the layer
+        to its own. A consumer's commander returns its subclass of
+        ``CommanderEnvelopeHandler`` here — an ``on_<op>`` of its own that calls
+        the core's and then reads what the event carries for it, such as the
+        tables a newborn page subscribes — and the fold stays one chain.
+        """
+        return CommanderEnvelopeHandler(self)
 
     def on_worker_presented(self, worker_handler: Any) -> None:
         """A process has just presented itself on its wire: the seam a consumer overrides.

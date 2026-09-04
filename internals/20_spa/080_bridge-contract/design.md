@@ -21,6 +21,10 @@ the core names, composition never a subclass of the worker or the vertex:
   bridge's own orders to the worker, called by the vertex down the lane.
 - `SpaCommander.on_worker_presented(worker_handler)`: a process has just
   presented itself — where the bridge pushes what a newborn must know.
+- `SpaCommander.envelope_handler` (property): the last layer of the envelope
+  chain; the bridge returns its subclass of `CommanderEnvelopeHandler` and reads
+  in its own `on_<op>`, after the core's, what a worker event carries for it —
+  the tables a newborn page subscribes, above all.
 - `SpaWorker.build_request_slot()` / `on_request_served()`: what a request
   carries, and the tail of every served request.
 - `RegisterRegistry.page_row_class` + `subscribe_page_store` / `detach_page` /

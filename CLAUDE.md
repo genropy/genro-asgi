@@ -134,7 +134,12 @@ for its orders to the worker, `build_request_slot` for what a request carries,
 `WorkerHandler.read_envelope` on the envelope that carries the presentation (the
 `pid` slot, said at birth and never again), once per process, a no-op in the
 core: the seam the bridge pushes its source filter from, on a task of its own,
-never holding up the envelope. `RequestSlot` carries `worker_events`,
+never holding up the envelope — and `SpaCommander.envelope_handler`, a property
+returning the last layer of the envelope chain (`CommanderEnvelopeHandler`),
+read once by every `GroupHandler` at birth: the bridge's commander returns its
+subclass, whose `on_new_page` calls the core's and then reads the tables the
+newborn page subscribes, which the core's layer ignores (owner, 2026-09-04: a
+property, not a `_class` attribute nor a factory method). `RequestSlot` carries `worker_events`,
 `connection_id` and `login_previous_user` and nothing else; the census of the
 worker and of the vertex show no genropy entry.
 
