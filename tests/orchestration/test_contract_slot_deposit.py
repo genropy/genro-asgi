@@ -17,8 +17,9 @@
 A commit's deposits used to leave the worker only inside ``collect_page``, which
 only a page's own envelope reaches: a ``rootPage`` webhook, or a request that
 failed after its commit, announced to nobody. The end of the stitching now
-delivers whatever the slot still holds through ``/desk/deposit`` — filed in the
-subscribers' queues, nothing retired, because there is no page to answer — and
+delivers whatever the slot still holds through ``/commander/delivery/deposit`` —
+filed in the subscribers' queues, nothing retired, because there is no page to
+answer — and
 after a collect the slot is empty, so nothing is delivered twice.
 """
 

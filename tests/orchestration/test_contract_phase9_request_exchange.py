@@ -30,8 +30,8 @@ What dies: ``deposit_dbevent``, ``fan_out_local``, ``worker.subscriptions``
 from __future__ import annotations
 
 import asyncio
-import functools
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 
 import pytest
 from genro_bag import Bag
@@ -149,22 +149,31 @@ async def test_local_only_events_reach_only_the_own_collect_and_never_the_wire(l
 async def test_the_exchange_happens_on_every_request_even_empty_handed(lane):
     # wf:contract: a request that generated nothing still exchanges at its
     # wf:contract: end: retiring the page's pendings is the reason, and the
-    # wf:contract: outbound payload is simply empty.
-    served = []
-    desk = lane.desk
-    original = desk.op_exchange
-    desk.op_exchange = functools.partial(_recording_exchange, original, served)
+    # wf:contract: outbound payload is simply empty. Observed by its effect —
+    # wf:contract: what waited at the desk for the page is retired by a collect
+    # wf:contract: that deposited nothing — since the exchange is resolved by
+    # wf:contract: name on the dispatcher's tree and cannot be intercepted on
+    # wf:contract: the desk instance.
+    lane.desk.file_datachange(
+        {
+            "op": "set_datachange",
+            "kind": "page",
+            "target": PAGE,
+            "filters": None,
+            "change": to_tytx(
+                {"key": {"path": "a", "reason": "r", "fired": False}, "value": 1,
+                 "attributes": None, "delete": False, "change_ts": datetime.now(UTC)},
+                "json",
+            ),
+        }
+    )
+    assert PAGE in lane.desk.page_datachange_map
 
     collected = await lane.verb("collect_page", PAGE)
 
-    assert collected == {"datachanges": [], "dbevents": []}
-    assert served == [{"page_id": PAGE, "user": USER, "dbevents": []}]
-
-
-def _recording_exchange(original, served, **payload):
-    """Serve the real exchange, keeping the payload the worker sent up."""
-    served.append(payload)
-    return original(**payload)
+    assert collected["dbevents"] == []
+    assert [change["value"] for change in collected["datachanges"]] == [1]
+    assert PAGE not in lane.desk.page_datachange_map
 
 
 async def test_own_generated_events_come_back_in_the_same_requests_collect(lane):

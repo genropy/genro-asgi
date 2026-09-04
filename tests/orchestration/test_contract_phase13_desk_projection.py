@@ -110,7 +110,7 @@ async def test_the_drop_cascade_reaches_the_desk_and_is_pinned(desk_lane):
     commander.connection_user_map["c-1"] = "mario"
     commander.user_map["mario"] = commander._new_row()
     commander.page_connection_map["p-1"] = "c-1"
-    desk.op_subscribe_table("p-1", "mytable")
+    desk.subscribe_table("p-1", "mytable")
     desk.file_dbevent(
         {"table": "mytable", "batch": [], "from_page_id": "px", "reason": None, "ts": 0.0}
     )

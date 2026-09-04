@@ -176,6 +176,7 @@ from pathlib import Path
 from typing import Any
 
 from genro_bag import Bag
+from genro_routes import RoutingClass, route
 import psutil
 from genro_tytx import from_tytx, to_tytx
 
@@ -243,11 +244,6 @@ SHAPE_REVIEW_SECONDS = HEARTBEAT_SECONDS * CHECK_OCCUPANCY_BEATS
 #: like one of the contract ops.
 SITE_PATH_PREFIX = "/site"
 
-#: The namespace of the lane going UP: a worker places its desk CALLs on
-#: ``/desk/<op>``, the way the orders going down travel on ``/op/<name>``. The
-#: segment after the prefix IS the name of the method that serves it.
-DESK_PATH_PREFIX = "/desk/"
-
 #: What ``kind`` names when an addressed write is a STATE one: the target is a
 #: store, and the write is a real Bag write wherever it lands. Redefined with
 #: its ratified value rather than imported: the module that declares it is the
@@ -276,18 +272,24 @@ REBOOT_DATA_NAME = "reboot_data"
 __all__ = [
     "CGROUP_MEMORY_FILES",
     "DECISIONS_LOGGER_NAME",
-    "DESK_PATH_PREFIX",
     "GUEST_PREFIX",
     "HEARTBEAT_SECONDS",
     "ORDERS_LOGGER_NAME",
     "STATE_KINDS",
+    "CommanderOperations",
     "DeliveryDesk",
+    "GlobalStoreOperations",
     "SpaCommander",
 ]
 
 
-class DeliveryDesk:
+class DeliveryDesk(RoutingClass):
     """The vertex's desk: who subscribes what, and what waits for whom.
+
+    The ``delivery`` branch of the commander's dispatcher: its four ``@route``
+    methods are the CALLs a worker places on ``/commander/delivery/<op>``, resolved
+    by name by genro-routes (#59). This is the genropy half of the vertex — it
+    leaves the core for the bridge, which will attach its own class in its place.
 
     The commander alone holds the subscription index and the pending queues, and
     every one of them is fed and drained by CALLs a worker places on the lane.
@@ -297,11 +299,6 @@ class DeliveryDesk:
     own store, applied to his Bag by whichever of his pages retires them —
     usersticky puts them all in one process, and the siblings capture the write
     locally on their own ``user_view``).
-
-    **The global store is served here too**, for the same reason: it lives on
-    the commander and nowhere else, so ``store_set``, ``store_del`` and the two
-    halves of the read-modify-write grant are lane CALLs like the rest. There is
-    no replica anywhere to keep aligned.
 
     **Outside the pickled surface, on purpose.** The queues are ephemeral: what
     is waiting for a user who goes into the freezer is lost with the websockets
@@ -347,36 +344,6 @@ class DeliveryDesk:
         """Every table holding at least one subscription — the workers' source filter."""
         return sorted(self.page_subscriptions.table_pages)
 
-    def serve_child_call(self, path: str, data: dict[str, Any]) -> Any:
-        """Serve one CALL a worker placed on the lane, by the name in its path.
-
-        Args:
-            path: the routing key, ``/desk/<op>``.
-            data: the payload, handed over as the op's own keyword arguments.
-
-        Returns:
-            Whatever the op answers, which becomes the ``result`` of the REPLY.
-
-        Raises:
-            AttributeError: no op of that name — the wire answers an error REPLY,
-                never a silent discard.
-        """
-        return getattr(self, f"op_{path.removeprefix(DESK_PATH_PREFIX)}")(**data)
-
-    def op_observation(self, kind: str, source: str, data: dict[str, Any]) -> dict[str, Any]:
-        """Take one observation off the lane and hand it to whoever watches.
-
-        Args:
-            kind: the mutation the child reports.
-            source: the worker it happened in.
-            data: the keys that name it.
-
-        Returns:
-            Nothing: the child does not read this answer, it only needs one.
-        """
-        self.spa_commander.publish_observation(kind, source, data)
-        return {}
-
     def install_page_subscriptions(self, page_id: str, tables: list[str]) -> None:
         """File a page's announced subscriptions: the index rebuilt from the row.
 
@@ -392,7 +359,8 @@ class DeliveryDesk:
         if any(created):
             self._announce_subscribed_tables()
 
-    def op_subscribe_table(
+    @route()
+    def subscribe_table(
         self, page_id: str, table: str, subscribe: bool = True
     ) -> dict[str, Any]:
         """File (or unfile) a page's subscription to a table's events.
@@ -417,7 +385,8 @@ class DeliveryDesk:
             self._announce_subscribed_tables()
         return {"page_id": page_id, "table": table, "subscribe": subscribe}
 
-    def op_exchange(
+    @route()
+    def exchange(
         self,
         page_id: str,
         user: str,
@@ -449,7 +418,8 @@ class DeliveryDesk:
             "store_changes": to_tytx(self.drain_user_store_changes(user), "json"),
         }
 
-    def op_deposit(self, dbevents: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    @route()
+    def deposit(self, dbevents: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         """File the deposits of a request that reached no ``collect_page``.
 
         Args:
@@ -467,7 +437,8 @@ class DeliveryDesk:
             self.file_dbevent(deposit)
         return {}
 
-    def op_on_datachange(self, **message: Any) -> dict[str, Any]:
+    @route()
+    def on_datachange(self, **message: Any) -> dict[str, Any]:
         """File one addressed write the moment its own verb is called.
 
         Args:
@@ -566,7 +537,54 @@ class DeliveryDesk:
         """Retire a user's pending store writes, all of them, in arrival order."""
         return self.user_store_change_map.pop(user, [])
 
-    def op_store_set(self, path: str, value: Any = None) -> dict[str, Any]:
+    def drop_page(self, page_id: str) -> None:
+        """Forget a page here: its two queues and its subscriptions, one breath.
+
+        Args:
+            page_id: the page that is gone.
+
+        Acts on both page queue maps and on ``page_subscriptions``: nothing is
+        delivered to a page that is not there any more, and nothing keeps its
+        tables alive in the source filter.
+        """
+        self.page_datachange_map.pop(page_id, None)
+        self.page_dbevent_map.pop(page_id, None)
+        if self.page_subscriptions.drop_page(page_id):
+            self._announce_subscribed_tables()
+
+    def _announce_subscribed_tables(self) -> None:
+        """Tell the vertex the global set moved: every living worker gets it pushed."""
+        self.spa_commander.broadcast_subscribed_tables()
+
+    def drop_user(self, user: str) -> None:
+        """Forget what was waiting for a user's own store; his pages go on their own."""
+        self.user_store_change_map.pop(user, None)
+
+    def _under(self, path: str, prefix: str) -> bool:
+        """Whether a pending change's path falls under a dropped prefix."""
+        return path == prefix or path.startswith(f"{prefix}.")
+
+
+class GlobalStoreOperations(RoutingClass):
+    """The ``store`` branch of the commander's dispatcher: the global store on the lane.
+
+    The store lives on the commander and nowhere else, so the two blind writes,
+    the read and the two halves of the read-modify-write grant are CALLs a
+    worker places on ``/commander/store/<op>``. There is no replica anywhere to
+    keep aligned. ``delete`` is served under the name ``del`` — the path the
+    workers use, which is not a Python name.
+
+    Args:
+        spa_commander: the vertex whose ``global_register`` and ``global_lock``
+            these operations act on.
+    """
+
+    def __init__(self, spa_commander: Any) -> None:
+        self.spa_commander = spa_commander
+        self._logger = logging.getLogger(__name__)
+
+    @route()
+    def set(self, path: str, value: Any = None) -> dict[str, Any]:
         """Write one path of the store, and answer once it holds the value.
 
         Args:
@@ -583,7 +601,8 @@ class DeliveryDesk:
         self.spa_commander.global_register.set_item(path, value)
         return {"path": path}
 
-    def op_store_del(self, path: str) -> dict[str, Any]:
+    @route(name="del")
+    def delete(self, path: str) -> dict[str, Any]:
         """Remove one path of the store — the node is gone, not set to None.
 
         Args:
@@ -597,7 +616,8 @@ class DeliveryDesk:
         self.spa_commander.global_register.pop(path)
         return {"path": path}
 
-    def op_store_get(self, path: str) -> dict[str, Any]:
+    @route()
+    def get(self, path: str) -> dict[str, Any]:
         """Read one path of the store, and answer what it holds right now.
 
         Args:
@@ -616,7 +636,8 @@ class DeliveryDesk:
             "value": to_tytx(self.spa_commander.global_register.get_item(path), "json"),
         }
 
-    async def op_store_lock(
+    @route()
+    async def lock(
         self, worker: str, request_id: str
     ) -> dict[str, Any]:
         """Park on the FIFO grant, then hand the store itself to the winner.
@@ -639,7 +660,8 @@ class DeliveryDesk:
             "store": to_tytx(self.spa_commander.global_register, "json"),
         }
 
-    def op_store_unlock(
+    @route()
+    def unlock(
         self, request_id: str, changes: Any = None
     ) -> dict[str, Any]:
         """Apply a holder's drained changes and let the next waiter in.
@@ -682,32 +704,47 @@ class DeliveryDesk:
         self.spa_commander.global_lock.release()
         self._logger.info("Worker %s died holding the store: released, nothing applied", worker)
 
-    def drop_page(self, page_id: str) -> None:
-        """Forget a page here: its two queues and its subscriptions, one breath.
+
+class CommanderOperations(RoutingClass):
+    """The commander's dispatcher: what a worker may call on the vertex, as a tree.
+
+    A CALL that climbs the lane arrives at the worker's GROUP, whose dispatcher
+    forwards every ``commander/…`` path here (#59, D59-15). The tree IS the
+    table of the operations: ``observation`` is a leaf of this class, ``store``
+    is :class:`GlobalStoreOperations`, ``delivery`` is the :class:`DeliveryDesk`
+    for as long as it stays in the core, and a consumer attaches its own class
+    under a name of its own with ``add_branches`` — once, from its subclass of
+    the commander. A path nobody serves raises ``NotFound`` when the node is
+    called; the wire turns it into the error REPLY.
+
+    Args:
+        spa_commander: the vertex; its ``delivery_desk`` must exist already.
+    """
+
+    def __init__(self, spa_commander: Any) -> None:
+        self.spa_commander = spa_commander
+        self.global_store = GlobalStoreOperations(spa_commander)
+        self.add_branches(
+            [
+                {"name": "store", "instance": self.global_store},
+                {"name": "delivery", "instance": spa_commander.delivery_desk},
+            ]
+        )
+
+    @route()
+    def observation(self, kind: str, source: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Take one observation off the lane and hand it to whoever watches.
 
         Args:
-            page_id: the page that is gone.
+            kind: the mutation the child reports.
+            source: the worker it happened in.
+            data: the keys that name it.
 
-        Acts on both page queue maps and on ``page_subscriptions``: nothing is
-        delivered to a page that is not there any more, and nothing keeps its
-        tables alive in the source filter.
+        Returns:
+            Nothing: the child does not read this answer, it only needs one.
         """
-        self.page_datachange_map.pop(page_id, None)
-        self.page_dbevent_map.pop(page_id, None)
-        if self.page_subscriptions.drop_page(page_id):
-            self._announce_subscribed_tables()
-
-    def _announce_subscribed_tables(self) -> None:
-        """Tell the vertex the global set moved: every living worker gets it pushed."""
-        self.spa_commander.broadcast_subscribed_tables()
-
-    def drop_user(self, user: str) -> None:
-        """Forget what was waiting for a user's own store; his pages go on their own."""
-        self.user_store_change_map.pop(user, None)
-
-    def _under(self, path: str, prefix: str) -> bool:
-        """Whether a pending change's path falls under a dropped prefix."""
-        return path == prefix or path.startswith(f"{prefix}.")
+        self.spa_commander.publish_observation(kind, source, data)
+        return {}
 
 
 class SingleGroupRequired(Exception):
@@ -788,6 +825,9 @@ class SpaCommander:
         #: The desk of the deliveries: the subscriptions and the three queue
         #: species, held here alone and outside everything that is pickled.
         self.delivery_desk = DeliveryDesk(self)
+        #: The tree of what a worker may call on the vertex: ``store/…``,
+        #: ``observation``, ``delivery/…`` and whatever a consumer attaches.
+        self.commander_dispatcher = CommanderOperations(self)
         self.envelope_handler = CommanderEnvelopeHandler(self)
         #: Where the whole machine stands: ``running`` or ``saturated`` (no room
         #: for a newcomer anywhere). Written by the check of the resources, which

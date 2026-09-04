@@ -137,7 +137,7 @@ flight out of date: the accepted risk, measured against the tens of seconds
 that separate a page's subscription from its first commit. And every request
 delivers what its slot still holds before it returns:
 `SpaWorker.deliver_slot_deposits` sits in the `finally` of `_serve_on_thread`
-and sends the slot's deposits up `/desk/deposit`, which files them in the
+and sends the slot's deposits up `/commander/delivery/deposit`, which files them in the
 subscribers' queues and retires nothing — there is no page to answer — so a
 `rootPage` webhook, or a request that failed after its commit, announces like
 any page. `collect_page` keeps its two jobs, delivering AND retiring, and
@@ -359,8 +359,8 @@ parcel, never through the desk. The same user is the condition because his
 freeze waits for the caller's own pending call, so the write always precedes the
 photo; another user's freeze does not wait. Every other address — a page of
 another user even on this worker, `filters`, the STATE kinds — leaves at once
-from the request thread as ONE CALL, `/desk/on_datachange`
-(`DeliveryDesk.op_on_datachange`), filed the moment the verb runs; the desk is
+from the request thread as ONE CALL, `/commander/delivery/on_datachange`
+(`DeliveryDesk.on_datachange`), filed the moment the verb runs; the desk is
 the authority on existence and answers `{"filed": False}` for a target nobody
 holds, which the verb REPORTS in its answer (`filed`) and never raises — the
 daemon returned in silence on a missing item, genropy #1253 gives that silence a
@@ -394,14 +394,36 @@ and only that request's tail calls `freeze_connection` — a ping ending during 
 `doLogin` evicts nobody (the shared `_login_previous_user_map` let it, reproduced
 in the bridge on 2026-09-04). The ONE producer answering no CALL, the quit's
 transfer cycle, gives each departure a slot of its own and sends what it
-announced with ONE CALL of the worker's, `/op/announce`, which `WorkerHandler`
-hands to the same fold a reply's envelope goes through; the REPLY is the
+announced with ONE CALL of the worker's, `/group/announce`, which the group's
+dispatcher hands to the same fold a reply's envelope goes through; the REPLY is the
 acknowledgement, a vertex that answers an error or nothing within
 `ANNOUNCE_TIMEOUT_SECONDS` loses it, counted and logged, never retried. This is
 the two-channel mechanism of the pre_refactoring stack (`offer_event` on the
 per-CALL sink, `offer_lifecycle` on the outbox) without the outbox's `seq`/ack.
 In tests, `XT_DeskLane.verb` announces after each verb and `attach_wire` gives a
 unit-test worker a stub wire and a slot.
+
+**What a worker calls up the lane is a routing tree (landed 2026-09-04, #59
+block 1).** The CALLs a worker places on the lane are resolved by name with
+genro-routes, the same machinery the HTTP side uses — no chain of `if` on the
+path, no hand-written `getattr`. The first segment names the LEVEL that serves:
+`group/…` for the group's own operations, `commander/…` for the vertex's. Each
+`GroupHandler` hosts `group_dispatcher` (`GroupDispatcher`): its `group` branch is
+`GroupOperations` (today `announce`, the worker's second channel, folded on the
+handler of the worker named in the payload), its `commander` branch forwards the
+rest, path unconsumed, to `SpaCommander.commander_dispatcher`
+(`CommanderOperations`: the leaf `observation`, the branch `store` =
+`GlobalStoreOperations` with `set`/`get`/`del`/`lock`/`unlock`, and the branch
+`delivery` = the `DeliveryDesk`, whose four ops are `@route` methods for as long
+as the genropy machinery stays in the core). `WorkerHandler.serve_child_call` is
+one line: resolve on the group's tree and call. A path nobody serves raises
+`NotFound`, a payload that does not fit the signature raises before the body
+runs, and `route.nodes()` on either dispatcher lists what it offers. A consumer
+attaches its own operation class under the commander's dispatcher with
+`add_branches`, once, from its subclass of the commander — composition, never a
+subclass of the worker or the vertex. The worker's parent will be its group
+(roadmap seed 2): the boundary is drawn today and the paths survive it. Orders
+going DOWN (`/op/…`) are still the `if` chain in `SpaWorker.answer_call`: block 2.
 
 **Not yet built (second pass).** The deliberate reboot command on `_server`
 (`reboot now`/`reboot wait N`, notify_user, the consumer service-message

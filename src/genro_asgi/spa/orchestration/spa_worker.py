@@ -88,8 +88,8 @@ plural: dropping a connection announces its pages as one ``drop_pages``, droppin
 a user its connections as one ``drop_connections``. Outside any CALL there is no
 slot and a mutation raises. The ONE producer that answers no CALL — the transfer
 cycle, which is the quit's — gives each departure a slot of its own and sends
-what it announced with ONE CALL of this worker's, ``/op/announce``, folded at the
-vertex exactly as a reply's envelope is; the REPLY is the acknowledgement, and a
+what it announced with ONE CALL of this worker's, ``/group/announce``, folded at
+the vertex exactly as a reply's envelope is; the REPLY is the acknowledgement, and a
 vertex that does not answer loses that announcement, counted and logged, never
 retried.
 
@@ -320,35 +320,38 @@ ANNOUNCE_TIMEOUT_SECONDS = 10.0
 #: The three clocks every register item carries, in the order of their rank.
 CLOCK_NAMES = ("last_refresh_ts", "last_user_ts", "last_rpc_ts")
 
-#: The routing key of the lane call that files a page's table subscription at
-#: the desk: it goes up at once and synchronously, so the index is already
-#: right when the request that subscribed commits in the same breath.
-DESK_SUBSCRIBE_TABLE_PATH = "/desk/subscribe_table"
+#: The routing keys of the lane going UP are paths on the trees the group and
+#: the commander host (#59): the first segment names the level that serves, the
+#: next ones the operation class and the operation — ``/commander/store/get``.
+#: The lane call that files a page's table subscription at the desk: it goes up
+#: at once and synchronously, so the index is already right when the request
+#: that subscribed commits in the same breath.
+DESK_SUBSCRIBE_TABLE_PATH = "/commander/delivery/subscribe_table"
 
 #: The routing key of the end-of-request exchange: what this request produced
 #: goes up, what waits for its page comes back.
-DESK_EXCHANGE_PATH = "/desk/exchange"
+DESK_EXCHANGE_PATH = "/commander/delivery/exchange"
 
 #: The routing key of the end-of-request deposit: what the slot still holds
 #: when no collect carried it away goes up alone, and nothing comes back.
-DESK_DEPOSIT_PATH = "/desk/deposit"
+DESK_DEPOSIT_PATH = "/commander/delivery/deposit"
 
 #: The routing key one addressed write climbs the moment its verb is called:
 #: it is filed at the desk at once, so a request that never collects loses
 #: nothing, and the answer says whether the target exists at all.
-DESK_ON_DATACHANGE_PATH = "/desk/on_datachange"
+DESK_ON_DATACHANGE_PATH = "/commander/delivery/on_datachange"
 
 #: The routing keys of the global store, which lives on the commander and
 #: nowhere else: two blind writes, and the two halves of one grant.
-DESK_STORE_SET_PATH = "/desk/store_set"
-DESK_STORE_DEL_PATH = "/desk/store_del"
-DESK_STORE_GET_PATH = "/desk/store_get"
-DESK_STORE_LOCK_PATH = "/desk/store_lock"
-DESK_STORE_UNLOCK_PATH = "/desk/store_unlock"
+DESK_STORE_SET_PATH = "/commander/store/set"
+DESK_STORE_DEL_PATH = "/commander/store/del"
+DESK_STORE_GET_PATH = "/commander/store/get"
+DESK_STORE_LOCK_PATH = "/commander/store/lock"
+DESK_STORE_UNLOCK_PATH = "/commander/store/unlock"
 
 #: The routing key one observation climbs: a mutation of this process's
 #: registers, as it happens, for whoever is watching at the vertex.
-DESK_OBSERVATION_PATH = "/desk/observation"
+DESK_OBSERVATION_PATH = "/commander/observation"
 
 #: The address kind that names a page itself: the change is a SIGNAL and lands
 #: as a deposit on that page's queue at the desk — no Bag write, no residue.
@@ -2848,6 +2851,7 @@ class SpaWorker:
         gone, and its death settles what this process held.
         """
         data = self._outbound({ENVELOPE_SLOT_WORKER_EVENTS: worker_events})
+        data["worker"] = self.name
         try:
             await self.call(ANNOUNCE_OP_PATH, data, timeout=ANNOUNCE_TIMEOUT_SECONDS)
         except (CommanderCallFailed, TimeoutError):

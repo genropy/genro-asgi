@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from genro_asgi.spa.orchestration import GroupEnvelopeHandler, SpaCommander
+from genro_asgi.spa.orchestration.group_handler import GroupDispatcher
 
 
 class GroupStub:
@@ -59,6 +60,7 @@ class GroupStub:
         self.name = name
         self.spa_commander = spa_commander or SpaCommander(frozen_users_path)
         self.envelope_handler = GroupEnvelopeHandler(self, self.spa_commander.envelope_handler)
+        self.group_dispatcher = GroupDispatcher(self)
         self.user_worker_map: dict[str, str | None] = {}
         #: No template: a handler under this stub spawns its process, as the
         #: handlers of a group with no engine factory declared do.
@@ -79,6 +81,13 @@ class GroupStub:
         self.cpu_admission_reopen_percent = 40.0
         #: The handler under this group; the tests assign it after construction.
         self.worker_handler: Any = None
+
+    @property
+    def worker_handler_map(self) -> dict[str, Any]:
+        """The one handler under this stub, by name — what ``group/announce`` looks up."""
+        if self.worker_handler is None:
+            return {}
+        return {self.worker_handler.name: self.worker_handler}
 
     def ping_now(self) -> None:
         """The wake: at this round the group reads the state and who was on board."""

@@ -166,8 +166,9 @@ FREEZE_USER_OP_PATH = "/op/freeze_user"
 #: The routing key of the worker's OWN announcement: the envelope of what
 #: happened in this process while no CALL was being served — the transfer cycle
 #: of a quit — folded exactly as the envelope of a REPLY is. Every other worker
-#: event rides the REPLY of the CALL that caused it (owner, 2026-09-04).
-ANNOUNCE_OP_PATH = "/op/announce"
+#: event rides the REPLY of the CALL that caused it (owner, 2026-09-04). It is
+#: the group's operation: the worker announces to ITS group (#59, D59-14).
+ANNOUNCE_OP_PATH = "/group/announce"
 
 #: How long an ordered departure may take before this handler stops waiting for
 #: it, in seconds. Past it the process is killed and the death that follows is an
@@ -539,29 +540,25 @@ class WorkerHandler:
             self._logger.debug("Worker %s: the subscribed-tables push got no answer", self.name)
 
     def serve_child_call(self, path: str, data: dict[str, Any]) -> Any:
-        """Hand a CALL the child placed on the lane to the desk that serves it.
+        """Resolve a CALL the child placed on the lane on the group's dispatcher, and call it.
 
         Args:
-            path: the routing key the child chose.
-            data: its payload.
+            path: the routing key the child chose — ``/group/…`` or ``/commander/…``.
+            data: its payload, handed over as the operation's keyword arguments.
 
         Returns:
-            Whatever the desk answers, which the wire puts in the REPLY; an empty
-            answer for the announcement, whose whole effect is the fold.
+            Whatever the operation answers, sync or awaitable; the wire awaits
+            it if needed and puts it in the REPLY.
 
         Raises:
-            AttributeError: the desk serves no op of that name; the wire turns it
-                into an error REPLY, so the child is answered either way.
+            NotFound: no operation at that path, on either tree; the wire turns
+                it into an error REPLY, so the child is answered either way.
+            TypeError: the payload does not fit the operation's signature —
+                refused before the body runs, the same way.
 
-        The announcement is the second channel of the worker events: the
-        envelope goes into the same fold a REPLY's does. Nothing else is written
-        here: the queues and the subscriptions are the vertex's, and this
-        handler is only the rung the call climbs.
+        This handler is only the rung the call climbs: nothing is written here.
         """
-        if path == ANNOUNCE_OP_PATH:
-            self.read_envelope(data)
-            return {}
-        return self.group_handler.spa_commander.delivery_desk.serve_child_call(path, data)
+        return self.group_handler.group_dispatcher.route.node(path)(**data)
 
     async def launch_process(self) -> None:
         """Open the wire if it is closed, spawn the child, wait for it to present itself.
@@ -726,7 +723,9 @@ class WorkerHandler:
         death was nobody's order — rings the group's wake, and gives the desk
         back the store grant this process was holding, if it held one.
         """
-        self.group_handler.spa_commander.delivery_desk.release_worker_lock(self.name)
+        self.group_handler.spa_commander.commander_dispatcher.global_store.release_worker_lock(
+            self.name
+        )
         ordered = self._settle_death_wait()
         if ordered:
             self.state = "quitted"

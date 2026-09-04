@@ -44,14 +44,13 @@ import pytest
 from genro_tytx import from_tytx, to_tytx
 
 from genro_asgi.spa.orchestration import FreezeHandler, GroupHandler, SpaCommander
-from genro_asgi.spa.orchestration.spa_commander import DESK_PATH_PREFIX
 
 from .conftest import XT_DeskLane
 
 WORKER_NAME = "standard_0001"
-SUBSCRIBE_PATH = f"{DESK_PATH_PREFIX}subscribe_table"
-EXCHANGE_PATH = f"{DESK_PATH_PREFIX}exchange"
-ON_DATACHANGE_PATH = f"{DESK_PATH_PREFIX}on_datachange"
+SUBSCRIBE_PATH = "/commander/delivery/subscribe_table"
+EXCHANGE_PATH = "/commander/delivery/exchange"
+ON_DATACHANGE_PATH = "/commander/delivery/on_datachange"
 USER = "mario"
 PAGE = "page_one"
 SIBLING = "page_two"

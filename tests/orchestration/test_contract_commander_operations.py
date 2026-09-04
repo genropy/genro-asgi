@@ -1,0 +1,164 @@
+# Copyright 2025 Softwell S.r.l.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Contract: what a worker may call up the lane is a routing tree (#59, D59-9..11).
+
+The CALLs a worker places on the lane are resolved by name on genro-routes
+trees — not by a chain of ``if`` nor by a hand-written ``getattr``. The first
+segment of the path names the LEVEL that serves: ``group`` for the group's own
+operations (the announcement), ``commander`` for the vertex's (the global
+store, the observation, the genropy delivery until it leaves the core). The
+worker talks to its group: the group's dispatcher serves ``group/…`` itself and
+forwards ``commander/…`` to the commander's dispatcher, so the boundary between
+group and vertex is drawn today and the paths survive the group moving to a
+process of its own. The core attaches its own operation classes; a consumer
+attaches its own under a name of its own, on the commander, once, and the wire
+reaches them the same way. A path nobody serves is refused BY NAME
+(``NotFound``), a call that does not fit the operation's signature is refused
+before the body runs, and each tree says what it offers without being called.
+
+The tests place raw CALLs on a real lane: a ``SpaWorker`` on one end, a real
+``WorkerHandler`` under a real ``SpaCommander`` on the other.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+import pytest
+from genro_routes import RoutingClass, route
+from genro_tytx import from_tytx, to_tytx
+
+from genro_asgi.spa.orchestration.worker_connector import CommanderCallFailed
+from genro_asgi.spa.orchestration.worker_handler import ANNOUNCE_OP_PATH
+
+from .conftest import XT_DeskLane
+
+STORE_SET = "/commander/store/set"
+STORE_GET = "/commander/store/get"
+STORE_DEL = "/commander/store/del"
+STORE_LOCK = "/commander/store/lock"
+STORE_UNLOCK = "/commander/store/unlock"
+OBSERVATION = "/commander/observation"
+SUBSCRIBE_TABLE = "/commander/delivery/subscribe_table"
+
+
+class XT_ExtraOperations(RoutingClass):
+    """What a consumer attaches under the commander: one operation of its own."""
+
+    def __init__(self, spa_commander: Any) -> None:
+        self.spa_commander = spa_commander
+
+    @route()
+    def echo(self, **payload: Any) -> dict[str, Any]:
+        return {"echo": payload, "commander": type(self.spa_commander).__name__}
+
+
+@pytest.fixture
+async def lane(desk_lane: XT_DeskLane) -> XT_DeskLane:
+    return desk_lane
+
+
+async def test_store_set_then_get_round_trip_over_the_lane(lane):
+    """The global store is served on the tree: a write lands, a read sees it."""
+    assert await lane.worker.call(STORE_SET, {"path": "a.b", "value": 42}) == {"path": "a.b"}
+    reply = await lane.worker.call(STORE_GET, {"path": "a.b"})
+    assert reply["path"] == "a.b"
+    assert from_tytx(reply["value"], "json") == 42
+
+
+async def test_store_del_removes_the_node(lane):
+    await lane.worker.call(STORE_SET, {"path": "a.b", "value": 1})
+    assert await lane.worker.call(STORE_DEL, {"path": "a.b"}) == {"path": "a.b"}
+    reply = await lane.worker.call(STORE_GET, {"path": "a.b"})
+    assert from_tytx(reply["value"], "json") is None
+
+
+async def test_store_lock_grants_and_unlock_applies(lane):
+    """The two halves of the read-modify-write grant are leaves of the same branch."""
+    grant = await lane.worker.call(STORE_LOCK, {"worker": lane.worker_name, "request_id": "r1"})
+    assert grant["request_id"] == "r1"
+    assert lane.commander.global_lock.holds("r1")
+    reply = await lane.worker.call(
+        STORE_UNLOCK, {"request_id": "r1", "changes": to_tytx([], "json")}
+    )
+    assert reply == {"applied": True}
+    assert not lane.commander.global_lock.holds("r1")
+
+
+async def test_an_observation_call_reaches_the_watchers(lane):
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    await lane.commander.subscribe_observation(queue)
+    try:
+        await lane.worker.call(
+            OBSERVATION, {"kind": "xt_kind", "source": lane.worker_name, "data": {"k": 1}}
+        )
+        observed = await asyncio.wait_for(queue.get(), 5.0)
+    finally:
+        await lane.commander.unsubscribe_observation(queue)
+    assert observed["kind"] == "xt_kind"
+    assert observed["source"] == lane.worker_name
+
+
+async def test_a_delivery_operation_answers_under_its_own_branch(lane):
+    """The genropy operations live under their own segment until they leave the core."""
+    reply = await lane.worker.call(
+        SUBSCRIBE_TABLE, {"page_id": "p1", "table": "invoices", "subscribe": True}
+    )
+    assert reply == {"page_id": "p1", "table": "invoices", "subscribe": True}
+
+
+async def test_an_unknown_path_is_refused_by_name(lane):
+    with pytest.raises(CommanderCallFailed) as refusal:
+        await lane.worker.call("/commander/nothing_here", {})
+    assert refusal.value.path == "/commander/nothing_here"
+    assert "NotFound" in str(refusal.value)
+
+
+async def test_a_call_that_does_not_fit_the_signature_is_refused_before_the_body_runs(lane):
+    with pytest.raises(CommanderCallFailed) as refusal:
+        await lane.worker.call(STORE_GET, {"nope": 1})
+    assert "TypeError" in str(refusal.value)
+    assert "path" in str(refusal.value)
+
+
+async def test_the_announcement_is_the_groups_own_operation(lane):
+    """The worker's second channel climbs to ITS group: ``group/announce`` folds the envelope."""
+    assert ANNOUNCE_OP_PATH == "/group/announce"
+    await lane.verb("add_connection", "c1", "mario")
+    await lane.announce()
+    assert lane.commander.connection_user_map["c1"] == "mario"
+    assert lane.group.user_worker_map["mario"] == lane.worker_name
+
+
+async def test_each_dispatcher_says_what_it_serves(lane):
+    """Introspection, not documentation: the trees list their operations and branches."""
+    group = lane.group.group_dispatcher.route.nodes()
+    assert set(group["routers"]) == {"group", "commander"}
+    assert "announce" in group["routers"]["group"]["entries"]
+    commander = lane.commander.commander_dispatcher.route.nodes()
+    assert "observation" in commander["entries"]
+    assert {"store", "delivery"} <= set(commander["routers"])
+    assert set(commander["routers"]["store"]["entries"]) == {"set", "get", "del", "lock", "unlock"}
+
+
+async def test_a_consumer_attaches_its_own_operations_and_the_wire_reaches_them(lane):
+    """Composition: the consumer's class hangs under the commander's dispatcher, by a name of its own."""
+    lane.commander.commander_dispatcher.add_branches(
+        {"name": "xt_extra", "instance": XT_ExtraOperations(lane.commander)}
+    )
+    reply = await lane.worker.call("/commander/xt_extra/echo", {"x": 1})
+    assert reply == {"echo": {"x": 1}, "commander": "SpaCommander"}
+    assert "xt_extra" in lane.commander.commander_dispatcher.route.nodes()["routers"]
