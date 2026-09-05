@@ -18,7 +18,7 @@ from .executor import WORKER_ID, LocalTaskExecutor
 from .hub import EventHub
 from .manager import TaskManager
 from .mixin import TaskGrammar, TaskMixin
-from .schedule import CronSpec, next_run, parse_at, parse_every
+from .schedule import AtSpec, CronSpec, EverySpec, TaskCadence
 from .scheduler import TaskScheduler
 from .spool import STATUSES, TaskSpool, new_descriptor
 from .store import FileTaskStore, TaskStore
@@ -26,10 +26,13 @@ from .store import FileTaskStore, TaskStore
 __all__ = [
     "STATUSES",
     "WORKER_ID",
+    "AtSpec",
     "CronSpec",
     "EventHub",
+    "EverySpec",
     "FileTaskStore",
     "LocalTaskExecutor",
+    "TaskCadence",
     "TaskGrammar",
     "TaskManager",
     "TaskMixin",
@@ -37,7 +40,4 @@ __all__ = [
     "TaskSpool",
     "TaskStore",
     "new_descriptor",
-    "next_run",
-    "parse_at",
-    "parse_every",
 ]

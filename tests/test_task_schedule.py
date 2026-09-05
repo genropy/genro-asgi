@@ -12,12 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for tasks.schedule (core 1e Phase 4): pure cron/every/at parsing.
+"""Tests for tasks.schedule (core 1e Phase 4): cron/every/at cadences.
 
-No I/O, no server: pure functions and ``CronSpec``. Cron matches are checked by
-decoding the returned epoch back to a local ``datetime`` and asserting the
-field values, so the tests are timezone-agnostic (the parser evaluates in local
-time, like system cron).
+No I/O, no server: the three spec classes and ``TaskCadence``. Cron matches are
+checked by decoding the returned epoch back to a local ``datetime`` and
+asserting the field values, so the tests are timezone-agnostic (the parser
+evaluates in local time, like system cron).
 """
 
 from __future__ import annotations
@@ -26,49 +26,52 @@ from datetime import datetime
 
 import pytest
 
-from genro_asgi.tasks.schedule import CronSpec, next_run, parse_at, parse_every
+from genro_asgi.tasks.schedule import AtSpec, CronSpec, EverySpec, TaskCadence
 
 
-class TestParseEvery:
+class TestEverySpec:
     """``"<n><unit>"`` -> seconds, with strict validation."""
 
     def test_units(self) -> None:
-        assert parse_every("30s") == 30
-        assert parse_every("15m") == 15 * 60
-        assert parse_every("2h") == 2 * 3600
-        assert parse_every("1d") == 86400
+        assert EverySpec("30s").seconds == 30
+        assert EverySpec("15m").seconds == 15 * 60
+        assert EverySpec("2h").seconds == 2 * 3600
+        assert EverySpec("1d").seconds == 86400
 
     def test_whitespace_tolerated(self) -> None:
-        assert parse_every("  45s ") == 45
+        assert EverySpec("  45s ").seconds == 45
 
     @pytest.mark.parametrize("bad", ["", "s", "10", "10x", "1.5h", "-5m"])
     def test_malformed_raises(self, bad: str) -> None:
         with pytest.raises(ValueError):
-            parse_every(bad)
+            EverySpec(bad)
 
     def test_zero_interval_raises(self) -> None:
         with pytest.raises(ValueError, match="zero interval"):
-            parse_every("0s")
+            EverySpec("0s")
+
+    def test_next_run_adds_the_interval(self) -> None:
+        assert EverySpec("15m").get_next_run(1_000_000.0) == 1_000_000.0 + 15 * 60
 
 
-class TestParseAt:
+class TestAtSpec:
     """A list of ISO timestamps -> sorted epoch seconds."""
 
     def test_sorted_epochs(self) -> None:
-        got = parse_at(["2030-01-02T00:00:00", "2030-01-01T00:00:00"])
+        got = AtSpec(["2030-01-02T00:00:00", "2030-01-01T00:00:00"]).instants
         assert got == sorted(got)
         assert len(got) == 2
 
     def test_empty_list(self) -> None:
-        assert parse_at([]) == []
+        assert AtSpec([]).instants == []
 
     def test_not_a_list_raises(self) -> None:
         with pytest.raises(ValueError, match="want a list"):
-            parse_at("2030-01-01T00:00:00")
+            AtSpec("2030-01-01T00:00:00")
 
     def test_bad_timestamp_raises(self) -> None:
         with pytest.raises(ValueError, match="invalid at timestamp"):
-            parse_at(["not-a-date"])
+            AtSpec(["not-a-date"])
 
 
 class TestCronSpec:
@@ -106,51 +109,55 @@ class TestCronSpec:
         with pytest.raises(ValueError, match="invalid cron step"):
             CronSpec("*/0 * * * *")
 
-    def test_next_after_daily(self) -> None:
+    def test_next_run_daily(self) -> None:
         # every day at 07:30 — the next match is a 07:30 local instant
         after = datetime(2030, 6, 15, 8, 0, 0).timestamp()  # past 07:30 today
-        got = datetime.fromtimestamp(CronSpec("30 7 * * *").next_after(after))
+        got = datetime.fromtimestamp(CronSpec("30 7 * * *").get_next_run(after))
         assert (got.hour, got.minute) == (7, 30)
         assert got.date() == datetime(2030, 6, 16).date()   # -> tomorrow
 
-    def test_next_after_strictly_after(self) -> None:
+    def test_next_run_strictly_after(self) -> None:
         base = datetime(2030, 6, 15, 7, 30, 0)
-        got = CronSpec("30 7 * * *").next_after(base.timestamp())
+        got = CronSpec("30 7 * * *").get_next_run(base.timestamp())
         assert got > base.timestamp()                       # never returns "now"
 
     def test_dom_or_dow_when_both_restricted(self) -> None:
         # "0 0 13 * 5" matches day-13 OR any Friday (system-cron OR rule)
         spec = CronSpec("0 0 13 * 5")
         assert spec.dom_restricted and spec.dow_restricted
-        got = datetime.fromtimestamp(spec.next_after(datetime(2030, 6, 1).timestamp()))
+        got = datetime.fromtimestamp(spec.get_next_run(datetime(2030, 6, 1).timestamp()))
         assert got.day == 13 or (got.weekday() + 1) % 7 == 5
 
     def test_impossible_date_raises(self) -> None:
         with pytest.raises(ValueError, match="no occurrence"):
-            CronSpec("0 0 31 2 *").next_after(datetime(2030, 1, 1).timestamp())
+            CronSpec("0 0 31 2 *").get_next_run(datetime(2030, 1, 1).timestamp())
 
 
-class TestNextRun:
-    """Dispatch across the three kinds + the exhausted ``at`` -> None."""
+class TestTaskCadence:
+    """The kind picks the spec class; the exhausted ``at`` answers None."""
 
     def test_every_adds_interval(self) -> None:
         now = 1_000_000.0
-        assert next_run("every", "15m", now) == now + 15 * 60
+        assert TaskCadence("every", "15m").get_next_run(now) == now + 15 * 60
 
     def test_cron_delegates(self) -> None:
         now = datetime(2030, 6, 15, 8, 0, 0).timestamp()
-        got = next_run("cron", "30 7 * * *", now)
+        got = TaskCadence("cron", "30 7 * * *").get_next_run(now)
         assert got is not None and got > now
 
     def test_at_returns_first_future(self) -> None:
         now = datetime(2030, 6, 15).timestamp()
-        got = next_run("at", ["2030-06-14T00:00:00", "2030-06-16T00:00:00"], now)
-        assert got == datetime(2030, 6, 16).timestamp()
+        spec = ["2030-06-14T00:00:00", "2030-06-16T00:00:00"]
+        assert TaskCadence("at", spec).get_next_run(now) == datetime(2030, 6, 16).timestamp()
 
     def test_at_exhausted_returns_none(self) -> None:
         now = datetime(2030, 6, 15).timestamp()
-        assert next_run("at", ["2030-06-14T00:00:00"], now) is None
+        assert TaskCadence("at", ["2030-06-14T00:00:00"]).get_next_run(now) is None
 
     def test_unknown_kind_raises(self) -> None:
         with pytest.raises(ValueError, match="unknown schedule kind"):
-            next_run("weekly", "x", 0.0)
+            TaskCadence("weekly", "x")
+
+    def test_malformed_spec_raises_at_construction(self) -> None:
+        with pytest.raises(ValueError, match="invalid every spec"):
+            TaskCadence("every", "10x")
