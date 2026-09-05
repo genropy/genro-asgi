@@ -12,34 +12,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""MCP support: the JSON-RPC engine over genro-routes routers.
+"""JSON-RPC error codes and :class:`McpError`, shared by the engine and the method families.
 
-``engine`` holds :class:`McpEngine` (envelope, resolution) and
-:class:`McpDispatcher` (the tree of methods), ``tools`` the ``tools/*`` family,
-``jsonrpc`` the error codes and :class:`McpError`. The transport shells
-(``McpApplication``, ``McpOpenApiApplication``) live in ``applications`` and
-drive :class:`McpEngine` with their own invoke callback.
+The codes are the ones the transport renders in the ``error`` object of a
+JSON-RPC response. ``McpError`` carries one of them with a message; every
+protocol failure in the ``mcp`` package raises it and nothing else.
 """
 
 from __future__ import annotations
-
-from .engine import McpDispatcher, McpEngine
-from .jsonrpc import (
-    JSONRPC_INTERNAL_ERROR,
-    JSONRPC_INVALID_REQUEST,
-    JSONRPC_METHOD_NOT_FOUND,
-    JSONRPC_NOT_AUTHORIZED,
-    McpError,
-)
-from .tools import McpTools
 
 __all__ = [
     "JSONRPC_INTERNAL_ERROR",
     "JSONRPC_INVALID_REQUEST",
     "JSONRPC_METHOD_NOT_FOUND",
     "JSONRPC_NOT_AUTHORIZED",
-    "McpDispatcher",
-    "McpEngine",
     "McpError",
-    "McpTools",
 ]
+
+JSONRPC_INVALID_REQUEST = -32600
+JSONRPC_METHOD_NOT_FOUND = -32601
+JSONRPC_INTERNAL_ERROR = -32603
+JSONRPC_NOT_AUTHORIZED = -32000
+
+
+class McpError(Exception):
+    """Carries a JSON-RPC error code + message for the transport to render."""
+
+    def __init__(self, code: int, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message

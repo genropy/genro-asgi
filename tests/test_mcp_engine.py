@@ -158,7 +158,7 @@ class TestToolsList:
                 ],
             }
         }
-        schema = engine._input_schema(info)
+        schema = engine.mcp_dispatcher.tools._input_schema(info)
         assert schema == {
             "type": "object",
             "properties": {"x": {"type": "integer"}, "y": {"type": "string"}},
@@ -166,7 +166,7 @@ class TestToolsList:
         }
 
     def test_input_schema_without_params_block_is_empty_object(self, engine: McpEngine) -> None:
-        assert engine._input_schema({}) == {"type": "object", "properties": {}}
+        assert engine.mcp_dispatcher.tools._input_schema({}) == {"type": "object", "properties": {}}
 
 
 class TestToolsCall:
