@@ -140,7 +140,7 @@ read once by every `GroupHandler` at birth: the bridge's commander returns its
 subclass, whose `on_new_page` calls the core's and then reads the tables the
 newborn page subscribes, which the core's layer ignores (owner, 2026-09-04: a
 property, not a `_class` attribute nor a factory method). `RequestSlot` carries `worker_events`,
-`connection_id` and `login_previous_user` and nothing else; the census of the
+`connection_id` and `connection_previous_user` and nothing else; the census of the
 worker and of the vertex show no genropy entry.
 
 **Mobility and deaths.** One path only: hold → freeze → reassign →
@@ -353,7 +353,7 @@ on the CALL's own task, `_run_in_pool` runs the stitching under a copy of that
 context so the thread finds the same slot, `send_reply` sends that slot's events
 and no other's, then closes the slot; outside any CALL a mutation raises. The
 login's tail is the first case this protects: `change_connection_user` writes
-`login_previous_user` on the slot of the request that logged the connection in,
+`connection_previous_user` on the slot of the request that logged the connection in,
 and only that request's tail calls `freeze_connection` — a ping ending during a
 `doLogin` evicts nobody (the shared `_login_previous_user_map` let it, reproduced
 in the bridge on 2026-09-04). The ONE producer answering no CALL, the quit's
@@ -431,4 +431,4 @@ commits, still to be entered in the register). Decision registers:
 
 **All general policies are inherited from the parent document: [meta-genro-modules CLAUDE.md](https://github.com/softwellsrl/meta-genro-modules/blob/main/CLAUDE.md)**
 
-**Last Updated**: 2026-09-04
+**Last Updated**: 2026-09-05

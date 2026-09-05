@@ -370,7 +370,7 @@ class RequestSlot:
     registers while this CALL was being served, and they ride ITS reply — never
     another's (owner, 2026-09-04). A consumer's slot class adds what its own
     verbs produce per request. ``connection_id`` is the one field that travels back OUT: the front reads
-    it off the reply to write its cookie with. ``login_previous_user`` is set
+    it off the reply to write its cookie with. ``connection_previous_user`` is set
     when THIS request logged the connection in, and it is what makes the tail of
     this request, and of no other, carry that connection to the deposit.
     """
@@ -383,7 +383,7 @@ class RequestSlot:
         self.connection_id: str | None = None
         #: Who owned the connection before this request logged it in; None when
         #: this request logged nobody in.
-        self.login_previous_user: str | None = None
+        self.connection_previous_user: str | None = None
 
 
 class GroupOrders(RoutingClass):
@@ -1663,7 +1663,7 @@ class SpaWorker:
                 self._transfer_flags.pop(previous_user, None)
             slot = self.request_slot
             slot.connection_id = cid
-            slot.login_previous_user = previous_user
+            slot.connection_previous_user = previous_user
             self.add_worker_event(
                 "connection_user_changed",
                 user=user,
@@ -2148,8 +2148,8 @@ class SpaWorker:
             if user is not None:
                 await self.close_request(user)
             slot = self.request_slot
-            if slot.login_previous_user is not None:
-                await self.freeze_connection(slot.connection_id, slot.login_previous_user)
+            if slot.connection_previous_user is not None:
+                await self.freeze_connection(slot.connection_id, slot.connection_previous_user)
 
     def _serve_on_thread(self, seam: WsgiSeam, payload: dict[str, Any]) -> dict[str, Any]:
         """Serve the stitching on the pool thread, in the slot of its CALL.
