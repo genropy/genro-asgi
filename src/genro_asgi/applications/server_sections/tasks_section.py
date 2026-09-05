@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING, Any
 
 from genro_routes import RoutingClass, route
 
-from ...tasks.schedule import next_run
+from ...tasks.schedule import TaskCadence
 from ...tasks.spool import STATUSES
 
 if TYPE_CHECKING:
@@ -107,7 +107,7 @@ class TasksSection(RoutingClass):
         if manager.task_store.get(code) is not None:
             return {"error": f"schedule already exists: {code}"}
         try:
-            first_run = next_run(kind, spec, time.time())
+            first_run = TaskCadence(kind, spec).get_next_run(time.time())
         except ValueError as exc:
             return {"error": str(exc)}
         record = {
@@ -145,7 +145,9 @@ class TasksSection(RoutingClass):
         record.update({field: body[field] for field in EDITABLE_FIELDS if field in body})
         if "kind" in body or "spec" in body:
             try:
-                record["next_run_ts"] = next_run(record["kind"], record["spec"], time.time())
+                record["next_run_ts"] = TaskCadence(record["kind"], record["spec"]).get_next_run(
+                    time.time()
+                )
             except ValueError as exc:
                 return {"error": str(exc)}
         manager.task_store.save(record)

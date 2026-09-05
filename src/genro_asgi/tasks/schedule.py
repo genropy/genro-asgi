@@ -33,47 +33,63 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-__all__ = ["parse_every", "parse_at", "CronSpec", "next_run"]
+__all__ = ["TaskCadence", "EverySpec", "CronSpec", "AtSpec"]
 
 EVERY_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 CRON_SEARCH_DAYS = 366 * 4  # a valid spec matches well within 4 years
 
 
-def parse_every(spec: str) -> int:
-    """``"30s" | "15m" | "2h" | "1d"`` -> the interval in seconds.
+class EverySpec:
+    """A fixed interval; every run is the previous instant plus ``seconds``."""
 
-    Raises:
-        ValueError: On a malformed spec, an unknown unit or a zero interval.
-    """
-    text = str(spec).strip()
-    number, unit = text[:-1], text[-1:]
-    if not number.isdigit() or unit not in EVERY_UNITS:
-        raise ValueError(f"invalid every spec: {spec!r} (want <number><s|m|h|d>)")
-    seconds = int(number) * EVERY_UNITS[unit]
-    if seconds <= 0:
-        raise ValueError(f"invalid every spec: {spec!r} (zero interval)")
-    return seconds
+    def __init__(self, spec: Any) -> None:
+        """Parse ``"30s" | "15m" | "2h" | "1d"`` into ``seconds``.
+
+        Raises:
+            ValueError: On a malformed spec, an unknown unit or a zero interval.
+        """
+        text = str(spec).strip()
+        number, unit = text[:-1], text[-1:]
+        if not number.isdigit() or unit not in EVERY_UNITS:
+            raise ValueError(f"invalid every spec: {spec!r} (want <number><s|m|h|d>)")
+        self.seconds = int(number) * EVERY_UNITS[unit]
+        if self.seconds <= 0:
+            raise ValueError(f"invalid every spec: {spec!r} (zero interval)")
+
+    def get_next_run(self, after_ts: float) -> float | None:
+        """The instant one interval after ``after_ts`` (epoch seconds)."""
+        return after_ts + self.seconds
 
 
-def parse_at(spec: Any) -> list[float]:
-    """A list of ISO timestamps -> sorted epoch seconds (naive = local time).
+class AtSpec:
+    """A list of one-shot instants; an exhausted list has no next run."""
 
-    Raises:
-        ValueError: If ``spec`` is not a list or an entry is not ISO-parseable.
-    """
-    if not isinstance(spec, list):
-        raise ValueError("invalid at spec: want a list of ISO timestamps")
-    instants = []
-    for entry in spec:
-        try:
-            instants.append(datetime.fromisoformat(str(entry)).timestamp())
-        except ValueError as exc:
-            raise ValueError(f"invalid at timestamp: {entry!r}") from exc
-    return sorted(instants)
+    def __init__(self, spec: Any) -> None:
+        """Parse a list of ISO timestamps into sorted ``instants`` (naive = local).
+
+        Raises:
+            ValueError: If ``spec`` is not a list or an entry is not ISO-parseable.
+        """
+        if not isinstance(spec, list):
+            raise ValueError("invalid at spec: want a list of ISO timestamps")
+        instants = []
+        for entry in spec:
+            try:
+                instants.append(datetime.fromisoformat(str(entry)).timestamp())
+            except ValueError as exc:
+                raise ValueError(f"invalid at timestamp: {entry!r}") from exc
+        self.instants = sorted(instants)
+
+    def get_next_run(self, after_ts: float) -> float | None:
+        """The first instant strictly after ``after_ts``, or None once past them all."""
+        for instant in self.instants:
+            if instant > after_ts:
+                return instant
+        return None
 
 
 class CronSpec:
-    """A parsed 5-field cron string; ``next_after`` walks to the next match."""
+    """A parsed 5-field cron string; ``get_next_run`` walks to the next match."""
 
     def __init__(self, spec: str) -> None:
         """Parse ``"min hour dom month dow"`` into value sets.
@@ -123,7 +139,7 @@ class CronSpec:
             values.update(range(start, end + 1, step))
         return values
 
-    def next_after(self, after_ts: float) -> float:
+    def get_next_run(self, after_ts: float) -> float | None:
         """The first matching instant strictly after ``after_ts`` (epoch seconds).
 
         Raises:
@@ -160,24 +176,31 @@ class CronSpec:
         return None
 
 
-def next_run(kind: str, spec: Any, after_ts: float) -> float | None:
-    """The next due instant for a schedule, or None (an exhausted ``at`` list).
+class TaskCadence:
+    """The cadence of a task record: its ``kind`` picks the spec that computes."""
 
-    Args:
-        kind: ``"every" | "cron" | "at"``.
-        spec: The kind's spec — interval string, cron string, or ISO list.
-        after_ts: Compute the first occurrence strictly after this instant.
+    spec_classes: dict[str, type[EverySpec | CronSpec | AtSpec]] = {
+        "every": EverySpec,
+        "cron": CronSpec,
+        "at": AtSpec,
+    }
 
-    Raises:
-        ValueError: On an unknown kind or a malformed spec.
-    """
-    if kind == "every":
-        return after_ts + parse_every(spec)
-    if kind == "cron":
-        return CronSpec(spec).next_after(after_ts)
-    if kind == "at":
-        for instant in parse_at(spec):
-            if instant > after_ts:
-                return instant
-        return None
-    raise ValueError(f"unknown schedule kind: {kind!r}")
+    def __init__(self, kind: str, spec: Any) -> None:
+        """Build the spec of ``kind`` — the parse happens here, once.
+
+        Args:
+            kind: ``"every" | "cron" | "at"``.
+            spec: The kind's spec — interval string, cron string, or ISO list.
+
+        Raises:
+            ValueError: On an unknown kind or a malformed spec.
+        """
+        spec_class = self.spec_classes.get(kind)
+        if spec_class is None:
+            raise ValueError(f"unknown schedule kind: {kind!r}")
+        self.kind = kind
+        self.spec = spec_class(spec)
+
+    def get_next_run(self, after_ts: float) -> float | None:
+        """The next due instant, or None (an exhausted ``at`` list)."""
+        return self.spec.get_next_run(after_ts)

@@ -51,7 +51,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
-from .schedule import next_run
+from .schedule import TaskCadence
 
 if TYPE_CHECKING:
     from .manager import TaskManager
@@ -176,7 +176,7 @@ class TaskScheduler:
                 continue  # schedulable, but only through store records
             kind, spec = ("every", every) if every else ("cron", cron)
             try:
-                first_run = next_run(kind, spec, now)
+                first_run = TaskCadence(kind, spec).get_next_run(now)
             except ValueError:
                 logging.getLogger(__name__).exception(
                     "task %r: invalid default schedule %r", task_name, spec
@@ -246,7 +246,7 @@ class TaskScheduler:
             )
         duration = round(time.time() - started, 3)
         try:
-            next_ts = next_run(row["kind"], row["spec"], started)
+            next_ts = TaskCadence(row["kind"], row["spec"]).get_next_run(started)
         except ValueError as exc:
             next_ts = None
             outcome, error = "error", error or f"invalid schedule: {exc}"
