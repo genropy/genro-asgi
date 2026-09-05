@@ -50,14 +50,14 @@ from genro_asgi.spa.orchestration.worker_connector import (
 
 WORKER_NAME = "standard_0001"
 UPWARD_OP_PATH = "/op/upward"
-DESK_PATH = "/desk/ask"
+SERVED_OP_PATH = "/op/ask"
 
 
 class XT_ServingHandler:
-    """The WorkerHandler seen by its wire, with the desk half the lane needs.
+    """The WorkerHandler seen by its wire, with the parent half the lane needs.
 
     Args:
-        answers: what the desk hands back, by routing key; a key it does not
+        answers: what the parent hands back, by routing key; a key it does not
             hold is a path the parent does not serve.
     """
 
@@ -89,7 +89,7 @@ class X_LaneWorker(SpaWorker):
         if frame.path != UPWARD_OP_PATH:
             await super().answer_call(frame)
             return
-        answer = await self.call(DESK_PATH, {"who": self.name})
+        answer = await self.call(SERVED_OP_PATH, {"who": self.name})
         await self.send_reply(frame, result=answer)
 
 
@@ -132,7 +132,7 @@ class XT_LanePair:
 
 @pytest.fixture
 async def pair(short_root, tmp_path):
-    handler = XT_ServingHandler({DESK_PATH: {"desk": "answered"}})
+    handler = XT_ServingHandler({SERVED_OP_PATH: {"served": "answered"}})
     built = XT_LanePair(
         handler,
         short_root / "i" / f"{WORKER_NAME}.sock",
@@ -154,13 +154,13 @@ async def test_a_worker_call_is_served_and_answered_while_the_parents_call_is_st
     downward = asyncio.create_task(pair.connector.call(UPWARD_OP_PATH))
 
     await wait_until(lambda: pair.handler.served)
-    assert pair.handler.served == [(DESK_PATH, {"who": WORKER_NAME})]
+    assert pair.handler.served == [(SERVED_OP_PATH, {"who": WORKER_NAME})]
     assert not downward.done()
 
     pair.handler.gate.set()
     reply = await asyncio.wait_for(downward, 5.0)
 
-    assert reply["result"] == {"desk": "answered"}
+    assert reply["result"] == {"served": "answered"}
     assert ENVELOPE_SLOT_WORKER_EVENTS in reply
 
 
@@ -168,13 +168,13 @@ async def test_two_worker_calls_interleave_by_frame_id(pair):
     # wf:contract: two CALLs placed by the worker without awaiting the first
     # wf:contract: resolve each with its own REPLY, matched by frame id, in
     # wf:contract: whatever order the parent answers.
-    pair.handler.answers = {"/desk/one": "first", "/desk/two": "second"}
+    pair.handler.answers = {"/op/one": "first", "/op/two": "second"}
     gate = asyncio.Event()
     pair.handler.gate = gate
 
-    one = asyncio.create_task(pair.worker.call("/desk/one"))
+    one = asyncio.create_task(pair.worker.call("/op/one"))
     await wait_until(lambda: pair.handler.served)
-    two = asyncio.create_task(pair.worker.call("/desk/two"))
+    two = asyncio.create_task(pair.worker.call("/op/two"))
     await wait_until(lambda: len(pair.handler.served) == 2)
 
     # Both are on the wire and neither is answered: the parent is holding the
@@ -194,14 +194,14 @@ async def test_a_worker_call_from_a_pool_thread_reaches_the_loop_and_returns(pai
     worker = pair.worker
 
     def on_the_pool_thread() -> Any:
-        return worker.run_on_loop(worker.call(DESK_PATH, {"from": "the pool"}))
+        return worker.run_on_loop(worker.call(SERVED_OP_PATH, {"from": "the pool"}))
 
     answer = await asyncio.get_running_loop().run_in_executor(
         worker.traffic_pool, on_the_pool_thread
     )
 
-    assert answer == {"desk": "answered"}
-    assert pair.handler.served == [(DESK_PATH, {"from": "the pool"})]
+    assert answer == {"served": "answered"}
+    assert pair.handler.served == [(SERVED_OP_PATH, {"from": "the pool"})]
 
 
 async def test_a_call_the_parent_has_no_handler_for_answers_an_error_not_silence(pair):
@@ -209,13 +209,13 @@ async def test_a_call_the_parent_has_no_handler_for_answers_an_error_not_silence
     # wf:contract: error REPLY the worker can raise on — never a dropped frame
     # wf:contract: and never a warning-and-discard.
     with pytest.raises(CommanderCallFailed) as refusal:
-        await asyncio.wait_for(pair.worker.call("/desk/nothing_here"), 5.0)
+        await asyncio.wait_for(pair.worker.call("/op/nothing_here"), 5.0)
 
-    assert refusal.value.path == "/desk/nothing_here"
+    assert refusal.value.path == "/op/nothing_here"
     assert "KeyError" in refusal.value.cause
 
-    # The wire is unharmed: the next call on a path the desk serves answers.
-    assert await asyncio.wait_for(pair.worker.call(DESK_PATH), 5.0) == {"desk": "answered"}
+    # The wire is unharmed: the next call on a path the parent serves answers.
+    assert await asyncio.wait_for(pair.worker.call(SERVED_OP_PATH), 5.0) == {"served": "answered"}
 
 
 def test_the_envelope_slot_constants_wear_the_family_prefix():

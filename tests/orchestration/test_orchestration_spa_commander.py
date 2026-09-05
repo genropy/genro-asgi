@@ -15,8 +15,8 @@
 """The vertex on its own: who it writes, what it answers, what it discards.
 
 The chain's tests look at the fold from above — an envelope arrives and the
-indexes move. These look at the same object from the front: the reception desk
-that mints whoever shows up, the predicates the rest of the machine reads it
+indexes move. These look at the same object from the front: the birth of a row
+for whoever shows up, the predicates the rest of the machine reads it
 through, the waiting room that is a raised exception and not a field, and the two
 things the vertex does that nobody below it can — discarding what a dead process
 left on disk, and writing the account of every order.

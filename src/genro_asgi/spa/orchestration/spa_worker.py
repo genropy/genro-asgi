@@ -317,15 +317,15 @@ CLOCK_NAMES = ("last_refresh_ts", "last_user_ts", "last_rpc_ts")
 #: next ones the operation class and the operation — ``/commander/store/get``.
 #: The routing keys of the global store, which lives on the commander and
 #: nowhere else: two blind writes, and the two halves of one grant.
-DESK_STORE_SET_PATH = "/commander/store/set"
-DESK_STORE_DEL_PATH = "/commander/store/del"
-DESK_STORE_GET_PATH = "/commander/store/get"
-DESK_STORE_LOCK_PATH = "/commander/store/lock"
-DESK_STORE_UNLOCK_PATH = "/commander/store/unlock"
+GLOBAL_STORE_SET_OP_PATH = "/commander/store/set"
+GLOBAL_STORE_DEL_OP_PATH = "/commander/store/del"
+GLOBAL_STORE_GET_OP_PATH = "/commander/store/get"
+GLOBAL_STORE_LOCK_OP_PATH = "/commander/store/lock"
+GLOBAL_STORE_UNLOCK_OP_PATH = "/commander/store/unlock"
 
 #: The routing key one observation climbs: a mutation of this process's
 #: registers, as it happens, for whoever is watching at the vertex.
-DESK_OBSERVATION_PATH = "/commander/observation"
+OBSERVATION_OP_PATH = "/commander/observation"
 
 # What the census puts in place of a field it cannot carry as JSON: the field is
 # left out of the reading entirely, and a sentinel says so without colliding
@@ -349,11 +349,11 @@ __all__ = [
     "CLOCK_NAMES",
     "DEPOSIT_LOCK_RETRY_INTERVAL",
     "DEPOSIT_LOCK_WAIT_LIMIT",
-    "DESK_STORE_DEL_PATH",
-    "DESK_STORE_GET_PATH",
-    "DESK_STORE_LOCK_PATH",
-    "DESK_STORE_SET_PATH",
-    "DESK_STORE_UNLOCK_PATH",
+    "GLOBAL_STORE_DEL_OP_PATH",
+    "GLOBAL_STORE_GET_OP_PATH",
+    "GLOBAL_STORE_LOCK_OP_PATH",
+    "GLOBAL_STORE_SET_OP_PATH",
+    "GLOBAL_STORE_UNLOCK_OP_PATH",
     "GUEST_PREFIX",
     "TRANSFER_START_DELAY",
     "WORKER_SNAPSHOT_TTL",
@@ -1056,7 +1056,7 @@ class SpaWorker:
         Raises:
             CommanderCallFailed: the vertex refused the write.
         """
-        return self.run_on_loop(self.call(DESK_STORE_SET_PATH, {"path": path, "value": value}))
+        return self.run_on_loop(self.call(GLOBAL_STORE_SET_OP_PATH, {"path": path, "value": value}))
 
     def store_del(self, identity: str, path: str, **addressing: Any) -> Any:
         """Remove one path of the global store — it travels exactly like a write.
@@ -1072,7 +1072,7 @@ class SpaWorker:
         Raises:
             CommanderCallFailed: the vertex refused the removal.
         """
-        return self.run_on_loop(self.call(DESK_STORE_DEL_PATH, {"path": path}))
+        return self.run_on_loop(self.call(GLOBAL_STORE_DEL_OP_PATH, {"path": path}))
 
     def store_get(self, identity: str, path: str, **addressing: Any) -> Any:
         """Read one path of the global store: a CALL on the lane, the current value back.
@@ -1092,7 +1092,7 @@ class SpaWorker:
         Raises:
             CommanderCallFailed: the vertex refused the read.
         """
-        reply = self.run_on_loop(self.call(DESK_STORE_GET_PATH, {"path": path}))
+        reply = self.run_on_loop(self.call(GLOBAL_STORE_GET_OP_PATH, {"path": path}))
         return from_tytx(reply["value"], "json")
 
     def global_store_lock(self) -> GlobalStoreLease:
@@ -1122,7 +1122,7 @@ class SpaWorker:
             CommanderCallFailed: the vertex refused the grant.
         """
         grant = await self.call(
-            DESK_STORE_LOCK_PATH, {"worker": self.name, "request_id": request_id}
+            GLOBAL_STORE_LOCK_OP_PATH, {"worker": self.name, "request_id": request_id}
         )
         return CapturingGlobalStore(from_tytx(grant["store"], "json"))
 
@@ -1145,7 +1145,7 @@ class SpaWorker:
         changes = copy.drain() if apply else []
         copy.detach()
         await self.call(
-            DESK_STORE_UNLOCK_PATH,
+            GLOBAL_STORE_UNLOCK_OP_PATH,
             {"request_id": request_id, "changes": to_tytx(changes, "json")},
         )
 
@@ -1265,7 +1265,7 @@ class SpaWorker:
     async def _deliver_observation(self, payload: dict[str, Any]) -> None:
         """Await the observation's own answer, so a failure is logged and no more."""
         try:
-            await self.call(DESK_OBSERVATION_PATH, payload)
+            await self.call(OBSERVATION_OP_PATH, payload)
         except Exception as exc:
             self._logger.debug(
                 "Worker %s: observation %s lost (%s)", self.name, payload["kind"], exc

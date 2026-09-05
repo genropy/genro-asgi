@@ -18,9 +18,8 @@ One mechanism, no predicted questions: ``eval`` evaluates a Python
 expression in one process of an SPA pool — ``commander`` in the server
 process, or any worker by name, reached over the lane the commander already
 holds to every child — and answers the value's ``repr``. Whatever was not
-foreseen is readable by composing an expression: ``len(commander.user_map)``,
-``commander.delivery_desk.subscribed_tables``,
-``len(worker.connection_register)``, a single user's row.
+foreseen is readable by composing an expression; what a target's namespace
+holds is on :meth:`SpaConsole.eval`.
 
 **Mounting IS the gate.** The door is full eval by construction — there is no
 read-only eval in Python — so it exists only where the recipe mounts
