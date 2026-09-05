@@ -24,31 +24,31 @@ from __future__ import annotations
 import datetime
 
 
-async def test_a_read_answers_the_masters_current_value(desk_lane):
-    await desk_lane.verb("store_set", "alice", "gnr.a", value=1)
+async def test_a_read_answers_the_masters_current_value(worker_commander_lane):
+    await worker_commander_lane.verb("store_set", "alice", "gnr.a", value=1)
 
-    assert await desk_lane.verb("store_get", "alice", "gnr.a") == 1
+    assert await worker_commander_lane.verb("store_get", "alice", "gnr.a") == 1
 
-    desk_lane.commander.global_register.set_item("gnr.a", 2)
-    assert await desk_lane.verb("store_get", "alice", "gnr.a") == 2
-
-
-async def test_a_path_the_store_does_not_hold_answers_none(desk_lane):
-    assert await desk_lane.verb("store_get", "alice", "gnr.missing") is None
+    worker_commander_lane.commander.global_register.set_item("gnr.a", 2)
+    assert await worker_commander_lane.verb("store_get", "alice", "gnr.a") == 2
 
 
-async def test_typed_values_travel_whole(desk_lane):
+async def test_a_path_the_store_does_not_hold_answers_none(worker_commander_lane):
+    assert await worker_commander_lane.verb("store_get", "alice", "gnr.missing") is None
+
+
+async def test_typed_values_travel_whole(worker_commander_lane):
     stamp = datetime.datetime(2026, 8, 21, 10, 0, tzinfo=datetime.timezone.utc)
-    desk_lane.commander.global_register.set_item("CACHE_TS.adm_htag", stamp)
+    worker_commander_lane.commander.global_register.set_item("CACHE_TS.adm_htag", stamp)
 
-    assert await desk_lane.verb("store_get", "alice", "CACHE_TS.adm_htag") == stamp
+    assert await worker_commander_lane.verb("store_get", "alice", "CACHE_TS.adm_htag") == stamp
 
 
-async def test_a_subtree_comes_back_as_a_bag(desk_lane):
-    desk_lane.commander.global_register.set_item("gnr.counters.a", 1)
-    desk_lane.commander.global_register.set_item("gnr.counters.b", 2)
+async def test_a_subtree_comes_back_as_a_bag(worker_commander_lane):
+    worker_commander_lane.commander.global_register.set_item("gnr.counters.a", 1)
+    worker_commander_lane.commander.global_register.set_item("gnr.counters.b", 2)
 
-    subtree = await desk_lane.verb("store_get", "alice", "gnr.counters")
+    subtree = await worker_commander_lane.verb("store_get", "alice", "gnr.counters")
 
     assert subtree["a"] == 1
     assert subtree["b"] == 2

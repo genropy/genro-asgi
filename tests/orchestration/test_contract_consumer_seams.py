@@ -53,7 +53,7 @@ from genro_asgi.spa.orchestration.envelope_handler import CommanderEnvelopeHandl
 from genro_asgi.spa.orchestration.spa_worker import RequestSlot
 from genro_asgi.spa.register_row import ConnectionRow, PageRow, UserRow
 
-from .conftest import XT_DeskLane, attach_wire
+from .conftest import XT_WorkerCommanderLane, attach_wire
 
 STORE_GET = "/commander/store/get"
 STORE_LOCK = "/commander/store/lock"
@@ -258,7 +258,7 @@ async def test_the_vertex_data_and_its_writes_are_the_commanders_seams(short_roo
         frozen_users_path=short_root / "frozen_users",
         entry_module="never.launched",
     )
-    lane = XT_DeskLane(commander, group, FreezeHandler(tmp_path / "frozen_users"))
+    lane = XT_WorkerCommanderLane(commander, group, FreezeHandler(tmp_path / "frozen_users"))
     await lane.open()
     try:
         await lane.worker.call(STORE_LOCK, {"worker": lane.worker_name, "request_id": "r1"})
@@ -291,7 +291,7 @@ async def test_a_newborn_process_is_told_to_the_vertex_once(short_root, tmp_path
         frozen_users_path=short_root / "frozen_users",
         entry_module="never.launched",
     )
-    lane = XT_DeskLane(commander, group, FreezeHandler(tmp_path / "frozen_users"))
+    lane = XT_WorkerCommanderLane(commander, group, FreezeHandler(tmp_path / "frozen_users"))
     await lane.open()
     try:
         assert commander.presented == [lane.worker_name]
@@ -312,7 +312,7 @@ async def test_the_consumers_envelope_layer_reads_what_a_pages_birth_carries(sho
         frozen_users_path=short_root / "frozen_users",
         entry_module="never.launched",
     )
-    lane = XT_DeskLane(commander, group, FreezeHandler(tmp_path / "frozen_users"))
+    lane = XT_WorkerCommanderLane(commander, group, FreezeHandler(tmp_path / "frozen_users"))
     await lane.open()
     try:
         # The lane's worker is the core's, so the event a consumer's row would

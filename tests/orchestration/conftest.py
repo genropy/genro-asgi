@@ -14,7 +14,7 @@
 
 """The common ground of the orchestration tests: the root, the path, the wait.
 
-``desk_lane`` is a live lane — a real worker on a real UDS under a real
+``worker_commander_lane`` is a live lane — a real worker on a real UDS under a real
 commander — for the tests that exercise the site's verbs, which now place calls
 on it. ``short_root`` is a temporary directory whose name fits inside the system's cap
 on a UDS path — about a hundred characters, which pytest's own ``tmp_path`` is
@@ -155,7 +155,7 @@ def attach_wire(worker: SpaWorker) -> XT_Wire:
     return wire
 
 
-class XT_DeskLane:
+class XT_WorkerCommanderLane:
     """A worker and its real handler on one UDS, the commander above it.
 
     Args:
@@ -266,7 +266,7 @@ class XT_DeskLane:
 
 
 @pytest.fixture
-async def desk_lane(short_root, tmp_path):
+async def worker_commander_lane(short_root, tmp_path):
     """A live lane: the site's verbs on a worker, a real handler on a real commander."""
     commander = SpaCommander(short_root / "frozen_users")
     group = GroupHandler(
@@ -277,21 +277,7 @@ async def desk_lane(short_root, tmp_path):
         frozen_users_path=short_root / "frozen_users",
         entry_module="never.launched",
     )
-    lane = XT_DeskLane(commander, group, FreezeHandler(tmp_path / "frozen_users"))
-    await lane.open()
-    yield lane
-    await lane.close()
-
-
-@pytest.fixture
-async def second_desk_lane(desk_lane, tmp_path):
-    """A SECOND live lane on the same commander and the same group as ``desk_lane``."""
-    lane = XT_DeskLane(
-        desk_lane.commander,
-        desk_lane.worker_handler.group_handler,
-        FreezeHandler(tmp_path / "frozen_users_w2"),
-        worker_name="w2",
-    )
+    lane = XT_WorkerCommanderLane(commander, group, FreezeHandler(tmp_path / "frozen_users"))
     await lane.open()
     yield lane
     await lane.close()

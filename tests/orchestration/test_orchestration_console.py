@@ -22,20 +22,23 @@ from genro_asgi.applications.spa_console import SpaConsole, SpaConsoleMcpApplica
 from genro_asgi.spa.orchestration.spa_worker import GUEST_PREFIX
 
 
-async def test_the_commander_answers_about_itself(desk_lane):
-    desk_lane.commander.record_connection_user("cid-a", "guest_legacy1")
+async def test_the_commander_answers_about_itself(worker_commander_lane):
+    worker_commander_lane.commander.record_connection_user("cid-a", "guest_legacy1")
 
-    assert await desk_lane.commander.eval_in_target("commander", "len(commander.user_map)") == "1"
+    assert (
+        await worker_commander_lane.commander.eval_in_target("commander", "len(commander.user_map)")
+        == "1"
+    )
 
 
-async def test_a_worker_answers_over_the_lane(desk_lane):
-    desk_lane.worker.add_connection("a1b2")
-    desk_lane.worker.add_page("page-0", "a1b2")
+async def test_a_worker_answers_over_the_lane(worker_commander_lane):
+    worker_commander_lane.worker.add_connection("a1b2")
+    worker_commander_lane.worker.add_page("page-0", "a1b2")
 
-    connections = await desk_lane.commander.eval_in_target(
+    connections = await worker_commander_lane.commander.eval_in_target(
         "standard_0001", "len(worker.connection_register)"
     )
-    pages = await desk_lane.commander.eval_in_target(
+    pages = await worker_commander_lane.commander.eval_in_target(
         "standard_0001", "sorted(worker.page_register.keys())"
     )
 
@@ -43,14 +46,16 @@ async def test_a_worker_answers_over_the_lane(desk_lane):
     assert pages == "['page-0']"
 
 
-async def test_an_expression_that_fails_in_the_child_travels_back_as_the_error(desk_lane):
+async def test_an_expression_that_fails_in_the_child_travels_back_as_the_error(
+    worker_commander_lane,
+):
     with pytest.raises(RuntimeError, match="NameError"):
-        await desk_lane.commander.eval_in_target("standard_0001", "no_such_name")
+        await worker_commander_lane.commander.eval_in_target("standard_0001", "no_such_name")
 
 
-async def test_an_unknown_target_names_the_ones_there_are(desk_lane):
+async def test_an_unknown_target_names_the_ones_there_are(worker_commander_lane):
     with pytest.raises(KeyError, match="commander, standard_0001"):
-        await desk_lane.commander.eval_in_target("standard_9999", "1")
+        await worker_commander_lane.commander.eval_in_target("standard_9999", "1")
 
 
 class XT_Server:
@@ -60,16 +65,16 @@ class XT_Server:
         self.applications = applications
 
 
-async def test_the_tools_reach_the_front_and_list_the_targets(desk_lane):
+async def test_the_tools_reach_the_front_and_list_the_targets(worker_commander_lane):
     from genro_asgi.applications.spa_app import SpaApplication
 
     spa_front = SpaApplication.__new__(SpaApplication)
-    spa_front._commander = desk_lane.commander
+    spa_front._commander = worker_commander_lane.commander
     console_app = SpaConsoleMcpApplication(code="console")
     console_app.server = XT_Server({"shop": spa_front, "other": object()})
     console = SpaConsole(console_app)
 
-    desk_lane.worker.add_connection("a1b2")
+    worker_commander_lane.worker.add_connection("a1b2")
     guest = f"{GUEST_PREFIX}a1b2"
 
     assert await console.targets() == {"shop": ["commander", "standard_0001"]}
