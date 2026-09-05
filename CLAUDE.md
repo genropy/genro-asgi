@@ -364,7 +364,7 @@ acknowledgement, a vertex that answers an error or nothing within
 `ANNOUNCE_TIMEOUT_SECONDS` loses it, counted and logged, never retried. This is
 the two-channel mechanism of the pre_refactoring stack (`offer_event` on the
 per-CALL sink, `offer_lifecycle` on the outbox) without the outbox's `seq`/ack.
-In tests, `XT_DeskLane.verb` announces after each verb and `attach_wire` gives a
+In tests, `XT_WorkerCommanderLane.verb` announces after each verb and `attach_wire` gives a
 unit-test worker a stub wire and a slot.
 
 **What a worker calls up the lane is a routing tree (landed 2026-09-04, #59

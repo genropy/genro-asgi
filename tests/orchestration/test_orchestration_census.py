@@ -42,16 +42,16 @@ class XT_MuteWorkerHandler:
 
 
 @pytest.fixture
-async def populated_lane(desk_lane):
+async def populated_worker_commander_lane(worker_commander_lane):
     """One user with one connection and one page, both sides knowing about him."""
-    desk_lane.worker.add_connection("a1b2")
-    desk_lane.worker.add_page("page-0", "a1b2")
-    desk_lane.commander.record_connection_user("a1b2", "guest_a1b2")
-    return desk_lane
+    worker_commander_lane.worker.add_connection("a1b2")
+    worker_commander_lane.worker.add_page("page-0", "a1b2")
+    worker_commander_lane.commander.record_connection_user("a1b2", "guest_a1b2")
+    return worker_commander_lane
 
 
-async def test_the_worker_census_holds_its_three_registers(populated_lane):
-    census = populated_lane.worker.census()
+async def test_the_worker_census_holds_its_three_registers(populated_worker_commander_lane):
+    census = populated_worker_commander_lane.worker.census()
 
     assert census["name"] == "standard_0001"
     assert "guest_a1b2" in census["user_register"]
@@ -59,8 +59,8 @@ async def test_the_worker_census_holds_its_three_registers(populated_lane):
     assert "page-0" in census["page_register"]
 
 
-async def test_the_pool_census_carries_the_user_on_both_sides(populated_lane):
-    census = await populated_lane.commander.get_pool_census()
+async def test_the_pool_census_carries_the_user_on_both_sides(populated_worker_commander_lane):
+    census = await populated_worker_commander_lane.commander.get_pool_census()
 
     assert "guest_a1b2" in census["user_map"]
     assert census["connection_user_map"] == {"a1b2": "guest_a1b2"}
@@ -69,12 +69,14 @@ async def test_the_pool_census_carries_the_user_on_both_sides(populated_lane):
     assert "guest_a1b2" in worker_census["user_register"]
 
 
-async def test_the_pool_census_declares_how_worker_memory_was_accounted(populated_lane):
-    group = populated_lane.commander.group_map["standard"]
-    worker = populated_lane.worker_handler
+async def test_the_pool_census_declares_how_worker_memory_was_accounted(
+    populated_worker_commander_lane,
+):
+    group = populated_worker_commander_lane.commander.group_map["standard"]
+    worker = populated_worker_commander_lane.worker_handler
     worker.worker_snapshot = {"rss_bytes": 900, "pss_bytes": 300}
 
-    census = await populated_lane.commander.get_pool_census()
+    census = await populated_worker_commander_lane.commander.get_pool_census()
 
     summary = census["groups"]["standard"]
     assert summary["memory_accounting"] == "pss"
@@ -91,17 +93,17 @@ async def test_the_pool_census_declares_how_worker_memory_was_accounted(populate
     assert "cpu_temperature_sample_percent" in worker_summary
 
 
-async def test_the_whole_census_is_json(populated_lane):
-    census = await populated_lane.commander.get_pool_census()
+async def test_the_whole_census_is_json(populated_worker_commander_lane):
+    census = await populated_worker_commander_lane.commander.get_pool_census()
 
     assert json.loads(json.dumps(census))["workers"]["standard_0001"]["name"] == "standard_0001"
 
 
-async def test_a_worker_that_does_not_answer_is_an_error_entry(populated_lane):
-    group = populated_lane.commander.group_map["standard"]
+async def test_a_worker_that_does_not_answer_is_an_error_entry(populated_worker_commander_lane):
+    group = populated_worker_commander_lane.commander.group_map["standard"]
     group.worker_handler_map["standard_0002"] = XT_MuteWorkerHandler("standard_0002")
 
-    census = await populated_lane.commander.get_pool_census()
+    census = await populated_worker_commander_lane.commander.get_pool_census()
 
     assert "the wire is gone" in census["workers"]["standard_0002"]["error"]
     assert "guest_a1b2" in census["workers"]["standard_0001"]["user_register"]

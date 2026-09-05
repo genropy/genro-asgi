@@ -14,7 +14,7 @@
 
 """Contract: the orders a worker takes are a routing tree (#59, D59-9..14, block 2).
 
-The CALLs that come DOWN the lane to a worker are resolved by name on the tree
+The CALLs that come DOWN the worker_commander_lane to a worker are resolved by name on the tree
 the worker hosts, ``worker_dispatcher`` — not by a chain of ``if`` on the path.
 The first segment names who ISSUES the order: ``group`` for the group's
 (freeze_user, drop_user, drop_connection, quit, ping), ``commander`` for the
@@ -35,7 +35,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 from genro_routes import RoutingClass, route
 
 from genro_asgi.spa.orchestration.worker_handler import (
@@ -46,7 +45,7 @@ from genro_asgi.spa.orchestration.worker_handler import (
     PING_OP_PATH,
 )
 
-from .conftest import XT_DeskLane
+from .conftest import XT_WorkerCommanderLane
 
 
 class XT_ExtraOrders(RoutingClass):
@@ -60,14 +59,13 @@ class XT_ExtraOrders(RoutingClass):
         return {"echo": payload, "worker": self.spa_worker.name}
 
 
-@pytest.fixture
-async def lane(desk_lane: XT_DeskLane) -> XT_DeskLane:
-    return desk_lane
-
-
-async def order(lane: XT_DeskLane, path: str, data: dict[str, Any] | None = None) -> Any:
+async def order(
+    worker_commander_lane: XT_WorkerCommanderLane,
+    path: str,
+    data: dict[str, Any] | None = None,
+) -> Any:
     """Place one order on the worker the way the vertex does, and read the REPLY data."""
-    return await lane.worker_handler.connector.call(path, data)
+    return await worker_commander_lane.worker_handler.connector.call(path, data)
 
 
 async def test_the_paths_name_who_issues_the_order():
@@ -75,45 +73,53 @@ async def test_the_paths_name_who_issues_the_order():
     assert CENSUS_OP_PATH == "/commander/census"
 
 
-async def test_the_beat_is_answered(lane):
-    assert (await order(lane, PING_OP_PATH))["result"] == {}
+async def test_the_beat_is_answered(worker_commander_lane):
+    assert (await order(worker_commander_lane, PING_OP_PATH))["result"] == {}
 
 
-async def test_the_census_is_the_workers_own(lane):
-    reply = await order(lane, CENSUS_OP_PATH, {})
-    assert reply["result"]["name"] == lane.worker_name
+async def test_the_census_is_the_workers_own(worker_commander_lane):
+    reply = await order(worker_commander_lane, CENSUS_OP_PATH, {})
+    assert reply["result"]["name"] == worker_commander_lane.worker_name
     assert "user_register" in reply["result"]
 
 
-async def test_eval_answers_the_repr_and_a_failing_expression_answers_the_error(lane):
-    assert (await order(lane, EVAL_OP_PATH, {"expr": "1 + 1"}))["result"] == {"repr": "2"}
-    failed = await order(lane, EVAL_OP_PATH, {"expr": "1 / 0"})
+async def test_eval_answers_the_repr_and_a_failing_expression_answers_the_error(
+    worker_commander_lane,
+):
+    assert (await order(worker_commander_lane, EVAL_OP_PATH, {"expr": "1 + 1"}))["result"] == {
+        "repr": "2"
+    }
+    failed = await order(worker_commander_lane, EVAL_OP_PATH, {"expr": "1 / 0"})
     assert "ZeroDivisionError" in failed["error"]
 
 
-async def test_observe_switches_the_workers_observation(lane):
-    assert lane.worker.observation_on is False
-    assert (await order(lane, OBSERVE_OP_PATH, {"on": True}))["result"] == {}
-    assert lane.worker.observation_on is True
+async def test_observe_switches_the_workers_observation(worker_commander_lane):
+    assert worker_commander_lane.worker.observation_on is False
+    assert (await order(worker_commander_lane, OBSERVE_OP_PATH, {"on": True}))["result"] == {}
+    assert worker_commander_lane.worker.observation_on is True
 
 
-async def test_dropping_a_connection_nobody_holds_is_answered_quietly(lane):
-    assert (await order(lane, DROP_CONNECTION_OP_PATH, {"cid": "nobody"}))["result"] == {}
+async def test_dropping_a_connection_nobody_holds_is_answered_quietly(worker_commander_lane):
+    assert (await order(worker_commander_lane, DROP_CONNECTION_OP_PATH, {"cid": "nobody"}))[
+        "result"
+    ] == {}
 
 
-async def test_an_unknown_order_is_refused_by_name(lane):
-    reply = await order(lane, "/group/nothing_here", {})
+async def test_an_unknown_order_is_refused_by_name(worker_commander_lane):
+    reply = await order(worker_commander_lane, "/group/nothing_here", {})
     assert "NotFound" in reply["error"]
 
 
-async def test_an_order_that_does_not_fit_the_signature_is_refused_before_the_body_runs(lane):
-    reply = await order(lane, EVAL_OP_PATH, {"nope": 1})
+async def test_an_order_that_does_not_fit_the_signature_is_refused_before_the_body_runs(
+    worker_commander_lane,
+):
+    reply = await order(worker_commander_lane, EVAL_OP_PATH, {"nope": 1})
     assert "TypeError" in reply["error"]
     assert "expr" in reply["error"]
 
 
-async def test_the_dispatcher_says_what_orders_the_worker_takes(lane):
-    tree = lane.worker.worker_dispatcher.route.nodes()
+async def test_the_dispatcher_says_what_orders_the_worker_takes(worker_commander_lane):
+    tree = worker_commander_lane.worker.worker_dispatcher.route.nodes()
     assert set(tree["routers"]) == {"group", "commander"}
     assert set(tree["routers"]["group"]["entries"]) == {
         "ping", "quit", "drop_user", "drop_connection", "freeze_user"
@@ -121,9 +127,11 @@ async def test_the_dispatcher_says_what_orders_the_worker_takes(lane):
     assert set(tree["routers"]["commander"]["entries"]) == {"observe", "census", "eval"}
 
 
-async def test_a_consumer_attaches_its_own_orders_and_the_vertex_reaches_them(lane):
-    lane.worker.worker_dispatcher.commander_orders.add_branches(
-        {"name": "xt_extra", "instance": XT_ExtraOrders(lane.worker)}
+async def test_a_consumer_attaches_its_own_orders_and_the_vertex_reaches_them(
+    worker_commander_lane,
+):
+    worker_commander_lane.worker.worker_dispatcher.commander_orders.add_branches(
+        {"name": "xt_extra", "instance": XT_ExtraOrders(worker_commander_lane.worker)}
     )
-    reply = await order(lane, "/commander/xt_extra/echo", {"x": 1})
-    assert reply["result"] == {"echo": {"x": 1}, "worker": lane.worker_name}
+    reply = await order(worker_commander_lane, "/commander/xt_extra/echo", {"x": 1})
+    assert reply["result"] == {"echo": {"x": 1}, "worker": worker_commander_lane.worker_name}

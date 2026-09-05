@@ -184,8 +184,8 @@ async def test_the_transfer_cycle_announces_each_freeze_with_a_call_of_its_own(w
     assert deposit.read_user_register_item("mario") is not None
 
 
-async def test_the_vertex_folds_an_announcement_like_a_reply(desk_lane):
-    lane = desk_lane
+async def test_the_vertex_folds_an_announcement_like_a_reply(worker_commander_lane):
+    lane = worker_commander_lane
     vertex = lane.commander
     await lane.open_request()
     await lane.verb("add_connection", CID)
