@@ -219,7 +219,7 @@ async def test_a_call_the_handler_has_no_hook_for_comes_back_as_an_error(connect
     await child.present()
     child.answer_calls = False
 
-    await child.send(CALL_METHOD, "/desk/ask", {"user": "mario"})
+    await child.send(CALL_METHOD, "/op/ask", {"user": "mario"})
     await child.wait_frames(1)
 
     answer = child.received[0]

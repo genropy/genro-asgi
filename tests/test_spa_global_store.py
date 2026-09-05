@@ -15,10 +15,10 @@
 """The global store's own classes, tested bare.
 
 The store lives ONLY on the commander — there are no replicas — and the
-whole desk (store_set/store_del/store_get on the lane, the lock grant that
+whole surface (store_set/store_del/store_get on the lane, the lock grant that
 carries the true master state, the release that applies exactly what was
 drained) is pinned end to end by the orchestration contract tests
-(``tests/orchestration/test_contract_phase10_global_store_desk.py`` and
+(``tests/orchestration/test_contract_phase10_global_store.py`` and
 ``test_orchestration_store_get.py``). What belongs here is the module
 itself: a ``CapturingGlobalStore`` captures what changed, a ``GlobalStore``
 applies a drained batch faithfully.
