@@ -5,8 +5,8 @@
 The machine every installation runs on, from `BaseServer` upward. It is the
 server object itself, the applications it hosts and how a request finds one, the
 description an installation is assembled from, and the capability mixins stacked
-on the base — authentication, sessions, the middleware chain, storage, background
-work. The numbered folders are the reading order: no entry needs a concept that
+on the base — authentication, sessions, the middleware chain, the second
+transport, storage, background work. The numbered folders are the reading order: no entry needs a concept that
 comes later.
 
 | Entry | In one line |
@@ -18,6 +18,7 @@ comes later.
 | [030 middleware](030_middleware/README.md) | the uniform middleware chain every request passes |
 | [040 sessions](040_sessions/README.md) | per-user server-side state between requests |
 | [050 authentication](050_authentication/README.md) | 401 vs 403 · [avatar](050_authentication/avatar/README.md) · [tags](050_authentication/tags/README.md) |
+| [055 websocket](055_websocket/README.md) | the second transport: the server holds the connection, every message is a request |
 | [060 storage](060_storage/README.md) | the only access to the filesystem, through storage nodes |
 | [065 db](065_db/README.md) | databases mounted through the recipe, no backend in the core |
 | [070 tasks](070_tasks/README.md) | work that is no HTTP request |

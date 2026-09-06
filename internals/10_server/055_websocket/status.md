@@ -1,0 +1,77 @@
+# Websocket — current state
+
+**Version**: 0.1 · **Last Updated**: 2026-09-06 · **Status**: 🔴 DA REVISIONARE
+
+What exists TODAY on the branch, with its `file:line`. Update it in the same
+change that alters the behaviour. Written at the opening of phase 0 of
+[#68](https://github.com/genropy/genro-asgi/issues/68), on `develop` =
+`a434a23`: nothing of what [decisions.md](decisions.md) describes is built yet,
+and the entries below are the ground the work starts from.
+
+## What the code holds
+
+**The empty socket.** `BaseServer.on_websocket`
+([server.py:287-294](../../../src/genro_asgi/server.py)) consumes the connect
+and closes with code 1000. Its docstring names the reason: it is the D7 socket,
+and the motor of Q1 overrides this hook. The websocket branch of
+`BaseServer.__call__` (`server.py:237-238`) reaches it, and does NOT read the
+server's `state`: the 503 with `Retry-After` is on the HTTP branch only
+(`server.py:220-229`).
+
+Covered by `tests/test_demux.py:167-178`
+(`test_websocket_connect_is_closed_cleanly`), which drives `__call__` at the
+ASGI level with no websocket client. It is the only test of the whole
+repository that names `on_websocket`.
+
+**The middleware chain does not see it.** `MiddlewareMixin.__call__`
+([middleware/\_\_init\_\_.py:107-112](../../../src/genro_asgi/middleware/__init__.py))
+routes only `http` scopes through the chain; every other scope passes straight
+through. So at the handshake `scope["auth"]` and `scope["session"]` are NOT
+already there — which is why the handshake resolves the identity itself
+([decisions.md](decisions.md) §5).
+
+**The front has no websocket branch.** `SpaApplication.__call__`
+([spa_app.py:837-844](../../../src/genro_asgi/applications/spa_app.py))
+demultiplexes between its own router and the hosted site, on the path, for
+HTTP scopes only.
+
+**The pieces the motor will stand on already exist.** The demux
+(`server.py:247-273`), the request registry (`server.py:95`, registered in the
+HTTP cycle at `:225-240`), the identity (`auth/core.py:160-179`,
+`auth/mixin.py:151-163`), the session from the cookie
+(`middleware/session.py:76-78, 118-127`), the routing tree with its filtered
+walk (`routed_application.py:173-218`), and the lane's own envelope, which
+already speaks WSX with the same four fields (`channel/frame.py:15-23,
+94-100`).
+
+## What is not there
+
+No facade, no envelope class, no per-connection object, no registry, no config
+element, no `handshake_cookie` on any application, no `asgi_app` on the worker,
+no `hosted_app_seam`, no ASGI entrance on `WsgiSeam`, no `openchannel`, no
+`wsx` field on `PageRow`, no `send_message`. `SpaWorker.wsgi_app`
+([spa_worker.py:557-559](../../../src/genro_asgi/spa/orchestration/spa_worker.py))
+is the one consumer seam of the http CALL form, and `_serve_request` builds a
+`WsgiSeam` around it per request (`:2134`).
+
+`SPECIFICATION.md` §6 Q1 is marked RESOLVED as of this phase: the design it
+asked for is [decisions.md](decisions.md) and [design.md](design.md), and the
+code follows in phases 1 to 5.
+
+## The order of the work
+
+| Phase | What lands |
+|---|---|
+| 0 | this folder, Q1 resolved, the namings — no code |
+| 1 | the `WebSocket` facade, `WsxEnvelope`, `WebSocketDisconnect` |
+| 2 | `WsxConnection`, `WebSocketRegistry`, `on_websocket`, the config element |
+| 3 | the server speaks first, proven on a test application |
+| 4a | `asgi_app`, `AsgiSeam`, `hosted_app_seam`, `WsgiSeam` as the adapter, `run_sync` |
+| 4 | the SPA: message → CALL, `openchannel`, the per-page queue, the push |
+| 5 | `serve_websocket`, the admitted raw seam |
+| 6 | documents |
+| 7 | release 0.43.0 |
+
+Tests first in every phase, one commit per phase, the suite green. The working
+plan of the phases is local to the machine this work runs on and is not
+committed; what it decides lands here.
