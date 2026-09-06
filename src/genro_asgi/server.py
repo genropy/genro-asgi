@@ -353,16 +353,28 @@ class BaseServer:
         return Response(status_code=307, headers={"location": location})
 
     async def on_websocket(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """Live one websocket connection: the gate, the messages, the drain.
+        """Live one websocket connection: the motor, or the application's own hands.
 
         One ``WsxConnection`` per socket does the whole thing (#68): it judges
         the handshake, accepts it, turns every message into a request the demux
         routes like any other, and answers the ones that carry an ``id``. The
         connection is registered in ``websockets`` for its whole life.
 
-        A server that hosts a socket protocol of its own overrides this hook —
-        it is the seam an application that wants the raw socket is reached by.
+        The exception is an application that wants the socket ITSELF: the
+        handshake's path names it through the same demux, and if it defines
+        ``serve_websocket`` it is handed the raw scope, receive and send, with
+        the segment of its mount already taken off the path. Nothing of the
+        motor runs then — no accept, no Origin gate, no registry, no state
+        refusal: an application that takes the socket takes all of it, and the
+        core does not half-serve a connection it does not hold. It is the
+        admitted mode of the design, the one a hosted framework with a
+        websocket protocol of its own reaches the server by.
         """
+        app, target = self.demux(scope)
+        raw_seam = getattr(app, "serve_websocket", None)
+        if raw_seam is not None:
+            await raw_seam(target, receive, send)
+            return
         await WsxConnection(self, scope, receive, send).serve()
 
     @property

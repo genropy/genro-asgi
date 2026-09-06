@@ -84,6 +84,15 @@ shape of a request, no `id`, `True` = written to the socket and never
 server, and there is none by identity or by connection until something reads
 it). Not built yet: the SPA's own branch and `openchannel`, which is what will
 bind a page to its socket (phase 4), and the raw seam (phase 5).
+**An application may take the socket itself (landed 2026-09-07, #68 phase 5).**
+The handshake's path names the application through the same demux, and one that
+defines `serve_websocket` is handed the raw scope, receive and send, its mount
+already off the path. Nothing of the motor runs then — no accept, no Origin
+gate, no registry, no state refusal: whoever takes the socket takes all of it.
+It is the admitted mode of the design, the seam a hosted framework with a
+websocket protocol of its own reaches the server by; the core builds nothing
+beyond it.
+
 **A message of a page is a request of its user, and it ends on that user's own
 row (landed 2026-09-07, #68 phase 4).** The road is the one an HTTP request
 takes: the synthetic scope enters `SpaApplication.__call__`, `pack_http` packs

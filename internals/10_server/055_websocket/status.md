@@ -5,10 +5,20 @@
 What exists TODAY on the branch, with its `file:line`. Update it in the same
 change that alters the behaviour. Opened at phase 0 of
 [#68](https://github.com/genropy/genro-asgi/issues/68) on `develop` = `a434a23`;
-phases 1, 2, 3, 4a and 4 have landed since. The socket is no longer empty: a
+phases 1, 2, 3, 4a, 4 and 5 have landed since. The socket is no longer empty: a
 handshake reaches the motor, every message it carries is served as a request of
 its user on his own row, a page opens its channel and is bound to its socket,
 and the site can write back to it.
+
+## What phase 5 built
+
+**The admitted mode** — `BaseApplication` defines no `serve_websocket`, and an
+application that defines one is handed the raw scope, receive and send by
+`BaseServer.on_websocket` ([server.py](../../../src/genro_asgi/server.py)),
+with its mount already off the path. Nothing of the motor runs for it. 6
+contract tests in `tests/test_websocket_raw_seam.py`, including the one that
+says it out loud: while the server is not RUNNING the motor closes 1013, and an
+application holding its own socket answers as it likes.
 
 ## What phase 4 built
 
@@ -212,8 +222,6 @@ already speaks WSX with the same four fields (`channel/frame.py:15-23,
 
 ## What is not there
 
-No `serve_websocket` seam for an application that wants the raw socket
-(phase 5).
 `BaseApplication.handshake_cookie` exists and answers `None`: no application in
 the core names a cookie yet, the SPA included — a front that wants its
 handshake gated names it in its own subclass.
@@ -232,6 +240,7 @@ code follows in phases 1 to 5.
 | 3 | **DONE** — `BaseServer.send_message`: the server writes to a page |
 | 4a | **DONE** — `asgi_app`, `hosted_app_seam`, `AsgiSeam`, `WsgiSeam` as an ASGI application, `run_sync` |
 | 4 | **DONE** — `WsxControl`, `serve_wsx_request`, `serve_wsx`, `WsxCommands`, `call_lock`, the push |
+| 5 | **DONE** — `serve_websocket`: an application that takes the socket itself |
 | 2 | `WsxConnection`, `WebSocketRegistry`, `on_websocket`, the config element |
 | 3 | the server speaks first, proven on a test application |
 | 4a | `asgi_app`, `AsgiSeam`, `hosted_app_seam`, `WsgiSeam` as the adapter, `run_sync` |
