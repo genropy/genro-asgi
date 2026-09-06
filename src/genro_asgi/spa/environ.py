@@ -12,16 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The environ synthesizer: HTTP facts in, WSGI reply out, no transport.
+"""The two seams of the hosted application: facts in, answer out, no transport.
 
-The ratified modularity clause of design §3.1 asks for exactly this shape —
-"dict in, dict out, testable without processes", never braided into the
-envelope dispatch. :class:`WsgiSeam` is that isolated module: it takes the
-``http`` dict a CALL carries, builds the PEP 3333 environ from it, invokes a
-WSGI callable **as a library, in-process**, and shapes its answer back into a
-dict. The WSGI adapter stays where the old code needs it and stops being a
-transport; when the last WSGI piece goes dark this module goes with it and the
-channel never notices.
+A CALL brings the worker one ``http`` dict — the facts the front packed out of
+a real request — and expects one back. What stands between that dict and the
+application the worker hosts is this module, and it holds one seam per kind of
+application:
+
+- :class:`AsgiSeam` takes the ``http`` dict, builds the ASGI **scope** from it,
+  and calls an ASGI application as a server would: ``(scope, receive, send)``.
+  It is the ONE road out of ``_serve_request``.
+- :class:`WsgiSeam` is an ASGI application itself, wrapped around a WSGI
+  callable: it builds the PEP 3333 environ from a scope and runs that callable
+  on the worker's traffic pool, because WSGI is synchronous.
+
+So there is one seam on the worker, ``asgi_app``, and a legacy WSGI site
+reaches it through ``WsgiSeam``. A worker that hosts only WSGI takes the
+shortcut — it assigns ``wsgi_app`` and the core wraps it — and a consumer whose
+own ASGI application must delegate some paths to a legacy site builds a
+``WsgiSeam`` around that site and calls it from its own router: the mixed
+routing lives there, and the core knows no path prefixes (owner, 2026-09-06,
+form B).
 
 **The wire shape, both ways.** The request dict is JSON-safe because the
 channel is JSON: ``{"method", "path", "query_string", "headers", "body",
@@ -29,18 +40,16 @@ channel is JSON: ``{"method", "path", "query_string", "headers", "body",
 like the move package. The reply is ``{"status", "headers", "body"}`` with the
 same conventions.
 
-**One body, whole, both ways.** Streaming and large bodies are out of scope by
-ratification: the request body arrives as one ``BytesIO`` and the response
-iterable is consumed to the last chunk (and closed, as PEP 3333 requires)
-before the reply dict exists. The legacy ``write()`` callable is supported the
-only way a whole-body reply can support it: its chunks are buffered and, per
-PEP 3333, prepended to the bytes the iterable yields.
+**One body, whole, both ways.** Streaming is out of scope by ratification: the
+request body arrives as one chunk and the response is consumed to its last one
+before the reply dict exists. An application that never finishes never finishes
+the CALL.
 
 **The identity travels.** The CALL's ``identity`` — the sticky key the pool
-routed on — reaches the site as ``environ["genro.identity"]``: the hosted code
-sees who the request belongs to without re-deriving it from the cookie.
-
-The call is synchronous — WSGI is — so the worker runs it on its pool.
+routed on — reaches the hosted code as ``genro.identity``, a scope key for an
+ASGI application and an environ key for a WSGI one, together with
+``genro.page_id`` and ``genro.reply_path`` when the message carried them. On a
+real HTTP request those two are ABSENT, not ``None``.
 """
 
 from __future__ import annotations
@@ -50,57 +59,184 @@ import io
 import sys
 from typing import Any, Callable, Iterable
 
-__all__ = ["WsgiSeam"]
+__all__ = ["AsgiSeam", "WsgiSeam"]
 
 # The two headers PEP 3333 keeps out of the HTTP_ namespace.
 UNPREFIXED_HEADERS = {"content-type": "CONTENT_TYPE", "content-length": "CONTENT_LENGTH"}
 
+# What travels from the CALL's dict into the hosted code, when it is there.
+CALL_KEYS = ("genro.page_id", "genro.reply_path")
+
+
+class AsgiSeam:
+    """One ASGI application, called from the facts of a CALL."""
+
+    def __init__(self, asgi_app: Any) -> None:
+        """Args:
+        asgi_app: the application to call, ``(scope, receive, send)``.
+        """
+        self.asgi_app = asgi_app
+
+    def build_scope(self, http: dict[str, Any], identity: str | None = None) -> dict[str, Any]:
+        """The ASGI scope for one ``http`` dict.
+
+        Args:
+            http: the facts the front packed.
+            identity: the CALL's identity, ``None`` when the caller named none.
+
+        Returns:
+            An ``http`` scope. ``root_path`` is empty: the path the front
+            forwards is already mount-relative, so the whole of it is ``path``.
+            ``server`` comes from the Host header, the only place the front's
+            own address survives the packing.
+        """
+        headers = [
+            (str(name).encode("latin-1"), str(value).encode("latin-1"))
+            for name, value in http.get("headers") or []
+        ]
+        host, port = self.server_address(
+            next((v.decode("latin-1") for n, v in headers if n.lower() == b"host"), "")
+        )
+        client = http.get("client") or []
+        scope: dict[str, Any] = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": http.get("method", "GET"),
+            "scheme": http.get("scheme") or "http",
+            "path": http.get("path", "/"),
+            "raw_path": str(http.get("path", "/")).encode("latin-1"),
+            "root_path": "",
+            "query_string": str(http.get("query_string", "")).encode("latin-1"),
+            "headers": headers,
+            "server": (host, int(port)),
+            "client": (str(client[0]), int(client[1])) if len(client) > 1 else None,
+            "genro.identity": identity,
+        }
+        for key in CALL_KEYS:
+            if http.get(key.split(".")[1]) is not None:
+                scope[key] = http[key.split(".")[1]]
+        return scope
+
+    def server_address(self, host_header: str) -> tuple[str, str]:
+        """Split a Host header into ``(name, port)``."""
+        if not host_header:
+            return "localhost", "80"
+        host, _, port = host_header.partition(":")
+        return host, port or "80"
+
+    async def serve(self, http: dict[str, Any], identity: str | None = None) -> dict[str, Any]:
+        """Call the application on one ``http`` dict and shape its reply.
+
+        Args:
+            http: the facts the front packed.
+            identity: the CALL's identity.
+
+        Returns:
+            ``{"status", "headers", "body"}``, the body base64 — the same shape
+            the WSGI road produced before this seam existed.
+
+        Raises:
+            RuntimeError: the application answered nothing, or wrote a body
+                after declaring the last chunk.
+        """
+        scope = self.build_scope(http, identity)
+        body = base64.b64decode(http.get("body") or "")
+        collected: dict[str, Any] = {"status": None, "headers": [], "chunks": [], "done": False}
+
+        async def receive() -> dict[str, Any]:
+            if collected["done"]:
+                return {"type": "http.disconnect"}
+            collected["done"] = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        async def send(message: dict[str, Any]) -> None:
+            if message["type"] == "http.response.start":
+                collected["status"] = message["status"]
+                collected["headers"] = [
+                    [name.decode("latin-1"), value.decode("latin-1")]
+                    for name, value in message.get("headers") or []
+                ]
+            elif message["type"] == "http.response.body":
+                collected["chunks"].append(message.get("body", b""))
+
+        await self.asgi_app(scope, receive, send)
+        if collected["status"] is None:
+            raise RuntimeError("the hosted application answered nothing")
+        return {
+            "status": int(collected["status"]),
+            "headers": collected["headers"],
+            "body": base64.b64encode(b"".join(collected["chunks"])).decode("ascii"),
+        }
+
 
 class WsgiSeam:
-    """One WSGI callable, invoked in-process from the facts of a CALL."""
+    """One WSGI callable, reached as an ASGI application.
 
-    def __init__(self, wsgi_app: Callable[..., Iterable[bytes]]) -> None:
+    What a hosted ASGI application calls to delegate one request to the legacy,
+    and the road the core itself takes for the ``wsgi_app`` shortcut: one way
+    in, whether the consumer delegates or hosts nothing else.
+
+    It holds no state of a request: the same instance serves concurrent
+    requests, because the router of a consumer calls it that way.
+    """
+
+    def __init__(self, wsgi_app: Callable[..., Iterable[bytes]], worker: Any) -> None:
         """Args:
         wsgi_app: the consumer's WSGI callable, ``(environ, start_response)``.
+        worker: the worker whose traffic pool runs it — WSGI is synchronous,
+            and the request's slot follows the work onto that thread.
         """
         self.wsgi_app = wsgi_app
-        self.status = ""
-        self.headers: list[tuple[str, str]] = []
-        self.written: list[bytes] = []
+        self.worker = worker
 
-    def build_environ(self, http: dict[str, Any], identity: str | None = None) -> dict[str, Any]:
-        """The PEP 3333 environ for one ``http`` dict.
+    def build_environ(self, scope: dict[str, Any], body: bytes) -> dict[str, Any]:
+        """The PEP 3333 environ for one ASGI scope.
 
-        ``SCRIPT_NAME`` is empty: the path the front forwards is already
-        mount-relative, so the whole of it is ``PATH_INFO``. ``SERVER_NAME`` and
-        ``SERVER_PORT`` come from the Host header, the only place the front's
-        own address survives the packing. ``genro.identity`` carries the CALL's
-        identity, ``None`` when the caller named none.
+        Args:
+            scope: the http scope of the request being delegated.
+            body: the whole request body, already drained.
+
+        Returns:
+            The environ. ``SCRIPT_NAME`` is the scope's ``root_path`` and
+            ``PATH_INFO`` what is left of ``path`` once that prefix is taken
+            off — so the legacy site's view of its own URLs does not change,
+            whether the router in front of it moved the prefix into
+            ``root_path`` or left the path whole.
         """
-        body = base64.b64decode(http.get("body") or "")
-        headers = [(str(name), str(value)) for name, value in http.get("headers") or []]
-        client = http.get("client") or []
+        script_name = str(scope.get("root_path") or "")
+        path_info = str(scope.get("path") or "/")
+        if script_name and path_info.startswith(script_name):
+            path_info = path_info[len(script_name) :]
+        headers = [
+            (name.decode("latin-1"), value.decode("latin-1"))
+            for name, value in scope.get("headers") or []
+        ]
         environ: dict[str, Any] = {
-            "REQUEST_METHOD": http.get("method", "GET"),
-            "SCRIPT_NAME": "",
-            "PATH_INFO": http.get("path", "/"),
-            "QUERY_STRING": http.get("query_string", ""),
+            "REQUEST_METHOD": scope.get("method", "GET"),
+            "SCRIPT_NAME": script_name,
+            "PATH_INFO": path_info,
+            "QUERY_STRING": bytes(scope.get("query_string") or b"").decode("latin-1"),
             "SERVER_PROTOCOL": "HTTP/1.1",
             "wsgi.version": (1, 0),
-            "wsgi.url_scheme": http.get("scheme") or "http",
+            "wsgi.url_scheme": scope.get("scheme") or "http",
             "wsgi.input": io.BytesIO(body),
             "wsgi.errors": sys.stderr,
             "wsgi.multithread": True,
             "wsgi.multiprocess": False,
             "wsgi.run_once": False,
-            "genro.identity": identity,
+            "genro.identity": scope.get("genro.identity"),
         }
+        for key in CALL_KEYS:
+            if key in scope:
+                environ[key] = scope[key]
         environ.update(self.header_environ(headers))
         if body and "CONTENT_LENGTH" not in environ:
             environ["CONTENT_LENGTH"] = str(len(body))
-        host, port = self.server_address(environ.get("HTTP_HOST", ""))
-        environ["SERVER_NAME"] = host
-        environ["SERVER_PORT"] = port
+        server = scope.get("server") or ("localhost", 80)
+        environ["SERVER_NAME"] = str(server[0])
+        environ["SERVER_PORT"] = str(server[1])
+        client = scope.get("client")
         if client:
             environ["REMOTE_ADDR"] = str(client[0])
             if len(client) > 1:
@@ -126,53 +262,76 @@ class WsgiSeam:
                 packed[key] = value
         return packed
 
-    def server_address(self, host_header: str) -> tuple[str, str]:
-        """Split a Host header into ``(SERVER_NAME, SERVER_PORT)``."""
-        if not host_header:
-            return "localhost", "80"
-        host, _, port = host_header.partition(":")
-        return host, port or "80"
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        """Serve one ASGI request through the WSGI callable.
 
-    def start_response(
-        self,
-        status: str,
-        headers: list[tuple[str, str]],
-        exc_info: Any = None,
-    ) -> Callable[[bytes], None]:
-        """The classic WSGI callback: capture status and headers for the reply.
+        Args:
+            scope: the http scope; ``root_path`` becomes ``SCRIPT_NAME``.
+            receive: drained to the last ``http.request`` before the app runs.
+            send: gets one ``http.response.start`` and one
+                ``http.response.body`` — ``Set-Cookie`` and ``Location`` travel
+                like any other header, so a legacy redirect reaches the browser
+                as it is.
 
-        The return value is the legacy ``write`` callable PEP 3333 still
-        mandates: it buffers, and ``serve`` puts its bytes where the spec puts
-        them — before everything the iterable yields.
+        The callable is synchronous, so it runs on the worker's traffic pool
+        through ``run_sync``: the request's slot follows it onto that thread,
+        and whatever the site announces while serving rides this CALL's reply.
         """
-        self.status = status
-        self.headers = list(headers)
-        return self.buffer_write
+        body = await self.read_body(receive)
+        environ = self.build_environ(scope, body)
+        status, headers, payload = await self.worker.run_sync(
+            lambda: self.serve_environ(environ)
+        )
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status,
+                "headers": [
+                    (name.encode("latin-1"), value.encode("latin-1")) for name, value in headers
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": payload})
 
-    def buffer_write(self, data: bytes) -> None:
-        """The deprecated ``write`` callable: buffer the chunk for the reply."""
-        self.written.append(data)
+    async def read_body(self, receive: Any) -> bytes:
+        """Drain the request body to its last chunk."""
+        chunks: list[bytes] = []
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                break
+            chunks.append(message.get("body", b""))
+            if not message.get("more_body"):
+                break
+        return b"".join(chunks)
 
-    def serve(self, http: dict[str, Any], identity: str | None = None) -> dict[str, Any]:
-        """Run the WSGI app on one ``http`` dict and shape its reply.
+    def serve_environ(self, environ: dict[str, Any]) -> tuple[int, list[tuple[str, str]], bytes]:
+        """Run the WSGI callable on one environ, on the calling thread.
 
-        Synchronous by nature — the caller gives it a thread.
+        Returns:
+            The status, the headers and the whole body.
+
+        The iterable is consumed FIRST and closed as PEP 3333 requires; the
+        deprecated ``write`` callable is supported the only way a whole-body
+        reply can support it — its chunks lead the bytes the iterable yields.
         """
-        self.written = []
-        environ = self.build_environ(http, identity)
-        result = self.wsgi_app(environ, self.start_response)
+        status = "200 OK"
+        headers: list[tuple[str, str]] = []
+        written: list[bytes] = []
+
+        def start_response(
+            answer: str, answer_headers: list[tuple[str, str]], exc_info: Any = None
+        ) -> Callable[[bytes], None]:
+            nonlocal status, headers
+            status, headers = answer, list(answer_headers)
+            return written.append
+
+        result = self.wsgi_app(environ, start_response)
         try:
-            # The iterable is consumed FIRST: an app that writes while it
-            # yields fills the buffer during this very loop, and its bytes
-            # still lead the body.
             chunks = list(result)
-            body = b"".join(self.written + chunks)
+            body = b"".join(written + chunks)
         finally:
             close = getattr(result, "close", None)
             if close is not None:
                 close()
-        return {
-            "status": int(self.status.split(" ", 1)[0]),
-            "headers": [[name, value] for name, value in self.headers],
-            "body": base64.b64encode(body).decode("ascii"),
-        }
+        return int(status.split(" ", 1)[0]), headers, body

@@ -197,9 +197,17 @@ class WorkerEntry:
         """Build, present, serve — and leave when the wire dies first.
 
         Sets ``worker``. Returns when the worker has left: on its own decision,
-        or because the wire under it was gone, which saves nothing.
+        or because the wire under it was gone, which saves nothing. A worker that
+        declared BOTH hosted seams dies before the wire exists: that is a
+        contradiction, not a choice.
         """
         self.worker = self.build_worker()
+        # The one configuration error the boot catches: two seams assigned at
+        # once, which is a contradiction somebody declared. NO seam at all is
+        # not an error — it is the base worker, which serves its orders and no
+        # request, and whose http CALL is refused by the property when it comes.
+        if self.worker.asgi_app is not None and self.worker.wsgi_app is not None:
+            self.worker.hosted_app_seam
         self.worker.attach_stream(await self.connect())
         await self.worker.send_presentation(self.config)
         self.logger.info(

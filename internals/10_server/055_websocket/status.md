@@ -5,9 +5,36 @@
 What exists TODAY on the branch, with its `file:line`. Update it in the same
 change that alters the behaviour. Opened at phase 0 of
 [#68](https://github.com/genropy/genro-asgi/issues/68) on `develop` = `a434a23`;
-phases 1, 2 and 3 have landed since. The socket is no longer empty: a
+phases 1, 2, 3 and 4a have landed since. The socket is no longer empty: a
 handshake reaches the motor, every message it carries is served as a request,
-and the server can write to a page that asked for nothing.
+the server can write to a page that asked for nothing, and the worker hosts an
+ASGI application with the legacy reaching it through the core.
+
+## What phase 4a built
+
+**One seam on the worker** — `SpaWorker.asgi_app`, and the property
+`hosted_app_seam`
+([spa_worker.py](../../../src/genro_asgi/spa/orchestration/spa_worker.py)),
+which is the one road out of `_serve_request`: `AsgiSeam` on the assigned
+application, or `AsgiSeam(WsgiSeam(wsgi_app, worker))` when the consumer took
+the shortcut. Both assigned is a contradiction, and `WorkerEntry` kills the
+process at boot; NEITHER is the base worker, which
+[worker_entry.py](../../../src/genro_asgi/spa/orchestration/worker_entry.py)
+declares legitimate — it serves its orders, and an http CALL is refused with
+the property's message (owner, 2026-09-07, N29).
+
+**The two seams** — [environ.py](../../../src/genro_asgi/spa/environ.py), 100%
+covered, 28 contract tests in
+`tests/orchestration/test_orchestration_asgi_seam.py`. `AsgiSeam` turns the
+`http` dict into an ASGI scope and calls the application as a server would;
+`WsgiSeam` is an ASGI application around a WSGI callable, its dict entrance
+gone with its two readers. `SCRIPT_NAME` is `root_path` and `PATH_INFO` what is
+left of `path`; `Set-Cookie` and `Location` travel like any other header; the
+callable runs through `SpaWorker.run_sync`, which is the traffic pool with this
+CALL's slot following onto the thread.
+
+**What did not change**: the whole existing rig passes untouched. The bridge
+assigns `wsgi_app` and knows nothing of the adapter it now goes through.
 
 ## What phase 3 built
 
@@ -147,9 +174,8 @@ Nothing that belongs to the SPA: no `openchannel`, no `wsx` field on
 against `page_connection_map` — `WebSocketRegistry` binds pages, nobody writes
 into it yet. No `serve_websocket` seam for an application that wants the raw socket
 (phase 5).
-On the worker: no `asgi_app`, no `hosted_app_seam`, no ASGI entrance on
-`WsgiSeam` (phase 4a). `BaseApplication.handshake_cookie` exists and answers
-`None`: no application in the core names a cookie yet. `SpaWorker.wsgi_app`
+`BaseApplication.handshake_cookie` exists and answers `None`: no application in
+the core names a cookie yet. `SpaWorker.wsgi_app`
 ([spa_worker.py:557-559](../../../src/genro_asgi/spa/orchestration/spa_worker.py))
 is the one consumer seam of the http CALL form, and `_serve_request` builds a
 `WsgiSeam` around it per request (`:2134`).
@@ -166,6 +192,7 @@ code follows in phases 1 to 5.
 | 1 | **DONE** — the `WebSocket` facade, `WsxEnvelope`, `WebSocketDisconnect` |
 | 2 | **DONE** — `WsxConnection`, `WebSocketRegistry`, `on_websocket`, the config element |
 | 3 | **DONE** — `BaseServer.send_message`: the server writes to a page |
+| 4a | **DONE** — `asgi_app`, `hosted_app_seam`, `AsgiSeam`, `WsgiSeam` as an ASGI application, `run_sync` |
 | 2 | `WsxConnection`, `WebSocketRegistry`, `on_websocket`, the config element |
 | 3 | the server speaks first, proven on a test application |
 | 4a | `asgi_app`, `AsgiSeam`, `hosted_app_seam`, `WsgiSeam` as the adapter, `run_sync` |

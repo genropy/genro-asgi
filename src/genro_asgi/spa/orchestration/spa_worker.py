@@ -214,9 +214,12 @@ reply. A path nobody serves answers ``NotFound``. The http CALL form (an ``http`
 ``identity`` and the ``user_frozen`` verdict) is a request the front packed
 whole: it lands on the unified row FIRST — the store adopted when the verdict
 authorises it, the connection looked up in the deposit by itself, the clocks
-stamped — and only then goes to the ``WsgiSeam`` on the traffic pool. That
-seam's ``wsgi_app`` is ``None`` here: this class hosts no site, and says so
-explicitly. A subclass assigns it, which is the whole contract with the bridge.
+stamped — and only then goes to ``hosted_app_seam``, which is the one road to
+whatever this worker hosts. Both seams are ``None`` here: this class hosts no
+application, and the property says so out loud. A subclass assigns ONE of them
+— ``asgi_app`` for an ASGI application, or the ``wsgi_app`` shortcut, which the
+core wraps in a ``WsgiSeam`` of its own and runs on the traffic pool because
+WSGI is synchronous — and that is the whole contract with a consumer.
 
 **The photo rides out.** ``worker_snapshot`` is a slot ANY envelope leaving here
 may carry beside its own payload: the presentation carries it (a live process is
@@ -262,7 +265,7 @@ from genro_routes import RoutingClass, route
 from genro_tytx import from_tytx, to_tytx
 
 from ...channel.frame import REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
-from ..environ import WsgiSeam
+from ..environ import AsgiSeam, WsgiSeam
 from ..global_store import CapturingGlobalStore, GlobalStoreLease
 from ..register import Register
 from ..register_registry import RegisterRegistry
@@ -554,8 +557,18 @@ class SpaWorker:
         #: One future per CALL this worker placed upward, by frame id: the read
         #: loop resolves them as the answers land, in whatever order they do.
         self._parent_calls: dict[str, asyncio.Future[Any]] = {}
-        #: The consumer seam of the http CALL form: a WSGI callable a subclass
-        #: assigns. None here — this class hosts no site of its own.
+        #: The consumer seam of the http CALL form: an ASGI application a
+        #: subclass assigns. None here — this class hosts no application of its
+        #: own. Whoever assigns it also gives it this worker, the way the
+        #: genropy bridge gives its hosted site its ``spa_worker``: the core
+        #: writes no live object into a scope (owner, 2026-09-06). A task the
+        #: application spawns inherits the context at creation, but mutating
+        #: the registers AFTER the reply has left raises: the work of a request
+        #: ends inside the request, as it does for a WSGI site.
+        self.asgi_app: Any = None
+        #: The shortcut for whoever hosts WSGI only: a WSGI callable the core
+        #: wraps in a ``WsgiSeam`` itself. Alternative to ``asgi_app``, never
+        #: an addition — both assigned is a configuration error.
         self.wsgi_app: Callable[..., Any] | None = None
         self.dispatch_lock = threading.RLock()
         #: The rows of the three registers, and the lifecycle vocabulary that
@@ -610,6 +623,53 @@ class SpaWorker:
         nothing else in this class names the concrete class.
         """
         return RegisterRegistry()
+
+    @property
+    def hosted_app_seam(self) -> AsgiSeam:
+        """The seam onto the hosted application, the one seam a consumer assigned.
+
+        Returns:
+            The ASGI seam: on ``asgi_app`` when a consumer assigned one, on the
+            WSGI adapter around ``wsgi_app`` when it took the shortcut instead.
+
+        Raises:
+            RuntimeError: both seams are assigned, or neither is. The shortcut
+                is an alternative, not an addition, and a worker hosting
+                nothing serves nothing. ``WorkerEntry`` reads this once at
+                boot, so a misconfigured worker dies there and not at its first
+                request.
+        """
+        if self.asgi_app is not None and self.wsgi_app is not None:
+            raise RuntimeError(
+                f"Worker {self.name}: asgi_app and wsgi_app are both assigned; "
+                "the WSGI shortcut is an alternative to the ASGI seam, not an addition"
+            )
+        if self.asgi_app is not None:
+            return AsgiSeam(self.asgi_app)
+        if self.wsgi_app is not None:
+            return AsgiSeam(WsgiSeam(self.wsgi_app, self))
+        raise RuntimeError(
+            f"Worker {self.name}: neither asgi_app nor wsgi_app is assigned; "
+            "this worker hosts no application"
+        )
+
+    async def run_sync(self, work: Callable[[], Any]) -> Any:
+        """Run one piece of synchronous work on the traffic pool, in this CALL's slot.
+
+        Args:
+            work: what to run there — a WSGI callable, a legacy database call.
+
+        Returns:
+            Whatever the work returned.
+
+        The thread runs under a COPY of the calling task's context, so it finds
+        the request slot of the CALL it serves and whatever it announces rides
+        that CALL's reply. This is how a hosted ASGI application does its
+        synchronous work: the legacy database its group engine built is
+        synchronous, and neither the loop nor the service pool may be held
+        behind it.
+        """
+        return await self._run_in_pool(self.traffic_pool, work)
 
     def build_request_slot(self) -> RequestSlot:
         """Build the slot of one request: the seam a consumer replaces with its own slot class.
@@ -1357,18 +1417,12 @@ class SpaWorker:
                 ``identity`` to route on and the ``user_frozen`` verdict, which
                 belong together because the row is resolved from all three.
 
-        No ``wsgi_app`` means this worker hosts no site: the form is understood
-        and the explicit error says the seam is empty — and nothing is born on
-        the registers for a request that was never served. Anything that goes
-        wrong afterwards comes back as that same REPLY: a caller is answered
-        once, always, and a deposit that refuses a parcel must not leave a
-        browser waiting for a timeout.
+        Whether this worker hosts anything at all is ``hosted_app_seam``'s
+        judgment, and it was already made at boot: what can still go wrong here
+        comes back as this same REPLY — a caller is answered once, always, and
+        a deposit that refuses a parcel must not leave a browser waiting for a
+        timeout.
         """
-        if self.wsgi_app is None:
-            await self.send_reply(
-                frame, error="http CALL form refused: this worker hosts no WSGI site"
-            )
-            return
         try:
             result: Any = await self._serve_request(payload)
             error: Any = None
@@ -2117,9 +2171,11 @@ class SpaWorker:
         in order: the pendings cover the adoption too, so no departure can wake
         in the gap between the loading and the serving of the same call. Then
         the row (the store adopted when the verdict authorises it, the
-        connection found by itself, the clocks stamped), and the stitching on
-        the traffic pool: WSGI is synchronous, and neither the loop nor the
-        service pool may be held behind it. The end of the call is where a
+        connection found by itself, the clocks stamped), and then the hosted
+        application, awaited on the task of this CALL — the slot is that task's,
+        so nothing needs copying; a WSGI site behind the shortcut goes to the
+        traffic pool from inside the adapter, because WSGI is synchronous. The
+        end of the call is where a
         departure that had to wait for it happens — on the connection the
         SERVICE settled on, which is the one the site named while serving when
         it named one, and the one the request came in on otherwise.
@@ -2131,13 +2187,18 @@ class SpaWorker:
             self.open_request(user)
         try:
             await self._resolve_row(user, cid, payload)
-            seam = WsgiSeam(self.wsgi_app)
+            seam = self.hosted_app_seam
             service_started = time.monotonic()
             try:
-                served = await self._run_in_pool(
-                    self.traffic_pool,
-                    functools.partial(self._serve_on_thread, seam, payload),
-                )
+                try:
+                    served = await seam.serve(payload["http"], payload.get("identity"))
+                finally:
+                    # On a pool thread, with this request's slot still open and
+                    # BEFORE the counters, the pendings and the login's tail:
+                    # a consumer delivers here what its verbs left on the slot,
+                    # and does it from a thread, because it may call up the lane.
+                    await self.run_sync(self.on_request_served)
+                served["connection_id"] = self.request_slot.connection_id
             finally:
                 # Counted whatever the stitching did: a call that failed or ran
                 # long is exactly the one the measure must not lose.
@@ -2150,25 +2211,6 @@ class SpaWorker:
             slot = self.request_slot
             if slot.connection_previous_user is not None:
                 await self.freeze_connection(slot.connection_id, slot.connection_previous_user)
-
-    def _serve_on_thread(self, seam: WsgiSeam, payload: dict[str, Any]) -> dict[str, Any]:
-        """Serve the stitching on the pool thread, in the slot of its CALL.
-
-        The thread runs under a copy of the CALL's context, so the site's verbs,
-        called on this very thread, find the slot the task opened and their
-        events ride this CALL's reply. What the site named while serving LEAVES
-        with the answer — the front has no other way of learning the connection
-        this request settled on, and its cookie is written off it. What the slot
-        still holds is delivered in the ``finally``, so a request that never
-        collected — and one that failed after its commit — announces its
-        deposits before the exception goes on its way.
-        """
-        try:
-            answer = seam.serve(payload["http"], payload.get("identity"))
-        finally:
-            self.on_request_served()
-        answer["connection_id"] = self.request_slot.connection_id
-        return answer
 
     async def _resolve_row(self, user: str | None, cid: str, payload: dict[str, Any]) -> None:
         """Put the row of an incoming request in order.

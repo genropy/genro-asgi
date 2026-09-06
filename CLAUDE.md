@@ -84,6 +84,28 @@ shape of a request, no `id`, `True` = written to the socket and never
 server, and there is none by identity or by connection until something reads
 it). Not built yet: the SPA's own branch and `openchannel`, which is what will
 bind a page to its socket (phase 4), and the raw seam (phase 5).
+**The worker hosts an ASGI application, and the legacy reaches it through the
+core (landed 2026-09-07, #68 phase 4a).** There is ONE seam, `SpaWorker.asgi_app`,
+and one road out of `_serve_request`: the property `hosted_app_seam`, which
+returns `AsgiSeam` on the assigned application, or `AsgiSeam(WsgiSeam(wsgi_app,
+worker))` when a consumer took the WSGI shortcut — so `_serve_request` does not
+know which of the two is filled. `AsgiSeam` builds the ASGI scope from the same
+`http` dict the CALL always carried (`genro.identity` always, `genro.page_id`
+and `genro.reply_path` only when the message brought them), hands the body over
+whole in one `http.request` and then `http.disconnect`, and shapes the answer
+back into `{"status", "headers", "body"}` — the shape the WSGI road produced
+before. `WsgiSeam` is now an ASGI application around a WSGI callable, with the
+dict entrance gone: `SCRIPT_NAME` is the scope's `root_path` and `PATH_INFO`
+what is left of `path`, so a legacy site keeps its view of its own URLs whether
+the router in front moved the prefix or left the path whole; it runs the
+callable through `SpaWorker.run_sync`, the traffic pool with this CALL's slot
+following onto the thread. Mixed applications are the consumer's own router
+calling that same `WsgiSeam` for the legacy paths — the core knows no prefixes
+(form B). `on_request_served` now runs through `run_sync` too, still on a pool
+thread and still before the counters, the pendings and the login's tail. Both
+seams assigned is a contradiction and `WorkerEntry` kills the process at boot;
+NEITHER is the base worker, legitimate, which serves its orders and refuses an
+http CALL with the property's message.
 `Request` reads the ASGI request by itself (landed 2026-09-02): headers and
 cookies off the scope, the query, the body drained ALWAYS from `receive` and
 joined once; the body is decoded by content-type — json/xml/msgpack hydrated,

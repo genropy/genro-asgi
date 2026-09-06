@@ -523,7 +523,9 @@ async def test_a_worker_with_no_site_refuses_the_form_and_registers_nobody(wire)
         "/site/invoices", http_call("cid-a", "mario"), timeout=5.0
     )
 
-    assert reply["error"] == "http CALL form refused: this worker hosts no WSGI site"
+    # The base worker lives and serves its orders; what it cannot do is serve a
+    # request, and the seam property is what says so (#68 N29).
+    assert "hosts no application" in reply["error"]
     assert worker.user_register.keys() == []
 
 
