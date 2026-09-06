@@ -80,6 +80,12 @@ lane needed no machinery of its own. A CALL the handler does not serve comes bac
 as an error REPLY, never as a dropped frame; anything that is neither method is
 logged as an unexpected envelope, because there is no third lane.
 
+An error REPLY carries its text under ``error``, and MAY carry a ``status``
+beside it: only a refusal knows what the caller should be answered — a page
+that never opened its channel is a 409 whose words are meant for the browser —
+and everything else leaves it out, which is how the front tells a refusal of
+the client from a site that broke (#70).
+
 **The end of the wire is a LOCAL fact of this handler.** EOF — the death signal
 on a same-host socket — or a protocol violation closes the stream, fails every
 pending CALL and tells the handler through ``on_child_lost``, which is where the

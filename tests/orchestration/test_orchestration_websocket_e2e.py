@@ -295,6 +295,31 @@ class TestACallerWithNoCookie:
             await control(parameters=None, _request=request)
 
 
+class TestAMessageBeforeTheChannelIsOpen:
+    async def test_the_browser_is_told_what_is_wrong_and_not_that_the_site_broke(
+        self, machine
+    ) -> None:
+        # What the first browser found (#70 C): the refusal was normalised into
+        # the 502 of an upstream that broke, and the reason lived only in the
+        # worker's log. It is a refusal of the CLIENT, not a failure of the
+        # site, and it carries its own status and its own words.
+        answer = await machine.message(
+            WsxEnvelope(id="m1", method="WSK", path="/main/rpc", page_id=PAGE)
+        )
+        assert answer.status == 409
+        assert "no open channel" in answer.data
+
+    async def test_the_page_is_served_once_its_channel_is_open(self, machine) -> None:
+        await machine.open_channel()
+        answer = await machine.message(
+            WsxEnvelope(id="m2", method="WSK", path="/main/rpc", page_id=PAGE)
+        )
+        # The lane's worker hosts no application, so what comes back now is the
+        # site's own failure — a 502 with the fixed text — and no longer the
+        # refusal: the channel is open and the message was passed on.
+        assert answer.status == 502
+
+
 class TestTheChannelSurvivesTheDeposit:
     async def test_a_page_woken_from_the_deposit_still_has_its_channel(
         self, machine

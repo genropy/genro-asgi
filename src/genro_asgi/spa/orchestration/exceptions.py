@@ -95,13 +95,20 @@ class SiteFailedRequest(Exception):
     Args:
         user: whose request it was.
         cause: what the child said went wrong.
+        status: what the front should answer, when the worker knew — a REFUSAL
+            of the client knows (a page that never opened its channel is a 409,
+            and its words are meant for the browser). ``None`` for everything
+            else, which is the upstream's own failure and stays a 502 with the
+            fixed text.
 
     The placement is sound and the wire is up: what failed is the site inside the
     process. It is the upstream's failure and never the client's, which is why it
-    is a class of its own and not one of the refusals.
+    is a class of its own and not one of the refusals — except when the child
+    named a status, and then those words ARE the answer.
     """
 
-    def __init__(self, user: str, cause: str) -> None:
+    def __init__(self, user: str, cause: str, status: int | None = None) -> None:
         super().__init__(f"the worker of {user} failed the request: {cause}")
         self.user = user
         self.cause = cause
+        self.status = status

@@ -1018,7 +1018,7 @@ class SpaApplication(RoutedApplication):
             response = self.wire_lost_response(gone)
         except SiteFailedRequest as failure:
             self._logger.error("Front %s: %s", self.code, failure)
-            response = self.gateway_response()
+            response = self.gateway_response(failure)
         else:
             response = self.build_response(reply, carried)
         await response(scope, receive, send)
@@ -1054,8 +1054,26 @@ class SpaApplication(RoutedApplication):
             ],
         )
 
-    def gateway_response(self) -> Response:
-        """The 502 of an upstream that broke: what broke is said in the log alone."""
+    def gateway_response(self, failure: SiteFailedRequest | None = None) -> Response:
+        """What the caller reads when the worker answered a failure.
+
+        Args:
+            failure: what the worker said, when the caller is to be told; the
+                502 with the fixed text is the answer without it.
+
+        Returns:
+            The refusal the worker named, with ITS words, when it named a
+            status — a page that never opened its channel is a 409 and the
+            browser must read why (#70). Everything else is the 502 of an
+            upstream that broke, whose reason stays in the log alone: what
+            failed inside the site is nobody's business out here.
+        """
+        if failure is not None and failure.status is not None:
+            return Response(
+                content=failure.cause,
+                status_code=failure.status,
+                headers=[("content-type", "text/plain; charset=utf-8")],
+            )
         return Response(
             content=ERR_502_TEXT,
             status_code=502,
