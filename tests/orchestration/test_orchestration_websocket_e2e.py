@@ -38,11 +38,18 @@ from typing import Any
 import pytest
 
 from genro_asgi import BaseServer, MiddlewareMixin
+from genro_asgi.exceptions import HTTPBadRequest
+from genro_asgi.request import Request
 from genro_asgi.applications.spa_app import SPA_CONNECTION_ID_COOKIE, SpaApplication
 from genro_asgi.types import Message, Scope
 from genro_asgi.wsx import WsxConnection, WsxEnvelope
 
 PREFIX = "WSX://"
+
+
+async def no_body() -> Message:
+    """A receive that hands over an empty body: the request carries none."""
+    return {"type": "http.request", "body": b"", "more_body": False}
 CID = "cid-a"
 USER = "mario"
 PAGE = "page-1"
@@ -160,6 +167,45 @@ async def machine(worker_commander_lane):
         yield running
 
 
+class TestTheHandshakeOfTheSpa:
+    async def test_a_socket_with_no_connection_cookie_is_closed_1008(
+        self, worker_commander_lane
+    ) -> None:
+        # What the first browser found (#70 A): the front declared no cookie,
+        # so a socket opened without one stayed open for ever. The gate of
+        # W-13 had been built and had no user.
+        machine = XT_Machine(worker_commander_lane)
+        scope: Scope = {
+            "type": "websocket",
+            "path": "/_wsx",
+            "headers": [(b"host", b"site.example")],
+            "subprotocols": [],
+        }
+        connection = WsxConnection(
+            machine.server, scope, machine.browser.receive, machine.browser.send
+        )
+        # The browser leaves right away: without the gate the read loop would
+        # wait for ever, which is exactly what the defect looked like.
+        machine.browser.leave()
+        await connection.serve()
+        assert machine.browser.sent == [
+            {"type": "websocket.accept"},
+            {
+                "type": "websocket.close",
+                "code": 1008,
+                "reason": "connection cookie required: spa_connection_id",
+            },
+        ]
+
+    async def test_a_socket_with_the_cookie_is_let_in(self, machine) -> None:
+        assert {"type": "websocket.accept"} in machine.browser.sent
+
+    def test_the_front_names_the_cookie_its_handshake_must_carry(self) -> None:
+        assert SpaApplication(code="site0", mount="").handshake_cookie == (
+            SPA_CONNECTION_ID_COOKIE
+        )
+
+
 class TestOpeningTheChannelOfAPage:
     async def test_the_page_is_told_its_channel_is_open(self, machine) -> None:
         answer = await machine.open_channel()
@@ -224,29 +270,29 @@ class TestWhatTheWorkerRefuses:
         assert machine.server.websockets.get_page_socket("ghost") is None
 
 
-class TestASocketWithNoCookie:
-    async def test_a_message_from_a_connection_with_no_cookie_is_refused(
+class TestACallerWithNoCookie:
+    async def test_the_command_refuses_a_request_that_carries_no_connection(
         self, worker_commander_lane
     ) -> None:
-        # The SPA gates its handshake on the cookie, so this cannot happen
-        # through the front door; the command refuses it anyway, because the
-        # answer must never be "some connection".
-        machine = XT_Machine(worker_commander_lane)
-        scope: Scope = {
-            "type": "websocket",
-            "path": "/_wsx",
-            "headers": [(b"host", b"site.example")],
-            "subprotocols": [],
-        }
-        connection = WsxConnection(
-            machine.server, scope, machine.browser.receive, machine.browser.send
+        # No websocket can reach this any more — the handshake gate closes such
+        # a socket first (#70 A) — but the route is a route: an HTTP caller can
+        # knock on it with no cookie at all, and the answer must never be «some
+        # connection».
+        front = XT_Front(worker_commander_lane.commander, code="site0", mount="")
+        control = front.route.node("/_wsx/openchannel")
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/_wsx/openchannel",
+                "headers": [],
+                "genro.page_id": PAGE,
+            },
+            no_body,
         )
-        task = asyncio.create_task(connection.serve())
-        await machine.settle()
-        answer = await machine.open_channel()
-        assert answer.status == 400
-        machine.browser.leave()
-        await task
+        await request.init()
+        with pytest.raises(HTTPBadRequest, match="no cookie"):
+            await control(parameters=None, _request=request)
 
 
 class TestTheChannelSurvivesTheDeposit:

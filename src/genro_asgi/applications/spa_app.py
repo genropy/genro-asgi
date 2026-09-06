@@ -514,6 +514,21 @@ class SpaApplication(RoutedApplication):
     #: The words this front adds to a recipe, read back under its own code.
     grammar = SpaApplicationGrammar
 
+    @property
+    def handshake_cookie(self) -> str | None:
+        """The connection cookie a websocket handshake must carry to reach this front.
+
+        Returns:
+            The name of the SPA's own connection cookie.
+
+        Every message on that socket is a request of the user the cookie names,
+        so a socket opened without one could never be served: the handshake is
+        accepted and closed 1008, and the browser reads why. The first live
+        probe found this property unimplemented and the socket left open for
+        ever (#70).
+        """
+        return SPA_CONNECTION_ID_COOKIE
+
     #: The pool this front builds. A subclass names another one — a vertex that
     #: can grow its own machine, say — and the recipe names the subclass.
     commander_class: type[SpaCommander] = SpaCommander
