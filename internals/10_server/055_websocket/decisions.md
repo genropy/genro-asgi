@@ -1,6 +1,6 @@
 # Websocket — decisions
 
-**Version**: 0.1 · **Last Updated**: 2026-09-06 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.2 · **Last Updated**: 2026-09-07 · **Status**: 🔴 DA REVISIONARE
 
 **The websocket, with the work finished.** Read this as a report from the day
 everything described here is running: it says what the transport *is*, and
@@ -283,8 +283,9 @@ loses a process to govern.
 
 ## 14. The names
 
-Every name below was baptised by the owner, one per turn, on 2026-09-05 and
-2026-09-06.
+Every name below was baptised by the owner, one per turn, between 2026-09-05
+and 2026-09-07 — the ones the code needed as it was written included, because
+a name that was not foreseen is still a name.
 
 | What it is | Name |
 |---|---|
@@ -309,6 +310,19 @@ Every name below was baptised by the owner, one per turn, on 2026-09-05 and
 | The property that yields the seam onto the hosted application | `SpaWorker.hosted_app_seam` |
 | The WSGI → ASGI adapter | `WsgiSeam` itself, with `__call__(scope, receive, send)` |
 | How the ASGI application reaches the worker | the consumer binds it, in its own worker class |
+| How the server reaches one layer of its middleware chain | `get_middleware(middleware_class)` |
+| The pure reading of the session of a scope the chain never saw | `SessionMiddleware.get_session(scope)` |
+| The whole life of one connection | `WsxConnection.serve()` |
+| What the registry does | `register` / `unregister`, `bind_page` / `get_page_socket` |
+| How a handshake is turned away with no accept | `WebSocket.refuse(code, reason)` |
+| Where the sending to a page lives | `BaseServer.send_message(page_id, path, data)` |
+| The commander's resolution every form of request shares | `resolve_worker(cid, *, hold_timeout)` |
+| The worker's method for the `wsx` payload form | `serve_wsx(frame, payload)` |
+| The front's routing class under `_wsx` | `WsxControl` |
+| The commander's door for the `wsx` form | `serve_wsx_request(cid, payload, *, hold_timeout)` |
+| The worker's dispatcher branch for what a page asks of its channel | `WsxCommands` |
+| The queue a page's calls wait in, on its own row | `call_lock` |
+| How a handler asks for the request itself | it declares `_request` |
 
 Two of them carry a reason worth keeping:
 
@@ -327,6 +341,39 @@ in its own worker class, at construction or as an attribute afterwards — the
 road the genropy bridge already takes when it writes `site.spa_worker = self`.
 The core adds nothing and writes NO live object into the scope, which stays the
 JSON-safe facts the front packed.
+
+Three more carry a reason, and all three were decided while the code was being
+written rather than before it:
+
+- **What the boot checks** (owner, 2026-09-07). A worker that declared BOTH
+  hosted seams is a contradiction somebody wrote down, and it dies before its
+  wire exists. A worker with NEITHER is not an error at all: it is the base
+  worker, which the spawn entry declares legitimate — it serves its orders and
+  hosts nothing — and it learns it hosts nothing when an http CALL finally asks
+  it to serve a request. The plan said «neither → error»; the plan was wrong,
+  and it said so in a line nobody had ratified.
+- **Where the page names itself in `openchannel`** (owner, 2026-09-07). In the
+  envelope's own `page_id` field, never in the payload — so the CONNECTION,
+  which must bind that page to its socket, reads what is its to read and leaves
+  the payload to the application. The command names no page in its parameters
+  at all: it takes them from the scope, where the envelope's field landed.
+- **Who binds the page to the socket** (owner, 2026-09-07). The application
+  decides — it validates the page against the vertex's own map and writes the
+  channel on its row — and the connection binds, because it is the one holding
+  the socket, and only because the answer was 200. Nothing is ever bound that
+  will have to be unbound.
+
+### 14a. The channel travels; the queue does not
+
+**Source: owner, 2026-09-07, confirming a reading of two decisions already
+taken.** The `wsx` field travels in the parcel like any other datum of a page,
+because W-8 says the dict lives on the page's row and travels with it, and W-5
+says a freeze does not touch the websocket — the browser of a user parked for
+being idle notices nothing. A row that came back from the deposit without its
+channel would refuse the very next message of a page that is still connected,
+and the binding on the server would outlive the row on the worker. What stays
+behind is `call_lock` alone: a lock is an object, and the page that comes back
+is served by a loop that never saw the old one.
 
 ## 15. What is deliberately absent
 

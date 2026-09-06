@@ -706,8 +706,9 @@ the server (thread pool for sync handlers, registry for the current request).
   (`BaseServer.on_websocket`), the identity is judged once at the handshake, and
   a message for the SPA becomes an ordinary CALL on the worker's lane. Decided
   in the investigation of 2026-09-05/06, tracked in
-  [055 websocket](internals/10_server/055_websocket/decisions.md); built in
-  #68.
+  [055 websocket](internals/10_server/055_websocket/decisions.md), and BUILT in
+  #68 — the six phases of code landed on 2026-09-06/07, and what the code holds
+  today is [055 websocket status](internals/10_server/055_websocket/status.md).
 - **Q2** Middleware chain: in the base or only on the public server?
 - **Q3** — RESCOPED 2026-07-19 (see §2, part 2): the orchestration package
   lives in the `genro-asgi-*` family; only the suffix is open ("server"

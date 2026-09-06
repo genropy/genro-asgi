@@ -1,6 +1,6 @@
 # Websocket
 
-**Version**: 0.1 · **Last Updated**: 2026-09-06 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.2 · **Last Updated**: 2026-09-07 · **Status**: 🔴 DA REVISIONARE
 
 How a message on a socket becomes a method call: who holds the connection, what
 a message looks like, how it reaches an application in this process or a worker
@@ -14,7 +14,9 @@ in another, and how the server addresses one page by itself.
 | `WsxEnvelope` | one message as a class: `id?`, `method`, `path`, `data`, `page_id?`, `reply_path?`, and the answer's `id`, `status`, `data`. The `WSX://` prefix is its marker, and `data` is the TYTX string |
 | `WsxConnection` | one per connection: it accepts, gates, resolves the identity once, then reads messages and serves each on a task of its own under a per-connection ceiling |
 | `WebSocketRegistry` | every live connection of the server, and the `page_id → socket` association `openchannel` writes. Neutral: it knows no application |
-| `BaseServer.on_websocket` | the entrance, where a `WsxConnection` is built and driven |
+| `BaseServer.on_websocket` | the entrance: it demultiplexes first, hands the raw socket to an application that defines `serve_websocket`, and otherwise builds a `WsxConnection` and drives it |
+| `WsxControl` | the front's routing class under `_wsx`: `openchannel`, the command a page sends before anything of its own |
+| `WsxCommands` | the worker's dispatcher branch for the same command, where the channel is written on the page's row |
 | `server/websocket` | the config element: `origins`, `max_concurrent` |
 
 ## 1. The handshake, in order

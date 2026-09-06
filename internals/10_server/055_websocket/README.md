@@ -1,6 +1,6 @@
 # Websocket
 
-**Version**: 0.1 · **Last Updated**: 2026-09-06 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.2 · **Last Updated**: 2026-09-07 · **Status**: 🔴 DA REVISIONARE
 
 The second transport of the server. A browser opens one websocket, and every
 message on it is served like an HTTP request: the server holds the connection,

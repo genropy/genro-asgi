@@ -1,14 +1,25 @@
 # Websocket — current state
 
-**Version**: 0.1 · **Last Updated**: 2026-09-06 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.2 · **Last Updated**: 2026-09-07 · **Status**: 🔴 DA REVISIONARE
 
 What exists TODAY on the branch, with its `file:line`. Update it in the same
 change that alters the behaviour. Opened at phase 0 of
 [#68](https://github.com/genropy/genro-asgi/issues/68) on `develop` = `a434a23`;
-phases 1, 2, 3, 4a, 4 and 5 have landed since. The socket is no longer empty: a
-handshake reaches the motor, every message it carries is served as a request of
-its user on his own row, a page opens its channel and is bound to its socket,
-and the site can write back to it.
+all six phases of code have landed since — 1, 2, 3, 4a, 4 and 5. The socket is
+no longer empty: a handshake reaches the motor, every message it carries is
+served as a request of its user on his own row, a page opens its channel and is
+bound to its socket, the site can write back to it, and an application that
+wants the socket itself is handed it.
+
+**The measure, at the head of the branch.** The whole suite is 1946 passed at
+97% coverage; the websocket's own tests are **170**, across
+`tests/test_websocket_facade.py` (31), `tests/test_wsx_envelope.py` (29),
+`tests/test_websocket_registry.py` (12), `tests/test_wsx_connection.py` (37),
+`tests/test_websocket_server_send.py` (8), `tests/test_websocket_raw_seam.py`
+(6), `tests/orchestration/test_orchestration_websocket_e2e.py` (16) and
+`tests/orchestration/test_orchestration_asgi_seam.py` (31). The three modules
+the motor lives in — `websocket.py`, `wsx.py`, `spa/environ.py` — are covered
+100% by those alone.
 
 ## What phase 5 built
 
@@ -220,9 +231,9 @@ walk (`routed_application.py:173-218`), and the lane's own envelope, which
 already speaks WSX with the same four fields (`channel/frame.py:15-23,
 94-100`).
 
-## What is not there
+## What is not there, and why
 
-`BaseApplication.handshake_cookie` exists and answers `None`: no application in
+**Nobody names a handshake cookie.** `BaseApplication.handshake_cookie` exists and answers `None`: no application in
 the core names a cookie yet, the SPA included — a front that wants its
 handshake gated names it in its own subclass.
 
@@ -232,22 +243,17 @@ code follows in phases 1 to 5.
 
 ## The order of the work
 
-| Phase | What lands |
-|---|---|
-| 0 | **DONE** — this folder, Q1 resolved, the namings — no code |
-| 1 | **DONE** — the `WebSocket` facade, `WsxEnvelope`, `WebSocketDisconnect` |
-| 2 | **DONE** — `WsxConnection`, `WebSocketRegistry`, `on_websocket`, the config element |
-| 3 | **DONE** — `BaseServer.send_message`: the server writes to a page |
-| 4a | **DONE** — `asgi_app`, `hosted_app_seam`, `AsgiSeam`, `WsgiSeam` as an ASGI application, `run_sync` |
-| 4 | **DONE** — `WsxControl`, `serve_wsx_request`, `serve_wsx`, `WsxCommands`, `call_lock`, the push |
-| 5 | **DONE** — `serve_websocket`: an application that takes the socket itself |
-| 2 | `WsxConnection`, `WebSocketRegistry`, `on_websocket`, the config element |
-| 3 | the server speaks first, proven on a test application |
-| 4a | `asgi_app`, `AsgiSeam`, `hosted_app_seam`, `WsgiSeam` as the adapter, `run_sync` |
-| 4 | the SPA: message → CALL, `openchannel`, the per-page queue, the push |
-| 5 | `serve_websocket`, the admitted raw seam |
-| 6 | documents |
-| 7 | release 0.43.0 |
+| Phase | What lands | |
+|---|---|---|
+| 0 | this folder, Q1 resolved, the namings — no code | **DONE** |
+| 1 | the `WebSocket` facade, `WsxEnvelope`, `WebSocketDisconnect` | **DONE** |
+| 2 | `WsxConnection`, `WebSocketRegistry`, `on_websocket`, the config element | **DONE** |
+| 3 | the server speaks first, proven on a test application | **DONE** |
+| 4a | `asgi_app`, `AsgiSeam`, `hosted_app_seam`, `WsgiSeam` as the adapter, `run_sync` | **DONE** |
+| 4 | the SPA: message → CALL, `openchannel`, the per-page queue, the push | **DONE** |
+| 5 | `serve_websocket`, the admitted raw seam | **DONE** |
+| 6 | documents | **DONE** |
+| 7 | release 0.43.0 | |
 
 Tests first in every phase, one commit per phase, the suite green. The working
 plan of the phases is local to the machine this work runs on and is not
