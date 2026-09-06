@@ -137,8 +137,7 @@ class AsgiSeam:
             the WSGI road produced before this seam existed.
 
         Raises:
-            RuntimeError: the application answered nothing, or wrote a body
-                after declaring the last chunk.
+            RuntimeError: the application answered nothing.
         """
         scope = self.build_scope(http, identity)
         body = base64.b64decode(http.get("body") or "")
@@ -276,6 +275,10 @@ class WsgiSeam:
         The callable is synchronous, so it runs on the worker's traffic pool
         through ``run_sync``: the request's slot follows it onto that thread,
         and whatever the site announces while serving rides this CALL's reply.
+
+        An application that read the body itself delegates with an EMPTY one —
+        what is left on ``receive`` by then is the disconnect — so delegate
+        before reading, or hand the legacy what you read some other way.
         """
         body = await self.read_body(receive)
         environ = self.build_environ(scope, body)

@@ -633,11 +633,13 @@ class SpaWorker:
             WSGI adapter around ``wsgi_app`` when it took the shortcut instead.
 
         Raises:
-            RuntimeError: both seams are assigned, or neither is. The shortcut
-                is an alternative, not an addition, and a worker hosting
-                nothing serves nothing. ``WorkerEntry`` reads this once at
-                boot, so a misconfigured worker dies there and not at its first
-                request.
+            RuntimeError: both seams are assigned, or neither is — and the two
+                are not the same kind of trouble. BOTH is a contradiction
+                somebody declared, and ``WorkerEntry`` reads this at boot for
+                exactly that case, so the process dies before the wire exists.
+                NEITHER is the base worker, which is legitimate: it serves its
+                orders and hosts nothing, and it learns so here, when an http
+                CALL finally asks it to serve a request.
         """
         if self.asgi_app is not None and self.wsgi_app is not None:
             raise RuntimeError(
