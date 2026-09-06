@@ -18,10 +18,10 @@ and the motor of Q1 overrides this hook. The websocket branch of
 server's `state`: the 503 with `Retry-After` is on the HTTP branch only
 (`server.py:220-229`).
 
-Covered by `tests/test_demux.py:167-178`
-(`test_websocket_connect_is_closed_cleanly`), which drives `__call__` at the
-ASGI level with no websocket client. It is the only test of the whole
-repository that names `on_websocket`.
+Covered by `tests/test_demux.py:166-178` (`TestEmptyWebsocket`), which drives
+`__call__` at the ASGI level with no websocket client: it calls the server, and
+the websocket branch takes it from there. It is the only test of the whole
+repository that reaches `on_websocket` — no test names it.
 
 **The middleware chain does not see it.** `MiddlewareMixin.__call__`
 ([middleware/\_\_init\_\_.py:107-112](../../../src/genro_asgi/middleware/__init__.py))
@@ -32,8 +32,9 @@ already there — which is why the handshake resolves the identity itself
 
 **The front has no websocket branch.** `SpaApplication.__call__`
 ([spa_app.py:837-844](../../../src/genro_asgi/applications/spa_app.py))
-demultiplexes between its own router and the hosted site, on the path, for
-HTTP scopes only.
+demultiplexes between its own router and the hosted site on the PATH, and never
+reads the scope's type. It sees no websocket scope today because the server
+takes that branch first (`server.py:237-238`) and never reaches the demux.
 
 **The pieces the motor will stand on already exist.** The demux
 (`server.py:247-273`), the request registry (`server.py:95`, registered in the

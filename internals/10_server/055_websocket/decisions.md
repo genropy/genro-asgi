@@ -8,10 +8,12 @@ never what it lacks. What the code holds today is [status.md](status.md)'s
 subject.
 
 Every voice carries its source. A voice sourced to the owner and a date was
-decided in conversation, in the working register of the investigation opened on
-2026-09-05, before it reached this file; the tags `W-1`…`W-13` and `N1`…`N22`
-are that register's own numbering, kept here so a later reader can find the
-conversation that produced a line.
+decided in conversation before it reached this file. Two working documents hold
+those conversations: the decision register of the investigation opened on
+2026-09-05, which carries the `W-1`…`W-13` questions and the namings from `N14`
+on, and the investigation's diary, which carries the namings `N1`…`N13` decided
+on 2026-09-05 turn by turn. The tags are their own numbering, kept here so a
+later reader can find the conversation that produced a line.
 
 ---
 
@@ -154,8 +156,11 @@ server's registry already knows who is connected.
 
 **Source: owner, 2026-09-05 (W-8), «sì, mi pare bello», revised the same day.**
 At the server every message is a task, with a per-connection ceiling
-(`max_concurrent`, 16) and the control ping outside it; the client correlates on
-the `id`. This is the semantics the HTTP calls of the same page already have —
+(`max_concurrent`) and the control ping outside it; the client correlates on
+the `id`. The ceiling's DEFAULT is not the owner's own word: the register says
+10, the plan says 16, and the value is his to ratify. What his words do settle
+is that there IS a ceiling — «il tetto protegge il server da un client che
+inonda» is the reason option (a) was written that way. This is the semantics the HTTP calls of the same page already have —
 a page fires dozens of calls at once — and a slow message blocks neither the
 others nor the ping.
 
@@ -290,7 +295,7 @@ Every name below was baptised by the owner, one per turn, on 2026-09-05 and
 | The method admitted for a raw websocket handed to an application | `serve_websocket` |
 | The page row's channel declaration, and the command that writes it | field `wsx` + `openchannel` |
 | The flag inside the `wsx` dict that puts a page's messages in single file | `sequential` |
-| The config element, with its `origins` and its per-connection ceiling | `server/websocket`, `max_concurrent` = 16 |
+| The config element, with its `origins` and its per-connection ceiling | `server/websocket`, `max_concurrent` (the name is his, the default is not yet) |
 | The reserved first segment of a control message | `_wsx` |
 | The commander branch the worker's push arrives on | `/commander/websocket/send` |
 | The worker verb that addresses one page | `SpaWorker.send_message(page_id, path, data)` |
