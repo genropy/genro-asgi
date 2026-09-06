@@ -1595,6 +1595,12 @@ class SpaWorker:
         runs: the CALL goes up on the loop and this thread waits for its REPLY.
         Fire and forget in meaning, not in mechanics — delivered says written
         to the socket, never executed by the page (W-12).
+
+        The payload is serialised HERE, before it reaches the lane: the lane is
+        JSON, and a date, a Decimal or a bytes object would die in its
+        ``json.dumps``. What crosses it is the TYTX string the browser's own
+        codec reads at the other end, and the front hydrates it back before the
+        envelope is built (#70).
         """
         with self.dispatch_lock:
             row = self.page_register.get(page_id)
@@ -1602,7 +1608,12 @@ class SpaWorker:
         reply = self.run_on_loop(
             self.call(
                 WEBSOCKET_SEND_PATH,
-                {"page_id": page_id, "path": path, "data": data, "cid": cid},
+                {
+                    "page_id": page_id,
+                    "path": path,
+                    "data": to_tytx(data, "json") if data is not None else None,
+                    "cid": cid,
+                },
             )
         )
         return bool((reply or {}).get("delivered"))

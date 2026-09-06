@@ -340,6 +340,30 @@ class TestTheServerSpeaksToTheOpenedPage:
             ("/main/refresh", {"n": 1}, PAGE)
         ]
 
+    async def test_bytes_reach_the_browser_through_the_codec(self, machine) -> None:
+        # What the first browser found (#70 B): the lane is JSON, so `data`
+        # went into `json.dumps` as it was and a bytes payload died there with
+        # a TypeError — the browser saw a 502 and no push. The codec that
+        # carries bytes is TYTX, and the worker speaks it before the CALL.
+        await machine.open_channel()
+        delivered = await machine.lane.verb(
+            "send_message", PAGE, "/main/blob", {"blob": b"\x00\x01\xff", "n": 1}
+        )
+        await machine.settle()
+        assert delivered is True
+        pushed = [m for m in machine.browser.answers if m.id is None]
+        assert pushed[0].data == {"blob": b"\x00\x01\xff", "n": 1}
+
+    async def test_what_the_codec_carries_survives_the_whole_road(self, machine) -> None:
+        from datetime import date
+        from decimal import Decimal
+
+        await machine.open_channel()
+        sent = {"day": date(2026, 9, 7), "total": Decimal("9.99"), "nothing": None}
+        await machine.lane.verb("send_message", PAGE, "/main/typed", sent)
+        await machine.settle()
+        assert [m for m in machine.browser.answers if m.id is None][0].data == sent
+
     async def test_a_page_that_never_opened_its_channel_is_reachable_by_nobody(
         self, machine
     ) -> None:

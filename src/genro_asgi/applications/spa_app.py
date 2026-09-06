@@ -83,6 +83,7 @@ import logging
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from genro_bag import BagResolver
+from genro_tytx import from_tytx
 from genro_builders.builder import element
 from genro_routes import RoutingClass, route
 
@@ -425,7 +426,9 @@ class WebsocketOperations(RoutingClass):
         Args:
             page_id: the page to address.
             path: what the client routes the message on.
-            data: the payload.
+            data: the payload, as the TYTX string the worker put on the lane —
+                the lane is JSON and carries no date, Decimal or bytes of its
+                own, so what the site sent is hydrated back here (#70).
             cid: the connection the worker believes that page belongs to.
 
         Returns:
@@ -442,7 +445,8 @@ class WebsocketOperations(RoutingClass):
         if owner is None or (cid is not None and owner != cid):
             return {"delivered": False}
         server = application.server
-        return {"delivered": await server.send_message(page_id, path, data)}
+        payload = from_tytx(data, "json") if data is not None else None
+        return {"delivered": await server.send_message(page_id, path, payload)}
 
 
 class WsxControl(RoutingClass):
