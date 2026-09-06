@@ -251,6 +251,7 @@ import asyncio
 import contextvars
 import inspect
 import copy
+import contextlib
 import functools
 import logging
 import os
@@ -306,6 +307,15 @@ WORKER_SNAPSHOT_TTL = 0.5
 #: How long a quit waits for a user whose call is still in flight, in seconds.
 #: Past it the wait is dropped and he is parked without that call.
 PENDING_CALL_GRACE_SECONDS = 5.0
+
+#: Where a channel command is resolved on this worker's own dispatcher. The
+#: front names the branch on the lane; the leaf is this worker's business.
+WSX_COMMAND_PATH = "/wsx/openchannel"
+
+#: Where a message for a browser is placed on the lane: the front attached that
+#: branch under the commander's operations, because the delivery needs the
+#: registry of sockets and the vertex's own map of pages.
+WEBSOCKET_SEND_PATH = "/commander/websocket/send"
 
 #: How long the worker waits for the vertex to take an announcement, in
 #: seconds. Past it the announcement is counted lost: a wire that answers
@@ -477,6 +487,52 @@ class CommanderOrders(RoutingClass):
         return {"repr": self.spa_worker.eval_expression(expr)}
 
 
+class WsxCommands(RoutingClass):
+    """The ``wsx`` branch of the worker's dispatcher: what a PAGE asks of its channel.
+
+    The other two branches name who ISSUES an order — the group, the vertex.
+    This one names a matter instead: nobody orders here, a page opens its
+    channel and says how it wants to be served on it.
+
+    Args:
+        spa_worker: the process the command acts on.
+    """
+
+    def __init__(self, spa_worker: Any) -> None:
+        self.spa_worker = spa_worker
+
+    @route()
+    def openchannel(self, page_id: str, parameters: Any = None) -> str:
+        """Open the channel of one page, and say how its calls must be served.
+
+        Args:
+            page_id: the page opening its channel.
+            parameters: how it wants to be served — nothing for the ordinary
+                page, a dict for one that asked for something (``sequential``
+                serialises its calls).
+
+        Returns:
+            The word the front turns into the answer of the command.
+
+        Raises:
+            KeyError: no page of that name lives here. A page is born by the
+                site while it serves, so a channel opened for a page nobody
+                created is a client talking about something that does not
+                exist, and it is told so.
+
+        Acts on the page's row, under its own lock. Saying it twice changes
+        nothing: a browser that reconnects opens its channel again.
+        """
+        worker = self.spa_worker
+        with worker.dispatch_lock:
+            row = worker.page_register.get(page_id)
+        if row is None:
+            raise KeyError(f"no page {page_id!r} on this worker: it was never born here")
+        with row["item_lock"]:
+            row["wsx"] = parameters if parameters else True
+        return "channel open"
+
+
 class WorkerDispatcher(RoutingClass):
     """The root of the orders a worker takes: ``group/…`` and ``commander/…``.
 
@@ -493,10 +549,12 @@ class WorkerDispatcher(RoutingClass):
         self.spa_worker = spa_worker
         self.group_orders = GroupOrders(spa_worker)
         self.commander_orders = CommanderOrders(spa_worker)
+        self.wsx_commands = WsxCommands(spa_worker)
         self.add_branches(
             [
                 {"name": "group", "instance": self.group_orders},
                 {"name": "commander", "instance": self.commander_orders},
+                {"name": "wsx", "instance": self.wsx_commands},
             ]
         )
 
@@ -1401,6 +1459,9 @@ class SpaWorker:
         if "http" in payload:
             await self.serve_http(frame, payload)
             return
+        if "wsx" in payload:
+            await self.serve_wsx(frame, payload)
+            return
         try:
             result = self.worker_dispatcher.route.node(frame.path)(**payload)
             if inspect.isawaitable(result):
@@ -1430,6 +1491,30 @@ class SpaWorker:
             error: Any = None
         except Exception as exc:
             self._logger.exception("Worker %s: http CALL %s failed", self.name, frame.path)
+            result, error = None, f"{type(exc).__name__}: {exc}"
+        await self.send_reply(frame, result=result, error=error)
+
+    async def serve_wsx(self, frame: Frame, payload: dict[str, Any]) -> None:
+        """Serve the ``wsx`` CALL form: a channel command of one page.
+
+        Args:
+            frame: the CALL being answered.
+            payload: its whole payload — the ``wsx`` dict the front composed,
+                the ``identity`` to route on and the ``user_frozen`` verdict.
+
+        The command runs through the SAME prologue an http request does: the
+        call is written in the user's pendings, and his row is put in order —
+        adopted from the deposit when the verdict says he was frozen, because a
+        page's row is not in memory until its user is, and there would be
+        nowhere to write the channel. What differs is the middle: instead of
+        the hosted application, the command is resolved on this worker's own
+        dispatcher.
+        """
+        try:
+            result: Any = await self._serve_command(payload)
+            error: Any = None
+        except Exception as exc:
+            self._logger.exception("Worker %s: wsx CALL %s failed", self.name, frame.path)
             result, error = None, f"{type(exc).__name__}: {exc}"
         await self.send_reply(frame, result=result, error=error)
 
@@ -1493,6 +1578,34 @@ class SpaWorker:
         if "error" in reply:
             raise CommanderCallFailed(path, str(reply["error"]))
         return reply.get("result")
+
+    def send_message(self, page_id: str, path: str, data: Any = None) -> bool:
+        """Write one message of the site onto the page's websocket.
+
+        Args:
+            page_id: the page to address — one of this worker's own.
+            path: what the client routes the message on.
+            data: the payload, as a Python value.
+
+        Returns:
+            ``True`` when the message reached a socket, ``False`` when that
+            page speaks on none.
+
+        Callable from a traffic-pool thread, which is where the site's own code
+        runs: the CALL goes up on the loop and this thread waits for its REPLY.
+        Fire and forget in meaning, not in mechanics — delivered says written
+        to the socket, never executed by the page (W-12).
+        """
+        with self.dispatch_lock:
+            row = self.page_register.get(page_id)
+            cid = row.get("connection_id") if row is not None else None
+        reply = self.run_on_loop(
+            self.call(
+                WEBSOCKET_SEND_PATH,
+                {"page_id": page_id, "path": path, "data": data, "cid": cid},
+            )
+        )
+        return bool((reply or {}).get("delivered"))
 
     def run_on_loop(self, coro: Any) -> Any:
         """Run a coroutine on this worker's loop from a pool thread, and wait.
@@ -2193,7 +2306,8 @@ class SpaWorker:
             service_started = time.monotonic()
             try:
                 try:
-                    served = await seam.serve(payload["http"], payload.get("identity"))
+                    async with self._page_queue(payload["http"].get("page_id")):
+                        served = await seam.serve(payload["http"], payload.get("identity"))
                 finally:
                     # On a pool thread, with this request's slot still open and
                     # BEFORE the counters, the pendings and the login's tail:
@@ -2207,6 +2321,68 @@ class SpaWorker:
                 if user is not None:
                     self._record_service(user, time.monotonic() - service_started)
             return served
+        finally:
+            if user is not None:
+                await self.close_request(user)
+            slot = self.request_slot
+            if slot.connection_previous_user is not None:
+                await self.freeze_connection(slot.connection_id, slot.connection_previous_user)
+
+    @contextlib.asynccontextmanager
+    async def _page_queue(self, page_id: str | None) -> Any:
+        """Hold the page's queue for the whole call, when that page asked for one.
+
+        Args:
+            page_id: the page this call belongs to, ``None`` for a request that
+                names none — an ordinary http request of the site.
+
+        Raises:
+            RuntimeError: the page named here never opened its channel, or was
+                never born on this worker. A message of a page is refused
+                before anything is served: ``openchannel`` is what makes a page
+                addressable, and a message that skips it is a client out of
+                step with its own row.
+
+        A page that opened its channel with ``sequential`` is served one call at
+        a time: the lock lives on ITS row, so pages never wait for each other,
+        and it is taken around the WHOLE call — the slot is open and the call is
+        already in the user's pendings, so a freeze waits for the queue too,
+        which is what it must do. Every other call passes straight through.
+        """
+        if page_id is None:
+            yield
+            return
+        with self.dispatch_lock:
+            row = self.page_register.get(page_id)
+        if row is None or row.get("wsx") is None:
+            raise RuntimeError(
+                f"page {page_id!r} has no open channel on this worker: "
+                "send openchannel before any message of its own"
+            )
+        channel = row["wsx"]
+        if not isinstance(channel, dict) or not channel.get("sequential"):
+            yield
+            return
+        async with row["call_lock"]:
+            yield
+
+    async def _serve_command(self, payload: dict[str, Any]) -> Any:
+        """The prologue, the command on the dispatcher, the end of the call.
+
+        The same opening and the same closing as a request — pendings, the row
+        put in order, the login's tail — around the one thing that differs: the
+        command is resolved on ``worker_dispatcher`` instead of going to the
+        hosted application.
+        """
+        command = payload["wsx"]
+        user = payload.get("identity")
+        if user is not None:
+            self.open_request(user)
+        try:
+            await self._resolve_row(user, command.get("cid"), payload)
+            return self.worker_dispatcher.route.node(WSX_COMMAND_PATH)(
+                **{key: value for key, value in command.items() if key != "cid"}
+            )
         finally:
             if user is not None:
                 await self.close_request(user)

@@ -5,10 +5,50 @@
 What exists TODAY on the branch, with its `file:line`. Update it in the same
 change that alters the behaviour. Opened at phase 0 of
 [#68](https://github.com/genropy/genro-asgi/issues/68) on `develop` = `a434a23`;
-phases 1, 2, 3 and 4a have landed since. The socket is no longer empty: a
-handshake reaches the motor, every message it carries is served as a request,
-the server can write to a page that asked for nothing, and the worker hosts an
-ASGI application with the legacy reaching it through the core.
+phases 1, 2, 3, 4a and 4 have landed since. The socket is no longer empty: a
+handshake reaches the motor, every message it carries is served as a request of
+its user on his own row, a page opens its channel and is bound to its socket,
+and the site can write back to it.
+
+## What phase 4 built
+
+**The channel of a page** — `WsxControl` under the front's `_wsx` root
+([spa_app.py](../../../src/genro_asgi/applications/spa_app.py)),
+`SpaCommander.serve_wsx_request`
+([spa_commander.py](../../../src/genro_asgi/spa/orchestration/spa_commander.py)),
+`SpaWorker.serve_wsx` and the `WsxCommands` branch
+([spa_worker.py](../../../src/genro_asgi/spa/orchestration/spa_worker.py)),
+14 contract tests in
+`tests/orchestration/test_orchestration_websocket_e2e.py` that enter where a
+real message enters — the socket — over a real pool. `openchannel` is
+validated by the front against `page_connection_map`, written on the page's row
+by the worker through the same prologue a request goes through, and bound to
+the socket by the CONNECTION, only on a 200.
+
+**One resolution for every form** — `SpaCommander.resolve_worker` is what
+`serve_request` and `serve_wsx_request` both call: the barrier, the
+reception-first rule, the placement.
+
+**The queue of a page** — `call_lock` on `PageRow`
+([register_row.py](../../../src/genro_asgi/spa/register_row.py)), an
+`asyncio.Lock` among the fields the parcel leaves behind, taken around the
+whole call when the page opened its channel with `sequential`.
+
+**The way back** — `SpaWorker.send_message`, the `websocket` branch the front
+attaches under `CommanderOperations`, and `BaseServer.send_message` at the end
+of it. A page the vertex no longer knows is reachable by nobody, because the
+branch validates before it writes.
+
+**The channel is the price of being addressed** — a call that names a page is
+refused unless that page opened its channel: `openchannel` is what makes a page
+addressable, and a message that skips it is a client out of step with its own
+row. A request that names no page — the ordinary HTTP of the site — is
+untouched.
+
+**The request itself, for a handler that needs it** — the `_request` injection
+moved from the `_server` app's own `bind_kwargs` into
+`RoutedApplication.bind_kwargs`: the seam is nobody's private business, and
+`openchannel` is its second reader.
 
 ## What phase 4a built
 
@@ -169,16 +209,11 @@ already speaks WSX with the same four fields (`channel/frame.py:15-23,
 
 ## What is not there
 
-Nothing that belongs to the SPA: no `openchannel`, no `wsx` field on
-`PageRow`, no `send_message`, and no branch of the front that validates a page
-against `page_connection_map` — `WebSocketRegistry` binds pages, nobody writes
-into it yet. No `serve_websocket` seam for an application that wants the raw socket
+No `serve_websocket` seam for an application that wants the raw socket
 (phase 5).
 `BaseApplication.handshake_cookie` exists and answers `None`: no application in
-the core names a cookie yet. `SpaWorker.wsgi_app`
-([spa_worker.py:557-559](../../../src/genro_asgi/spa/orchestration/spa_worker.py))
-is the one consumer seam of the http CALL form, and `_serve_request` builds a
-`WsgiSeam` around it per request (`:2134`).
+the core names a cookie yet, the SPA included — a front that wants its
+handshake gated names it in its own subclass.
 
 `SPECIFICATION.md` §6 Q1 is marked RESOLVED as of this phase: the design it
 asked for is [decisions.md](decisions.md) and [design.md](design.md), and the
@@ -193,6 +228,7 @@ code follows in phases 1 to 5.
 | 2 | **DONE** — `WsxConnection`, `WebSocketRegistry`, `on_websocket`, the config element |
 | 3 | **DONE** — `BaseServer.send_message`: the server writes to a page |
 | 4a | **DONE** — `asgi_app`, `hosted_app_seam`, `AsgiSeam`, `WsgiSeam` as an ASGI application, `run_sync` |
+| 4 | **DONE** — `WsxControl`, `serve_wsx_request`, `serve_wsx`, `WsxCommands`, `call_lock`, the push |
 | 2 | `WsxConnection`, `WebSocketRegistry`, `on_websocket`, the config element |
 | 3 | the server speaks first, proven on a test application |
 | 4a | `asgi_app`, `AsgiSeam`, `hosted_app_seam`, `WsgiSeam` as the adapter, `run_sync` |

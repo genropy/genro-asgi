@@ -120,11 +120,14 @@ async def test_an_order_that_does_not_fit_the_signature_is_refused_before_the_bo
 
 async def test_the_dispatcher_says_what_orders_the_worker_takes(worker_commander_lane):
     tree = worker_commander_lane.worker.worker_dispatcher.route.nodes()
-    assert set(tree["routers"]) == {"group", "commander"}
+    # Two branches name who ISSUES an order; the third names a matter — what a
+    # page asks of its own channel (#68 phase 4).
+    assert set(tree["routers"]) == {"group", "commander", "wsx"}
     assert set(tree["routers"]["group"]["entries"]) == {
         "ping", "quit", "drop_user", "drop_connection", "freeze_user"
     }
     assert set(tree["routers"]["commander"]["entries"]) == {"observe", "census", "eval"}
+    assert set(tree["routers"]["wsx"]["entries"]) == {"openchannel"}
 
 
 async def test_a_consumer_attaches_its_own_orders_and_the_vertex_reaches_them(

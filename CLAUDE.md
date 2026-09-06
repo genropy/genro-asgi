@@ -84,6 +84,37 @@ shape of a request, no `id`, `True` = written to the socket and never
 server, and there is none by identity or by connection until something reads
 it). Not built yet: the SPA's own branch and `openchannel`, which is what will
 bind a page to its socket (phase 4), and the raw seam (phase 5).
+**A message of a page is a request of its user, and it ends on that user's own
+row (landed 2026-09-07, #68 phase 4).** The road is the one an HTTP request
+takes: the synthetic scope enters `SpaApplication.__call__`, `pack_http` packs
+it — with `page_id` and `reply_path` beside the `cid` when the envelope carried
+them, absent otherwise — `SpaCommander.resolve_worker` gives it the barrier,
+the reception-first rule and the placement, and the worker serves it on the
+hosted application. A page that asked for `sequential` is served one call at a
+time: the queue is `call_lock` on ITS OWN row (an `asyncio.Lock`, never
+travelling in a parcel, not to be confused with `item_lock`, which guards the
+row on whatever thread touches it), taken around the whole call, so a freeze
+waits for the queue too and pages never wait for each other.
+**`openchannel` is what a page sends first**, and both halves of the machine
+touch it: `WsxControl` under the front's `_wsx` root validates the page against
+`page_connection_map` and sends the third payload form — `wsx`, no `http` dict —
+through `SpaCommander.serve_wsx_request`, which the worker answers with
+`serve_wsx`, sharing the whole prologue of a request (pendings, the row put in
+order, adoption when the user was frozen) and resolving `/wsx/openchannel` on
+its own `WsxCommands` branch, where the channel is written on the page's row.
+Only on a 200 does `WsxConnection` bind that page to its socket — the
+application decides, the connection binds — and it recognises the command on
+the private path the demux leaves, never on the whole one. The page names
+itself in the envelope's `page_id` field and never in the payload, so the
+connection reads what is its own to read. The way back is
+`SpaWorker.send_message(page_id, path, data)`, callable from a pool thread:
+the CALL climbs to the `websocket` branch the front attached under
+`CommanderOperations`, which validates the page against the same map and writes
+through `BaseServer.send_message`. A handler that needs the request itself
+declares `_request`, and the injection now lives in
+`RoutedApplication.bind_kwargs` for every routed application, not in the
+`_server` app alone.
+
 **The worker hosts an ASGI application, and the legacy reaches it through the
 core (landed 2026-09-07, #68 phase 4a).** There is ONE seam, `SpaWorker.asgi_app`,
 and one road out of `_serve_request`: the property `hosted_app_seam`, which

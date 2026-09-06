@@ -146,6 +146,18 @@ class XT_WholePathWorker(XT_MixedWorker):
         await self.legacy(scope, receive, send)
 
 
+def with_open_page(worker: SpaWorker, page_id: str = "p1") -> None:
+    """Give the worker a page that already opened its channel.
+
+    A message that names a page is refused unless that page said
+    ``openchannel`` first (#68 phase 4), so a test that passes the page keys
+    has to have a page.
+    """
+    worker.open_request_slot()
+    worker.new_page(USER, page_id, connection_id=CID)
+    worker.page_register.get(page_id)["wsx"] = True
+
+
 def worker_of(worker_class: type, tmp_path: Any) -> SpaWorker:
     worker = worker_class(
         "standard_0001", freeze_handler=FreezeHandler(tmp_path / "frozen_users")
@@ -201,6 +213,7 @@ class TestAnAsgiApplicationAlone:
         assert "genro.page_id" not in scope and "genro.reply_path" not in scope
 
     async def test_the_page_keys_travel_when_the_call_carries_them(self, asgi_worker) -> None:
+        with_open_page(asgi_worker)
         await asgi_worker._serve_request(
             http_call(page_id="p1", reply_path="/main/done")
         )
@@ -505,11 +518,29 @@ class TestTheContractOfTheTwoSeams:
             worker.exit_process()
 
     async def test_the_page_keys_reach_the_legacy_too(self, mixed_worker) -> None:
+        with_open_page(mixed_worker)
         await mixed_worker._serve_request(
             http_call(path="/legacy/x", page_id="p1", reply_path="/main/done")
         )
         environ = mixed_worker.environs[0]
         assert (environ["genro.page_id"], environ["genro.reply_path"]) == ("p1", "/main/done")
+
+
+class TestAMessageOfAPage:
+    async def test_a_page_that_never_opened_its_channel_is_refused(self, asgi_worker) -> None:
+        asgi_worker.open_request_slot()
+        asgi_worker.new_page(USER, "p1", connection_id=CID)
+        with pytest.raises(RuntimeError, match="no open channel"):
+            await asgi_worker._serve_request(http_call(page_id="p1"))
+
+    async def test_a_page_this_worker_never_saw_is_refused(self, asgi_worker) -> None:
+        with pytest.raises(RuntimeError, match="no open channel"):
+            await asgi_worker._serve_request(http_call(page_id="never-born"))
+
+    async def test_a_request_that_names_no_page_passes(self, asgi_worker) -> None:
+        # An ordinary http request of the site names no page and is untouched.
+        served = await asgi_worker._serve_request(http_call())
+        assert served["status"] == 201
 
 
 class TestWhatTheSeamRefuses:

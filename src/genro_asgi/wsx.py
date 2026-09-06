@@ -86,6 +86,13 @@ WSX_PREFIX = "WSX://"
 WSX_ROOT = "_wsx"
 PING_PATH = f"/{WSX_ROOT}/ping"
 
+#: The command a page sends before any message of its own: the application
+#: decides — it validates the page and writes the channel on its row — and the
+#: CONNECTION binds, because it is the one holding the socket (owner, N30).
+#: Recognised on the path the demux leaves once the mount is taken off, never
+#: on the whole path: the mount is the application's, the segment is the core's.
+OPENCHANNEL_PATH = f"/{WSX_ROOT}/openchannel"
+
 #: How long the closing connection waits for the messages still in flight.
 DRAIN_TIMEOUT_SECONDS = 5.0
 
@@ -346,6 +353,10 @@ class WsxConnection:
         Returns:
             The status and the data of the answer. An ``HTTPException`` becomes
             its own status, anything else a 500 — the socket survives either.
+
+        The one message this connection looks at twice is ``openchannel``: the
+        application decides whether that page may speak here, and only if it
+        answered 200 is the page bound to this socket.
         """
         collected: list[Any] = []
         try:
@@ -356,7 +367,13 @@ class WsxConnection:
         except Exception as failure:
             self._logger.exception("Websocket: message %s failed", envelope.path)
             return 500, f"{type(failure).__name__}: {failure}"
-        return self._answer_of(collected)
+        status, data = self._answer_of(collected)
+        if status == 200 and target.get("path") == OPENCHANNEL_PATH and envelope.page_id:
+            # The application said yes: now the page speaks on THIS socket.
+            # Bound only after the answer, so a page that was refused — not
+            # this connection's, or never born — is never bound at all.
+            self.server.websockets.bind_page(envelope.page_id, self.socket)
+        return status, data
 
     def _request_scope(self, envelope: WsxEnvelope) -> Scope:
         """The synthetic HTTP scope of one message.
