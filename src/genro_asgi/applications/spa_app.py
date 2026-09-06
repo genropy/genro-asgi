@@ -88,7 +88,7 @@ from genro_routes import RoutingClass, route
 
 from ..application import ApplicationGrammar
 from ..config.handler import ConfigError
-from ..exceptions import HTTPBadRequest, HTTPException, HTTPNotFound
+from ..exceptions import HTTPBadRequest, HTTPException, HTTPForbidden, HTTPNotFound
 from ..lifespan import FatalBootError
 from ..middleware.base import cookie_value
 from ..orchestration_profile_store import (
@@ -130,6 +130,11 @@ REQUEST_HOLD_MAX_SECONDS = 5.0
 #: ONLY when the gate is on: a first-level root of this front is a root the
 #: hosted site loses, and a machine nobody reconfigures must not lose it.
 ORCHESTRATION_ROOT = "_orchestration"
+
+#: The front's internal root for what a page asks of its channel. The reserved
+#: segment is the core's (the server answers ``/_wsx/ping`` itself); under an
+#: application's mount it is this front's own control surface.
+WSX_ROOT = "_wsx"
 
 #: The words that used to hang on the application element and now live on the
 #: ``orchestration`` node. A recipe still writing one of them is refused by name.
@@ -397,6 +402,112 @@ class OrchestrationControl(RoutingClass):
         return self.application.settings_status
 
 
+class WebsocketOperations(RoutingClass):
+    """What a WORKER calls on the vertex to reach a browser: the push.
+
+    Attached under the commander's own operations by the front, because the
+    delivery needs both halves of the machine — the registry of live sockets,
+    which is the server's, and ``page_connection_map``, which is the vertex's.
+
+    Args:
+        application: the front, which holds the server and the commander.
+    """
+
+    def __init__(self, application: SpaApplication) -> None:
+        self.application = application
+
+    @route()
+    async def send(
+        self, page_id: str, path: str, data: Any = None, cid: str | None = None
+    ) -> dict[str, Any]:
+        """Write one message of the site onto the socket that page speaks on.
+
+        Args:
+            page_id: the page to address.
+            path: what the client routes the message on.
+            data: the payload.
+            cid: the connection the worker believes that page belongs to.
+
+        Returns:
+            ``{"delivered": bool}`` — written to a socket, or nobody there.
+
+        The page is validated against ``page_connection_map`` before anything
+        is written: a page the fold has already dropped is not there any more,
+        and a page whose connection is another one is not this caller's to
+        write to. Fire and forget (W-12): delivered means written to the
+        socket, never executed by the page.
+        """
+        application = self.application
+        owner = application.commander.page_connection_map.get(page_id)
+        if owner is None or (cid is not None and owner != cid):
+            return {"delivered": False}
+        server = application.server
+        return {"delivered": await server.send_message(page_id, path, data)}
+
+
+class WsxControl(RoutingClass):
+    """What a page asks of its channel, mounted under ``_wsx`` on the front.
+
+    Sibling of ``OrchestrationControl``: a routing class under an internal root
+    of the front, whose routes carry no logic of their own. ``openchannel`` is
+    the only command for now, and it is the one a page MUST send before any
+    other message of its own reaches the worker.
+    """
+
+    def __init__(self, application: SpaApplication) -> None:
+        self.application = application
+        # The neutral ``fields`` block is what tells ``bind_kwargs`` that a
+        # handler declared ``_request``; it is the pydantic plugin that fills
+        # it, so this surface arms it on its own router, as the console does.
+        self.route.plug("pydantic")
+
+    @route()
+    async def openchannel(
+        self, parameters: dict[str, Any] | None = None, _request=None
+    ) -> dict[str, Any]:
+        """Open the channel of one page: validate it, then write it on its row.
+
+        Args:
+            parameters: how it wants to be served on it; ``sequential`` asks for
+                one call at a time.
+            _request: the live request, injected by ``bind_kwargs``. Left
+                unannotated so it stays out of the schema; it is where the
+                connection AND the page are read from — a client does not get
+                to say which connection it is, and the page it names travels in
+                the envelope's own field, never in the payload.
+
+        Returns:
+            What the client reads as the answer of the command.
+
+        Raises:
+            HTTPForbidden: this page is not this connection's. The vertex knows
+                which connection every page belongs to — the birth of a page
+                rode the reply of the request that created it — so the check
+                costs nothing and never goes down to the worker.
+            HTTPBadRequest: the message names no page, or the request carries
+                no connection at all.
+
+        The page is bound to the socket by the CONNECTION, not here, and only
+        because this answered 200: whoever holds the socket does the binding,
+        whoever holds the pool decides (owner, 2026-09-07).
+        """
+        page_id = _request.scope.get("genro.page_id")
+        if not page_id:
+            raise HTTPBadRequest("openchannel names no page: put it in the envelope's page_id")
+        cid = self.application.request_cid(_request.scope)
+        if cid is None:
+            raise HTTPBadRequest("this connection carries no cookie")
+        commander = self.application.commander
+        if commander.page_connection_map.get(page_id) != cid:
+            raise HTTPForbidden(f"page {page_id!r} is not this connection's")
+        reply = await commander.serve_wsx_request(
+            cid,
+            {"wsx": {"cid": cid, "page_id": page_id, "parameters": parameters}},
+            hold_timeout=REQUEST_HOLD_MAX_SECONDS,
+        )
+        return {"channel": reply.get("result")}
+
+
 class SpaApplication(RoutedApplication):
     """A single-page-application front backed by the new user-sticky pool."""
 
@@ -421,6 +532,7 @@ class SpaApplication(RoutedApplication):
         """
         self.refuse_moved_words(kwargs)
         self._commander: SpaCommander | None = None
+        self._channel_mounted = False
         self._logger = logging.getLogger(__name__)
         #: Where the named profiles are read from at boot; the vertex is given
         #: the same folder and reads them itself from there on. Written by the
@@ -588,6 +700,7 @@ class SpaApplication(RoutedApplication):
             self.refuse_boot(f"the pool could not be brought up: {broken}", broken)
         try:
             self.mount_control()
+            self.mount_channel_control()
         except Exception as broken:
             await self.take_pool_down(commander)
             self.refuse_boot(
@@ -649,6 +762,26 @@ class SpaApplication(RoutedApplication):
             {"name": ORCHESTRATION_ROOT, "instance": OrchestrationControl(self)}
         )
         self._control_mounted = True
+
+    def mount_channel_control(self) -> None:
+        """Claim ``_wsx`` on this front's router: the channel commands of a page.
+
+        No gate: a front that hosts pages hosts their channel too, and the
+        command is refused per page anyway — a page that is not this
+        connection's gets a 403 whether the root is there or not. Called once,
+        when the pool is up, beside the orchestration root.
+
+        The other half goes the other way: ``websocket`` is attached under the
+        commander's own operations, which is how a worker reaches a browser.
+        Not lazily — a worker may call it as soon as it is up.
+        """
+        if self._channel_mounted:
+            return
+        self.route.add_branches({"name": WSX_ROOT, "instance": WsxControl(self)})
+        self.commander.commander_dispatcher.add_branches(
+            [{"name": "websocket", "instance": WebsocketOperations(self)}]
+        )
+        self._channel_mounted = True
 
     def boot_group_settings(
         self, groups: dict[str, dict[str, Any]]
@@ -959,10 +1092,15 @@ class SpaApplication(RoutedApplication):
         The headers are forwarded as they came: our cookie is ours to route on
         and the hosted site has no use for it — it reads its own, and the value
         in both is its own connection id anyway.
+
+        ``page_id`` and ``reply_path`` join the dict only when the scope carries
+        them — a message born on a websocket does, a real HTTP request does not
+        — and the seam writes them into the environ or the scope of the hosted
+        code under their ``genro.`` names.
         """
         query_string = scope.get("query_string") or b""
         client = scope.get("client") or None
-        return {
+        packed: dict[str, Any] = {
             "method": str(scope.get("method", "GET")),
             "path": str(scope.get("path", "/")),
             "query_string": query_string.decode("latin-1"),
@@ -975,3 +1113,9 @@ class SpaApplication(RoutedApplication):
             "scheme": str(scope.get("scheme", "http")),
             "cid": cid,
         }
+        for key in ("genro.page_id", "genro.reply_path"):
+            # A message born on a websocket carries them; a real request does
+            # not, and then they are ABSENT from the dict, never null.
+            if key in scope:
+                packed[key.split(".")[1]] = scope[key]
+        return packed

@@ -55,6 +55,8 @@ from .lifespan import QUITTING, RUNNING, STOPPING, Lifespan
 from .pool import WorkPool
 from .request_registry import RequestRegistry
 from .response import Response
+from .websocket import WebSocket, WebSocketRegistry
+from .wsx import WsxConnection, WsxEnvelope
 
 if TYPE_CHECKING:
     from .types import ASGIApp, Receive, Scope, Send
@@ -62,7 +64,21 @@ if TYPE_CHECKING:
 REFUSED_RETRY_AFTER_SECONDS = 5
 """The seconds a refused request is told to come back in."""
 
-__all__ = ["QUITTING", "REFUSED_RETRY_AFTER_SECONDS", "RUNNING", "STOPPING", "BaseServer"]
+WEBSOCKET_MAX_CONCURRENT = 16
+"""How many messages of ONE websocket connection may be served at once.
+
+A setpoint (owner, 2026-09-06: «configurabile default 16»): the ceiling is what
+keeps a client that floods from sinking the server.
+"""
+
+__all__ = [
+    "QUITTING",
+    "REFUSED_RETRY_AFTER_SECONDS",
+    "RUNNING",
+    "STOPPING",
+    "WEBSOCKET_MAX_CONCURRENT",
+    "BaseServer",
+]
 
 
 class BaseServer:
@@ -71,8 +87,9 @@ class BaseServer:
     Constructor kwargs peeled here: ``applications`` — the applications this
     server serves — ``default`` — the ``code`` of the application ``/``
     redirects to when nothing answers the root (an unknown code raises
-    ``ValueError``) — and ``max_threads`` — the pool's worker count, handed to
-    ``WorkPool`` (``None`` keeps the stdlib default).
+    ``ValueError``) — ``max_threads`` — the pool's worker count, handed to
+    ``WorkPool`` (``None`` keeps the stdlib default) — and ``websocket`` — the
+    websocket options, ``{"origins": [...], "max_concurrent": 16}``.
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -80,6 +97,7 @@ class BaseServer:
         default: str | None = kwargs.pop("default", None)
         max_threads: int | None = kwargs.pop("max_threads", None)
         debug: bool | str = kwargs.pop("debug", False)
+        websocket: dict[str, Any] = kwargs.pop("websocket", None) or {}
         if kwargs:
             unexpected = ", ".join(sorted(kwargs))
             raise TypeError(
@@ -93,6 +111,11 @@ class BaseServer:
         self._pool = WorkPool(self, max_threads=max_threads)
         self._lifespan = Lifespan(self)
         self._registry = RequestRegistry(self)
+        self._websockets = WebSocketRegistry()
+        self._websocket_origins: list[str] = list(websocket.get("origins") or [])
+        self._websocket_max_concurrent: int = int(
+            websocket.get("max_concurrent") or WEBSOCKET_MAX_CONCURRENT
+        )
         self.state = RUNNING
         """``RUNNING``, ``QUITTING`` or ``STOPPING`` — read by the entry point."""
         self.shutdown_mode = STOPPING
@@ -203,6 +226,51 @@ class BaseServer:
         """Base answer: none (``None``). Session capabilities override this."""
         return None
 
+    def get_middleware(self, middleware_class: type) -> Any:
+        """Base answer: none (``None``). The middleware capability overrides this."""
+        return None
+
+    @property
+    def websockets(self) -> WebSocketRegistry:
+        """The live websockets, and which one each page speaks on."""
+        return self._websockets
+
+    async def send_message(self, page_id: str, path: str, data: Any = None) -> bool:
+        """Write one message of the server's own onto the socket a page speaks on.
+
+        Args:
+            page_id: the page to address.
+            path: what the client routes the message on, the way this server
+                routes what the client sends.
+            data: the payload, as a Python value.
+
+        Returns:
+            ``True`` when the message was written to a socket, ``False`` when
+            that page speaks on none or its socket is already closed.
+
+        The message has the shape of a request and carries NO ``id``: it is not
+        an answer, and nobody answers it — a page that wants to reply sends an
+        rpc of its own, on the ``reply_path`` it asked for or on a path of its
+        choosing. DELIVERED means written to the socket, never executed by the
+        page: nothing here waits for anything.
+        """
+        socket = self.websockets.get_page_socket(page_id)
+        if socket is None or not socket.connected:
+            return False
+        envelope = WsxEnvelope(method="WSK", path=path, data=data, page_id=page_id)
+        await socket.send_text(envelope.encode())
+        return True
+
+    @property
+    def websocket_origins(self) -> list[str]:
+        """The Origins a handshake may come from; empty means same-origin only."""
+        return self._websocket_origins
+
+    @property
+    def websocket_max_concurrent(self) -> int:
+        """How many messages of ONE connection may be in flight at once."""
+        return self._websocket_max_concurrent
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """ASGI entry point: dispatch on the scope type.
 
@@ -285,13 +353,40 @@ class BaseServer:
         return Response(status_code=307, headers={"location": location})
 
     async def on_websocket(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """The empty websocket socket (D7): consume the connect, close cleanly.
+        """Live one websocket connection: the motor, or the application's own hands.
 
-        The base accepts nothing and closes with code 1000. The websocket motor
-        (Q1) overrides this hook in a later macro.
+        One ``WsxConnection`` per socket does the whole thing (#68): it judges
+        the handshake, accepts it, turns every message into a request the demux
+        routes like any other, and answers the ones that carry an ``id``. The
+        connection is registered in ``websockets`` for its whole life.
+
+        The state is judged FIRST, above the demux, for every websocket: a
+        server that is not ``RUNNING`` takes no new connection in charge, and
+        the handshake is turned away before the accept. The browser sees the
+        handshake fail with no readable code — 1013 exists only after an accept,
+        and in the raw mode the accept belongs to the application — but the
+        state is the machine's business and not the protocol's, exactly as it
+        is on the http branch.
+
+        The exception is an application that wants the socket ITSELF: the
+        handshake's path names it through the same demux, and if it defines
+        ``serve_websocket`` it is handed the raw scope, receive and send, with
+        the segment of its mount already taken off the path. Nothing else of the
+        motor runs then — no accept, no Origin gate, no registry: an application
+        that takes the socket takes all of it, and the core does not half-serve
+        a connection it does not hold. It is the admitted mode of the design,
+        the one a hosted framework with a websocket protocol of its own reaches
+        the server by.
         """
-        await receive()
-        await send({"type": "websocket.close", "code": 1000})
+        if self.state != RUNNING:
+            await WebSocket(scope, receive, send).refuse(1013, "server restarting")
+            return
+        app, target = self.demux(scope)
+        raw_seam = getattr(app, "serve_websocket", None)
+        if raw_seam is not None:
+            await raw_seam(target, receive, send)
+            return
+        await WsxConnection(self, scope, receive, send).serve()
 
     @property
     def uvicorn_server(self) -> uvicorn.Server | None:

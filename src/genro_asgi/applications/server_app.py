@@ -102,9 +102,8 @@ from .server_sections import (
 )
 
 if TYPE_CHECKING:
-    from genro_routes import RouterNode
 
-    from ..request import Request
+    pass
 
 __all__ = ["ServerApplication"]
 
@@ -196,24 +195,6 @@ class ServerApplication(OpenApiApplication):
     def register_auth_method(self, method: AuthMethod) -> None:
         """Register a login method in the ``auth`` section (created on demand)."""
         self.ensure_auth_section().register(method)
-
-    def bind_kwargs(self, node: RouterNode, request: Request) -> dict[str, Any]:
-        """Inject the live ``Request`` into handlers that declare ``_request``.
-
-        Extends the base reconciliation with the declarative seam the login
-        surface needs: when the node's neutral ``params`` block declares a
-        ``_request`` parameter, the per-dispatch ``Request`` is bound to it
-        (overriding any same-named wire value). Handlers leave ``_request``
-        unannotated so it stays out of the pydantic model — and therefore out of
-        the public OpenAPI schema — while still being visible in the neutral
-        ``fields`` this method reads. No ambient state — the request travels as
-        an ordinary argument, exactly like ``body_data``.
-        """
-        kwargs = super().bind_kwargs(node, request)
-        fields = node.params.get("fields") or []
-        if any(f["name"] == "_request" for f in fields):
-            kwargs["_request"] = request
-        return kwargs
 
     def _lock_seconds_remaining(self, record: dict[str, Any]) -> float:
         """Seconds left in ``record``'s lockout window, ``0.0`` when not locked.

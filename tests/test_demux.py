@@ -163,16 +163,28 @@ class TestServerOfMountsOnly:
         assert start["status"] == 404
 
 
-class TestEmptyWebsocket:
-    async def test_websocket_connect_is_closed_cleanly(self) -> None:
+class TestTheWebsocketBranch:
+    """The websocket scope reaches the motor (#68 phase 2).
+
+    Until phase 2 this branch was the empty socket of D7: it consumed the
+    connect and closed 1000. It now lives one whole connection; what that
+    connection does is `tests/test_wsx_connection.py`'s subject, and what is
+    asserted here is only that `__call__` hands it over.
+    """
+
+    async def test_a_handshake_on_a_served_path_is_accepted(self) -> None:
         server = BaseServer(applications=[ThrowawayApp(mount="")])
         sent: list[dict[str, object]] = []
+        incoming: list[dict[str, object]] = [
+            {"type": "websocket.connect"},
+            {"type": "websocket.disconnect", "code": 1000},
+        ]
 
         async def receive() -> dict[str, object]:
-            return {"type": "websocket.connect"}
+            return incoming.pop(0) if incoming else {"type": "websocket.disconnect", "code": 1006}
 
         async def send(message: dict[str, object]) -> None:
             sent.append(message)
 
-        await server({"type": "websocket", "path": "/"}, receive, send)
-        assert sent == [{"type": "websocket.close", "code": 1000}]
+        await server({"type": "websocket", "path": "/", "headers": []}, receive, send)
+        assert sent == [{"type": "websocket.accept"}]

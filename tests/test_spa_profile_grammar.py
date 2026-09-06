@@ -36,6 +36,7 @@ import pytest
 from genro_asgi import AsgiServer
 from genro_asgi.applications.spa_app import (
     ORCHESTRATION_ROOT,
+    WSX_ROOT,
     OrchestrationControl,
     SpaApplication,
 )
@@ -437,7 +438,12 @@ async def test_a_second_startup_builds_no_second_pool(tmp_path: Path) -> None:
     assert (built[0].starts, built[0].stops, built[0].quits) == (1, 0, 0)
     assert front.commander is built[0]
     assert live_heartbeats(built) == 1
-    assert len(front.route.nodes(lazy=True, forbidden=True)["routers"]) == 1
+    # The front's internal roots, each claimed ONCE: the orchestration control
+    # and the channel commands of a page (#68 phase 4).
+    assert set(front.route.nodes(lazy=True, forbidden=True)["routers"]) == {
+        ORCHESTRATION_ROOT,
+        WSX_ROOT,
+    }
 
 
 async def test_a_startup_after_a_shutdown_builds_a_new_pool_and_no_second_route(
@@ -473,7 +479,12 @@ async def test_a_startup_after_a_shutdown_builds_a_new_pool_and_no_second_route(
     assert first.stops == 1
 
     assert ORCHESTRATION_ROOT in front.internal_roots
-    assert len(front.route.nodes(lazy=True, forbidden=True)["routers"]) == 1
+    # The front's internal roots, each claimed ONCE: the orchestration control
+    # and the channel commands of a page (#68 phase 4).
+    assert set(front.route.nodes(lazy=True, forbidden=True)["routers"]) == {
+        ORCHESTRATION_ROOT,
+        WSX_ROOT,
+    }
     for name in ("apply", "reload", "status"):
         assert front.resolves_natively(f"/{ORCHESTRATION_ROOT}/{name}") is True
 

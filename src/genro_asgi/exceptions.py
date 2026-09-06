@@ -24,6 +24,11 @@ errors are pre-filled subclasses — ``HTTPBadRequest`` (400), ``HTTPNotFound``
 ``HTTPUnprocessableContent`` (422). ``Redirect(location, status=302)`` is the
 redirecting sibling: its ``location`` becomes the ``Location`` header. The
 mapping to actual ASGI responses lives in ``middleware/errors.py``.
+
+One exception here is not an HTTP error at all: ``WebSocketDisconnect`` is how
+the websocket facade reports that the client is gone. A disconnect is not a
+value a read can return — every read would have to be checked — so it arrives
+as an exception, and the read loop that catches it simply ends.
 """
 
 from __future__ import annotations
@@ -36,6 +41,7 @@ __all__ = [
     "HTTPUnauthorized",
     "HTTPUnprocessableContent",
     "Redirect",
+    "WebSocketDisconnect",
 ]
 
 
@@ -111,3 +117,17 @@ class Redirect(HTTPException):
     ) -> None:
         super().__init__(status, headers=headers)
         self.location = location
+
+
+class WebSocketDisconnect(Exception):
+    """The client is gone: ``code`` and ``reason`` as the ASGI message carried them.
+
+    Raised by every read of the facade, and by its iterator, which ends on it.
+    The default is 1000 with no reason, which is what an ASGI server sends when
+    the disconnect message carries neither.
+    """
+
+    def __init__(self, code: int = 1000, reason: str = "") -> None:
+        super().__init__(f"websocket disconnected: {code} {reason}".rstrip())
+        self.code = code
+        self.reason = reason

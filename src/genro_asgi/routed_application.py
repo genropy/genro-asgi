@@ -278,8 +278,24 @@ class RoutedApplication(BaseApplication, RoutingClass):
         node's neutral ``params`` block — never ``inspect``). The whole
         ``body_data`` is kept when the handler itself declares it, accepts
         ``**kwargs``, or exposes no signature (no pydantic plugin).
+
+        A handler that declares ``_request`` is given the live ``Request``: the
+        login surface of the ``_server`` app asked for it first, and the
+        websocket channel command asks for it now — both need what only the
+        request knows, the cookie it came with. It was the server app's own
+        override until #68 moved it here, because the seam is nobody's private
+        business (owner, 2026-09-07).
         """
         kwargs = request.handler_kwargs()
+        fields = node.params.get("fields") or []
+        if any(f["name"] == "_request" for f in fields):
+            # The declarative seam for a handler that needs the request itself
+            # — the cookie it carries, the session on it, the server behind it.
+            # It is declared UNANNOTATED, so it stays out of the pydantic model
+            # and out of the public schema, and it overrides any same-named
+            # value that arrived on the wire: nobody sends themselves a
+            # request. No ambient state: it travels as an ordinary argument.
+            kwargs["_request"] = request
         body = kwargs.get("body_data")
         if not isinstance(body, dict):
             return kwargs

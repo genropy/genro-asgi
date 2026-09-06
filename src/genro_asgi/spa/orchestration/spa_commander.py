@@ -243,6 +243,10 @@ SHAPE_REVIEW_SECONDS = HEARTBEAT_SECONDS * CHECK_OCCUPANCY_BEATS
 #: like one of the contract ops.
 SITE_PATH_PREFIX = "/site"
 
+#: The lane path of a channel command: the worker resolves what follows on its
+#: own dispatcher, so the front names the branch and nothing else.
+WSX_PATH_PREFIX = "/wsx/openchannel"
+
 #: Where the container's own memory limit is written, cgroup v2 first and v1
 #: after: the limit file and the usage file of each layout. Outside a container
 #: none of them is there, and the host figures stand.
@@ -678,6 +682,64 @@ class SpaCommander:
         own announcements is what writes the indexes. A known user with no home
         is placed, as ever.
         """
+        user, worker_handler = await self.resolve_worker(cid, hold_timeout=hold_timeout)
+        return await self._call_worker(
+            worker_handler,
+            f"{SITE_PATH_PREFIX}{http['path']}",
+            {"http": {**http, "cid": cid}},
+            user,
+        )
+
+    async def serve_wsx_request(
+        self, cid: str | None, payload: dict[str, Any], *, hold_timeout: float
+    ) -> dict[str, Any]:
+        """Serve one channel command of a page, the way a request of the site is served.
+
+        Args:
+            cid: the connection the command came in on.
+            payload: what the front composed — the ``wsx`` form, with no
+                ``http`` dict in it.
+            hold_timeout: the whole time this command may spend waiting for a
+                user who is between two homes.
+
+        Returns:
+            The child's REPLY payload, untouched.
+
+        Raises:
+            AssignmentRefused: nobody can take him now.
+            SiteFailedRequest: his worker answered with a failure.
+
+        The barrier, the reception-first rule and the placement are the ones an
+        http request meets — the same ``resolve_worker`` — because a channel
+        command belongs to a user exactly as a request does: it writes on the
+        row of one of his pages, and that row lives where he lives.
+        """
+        user, worker_handler = await self.resolve_worker(cid, hold_timeout=hold_timeout)
+        return await self._call_worker(worker_handler, WSX_PATH_PREFIX, payload, user)
+
+    async def resolve_worker(
+        self, cid: str | None, *, hold_timeout: float
+    ) -> tuple[str | None, Any]:
+        """Who this connection is, and which worker will serve him.
+
+        Args:
+            cid: the connection the request carries, None when it carries none.
+            hold_timeout: the whole time this request may spend waiting for a
+                user who is between two homes, however many times it waits.
+
+        Returns:
+            The identity — ``None`` for a browser the site never named — and the
+            handler of the worker that hosts him: his own, the one the placement
+            just gave him, or his group's reception when he is a guest.
+
+        Raises:
+            AssignmentRefused: nobody can take him now, and ``retry_after`` says
+                when the machine will have decided again.
+
+        Every form of request comes through here, so the barrier, the
+        reception-first rule and the placement are written once and every
+        caller meets them the same way.
+        """
         deadline = asyncio.get_running_loop().time() + hold_timeout
         while True:
             try:
@@ -702,20 +764,40 @@ class SpaCommander:
                         "no room for a newcomer: the pool is restricted",
                     )
                 ) from None
-            worker_handler = reception
-        else:
-            group_handler = self.group_map[self.user_map[user]["group"] or self.default_group]
-            try:
-                worker_name = group_handler.user_worker_map.get(
-                    user
-                ) or await group_handler.assign_user(user)
-            except AssignmentRefused as refusal:
-                raise self._refused(refusal) from None
-            worker_handler = group_handler.worker_handler_map[worker_name]
+            return user, reception
+        group_handler = self.group_map[self.user_map[user]["group"] or self.default_group]
+        try:
+            worker_name = group_handler.user_worker_map.get(
+                user
+            ) or await group_handler.assign_user(user)
+        except AssignmentRefused as refusal:
+            raise self._refused(refusal) from None
+        return user, group_handler.worker_handler_map[worker_name]
+
+    async def _call_worker(
+        self, worker_handler: Any, path: str, payload: dict[str, Any], user: str | None
+    ) -> dict[str, Any]:
+        """Put one request on a worker's lane and hand its REPLY back.
+
+        Args:
+            worker_handler: the handler of the worker that will serve it.
+            path: the path on the lane — the caller's own, because the forms do
+                not share one.
+            payload: what the caller composed, without the identity.
+            user: whose request it is, added here with the freeze verdict,
+                because both are the vertex's knowledge and not the caller's.
+
+        Returns:
+            The child's REPLY payload, untouched — reading it is the front's job.
+
+        Raises:
+            SiteFailedRequest: his worker answered with a failure.
+            ConnectionError: the wire of his worker is gone.
+        """
         reply = await worker_handler.connector.call(
-            f"{SITE_PATH_PREFIX}{http['path']}",
+            path,
             {
-                "http": {**http, "cid": cid},
+                **payload,
                 "identity": user,
                 "user_frozen": self.user_is_frozen(user) if user is not None else False,
             },

@@ -38,7 +38,7 @@ from genro_asgi import (
     SessionStore,
 )
 from genro_asgi.middleware import MiddlewareMixin
-from genro_asgi.middleware.session import COOKIE_LIFETIME_FACTOR
+from genro_asgi.middleware.session import COOKIE_LIFETIME_FACTOR, SessionMiddleware
 from genro_asgi.types import Message, Receive, Scope, Send
 
 # --- store contract suite (over a FACTORY, §5.9) ---
@@ -507,6 +507,47 @@ class TestAttachAvatar:
         assert session.id == session_id  # the id never changes at login
         assert session.data["cart"] == "kept"  # the cart survives the login
         assert store.get(session_id) is session
+
+
+class TestTheSessionOfAScopeWithNoChain:
+    """``get_session`` (#68 N24): what reads a session where no middleware ran.
+
+    A websocket handshake never passes through the chain, so the motor asks the
+    layer itself. The reading is pure — it hands back what the store has and
+    creates nothing, because a handshake has no moment to issue a cookie in.
+    """
+
+    def session_layer(self, server: SessionServer) -> SessionMiddleware:
+        layer = server.get_middleware(SessionMiddleware)
+        assert layer is not None
+        return layer
+
+    async def test_it_hands_back_the_session_the_cookie_names(self) -> None:
+        server = SessionServer(applications=[EchoApp(mount="")])
+        _, first = await http_get(server)
+        token = cookie_token(first)
+        scope: Scope = {"type": "websocket", "headers": [(b"cookie", f"session_id={token}".encode())]}
+        assert self.session_layer(server).get_session(scope).id == token
+
+    async def test_a_scope_with_no_cookie_reads_none(self) -> None:
+        server = SessionServer(applications=[EchoApp(mount="")])
+        assert self.session_layer(server).get_session({"type": "websocket", "headers": []}) is None
+
+    async def test_an_unknown_token_reads_none(self) -> None:
+        server = SessionServer(applications=[EchoApp(mount="")])
+        scope: Scope = {"type": "websocket", "headers": [(b"cookie", b"session_id=nobody")]}
+        assert self.session_layer(server).get_session(scope) is None
+
+    async def test_it_creates_nothing(self) -> None:
+        # ``dump`` is the store's own census: what it would persist.
+        server = SessionServer(applications=[EchoApp(mount="")])
+        before = server.session_store.dump()
+        self.session_layer(server).get_session({"type": "websocket", "headers": []})
+        assert server.session_store.dump() == before
+
+    def test_the_layer_is_none_when_that_middleware_is_off(self) -> None:
+        server = SessionServer(applications=[EchoApp(mount="")], middleware={"session": False})
+        assert server.get_middleware(SessionMiddleware) is None
 
 
 # --- SessionMiddleware and login: the cookie is issued for a NEW session only ---

@@ -39,6 +39,7 @@ class's to add (genropy-asgi does).
 
 from __future__ import annotations
 
+import asyncio
 import threading
 from typing import Any
 
@@ -85,6 +86,30 @@ class ConnectionRow(RegisterRow):
 
 
 class PageRow(RegisterRow):
-    """The page's row: the parcel leaves the edge to the connection behind."""
+    """The page's row: the parcel leaves the edge to the connection behind.
 
-    fields_left_behind = RegisterRow.fields_left_behind | {"connection_id"}
+    ``wsx`` is how this page uses its channel, and it is the command
+    ``openchannel`` that writes it: absent until the page opened its channel,
+    then ``True`` for the ordinary page or a dict of parameters for one that
+    asked for something. A message for a page that never opened its channel is
+    refused, so the field is also the proof that the browser and the row agree
+    on who this page is. It TRAVELS in the parcel — it is ``True`` or a dict of
+    plain data — because a user parked for being idle and woken by his next
+    request never lost his websocket: the browser noticed nothing, and a row
+    that came back without its channel would refuse the very next message of a
+    page that is still connected.
+    """
+
+    fields_left_behind = RegisterRow.fields_left_behind | {"connection_id", "call_lock"}
+
+    def default_fields(self) -> dict[str, Any]:
+        """The row's own lock, its channel, and the queue its calls wait in.
+
+        ``call_lock`` is an ``asyncio.Lock``, and it is a different thing from
+        ``item_lock``: that one guards the row itself and is taken on whatever
+        thread touches it, this one serialises the CALLS of this page, which
+        are tasks on the worker's loop. It is taken only when the page asked to
+        be served one call at a time, and it never travels — a page that comes
+        back from the deposit gets a fresh one.
+        """
+        return {**super().default_fields(), "wsx": None, "call_lock": asyncio.Lock()}

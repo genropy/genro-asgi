@@ -47,7 +47,6 @@ from genro_bag import Bag
 from genro_tytx import to_tytx
 
 from genro_asgi.spa import RegisterRegistry
-from genro_asgi.spa.environ import WsgiSeam
 from genro_asgi.spa.orchestration import FreezeHandler, GroupHandler, SpaCommander, SpaWorker
 from genro_asgi.spa.orchestration.envelope_handler import CommanderEnvelopeHandler
 from genro_asgi.spa.orchestration.spa_worker import RequestSlot
@@ -232,7 +231,11 @@ async def test_every_request_slot_is_the_consumers(worker):
     assert on_thread == "XT_Slot"
 
 
-def test_on_request_served_runs_after_every_request_failed_ones_included(worker):
+async def test_on_request_served_runs_after_every_request_failed_ones_included(worker):
+    # Rewritten in phase 4a of #68: the stitching goes through
+    # `hosted_app_seam` now, and `_serve_on_thread` is gone with the dict
+    # entrance it served. The assertion is the one it always was — the hook
+    # runs on a pool thread, in the request's own slot, whatever the site did.
     def wsgi_app(environ, start_response):
         start_response("200 OK", [("Content-Type", "text/plain")])
         return [b"ok"]
@@ -241,9 +244,11 @@ def test_on_request_served_runs_after_every_request_failed_ones_included(worker)
         raise RuntimeError("the site failed")
 
     payload = {"http": {"method": "GET", "path": "/", "cid": "c1"}, "identity": "mario"}
-    worker._serve_on_thread(WsgiSeam(wsgi_app), payload)
+    worker.wsgi_app = wsgi_app
+    await worker._serve_request(payload)
+    worker.wsgi_app = failing_app
     with pytest.raises(RuntimeError):
-        worker._serve_on_thread(WsgiSeam(failing_app), payload)
+        await worker._serve_request(payload)
     assert worker.served == ["XT_Slot", "XT_Slot"]
 
 

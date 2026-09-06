@@ -55,6 +55,97 @@ what the middleware chain serves itself passes. `Lifespan.shutdown` turns the
 state first (to `shutdown_mode` — STOPPING by default, QUITTING set by the
 reload child in `factory()`), drains the in-flight requests (bounded), THEN
 runs the hooks in reverse.
+**The websocket is a live connection whose every message is a request (landed
+2026-09-06, #68 phases 1-2).** `BaseServer.on_websocket` — the empty socket of
+D7 until now — gives each socket one `WsxConnection`, whose `serve()` is its
+whole life. The gate answers in ONE shape, accept then close with a readable
+code: a server not RUNNING closes 1013, a path no application serves or a
+missing home cookie closes 1008; the single refusal WITHOUT an accept is a
+hostile Origin (`WebSocket.refuse`), because nobody was admitted to be told.
+The path of the handshake names the home application through `demux`, and its
+`handshake_cookie` property (`None` on the base) says which cookie a
+handshake must carry. Identity is judged ONCE there: `server.authenticate`,
+then the session read straight off `SessionMiddleware.get_session(scope)` —
+the chain never sees a websocket scope — reached through
+`server.get_middleware(SessionMiddleware)`. Every message is a `WsxEnvelope`
+(`WSX://` + JSON, `data` a TYTX string, bytes included since genro-tytx
+0.14.0) and becomes a synthetic http scope with `method: "WSK"`, handed to the
+application `demux` picks — never to `server()`, which would run the whole
+chain per message. A message with an `id` is registered in `requests` and
+answered with its status; one without is an event nobody answers; a text that
+is not WSX and a binary frame are logged and dropped. The ceiling is
+`max_concurrent` per connection (16, `server/websocket` in the config, with
+`origins`), and `/_wsx/ping` is answered inline outside it. `WebSocketRegistry`
+(`server.websockets`) holds the live sockets and the `page_id → socket` binding
+`openchannel` will write; it is neutral and validates nothing. The server
+writes to a page with `BaseServer.send_message(page_id, path, data)` — the
+shape of a request, no `id`, `True` = written to the socket and never
+"executed by the page" (the registry stays a map: the sending lives on the
+server, and there is none by identity or by connection until something reads
+it). Not built yet: the SPA's own branch and `openchannel`, which is what will
+bind a page to its socket (phase 4), and the raw seam (phase 5).
+**An application may take the socket itself (landed 2026-09-07, #68 phase 5).**
+The handshake's path names the application through the same demux, and one that
+defines `serve_websocket` is handed the raw scope, receive and send, its mount
+already off the path. Nothing of the motor runs then — no accept, no Origin
+gate, no registry, no state refusal: whoever takes the socket takes all of it.
+It is the admitted mode of the design, the seam a hosted framework with a
+websocket protocol of its own reaches the server by; the core builds nothing
+beyond it.
+
+**A message of a page is a request of its user, and it ends on that user's own
+row (landed 2026-09-07, #68 phase 4).** The road is the one an HTTP request
+takes: the synthetic scope enters `SpaApplication.__call__`, `pack_http` packs
+it — with `page_id` and `reply_path` beside the `cid` when the envelope carried
+them, absent otherwise — `SpaCommander.resolve_worker` gives it the barrier,
+the reception-first rule and the placement, and the worker serves it on the
+hosted application. A page that asked for `sequential` is served one call at a
+time: the queue is `call_lock` on ITS OWN row (an `asyncio.Lock`, never
+travelling in a parcel, not to be confused with `item_lock`, which guards the
+row on whatever thread touches it), taken around the whole call, so a freeze
+waits for the queue too and pages never wait for each other.
+**`openchannel` is what a page sends first**, and both halves of the machine
+touch it: `WsxControl` under the front's `_wsx` root validates the page against
+`page_connection_map` and sends the third payload form — `wsx`, no `http` dict —
+through `SpaCommander.serve_wsx_request`, which the worker answers with
+`serve_wsx`, sharing the whole prologue of a request (pendings, the row put in
+order, adoption when the user was frozen) and resolving `/wsx/openchannel` on
+its own `WsxCommands` branch, where the channel is written on the page's row.
+Only on a 200 does `WsxConnection` bind that page to its socket — the
+application decides, the connection binds — and it recognises the command on
+the private path the demux leaves, never on the whole one. The page names
+itself in the envelope's `page_id` field and never in the payload, so the
+connection reads what is its own to read. The way back is
+`SpaWorker.send_message(page_id, path, data)`, callable from a pool thread:
+the CALL climbs to the `websocket` branch the front attached under
+`CommanderOperations`, which validates the page against the same map and writes
+through `BaseServer.send_message`. A handler that needs the request itself
+declares `_request`, and the injection now lives in
+`RoutedApplication.bind_kwargs` for every routed application, not in the
+`_server` app alone.
+
+**The worker hosts an ASGI application, and the legacy reaches it through the
+core (landed 2026-09-07, #68 phase 4a).** There is ONE seam, `SpaWorker.asgi_app`,
+and one road out of `_serve_request`: the property `hosted_app_seam`, which
+returns `AsgiSeam` on the assigned application, or `AsgiSeam(WsgiSeam(wsgi_app,
+worker))` when a consumer took the WSGI shortcut — so `_serve_request` does not
+know which of the two is filled. `AsgiSeam` builds the ASGI scope from the same
+`http` dict the CALL always carried (`genro.identity` always, `genro.page_id`
+and `genro.reply_path` only when the message brought them), hands the body over
+whole in one `http.request` and then `http.disconnect`, and shapes the answer
+back into `{"status", "headers", "body"}` — the shape the WSGI road produced
+before. `WsgiSeam` is now an ASGI application around a WSGI callable, with the
+dict entrance gone: `SCRIPT_NAME` is the scope's `root_path` and `PATH_INFO`
+what is left of `path`, so a legacy site keeps its view of its own URLs whether
+the router in front moved the prefix or left the path whole; it runs the
+callable through `SpaWorker.run_sync`, the traffic pool with this CALL's slot
+following onto the thread. Mixed applications are the consumer's own router
+calling that same `WsgiSeam` for the legacy paths — the core knows no prefixes
+(form B). `on_request_served` now runs through `run_sync` too, still on a pool
+thread and still before the counters, the pendings and the login's tail. Both
+seams assigned is a contradiction and `WorkerEntry` kills the process at boot;
+NEITHER is the base worker, legitimate, which serves its orders and refuses an
+http CALL with the property's message.
 `Request` reads the ASGI request by itself (landed 2026-09-02): headers and
 cookies off the scope, the query, the body drained ALWAYS from `receive` and
 joined once; the body is decoded by content-type — json/xml/msgpack hydrated,
@@ -431,4 +522,4 @@ commits, still to be entered in the register). Decision registers:
 
 **All general policies are inherited from the parent document: [meta-genro-modules CLAUDE.md](https://github.com/softwellsrl/meta-genro-modules/blob/main/CLAUDE.md)**
 
-**Last Updated**: 2026-09-05
+**Last Updated**: 2026-09-06

@@ -698,9 +698,17 @@ the server (thread pool for sync handlers, registry for the current request).
 
 ## 6. Open questions
 
-- **Q1** WSX/WebSocket: phase 0 leaves only the empty socket; when the motor
-  arrives, ONE dispatch engine with two transports (HTTP/WSX) — design it so
-  ctx, `on_route_resolved` and cleanups exist on both (the A1 gaps).
+- **Q1** — RESOLVED 2026-09-06 (see `internals/10_server/055_websocket/`):
+  ONE dispatch engine with two transports. A WSX message becomes a synthetic
+  HTTP request with `method: "WSK"`, resolved on the same routing tree with the
+  same filters, so ctx, `on_route_resolved` and the cleanups are the HTTP ones
+  and the A1 gaps cannot reopen. The server holds the connection
+  (`BaseServer.on_websocket`), the identity is judged once at the handshake, and
+  a message for the SPA becomes an ordinary CALL on the worker's lane. Decided
+  in the investigation of 2026-09-05/06, tracked in
+  [055 websocket](internals/10_server/055_websocket/decisions.md), and BUILT in
+  #68 — the six phases of code landed on 2026-09-06/07, and what the code holds
+  today is [055 websocket status](internals/10_server/055_websocket/status.md).
 - **Q2** Middleware chain: in the base or only on the public server?
 - **Q3** — RESCOPED 2026-07-19 (see §2, part 2): the orchestration package
   lives in the `genro-asgi-*` family; only the suffix is open ("server"

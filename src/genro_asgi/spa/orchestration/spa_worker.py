@@ -214,9 +214,12 @@ reply. A path nobody serves answers ``NotFound``. The http CALL form (an ``http`
 ``identity`` and the ``user_frozen`` verdict) is a request the front packed
 whole: it lands on the unified row FIRST — the store adopted when the verdict
 authorises it, the connection looked up in the deposit by itself, the clocks
-stamped — and only then goes to the ``WsgiSeam`` on the traffic pool. That
-seam's ``wsgi_app`` is ``None`` here: this class hosts no site, and says so
-explicitly. A subclass assigns it, which is the whole contract with the bridge.
+stamped — and only then goes to ``hosted_app_seam``, which is the one road to
+whatever this worker hosts. Both seams are ``None`` here: this class hosts no
+application, and the property says so out loud. A subclass assigns ONE of them
+— ``asgi_app`` for an ASGI application, or the ``wsgi_app`` shortcut, which the
+core wraps in a ``WsgiSeam`` of its own and runs on the traffic pool because
+WSGI is synchronous — and that is the whole contract with a consumer.
 
 **The photo rides out.** ``worker_snapshot`` is a slot ANY envelope leaving here
 may carry beside its own payload: the presentation carries it (a live process is
@@ -248,6 +251,7 @@ import asyncio
 import contextvars
 import inspect
 import copy
+import contextlib
 import functools
 import logging
 import os
@@ -262,7 +266,7 @@ from genro_routes import RoutingClass, route
 from genro_tytx import from_tytx, to_tytx
 
 from ...channel.frame import REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
-from ..environ import WsgiSeam
+from ..environ import AsgiSeam, WsgiSeam
 from ..global_store import CapturingGlobalStore, GlobalStoreLease
 from ..register import Register
 from ..register_registry import RegisterRegistry
@@ -303,6 +307,15 @@ WORKER_SNAPSHOT_TTL = 0.5
 #: How long a quit waits for a user whose call is still in flight, in seconds.
 #: Past it the wait is dropped and he is parked without that call.
 PENDING_CALL_GRACE_SECONDS = 5.0
+
+#: Where a channel command is resolved on this worker's own dispatcher. The
+#: front names the branch on the lane; the leaf is this worker's business.
+WSX_COMMAND_PATH = "/wsx/openchannel"
+
+#: Where a message for a browser is placed on the lane: the front attached that
+#: branch under the commander's operations, because the delivery needs the
+#: registry of sockets and the vertex's own map of pages.
+WEBSOCKET_SEND_PATH = "/commander/websocket/send"
 
 #: How long the worker waits for the vertex to take an announcement, in
 #: seconds. Past it the announcement is counted lost: a wire that answers
@@ -474,6 +487,52 @@ class CommanderOrders(RoutingClass):
         return {"repr": self.spa_worker.eval_expression(expr)}
 
 
+class WsxCommands(RoutingClass):
+    """The ``wsx`` branch of the worker's dispatcher: what a PAGE asks of its channel.
+
+    The other two branches name who ISSUES an order — the group, the vertex.
+    This one names a matter instead: nobody orders here, a page opens its
+    channel and says how it wants to be served on it.
+
+    Args:
+        spa_worker: the process the command acts on.
+    """
+
+    def __init__(self, spa_worker: Any) -> None:
+        self.spa_worker = spa_worker
+
+    @route()
+    def openchannel(self, page_id: str, parameters: Any = None) -> str:
+        """Open the channel of one page, and say how its calls must be served.
+
+        Args:
+            page_id: the page opening its channel.
+            parameters: how it wants to be served — nothing for the ordinary
+                page, a dict for one that asked for something (``sequential``
+                serialises its calls).
+
+        Returns:
+            The word the front turns into the answer of the command.
+
+        Raises:
+            KeyError: no page of that name lives here. A page is born by the
+                site while it serves, so a channel opened for a page nobody
+                created is a client talking about something that does not
+                exist, and it is told so.
+
+        Acts on the page's row, under its own lock. Saying it twice changes
+        nothing: a browser that reconnects opens its channel again.
+        """
+        worker = self.spa_worker
+        with worker.dispatch_lock:
+            row = worker.page_register.get(page_id)
+        if row is None:
+            raise KeyError(f"no page {page_id!r} on this worker: it was never born here")
+        with row["item_lock"]:
+            row["wsx"] = parameters if parameters else True
+        return "channel open"
+
+
 class WorkerDispatcher(RoutingClass):
     """The root of the orders a worker takes: ``group/…`` and ``commander/…``.
 
@@ -490,10 +549,12 @@ class WorkerDispatcher(RoutingClass):
         self.spa_worker = spa_worker
         self.group_orders = GroupOrders(spa_worker)
         self.commander_orders = CommanderOrders(spa_worker)
+        self.wsx_commands = WsxCommands(spa_worker)
         self.add_branches(
             [
                 {"name": "group", "instance": self.group_orders},
                 {"name": "commander", "instance": self.commander_orders},
+                {"name": "wsx", "instance": self.wsx_commands},
             ]
         )
 
@@ -554,8 +615,18 @@ class SpaWorker:
         #: One future per CALL this worker placed upward, by frame id: the read
         #: loop resolves them as the answers land, in whatever order they do.
         self._parent_calls: dict[str, asyncio.Future[Any]] = {}
-        #: The consumer seam of the http CALL form: a WSGI callable a subclass
-        #: assigns. None here — this class hosts no site of its own.
+        #: The consumer seam of the http CALL form: an ASGI application a
+        #: subclass assigns. None here — this class hosts no application of its
+        #: own. Whoever assigns it also gives it this worker, the way the
+        #: genropy bridge gives its hosted site its ``spa_worker``: the core
+        #: writes no live object into a scope (owner, 2026-09-06). A task the
+        #: application spawns inherits the context at creation, but mutating
+        #: the registers AFTER the reply has left raises: the work of a request
+        #: ends inside the request, as it does for a WSGI site.
+        self.asgi_app: Any = None
+        #: The shortcut for whoever hosts WSGI only: a WSGI callable the core
+        #: wraps in a ``WsgiSeam`` itself. Alternative to ``asgi_app``, never
+        #: an addition — both assigned is a configuration error.
         self.wsgi_app: Callable[..., Any] | None = None
         self.dispatch_lock = threading.RLock()
         #: The rows of the three registers, and the lifecycle vocabulary that
@@ -610,6 +681,55 @@ class SpaWorker:
         nothing else in this class names the concrete class.
         """
         return RegisterRegistry()
+
+    @property
+    def hosted_app_seam(self) -> AsgiSeam:
+        """The seam onto the hosted application, the one seam a consumer assigned.
+
+        Returns:
+            The ASGI seam: on ``asgi_app`` when a consumer assigned one, on the
+            WSGI adapter around ``wsgi_app`` when it took the shortcut instead.
+
+        Raises:
+            RuntimeError: both seams are assigned, or neither is — and the two
+                are not the same kind of trouble. BOTH is a contradiction
+                somebody declared, and ``WorkerEntry`` reads this at boot for
+                exactly that case, so the process dies before the wire exists.
+                NEITHER is the base worker, which is legitimate: it serves its
+                orders and hosts nothing, and it learns so here, when an http
+                CALL finally asks it to serve a request.
+        """
+        if self.asgi_app is not None and self.wsgi_app is not None:
+            raise RuntimeError(
+                f"Worker {self.name}: asgi_app and wsgi_app are both assigned; "
+                "the WSGI shortcut is an alternative to the ASGI seam, not an addition"
+            )
+        if self.asgi_app is not None:
+            return AsgiSeam(self.asgi_app)
+        if self.wsgi_app is not None:
+            return AsgiSeam(WsgiSeam(self.wsgi_app, self))
+        raise RuntimeError(
+            f"Worker {self.name}: neither asgi_app nor wsgi_app is assigned; "
+            "this worker hosts no application"
+        )
+
+    async def run_sync(self, work: Callable[[], Any]) -> Any:
+        """Run one piece of synchronous work on the traffic pool, in this CALL's slot.
+
+        Args:
+            work: what to run there — a WSGI callable, a legacy database call.
+
+        Returns:
+            Whatever the work returned.
+
+        The thread runs under a COPY of the calling task's context, so it finds
+        the request slot of the CALL it serves and whatever it announces rides
+        that CALL's reply. This is how a hosted ASGI application does its
+        synchronous work: the legacy database its group engine built is
+        synchronous, and neither the loop nor the service pool may be held
+        behind it.
+        """
+        return await self._run_in_pool(self.traffic_pool, work)
 
     def build_request_slot(self) -> RequestSlot:
         """Build the slot of one request: the seam a consumer replaces with its own slot class.
@@ -1339,6 +1459,9 @@ class SpaWorker:
         if "http" in payload:
             await self.serve_http(frame, payload)
             return
+        if "wsx" in payload:
+            await self.serve_wsx(frame, payload)
+            return
         try:
             result = self.worker_dispatcher.route.node(frame.path)(**payload)
             if inspect.isawaitable(result):
@@ -1357,23 +1480,41 @@ class SpaWorker:
                 ``identity`` to route on and the ``user_frozen`` verdict, which
                 belong together because the row is resolved from all three.
 
-        No ``wsgi_app`` means this worker hosts no site: the form is understood
-        and the explicit error says the seam is empty — and nothing is born on
-        the registers for a request that was never served. Anything that goes
-        wrong afterwards comes back as that same REPLY: a caller is answered
-        once, always, and a deposit that refuses a parcel must not leave a
-        browser waiting for a timeout.
+        Whether this worker hosts anything at all is ``hosted_app_seam``'s
+        judgment, and it was already made at boot: what can still go wrong here
+        comes back as this same REPLY — a caller is answered once, always, and
+        a deposit that refuses a parcel must not leave a browser waiting for a
+        timeout.
         """
-        if self.wsgi_app is None:
-            await self.send_reply(
-                frame, error="http CALL form refused: this worker hosts no WSGI site"
-            )
-            return
         try:
             result: Any = await self._serve_request(payload)
             error: Any = None
         except Exception as exc:
             self._logger.exception("Worker %s: http CALL %s failed", self.name, frame.path)
+            result, error = None, f"{type(exc).__name__}: {exc}"
+        await self.send_reply(frame, result=result, error=error)
+
+    async def serve_wsx(self, frame: Frame, payload: dict[str, Any]) -> None:
+        """Serve the ``wsx`` CALL form: a channel command of one page.
+
+        Args:
+            frame: the CALL being answered.
+            payload: its whole payload — the ``wsx`` dict the front composed,
+                the ``identity`` to route on and the ``user_frozen`` verdict.
+
+        The command runs through the SAME prologue an http request does: the
+        call is written in the user's pendings, and his row is put in order —
+        adopted from the deposit when the verdict says he was frozen, because a
+        page's row is not in memory until its user is, and there would be
+        nowhere to write the channel. What differs is the middle: instead of
+        the hosted application, the command is resolved on this worker's own
+        dispatcher.
+        """
+        try:
+            result: Any = await self._serve_command(payload)
+            error: Any = None
+        except Exception as exc:
+            self._logger.exception("Worker %s: wsx CALL %s failed", self.name, frame.path)
             result, error = None, f"{type(exc).__name__}: {exc}"
         await self.send_reply(frame, result=result, error=error)
 
@@ -1437,6 +1578,34 @@ class SpaWorker:
         if "error" in reply:
             raise CommanderCallFailed(path, str(reply["error"]))
         return reply.get("result")
+
+    def send_message(self, page_id: str, path: str, data: Any = None) -> bool:
+        """Write one message of the site onto the page's websocket.
+
+        Args:
+            page_id: the page to address — one of this worker's own.
+            path: what the client routes the message on.
+            data: the payload, as a Python value.
+
+        Returns:
+            ``True`` when the message reached a socket, ``False`` when that
+            page speaks on none.
+
+        Callable from a traffic-pool thread, which is where the site's own code
+        runs: the CALL goes up on the loop and this thread waits for its REPLY.
+        Fire and forget in meaning, not in mechanics — delivered says written
+        to the socket, never executed by the page (W-12).
+        """
+        with self.dispatch_lock:
+            row = self.page_register.get(page_id)
+            cid = row.get("connection_id") if row is not None else None
+        reply = self.run_on_loop(
+            self.call(
+                WEBSOCKET_SEND_PATH,
+                {"page_id": page_id, "path": path, "data": data, "cid": cid},
+            )
+        )
+        return bool((reply or {}).get("delivered"))
 
     def run_on_loop(self, coro: Any) -> Any:
         """Run a coroutine on this worker's loop from a pool thread, and wait.
@@ -2117,33 +2286,100 @@ class SpaWorker:
         in order: the pendings cover the adoption too, so no departure can wake
         in the gap between the loading and the serving of the same call. Then
         the row (the store adopted when the verdict authorises it, the
-        connection found by itself, the clocks stamped), and the stitching on
-        the traffic pool: WSGI is synchronous, and neither the loop nor the
-        service pool may be held behind it. The end of the call is where a
+        connection found by itself, the clocks stamped), and then the hosted
+        application, awaited on the task of this CALL — the slot is that task's,
+        so nothing needs copying; a WSGI site behind the shortcut goes to the
+        traffic pool from inside the adapter, because WSGI is synchronous. The
+        end of the call is where a
         departure that had to wait for it happens — on the connection the
         SERVICE settled on, which is the one the site named while serving when
         it named one, and the one the request came in on otherwise.
         """
-        cid = payload["http"]["cid"]
         user = payload.get("identity")
         served: dict[str, Any] = {}
-        if user is not None:
-            self.open_request(user)
-        try:
-            await self._resolve_row(user, cid, payload)
-            seam = WsgiSeam(self.wsgi_app)
+        async with self._serving(payload, payload["http"]["cid"]):
+            seam = self.hosted_app_seam
             service_started = time.monotonic()
             try:
-                served = await self._run_in_pool(
-                    self.traffic_pool,
-                    functools.partial(self._serve_on_thread, seam, payload),
-                )
+                try:
+                    async with self._page_queue(payload["http"].get("page_id")):
+                        served = await seam.serve(payload["http"], payload.get("identity"))
+                finally:
+                    # On a pool thread, with this request's slot still open and
+                    # BEFORE the counters, the pendings and the login's tail:
+                    # a consumer delivers here what its verbs left on the slot,
+                    # and does it from a thread, because it may call up the lane.
+                    await self.run_sync(self.on_request_served)
+                served["connection_id"] = self.request_slot.connection_id
             finally:
                 # Counted whatever the stitching did: a call that failed or ran
                 # long is exactly the one the measure must not lose.
                 if user is not None:
                     self._record_service(user, time.monotonic() - service_started)
             return served
+
+    @contextlib.asynccontextmanager
+    async def _page_queue(self, page_id: str | None) -> Any:
+        """Refuse a page with no open channel, or hold its queue for the whole call.
+
+        Args:
+            page_id: the page this call belongs to, ``None`` for a request that
+                names none — an ordinary http request of the site.
+
+        Raises:
+            RuntimeError: the page named here never opened its channel, or was
+                never born on this worker. A message of a page is refused
+                before anything is served: ``openchannel`` is what makes a page
+                addressable, and a message that skips it is a client out of
+                step with its own row.
+
+        A page that opened its channel with ``sequential`` is served one call at
+        a time: the lock lives on ITS row, so pages never wait for each other,
+        and it is taken around the WHOLE call — the slot is open and the call is
+        already in the user's pendings, so a freeze waits for the queue too,
+        which is what it must do. Every other call passes straight through.
+        """
+        if page_id is None:
+            yield
+            return
+        with self.dispatch_lock:
+            row = self.page_register.get(page_id)
+        if row is None or row.get("wsx") is None:
+            raise RuntimeError(
+                f"page {page_id!r} has no open channel on this worker: "
+                "send openchannel before any message of its own"
+            )
+        channel = row["wsx"]
+        if not isinstance(channel, dict) or not channel.get("sequential"):
+            yield
+            return
+        async with row["call_lock"]:
+            yield
+
+    @contextlib.asynccontextmanager
+    async def _serving(self, payload: dict[str, Any], cid: str | None) -> Any:
+        """The opening and the closing every form of call shares.
+
+        Args:
+            payload: the CALL's whole payload — the identity is read from it.
+            cid: the connection this call came in on.
+
+        The call is written in the user's pendings FIRST, before the row is put
+        in order: the pendings cover the adoption too, so no departure can wake
+        in the gap between the loading and the serving of the same call. At the
+        end the call leaves the pendings — which is where a departure that was
+        waiting for it happens — and the login's tail runs, on the connection
+        the SERVICE settled on.
+
+        What differs between the forms is only what happens in between: the
+        hosted application for a request, the dispatcher for a channel command.
+        """
+        user = payload.get("identity")
+        if user is not None:
+            self.open_request(user)
+        try:
+            await self._resolve_row(user, cid, payload)
+            yield user
         finally:
             if user is not None:
                 await self.close_request(user)
@@ -2151,24 +2387,13 @@ class SpaWorker:
             if slot.connection_previous_user is not None:
                 await self.freeze_connection(slot.connection_id, slot.connection_previous_user)
 
-    def _serve_on_thread(self, seam: WsgiSeam, payload: dict[str, Any]) -> dict[str, Any]:
-        """Serve the stitching on the pool thread, in the slot of its CALL.
-
-        The thread runs under a copy of the CALL's context, so the site's verbs,
-        called on this very thread, find the slot the task opened and their
-        events ride this CALL's reply. What the site named while serving LEAVES
-        with the answer — the front has no other way of learning the connection
-        this request settled on, and its cookie is written off it. What the slot
-        still holds is delivered in the ``finally``, so a request that never
-        collected — and one that failed after its commit — announces its
-        deposits before the exception goes on its way.
-        """
-        try:
-            answer = seam.serve(payload["http"], payload.get("identity"))
-        finally:
-            self.on_request_served()
-        answer["connection_id"] = self.request_slot.connection_id
-        return answer
+    async def _serve_command(self, payload: dict[str, Any]) -> Any:
+        """The shared prologue, and the command resolved on this worker's tree."""
+        command = payload["wsx"]
+        async with self._serving(payload, command.get("cid")):
+            return self.worker_dispatcher.route.node(WSX_COMMAND_PATH)(
+                **{key: value for key, value in command.items() if key != "cid"}
+            )
 
     async def _resolve_row(self, user: str | None, cid: str, payload: dict[str, Any]) -> None:
         """Put the row of an incoming request in order.
