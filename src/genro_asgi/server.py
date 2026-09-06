@@ -55,7 +55,7 @@ from .lifespan import QUITTING, RUNNING, STOPPING, Lifespan
 from .pool import WorkPool
 from .request_registry import RequestRegistry
 from .response import Response
-from .websocket import WebSocketRegistry
+from .websocket import WebSocket, WebSocketRegistry
 from .wsx import WsxConnection, WsxEnvelope
 
 if TYPE_CHECKING:
@@ -360,16 +360,27 @@ class BaseServer:
         routes like any other, and answers the ones that carry an ``id``. The
         connection is registered in ``websockets`` for its whole life.
 
+        The state is judged FIRST, above the demux, for every websocket: a
+        server that is not ``RUNNING`` takes no new connection in charge, and
+        the handshake is turned away before the accept. The browser sees the
+        handshake fail with no readable code — 1013 exists only after an accept,
+        and in the raw mode the accept belongs to the application — but the
+        state is the machine's business and not the protocol's, exactly as it
+        is on the http branch.
+
         The exception is an application that wants the socket ITSELF: the
         handshake's path names it through the same demux, and if it defines
         ``serve_websocket`` it is handed the raw scope, receive and send, with
-        the segment of its mount already taken off the path. Nothing of the
-        motor runs then — no accept, no Origin gate, no registry, no state
-        refusal: an application that takes the socket takes all of it, and the
-        core does not half-serve a connection it does not hold. It is the
-        admitted mode of the design, the one a hosted framework with a
-        websocket protocol of its own reaches the server by.
+        the segment of its mount already taken off the path. Nothing else of the
+        motor runs then — no accept, no Origin gate, no registry: an application
+        that takes the socket takes all of it, and the core does not half-serve
+        a connection it does not hold. It is the admitted mode of the design,
+        the one a hosted framework with a websocket protocol of its own reaches
+        the server by.
         """
+        if self.state != RUNNING:
+            await WebSocket(scope, receive, send).refuse(1013, "server restarting")
+            return
         app, target = self.demux(scope)
         raw_seam = getattr(app, "serve_websocket", None)
         if raw_seam is not None:

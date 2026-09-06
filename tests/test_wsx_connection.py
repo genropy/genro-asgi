@@ -31,7 +31,6 @@ from typing import Any
 
 from genro_asgi import BaseApplication, BaseServer, MiddlewareMixin
 from genro_asgi.exceptions import HTTPForbidden, HTTPUnauthorized
-from genro_asgi.lifespan import QUITTING
 from genro_asgi.request import Request
 from genro_tytx import to_msgpack, to_tytx
 
@@ -215,12 +214,6 @@ def closure(socket: XT_Socket) -> tuple[int, str]:
 
 
 class TestTheGate:
-    async def test_a_server_not_running_accepts_and_closes_1013(self) -> None:
-        server = echo_server()
-        server.state = QUITTING
-        socket = await drive(server, XT_Socket())
-        assert socket.accepted and closure(socket)[0] == 1013
-
     async def test_a_handshake_on_a_path_no_application_serves_is_closed_1008(self) -> None:
         socket = await drive(echo_server(), XT_Socket(), path="/nowhere/x")
         assert socket.accepted

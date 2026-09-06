@@ -26,10 +26,11 @@ the motor lives in — `websocket.py`, `wsx.py`, `spa/environ.py` — are covere
 **The admitted mode** — `BaseApplication` defines no `serve_websocket`, and an
 application that defines one is handed the raw scope, receive and send by
 `BaseServer.on_websocket` ([server.py](../../../src/genro_asgi/server.py)),
-with its mount already off the path. Nothing of the motor runs for it. 6
-contract tests in `tests/test_websocket_raw_seam.py`, including the one that
-says it out loud: while the server is not RUNNING the motor closes 1013, and an
-application holding its own socket answers as it likes.
+with its mount already off the path. Nothing else of the motor runs for it. 7
+contract tests in `tests/test_websocket_raw_seam.py`, including the two that
+draw the line: the raw application is never even named while the server is not
+RUNNING, because the state is judged above the demux, and both modes are turned
+away by that one refusal.
 
 ## What phase 4 built
 
@@ -120,11 +121,12 @@ socket's identity, because nothing reads either yet.
 
 **The connection** — `WsxConnection` in
 [wsx.py](../../../src/genro_asgi/wsx.py), 100% covered by
-`tests/test_wsx_connection.py` (36 contract tests). `serve()` is one socket's
-whole life: the gate, the accept, the read loop, the bounded drain. The gate
-closes 1013 on a server that is not RUNNING, 1008 on a path no application
-serves and on a missing home cookie, and REFUSES a hostile Origin before the
-accept. Identity is judged once — `server.authenticate` for the avatar,
+`tests/test_wsx_connection.py`. `serve()` is one socket's whole life: the gate,
+the accept, the read loop, the bounded drain. The gate closes 1008 on a path no
+application serves and on a missing home cookie, and REFUSES a hostile Origin
+before the accept. It never sees a connection the machine had already refused:
+the server's own state is judged above the demux, in `on_websocket`, for every
+websocket alike. Identity is judged once — `server.authenticate` for the avatar,
 `SessionMiddleware.get_session` for the session — and travels with every
 message. Each message becomes a synthetic http scope (`method: "WSK"`, the
 handshake's headers, `auth`, `session`, and `genro.page_id` /
@@ -200,10 +202,10 @@ native on msgpack, and the page encodes nothing by hand.
 
 **The empty socket, until phase 2.** `BaseServer.on_websocket` consumed the
 connect and closed with code 1000 — the D7 socket, whose docstring said the
-motor of Q1 would override this hook. It does now. The websocket branch of
-`BaseServer.__call__` still does NOT read the server's `state` (the 503 with
-`Retry-After` is on the HTTP branch only): the state is judged inside the gate,
-which renders its own refusal, 1013.
+motor of Q1 would override this hook. It does now. The `state` the http branch
+renders as a 503 with `Retry-After` is read here too, at the top of
+`on_websocket`: each transport judges the same fact and renders its own
+refusal, and this one turns the handshake away before the accept.
 
 The test that drove it (`tests/test_demux.py`, `TestEmptyWebsocket`) became
 `TestTheWebsocketBranch`, asserting only that `__call__` hands the scope to the

@@ -100,13 +100,18 @@ class TestAnApplicationThatTakesTheSocket:
         assert sent[0]["subprotocol"] == "echo"
         assert server.websockets.snapshot() == []
 
-    async def test_the_server_state_is_the_applications_business(self) -> None:
-        # The motor answers 1013 while the server is not running; here nobody
-        # asked the core anything, so the application decides.
-        server = BaseServer(applications=[EchoSocketApp(mount="raw")])
+    async def test_a_server_that_is_not_running_never_reaches_it(self) -> None:
+        # The state is judged above the demux, for every websocket alike
+        # (owner, 2026-09-07): the machine refuses before the application is
+        # even named, and the handshake is turned away with no accept — 1013
+        # exists only after one, and here the accept would be the
+        # application's.
+        app = EchoSocketApp(mount="raw")
+        server = BaseServer(applications=[app])
         server.state = QUITTING
         sent = await drive(server, "/raw/live", "one")
-        assert {"type": "websocket.send", "text": "echo:one"} in sent
+        assert sent == [{"type": "websocket.close", "code": 1013, "reason": "server restarting"}]
+        assert app.seen == []
 
 
 class TestAnApplicationThatDoesNot:
@@ -114,6 +119,14 @@ class TestAnApplicationThatDoesNot:
         server = BaseServer(applications=[PlainApp(mount="")])
         sent = await drive(server, "/")
         assert sent == [{"type": "websocket.accept"}]
+
+    async def test_a_server_that_is_not_running_refuses_it_the_same_way(self) -> None:
+        # One refusal for both modes: the machine's state is judged before
+        # anybody knows which application would have served the socket.
+        server = BaseServer(applications=[PlainApp(mount="")])
+        server.state = QUITTING
+        sent = await drive(server, "/")
+        assert sent == [{"type": "websocket.close", "code": 1013, "reason": "server restarting"}]
 
     async def test_the_base_application_defines_no_such_seam(self) -> None:
         # Absent by default, not None: what is not there cannot be called by

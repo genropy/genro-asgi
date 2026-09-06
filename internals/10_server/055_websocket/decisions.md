@@ -26,6 +26,14 @@ that sees every application and every connection, so the questions with one
 machine-wide answer are answered there once: the Origin gate, the identity, the
 registry of live connections, the refusal while the server is not `RUNNING`.
 
+That last one is judged HIGHER than the others (owner, 2026-09-07): above the
+demux, before anybody knows which application would have served the socket, and
+for the raw mode too. The state is the machine's business and not the
+protocol's, as it is on the http branch. The price is the shape of the refusal:
+the handshake is turned away before the accept, so the browser sees it fail
+with no readable code — 1013 exists only after an accept, and in the raw mode
+the accept belongs to the application.
+
 Each message is then handed to the application its `path` names, through the
 same demux an HTTP request goes through. So one websocket per browser serves
 every mounted application, and an application that lives in the server process

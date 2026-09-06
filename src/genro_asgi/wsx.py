@@ -54,10 +54,12 @@ request travels. A message with no ``id`` is an event: served, answered by
 nothing.
 
 **The gate answers in one shape: accept, then close with a readable code.** A
-server that is not running closes 1013; a handshake on a path no application
-serves, or one missing the cookie its home application demands, closes 1008.
-The single exception is a hostile Origin, refused BEFORE the accept — there is
-nobody to tell, because nobody was admitted.
+handshake on a path no application serves, or one missing the cookie its home
+application demands, closes 1008. The single exception is a hostile Origin,
+refused BEFORE the accept — there is nobody to tell, because nobody was
+admitted. The state of the server is judged higher up, in ``on_websocket``,
+above the demux and for every websocket alike: this gate never sees a
+connection the machine had already refused.
 """
 
 from __future__ import annotations
@@ -71,7 +73,6 @@ from genro_tytx import from_tytx, to_tytx
 
 from .application import BaseApplication
 from .exceptions import HTTPException, WebSocketDisconnect
-from .lifespan import RUNNING
 from .media_types import TRANSPORT_MIME
 from .middleware.session import SessionMiddleware
 from .types import Receive, Scope, Send
@@ -233,9 +234,6 @@ class WsxConnection:
             await self.socket.refuse(1008, refusal)
             return False
         await self.socket.accept()
-        if self.server.state != RUNNING:
-            await self.socket.close(1013, "server restarting")
-            return False
         app, _ = self.server.demux(self.socket.scope)
         if not isinstance(app, BaseApplication):
             await self.socket.close(1008, "no application at this path")
