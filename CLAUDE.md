@@ -77,9 +77,13 @@ is not WSX and a binary frame are logged and dropped. The ceiling is
 `max_concurrent` per connection (16, `server/websocket` in the config, with
 `origins`), and `/_wsx/ping` is answered inline outside it. `WebSocketRegistry`
 (`server.websockets`) holds the live sockets and the `page_id → socket` binding
-`openchannel` will write; it is neutral and validates nothing. Not built yet:
-the SPA's own branch (phase 4), the server speaking first (phase 3), the raw
-seam (phase 5).
+`openchannel` will write; it is neutral and validates nothing. The server
+writes to a page with `BaseServer.send_message(page_id, path, data)` — the
+shape of a request, no `id`, `True` = written to the socket and never
+"executed by the page" (the registry stays a map: the sending lives on the
+server, and there is none by identity or by connection until something reads
+it). Not built yet: the SPA's own branch and `openchannel`, which is what will
+bind a page to its socket (phase 4), and the raw seam (phase 5).
 `Request` reads the ASGI request by itself (landed 2026-09-02): headers and
 cookies off the scope, the query, the body drained ALWAYS from `receive` and
 joined once; the body is decoded by content-type — json/xml/msgpack hydrated,

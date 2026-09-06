@@ -5,8 +5,25 @@
 What exists TODAY on the branch, with its `file:line`. Update it in the same
 change that alters the behaviour. Opened at phase 0 of
 [#68](https://github.com/genropy/genro-asgi/issues/68) on `develop` = `a434a23`;
-phases 1 and 2 have landed since. The socket is no longer empty: a handshake
-reaches the motor, and every message it carries is served as a request.
+phases 1, 2 and 3 have landed since. The socket is no longer empty: a
+handshake reaches the motor, every message it carries is served as a request,
+and the server can write to a page that asked for nothing.
+
+## What phase 3 built
+
+**The server speaks first** — `BaseServer.send_message(page_id, path, data)`
+([server.py](../../../src/genro_asgi/server.py)), 8 contract tests in
+`tests/test_websocket_server_send.py`. It finds the socket that page speaks on
+and writes one message with the shape of a request and NO `id`: not an answer,
+and nobody answers it. `True` says it was written to the socket, `False` that
+the page speaks on none or that its socket already closed — delivered means
+written, never executed by the page. The name and the signature are
+`SpaWorker.send_message`'s, which is what will call it from a worker.
+
+Reduced from the plan by the owner (2026-09-07, N28): the sending lives on the
+server, which knows the protocol, and the registry stays a map. There is no
+sending by identity or by connection, and the registry does not learn a
+socket's identity, because nothing reads either yet.
 
 ## What phase 2 built
 
@@ -128,8 +145,8 @@ already speaks WSX with the same four fields (`channel/frame.py:15-23,
 Nothing that belongs to the SPA: no `openchannel`, no `wsx` field on
 `PageRow`, no `send_message`, and no branch of the front that validates a page
 against `page_connection_map` — `WebSocketRegistry` binds pages, nobody writes
-into it yet. Nothing that lets the server speak first (phase 3), and no
-`serve_websocket` seam for an application that wants the raw socket (phase 5).
+into it yet. No `serve_websocket` seam for an application that wants the raw socket
+(phase 5).
 On the worker: no `asgi_app`, no `hosted_app_seam`, no ASGI entrance on
 `WsgiSeam` (phase 4a). `BaseApplication.handshake_cookie` exists and answers
 `None`: no application in the core names a cookie yet. `SpaWorker.wsgi_app`
@@ -148,6 +165,7 @@ code follows in phases 1 to 5.
 | 0 | **DONE** — this folder, Q1 resolved, the namings — no code |
 | 1 | **DONE** — the `WebSocket` facade, `WsxEnvelope`, `WebSocketDisconnect` |
 | 2 | **DONE** — `WsxConnection`, `WebSocketRegistry`, `on_websocket`, the config element |
+| 3 | **DONE** — `BaseServer.send_message`: the server writes to a page |
 | 2 | `WsxConnection`, `WebSocketRegistry`, `on_websocket`, the config element |
 | 3 | the server speaks first, proven on a test application |
 | 4a | `asgi_app`, `AsgiSeam`, `hosted_app_seam`, `WsgiSeam` as the adapter, `run_sync` |

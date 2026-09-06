@@ -56,7 +56,7 @@ from .pool import WorkPool
 from .request_registry import RequestRegistry
 from .response import Response
 from .websocket import WebSocketRegistry
-from .wsx import WsxConnection
+from .wsx import WsxConnection, WsxEnvelope
 
 if TYPE_CHECKING:
     from .types import ASGIApp, Receive, Scope, Send
@@ -234,6 +234,32 @@ class BaseServer:
     def websockets(self) -> WebSocketRegistry:
         """The live websockets, and which one each page speaks on."""
         return self._websockets
+
+    async def send_message(self, page_id: str, path: str, data: Any = None) -> bool:
+        """Write one message of the server's own onto the socket a page speaks on.
+
+        Args:
+            page_id: the page to address.
+            path: what the client routes the message on, the way this server
+                routes what the client sends.
+            data: the payload, as a Python value.
+
+        Returns:
+            ``True`` when the message was written to a socket, ``False`` when
+            that page speaks on none or its socket is already closed.
+
+        The message has the shape of a request and carries NO ``id``: it is not
+        an answer, and nobody answers it — a page that wants to reply sends an
+        rpc of its own, on the ``reply_path`` it asked for or on a path of its
+        choosing. DELIVERED means written to the socket, never executed by the
+        page: nothing here waits for anything.
+        """
+        socket = self.websockets.get_page_socket(page_id)
+        if socket is None or not socket.connected:
+            return False
+        envelope = WsxEnvelope(method="WSK", path=path, data=data, page_id=page_id)
+        await socket.send_text(envelope.encode())
+        return True
 
     @property
     def websocket_origins(self) -> list[str]:
