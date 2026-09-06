@@ -72,6 +72,7 @@ from genro_tytx import from_tytx, to_tytx
 from .application import BaseApplication
 from .exceptions import HTTPException, WebSocketDisconnect
 from .lifespan import RUNNING
+from .media_types import TRANSPORT_MIME
 from .middleware.session import SessionMiddleware
 from .types import Receive, Scope, Send
 from .websocket import WebSocket
@@ -311,7 +312,7 @@ class WsxConnection:
         """Wait for the messages still in flight, then cut what is left."""
         if not self._tasks:
             return
-        done, pending = await asyncio.wait(set(self._tasks), timeout=DRAIN_TIMEOUT_SECONDS)
+        _, pending = await asyncio.wait(set(self._tasks), timeout=DRAIN_TIMEOUT_SECONDS)
         for task in pending:
             task.cancel()
 
@@ -323,10 +324,11 @@ class WsxConnection:
         with its status. A message without one is an event: served the same
         way, answered by nothing, its failure logged.
         """
-        item = self.server.requests.register(self._request_scope(envelope)) if envelope.id else None
+        scope = self._request_scope(envelope)
+        item = self.server.requests.register(scope) if envelope.id else None
         try:
             async with self._slots:
-                status, data = await self._call_application(envelope)
+                status, data = await self._call_application(envelope, scope)
         finally:
             if item is not None:
                 item.run_cleanups()
@@ -334,14 +336,17 @@ class WsxConnection:
         if envelope.id is not None:
             await self._answer(envelope, status, data)
 
-    async def _call_application(self, envelope: WsxEnvelope) -> tuple[int, Any]:
+    async def _call_application(self, envelope: WsxEnvelope, scope: Scope) -> tuple[int, Any]:
         """Hand one message to the application its path names.
+
+        Args:
+            envelope: the message being served.
+            scope: its synthetic http scope, built once by the caller.
 
         Returns:
             The status and the data of the answer. An ``HTTPException`` becomes
             its own status, anything else a 500 — the socket survives either.
         """
-        scope = self._request_scope(envelope)
         collected: list[Any] = []
         try:
             app, target = self.server.demux(scope)
@@ -401,9 +406,15 @@ class WsxConnection:
     def _answer_of(self, collected: list[Any]) -> tuple[int, Any]:
         """The status and the data an application's answer carried.
 
-        The body is read by its content-type, the way a request reads one: a
-        TYTX or JSON body comes back hydrated, anything else as the text or the
-        bytes it is.
+        Returns:
+            The status, and the body read by its content-type: one of the three
+            TYTX transports comes back hydrated, anything else as the text it
+            decodes to, or as the bytes it is.
+
+        This is the envelope's OWN reading of an answer, the mirror of what
+        ``Request.decode_body`` does with a request: the three transports are
+        the same three, and nothing else is understood here — a websocket
+        answer carries no form and no upload.
         """
         status = 200
         content_type = ""
@@ -414,8 +425,11 @@ class WsxConnection:
         body = b"".join(m.get("body", b"") for m in collected if m["type"] == "http.response.body")
         if not body:
             return status, None
-        if "json" in content_type or "xml" in content_type:
-            return status, from_tytx(body.decode("utf-8"), "json" if "json" in content_type else "xml")
+        transport = next((name for name in TRANSPORT_MIME if name in content_type), None)
+        if transport == "msgpack":
+            return status, from_tytx(body, transport="msgpack")
+        if transport is not None:
+            return status, from_tytx(body.decode("utf-8"), transport=transport)
         try:
             return status, body.decode("utf-8")
         except UnicodeDecodeError:

@@ -62,12 +62,14 @@ if TYPE_CHECKING:
     from .types import ASGIApp, Receive, Scope, Send
 
 REFUSED_RETRY_AFTER_SECONDS = 5
-
-#: How many messages of ONE websocket connection may be served at once. A
-#: setpoint (owner, 2026-09-06: «configurabile default 16»): the ceiling is
-#: what keeps a client that floods from sinking the server.
-WEBSOCKET_MAX_CONCURRENT = 16
 """The seconds a refused request is told to come back in."""
+
+WEBSOCKET_MAX_CONCURRENT = 16
+"""How many messages of ONE websocket connection may be served at once.
+
+A setpoint (owner, 2026-09-06: «configurabile default 16»): the ceiling is what
+keeps a client that floods from sinking the server.
+"""
 
 __all__ = [
     "QUITTING",

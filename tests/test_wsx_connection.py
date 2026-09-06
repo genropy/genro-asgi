@@ -33,7 +33,7 @@ from genro_asgi import BaseApplication, BaseServer, MiddlewareMixin
 from genro_asgi.exceptions import HTTPForbidden, HTTPUnauthorized
 from genro_asgi.lifespan import QUITTING
 from genro_asgi.request import Request
-from genro_tytx import to_tytx
+from genro_tytx import to_msgpack, to_tytx
 
 from genro_asgi.types import Message, Receive, Scope, Send
 from genro_asgi.wsx import WsxConnection, WsxEnvelope
@@ -100,6 +100,16 @@ class TellingApp(EchoApp):
             await send({"type": "http.response.start", "status": 200, "headers": []})
             await send({"type": "http.response.body", "body": b"first", "more_body": True})
             await send({"type": "http.response.body", "body": b"second"})
+            return
+        if scope["path"] == "/msgpack":
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [(b"content-type", b"application/vnd.tytx+msgpack")],
+                }
+            )
+            await send({"type": "http.response.body", "body": to_msgpack({"n": 7})})
             return
         if scope["path"] == "/binary":
             await send(
@@ -277,6 +287,14 @@ class TestWhatTheSyntheticScopeCarries:
             self.telling_server(), XT_Socket(request_message("/echo/silent", id="m1"))
         )
         assert (socket.answers[0].status, socket.answers[0].data) == (204, None)
+
+    async def test_a_msgpack_answer_comes_back_hydrated(self) -> None:
+        # The third transport a TYTX answer may use: the mirror of what
+        # `Request.decode_body` understands on the way in.
+        socket = await drive(
+            self.telling_server(), XT_Socket(request_message("/echo/msgpack", id="m1"))
+        )
+        assert socket.answers[0].data == {"n": 7}
 
     async def test_a_binary_answer_travels_as_its_bytes(self) -> None:
         # Now that the codec carries bytes, an answer nobody can decode as text
