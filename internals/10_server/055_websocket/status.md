@@ -3,12 +3,48 @@
 **Version**: 0.1 · **Last Updated**: 2026-09-06 · **Status**: 🔴 DA REVISIONARE
 
 What exists TODAY on the branch, with its `file:line`. Update it in the same
-change that alters the behaviour. Written at the opening of phase 0 of
-[#68](https://github.com/genropy/genro-asgi/issues/68), on `develop` =
-`a434a23`: nothing of what [decisions.md](decisions.md) describes is built yet,
-and the entries below are the ground the work starts from.
+change that alters the behaviour. Opened at phase 0 of
+[#68](https://github.com/genropy/genro-asgi/issues/68) on `develop` = `a434a23`;
+phase 1 has landed since, and the two objects it built are below. Nothing yet
+USES them: the server still answers a handshake with the empty socket.
 
-## What the code holds
+## What phase 1 built
+
+**The facade** — [websocket.py](../../../src/genro_asgi/websocket.py), 100%
+covered by `tests/test_websocket_facade.py` (27 contract tests). `WebSocket`
+wraps scope, `receive` and `send`: `accept()` consumes the connect and answers
+it (with a subprotocol and with response headers, the one place a websocket can
+carry a `Set-Cookie`), `close()` writes once and refuses to run before an
+accept, the reads refuse the wrong payload kind and raise
+`WebSocketDisconnect` when the client is gone, the writes refuse a socket
+nobody accepted, and iterating yields the incoming texts until that disconnect.
+`connected` is the whole state, one boolean, and the handshake facts — path,
+headers, cookies, offered subprotocols — are read off the scope in the
+constructor, the way `Request` reads an HTTP request.
+
+**The envelope** — [wsx.py](../../../src/genro_asgi/wsx.py), 100% covered by
+`tests/test_wsx_envelope.py` (29 contract tests). `WsxEnvelope(text)` reads a
+message, `WsxEnvelope(id=…, method=…, path=…, data=…)` builds one, and
+`encode()` gives the wire text. A field nobody set does not reach the wire, so
+an event has no `id` and a request has no `status`. `data` is a Python value
+here and the TYTX string inside the JSON body there: the round-trip tests are
+executable examples over Decimal, date, datetime, null, bytes, a Bag with
+attributes, a nested Bag, and a string full of characters JSON must escape. A
+text without the prefix, a body that is not JSON and a body that is not an
+object all raise `ValueError` — one answer for the read loop: this is not a
+message of ours.
+
+**The disconnect** — `WebSocketDisconnect` in
+[exceptions.py](../../../src/genro_asgi/exceptions.py), with `code` and
+`reason`. It sits beside the HTTP exceptions and is not one: a disconnect is
+not a value a read can return, so it arrives as an exception.
+
+**The dependency.** genro-tytx is pinned `>=0.14.0`
+([pyproject.toml:34, 50](../../../pyproject.toml)), the release that carries
+the `RAW` type: bytes in a message travel base64 under `::RAW` on JSON and
+native on msgpack, and the page encodes nothing by hand.
+
+## What the code held before it
 
 **The empty socket.** `BaseServer.on_websocket`
 ([server.py:287-294](../../../src/genro_asgi/server.py)) consumes the connect
@@ -47,7 +83,7 @@ already speaks WSX with the same four fields (`channel/frame.py:15-23,
 
 ## What is not there
 
-No facade, no envelope class, no per-connection object, no registry, no config
+No per-connection object, no registry, no config
 element, no `handshake_cookie` on any application, no `asgi_app` on the worker,
 no `hosted_app_seam`, no ASGI entrance on `WsgiSeam`, no `openchannel`, no
 `wsx` field on `PageRow`, no `send_message`. `SpaWorker.wsgi_app`
@@ -63,8 +99,8 @@ code follows in phases 1 to 5.
 
 | Phase | What lands |
 |---|---|
-| 0 | this folder, Q1 resolved, the namings — no code |
-| 1 | the `WebSocket` facade, `WsxEnvelope`, `WebSocketDisconnect` |
+| 0 | **DONE** — this folder, Q1 resolved, the namings — no code |
+| 1 | **DONE** — the `WebSocket` facade, `WsxEnvelope`, `WebSocketDisconnect` |
 | 2 | `WsxConnection`, `WebSocketRegistry`, `on_websocket`, the config element |
 | 3 | the server speaks first, proven on a test application |
 | 4a | `asgi_app`, `AsgiSeam`, `hosted_app_seam`, `WsgiSeam` as the adapter, `run_sync` |
