@@ -33,14 +33,16 @@ that commander in place.
 from __future__ import annotations
 
 import asyncio
+from datetime import date
+from decimal import Decimal
 from typing import Any
 
 import pytest
 
 from genro_asgi import BaseServer, MiddlewareMixin
+from genro_asgi.applications.spa_app import SPA_CONNECTION_ID_COOKIE, SpaApplication
 from genro_asgi.exceptions import HTTPBadRequest
 from genro_asgi.request import Request
-from genro_asgi.applications.spa_app import SPA_CONNECTION_ID_COOKIE, SpaApplication
 from genro_asgi.types import Message, Scope
 from genro_asgi.wsx import WsxConnection, WsxEnvelope
 
@@ -380,9 +382,6 @@ class TestTheServerSpeaksToTheOpenedPage:
         assert pushed[0].data == {"blob": b"\x00\x01\xff", "n": 1}
 
     async def test_what_the_codec_carries_survives_the_whole_road(self, machine) -> None:
-        from datetime import date
-        from decimal import Decimal
-
         await machine.open_channel()
         sent = {"day": date(2026, 9, 7), "total": Decimal("9.99"), "nothing": None}
         await machine.lane.verb("send_message", PAGE, "/main/typed", sent)
