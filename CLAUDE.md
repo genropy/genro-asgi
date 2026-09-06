@@ -47,7 +47,7 @@ that app with the segment stripped; else the root app; else 307 to the
 declared default; else the site index on `/` (ratified 2026-08-24, not yet
 built — today 404); else 404). It owns one thread pool (`run_sync`), a
 `RequestRegistry` holding the in-flight picture, ordered lifespan, and boots
-uvicorn programmatically (`serve()`, CLI `genroasgi serve/apps/stop/remove`,
+uvicorn programmatically (`serve()`, CLI `genro-asgi serve/apps/stop/remove`,
 `--debug` = a declared usage mode the core never branches on). The server
 carries a lifecycle `state` (`lifespan.py`: `RUNNING`/`QUITTING`/`STOPPING`):
 anything but RUNNING answers 503 + `Retry-After` and registers nothing, while
