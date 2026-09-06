@@ -28,7 +28,7 @@ process boundary as one JSON object in ``LAUNCHER_ENV`` and
 restart — with ``shutdown_mode = QUITTING``, so every reload exit takes the
 soft quit and the population survives the restart.
 
-This package's own CLI is one caller among others: ``genroasgi serve
+This package's own CLI is one caller among others: ``genro-asgi serve
 --reload`` keeps deriving its default watch root from the source file it was
 given, and hands the result here.
 """

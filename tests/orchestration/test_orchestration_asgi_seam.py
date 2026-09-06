@@ -34,6 +34,7 @@ from typing import Any
 
 import pytest
 
+from genro_asgi.exceptions import HTTPException
 from genro_asgi.spa.environ import WsgiSeam
 from genro_asgi.spa.orchestration import FreezeHandler, SpaWorker
 
@@ -528,13 +529,16 @@ class TestTheContractOfTheTwoSeams:
 
 class TestAMessageOfAPage:
     async def test_a_page_that_never_opened_its_channel_is_refused(self, asgi_worker) -> None:
+        # A refusal of the CLIENT, with a status of its own: the browser reads
+        # 409 and these words, not the 502 of a site that broke (#70 C).
         asgi_worker.open_request_slot()
         asgi_worker.new_page(USER, "p1", connection_id=CID)
-        with pytest.raises(RuntimeError, match="no open channel"):
+        with pytest.raises(HTTPException, match="no open channel") as refused:
             await asgi_worker._serve_request(http_call(page_id="p1"))
+        assert refused.value.status == 409
 
     async def test_a_page_this_worker_never_saw_is_refused(self, asgi_worker) -> None:
-        with pytest.raises(RuntimeError, match="no open channel"):
+        with pytest.raises(HTTPException, match="no open channel"):
             await asgi_worker._serve_request(http_call(page_id="never-born"))
 
     async def test_a_request_that_names_no_page_passes(self, asgi_worker) -> None:

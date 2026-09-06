@@ -83,6 +83,7 @@ import logging
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from genro_bag import BagResolver
+from genro_tytx import from_tytx
 from genro_builders.builder import element
 from genro_routes import RoutingClass, route
 
@@ -425,7 +426,9 @@ class WebsocketOperations(RoutingClass):
         Args:
             page_id: the page to address.
             path: what the client routes the message on.
-            data: the payload.
+            data: the payload, as the TYTX string the worker put on the lane —
+                the lane is JSON and carries no date, Decimal or bytes of its
+                own, so what the site sent is hydrated back here (#70).
             cid: the connection the worker believes that page belongs to.
 
         Returns:
@@ -442,7 +445,8 @@ class WebsocketOperations(RoutingClass):
         if owner is None or (cid is not None and owner != cid):
             return {"delivered": False}
         server = application.server
-        return {"delivered": await server.send_message(page_id, path, data)}
+        payload = from_tytx(data, "json") if data is not None else None
+        return {"delivered": await server.send_message(page_id, path, payload)}
 
 
 class WsxControl(RoutingClass):
@@ -513,6 +517,21 @@ class SpaApplication(RoutedApplication):
 
     #: The words this front adds to a recipe, read back under its own code.
     grammar = SpaApplicationGrammar
+
+    @property
+    def handshake_cookie(self) -> str | None:
+        """The connection cookie a websocket handshake must carry to reach this front.
+
+        Returns:
+            The name of the SPA's own connection cookie.
+
+        Every message on that socket is a request of the user the cookie names,
+        so a socket opened without one could never be served: the handshake is
+        accepted and closed 1008, and the browser reads why. The first live
+        probe found this property unimplemented and the socket left open for
+        ever (#70).
+        """
+        return SPA_CONNECTION_ID_COOKIE
 
     #: The pool this front builds. A subclass names another one — a vertex that
     #: can grow its own machine, say — and the recipe names the subclass.
@@ -999,7 +1018,7 @@ class SpaApplication(RoutedApplication):
             response = self.wire_lost_response(gone)
         except SiteFailedRequest as failure:
             self._logger.error("Front %s: %s", self.code, failure)
-            response = self.gateway_response()
+            response = self.gateway_response(failure)
         else:
             response = self.build_response(reply, carried)
         await response(scope, receive, send)
@@ -1035,8 +1054,26 @@ class SpaApplication(RoutedApplication):
             ],
         )
 
-    def gateway_response(self) -> Response:
-        """The 502 of an upstream that broke: what broke is said in the log alone."""
+    def gateway_response(self, failure: SiteFailedRequest | None = None) -> Response:
+        """What the caller reads when the worker answered a failure.
+
+        Args:
+            failure: what the worker said, when the caller is to be told; the
+                502 with the fixed text is the answer without it.
+
+        Returns:
+            The refusal the worker named, with ITS words, when it named a
+            status — a page that never opened its channel is a 409 and the
+            browser must read why (#70). Everything else is the 502 of an
+            upstream that broke, whose reason stays in the log alone: what
+            failed inside the site is nobody's business out here.
+        """
+        if failure is not None and failure.status is not None:
+            return Response(
+                content=failure.cause,
+                status_code=failure.status,
+                headers=[("content-type", "text/plain; charset=utf-8")],
+            )
         return Response(
             content=ERR_502_TEXT,
             status_code=502,

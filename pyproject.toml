@@ -28,6 +28,11 @@ classifiers = [
 
 dependencies = [
     "uvicorn>=0.30",
+    # uvicorn speaks websocket only with a backend, and none of its own: the
+    # server holds websockets, so the backend is a dependency of this package
+    # and not of whoever installs it. `websockets` is what is needed, and
+    # nothing more — never `uvicorn[standard]`, which drags in what is not.
+    "websockets>=13.0",
     "genro-bag>=0.21.0",
     "genro-builders>=0.23.0",
     "genro-toolbox>=0.14.0",

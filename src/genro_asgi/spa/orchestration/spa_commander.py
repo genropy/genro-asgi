@@ -803,7 +803,7 @@ class SpaCommander:
             },
         )
         if "error" in reply:
-            raise SiteFailedRequest(user, str(reply["error"]))
+            raise SiteFailedRequest(user, str(reply["error"]), reply.get("status"))
         return reply
 
     async def _wait_out_hold(self, user: str, deadline: float) -> None:

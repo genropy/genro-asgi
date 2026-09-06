@@ -266,6 +266,7 @@ from genro_routes import RoutingClass, route
 from genro_tytx import from_tytx, to_tytx
 
 from ...channel.frame import REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
+from ...exceptions import HTTPException
 from ..environ import AsgiSeam, WsgiSeam
 from ..global_store import CapturingGlobalStore, GlobalStoreLease
 from ..register import Register
@@ -1489,10 +1490,15 @@ class SpaWorker:
         try:
             result: Any = await self._serve_request(payload)
             error: Any = None
+            status: int | None = None
+        except HTTPException as refused:
+            # A refusal of the CLIENT: it knows what to answer, and the words
+            # are the ones the browser must read.
+            result, error, status = None, refused.detail, refused.status
         except Exception as exc:
             self._logger.exception("Worker %s: http CALL %s failed", self.name, frame.path)
-            result, error = None, f"{type(exc).__name__}: {exc}"
-        await self.send_reply(frame, result=result, error=error)
+            result, error, status = None, f"{type(exc).__name__}: {exc}", None
+        await self.send_reply(frame, result=result, error=error, status=status)
 
     async def serve_wsx(self, frame: Frame, payload: dict[str, Any]) -> None:
         """Serve the ``wsx`` CALL form: a channel command of one page.
@@ -1513,18 +1519,26 @@ class SpaWorker:
         try:
             result: Any = await self._serve_command(payload)
             error: Any = None
+            status: int | None = None
+        except HTTPException as refused:
+            result, error, status = None, refused.detail, refused.status
         except Exception as exc:
             self._logger.exception("Worker %s: wsx CALL %s failed", self.name, frame.path)
-            result, error = None, f"{type(exc).__name__}: {exc}"
-        await self.send_reply(frame, result=result, error=error)
+            result, error, status = None, f"{type(exc).__name__}: {exc}", None
+        await self.send_reply(frame, result=result, error=error, status=status)
 
-    async def send_reply(self, frame: Frame, *, result: Any = None, error: Any = None) -> None:
+    async def send_reply(
+        self, frame: Frame, *, result: Any = None, error: Any = None, status: int | None = None
+    ) -> None:
         """Answer a CALL, carrying what happened here while it was being served.
 
         Args:
             frame: the CALL being answered; its id is what makes this a REPLY.
             result: the answer, when there is one.
             error: what went wrong instead.
+            status: what the parent should answer, when this worker knows —
+                only a refusal knows. Absent from every other failure, and the
+                front then answers as it always did.
 
         Empties the ``worker_events`` of this CALL's slot onto the envelope — the
         worker events are delivered once, and the send IS the delivery — and
@@ -1540,6 +1554,8 @@ class SpaWorker:
         data: dict[str, Any] = {ENVELOPE_SLOT_WORKER_EVENTS: events}
         if error is not None:
             data["error"] = error
+            if status is not None:
+                data["status"] = status
         else:
             data["result"] = result
         await self.stream.write(
@@ -1595,6 +1611,12 @@ class SpaWorker:
         runs: the CALL goes up on the loop and this thread waits for its REPLY.
         Fire and forget in meaning, not in mechanics — delivered says written
         to the socket, never executed by the page (W-12).
+
+        The payload is serialised HERE, before it reaches the lane: the lane is
+        JSON, and a date, a Decimal or a bytes object would die in its
+        ``json.dumps``. What crosses it is the TYTX string the browser's own
+        codec reads at the other end, and the front hydrates it back before the
+        envelope is built (#70).
         """
         with self.dispatch_lock:
             row = self.page_register.get(page_id)
@@ -1602,7 +1624,12 @@ class SpaWorker:
         reply = self.run_on_loop(
             self.call(
                 WEBSOCKET_SEND_PATH,
-                {"page_id": page_id, "path": path, "data": data, "cid": cid},
+                {
+                    "page_id": page_id,
+                    "path": path,
+                    "data": to_tytx(data, "json") if data is not None else None,
+                    "cid": cid,
+                },
             )
         )
         return bool((reply or {}).get("delivered"))
@@ -2298,11 +2325,14 @@ class SpaWorker:
         user = payload.get("identity")
         served: dict[str, Any] = {}
         async with self._serving(payload, payload["http"]["cid"]):
-            seam = self.hosted_app_seam
             service_started = time.monotonic()
             try:
                 try:
+                    # The message is admitted FIRST: whether this page may speak
+                    # at all is the client's own business, and it is answered
+                    # before anybody asks what would have served it.
                     async with self._page_queue(payload["http"].get("page_id")):
+                        seam = self.hosted_app_seam
                         served = await seam.serve(payload["http"], payload.get("identity"))
                 finally:
                     # On a pool thread, with this request's slot still open and
@@ -2327,11 +2357,14 @@ class SpaWorker:
                 names none — an ordinary http request of the site.
 
         Raises:
-            RuntimeError: the page named here never opened its channel, or was
-                never born on this worker. A message of a page is refused
-                before anything is served: ``openchannel`` is what makes a page
-                addressable, and a message that skips it is a client out of
-                step with its own row.
+            HTTPException: 409, when the page named here never opened its
+                channel or was never born on this worker. A message of a page
+                is refused before anything is served: ``openchannel`` is what
+                makes a page addressable, and a message that skips it is a
+                client out of step with its own row. It is the CLIENT's
+                mistake, not the site's, so it carries a status of its own and
+                reaches the browser with these words rather than as the 502 of
+                an upstream that broke (#70).
 
         A page that opened its channel with ``sequential`` is served one call at
         a time: the lock lives on ITS row, so pages never wait for each other,
@@ -2345,9 +2378,10 @@ class SpaWorker:
         with self.dispatch_lock:
             row = self.page_register.get(page_id)
         if row is None or row.get("wsx") is None:
-            raise RuntimeError(
+            raise HTTPException(
+                409,
                 f"page {page_id!r} has no open channel on this worker: "
-                "send openchannel before any message of its own"
+                "send openchannel before any message of its own",
             )
         channel = row["wsx"]
         if not isinstance(channel, dict) or not channel.get("sequential"):

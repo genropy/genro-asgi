@@ -33,16 +33,25 @@ that commander in place.
 from __future__ import annotations
 
 import asyncio
+from datetime import date
+from decimal import Decimal
 from typing import Any
 
 import pytest
 
 from genro_asgi import BaseServer, MiddlewareMixin
 from genro_asgi.applications.spa_app import SPA_CONNECTION_ID_COOKIE, SpaApplication
+from genro_asgi.exceptions import HTTPBadRequest
+from genro_asgi.request import Request
 from genro_asgi.types import Message, Scope
 from genro_asgi.wsx import WsxConnection, WsxEnvelope
 
 PREFIX = "WSX://"
+
+
+async def no_body() -> Message:
+    """A receive that hands over an empty body: the request carries none."""
+    return {"type": "http.request", "body": b"", "more_body": False}
 CID = "cid-a"
 USER = "mario"
 PAGE = "page-1"
@@ -160,6 +169,45 @@ async def machine(worker_commander_lane):
         yield running
 
 
+class TestTheHandshakeOfTheSpa:
+    async def test_a_socket_with_no_connection_cookie_is_closed_1008(
+        self, worker_commander_lane
+    ) -> None:
+        # What the first browser found (#70 A): the front declared no cookie,
+        # so a socket opened without one stayed open for ever. The gate of
+        # W-13 had been built and had no user.
+        machine = XT_Machine(worker_commander_lane)
+        scope: Scope = {
+            "type": "websocket",
+            "path": "/_wsx",
+            "headers": [(b"host", b"site.example")],
+            "subprotocols": [],
+        }
+        connection = WsxConnection(
+            machine.server, scope, machine.browser.receive, machine.browser.send
+        )
+        # The browser leaves right away: without the gate the read loop would
+        # wait for ever, which is exactly what the defect looked like.
+        machine.browser.leave()
+        await connection.serve()
+        assert machine.browser.sent == [
+            {"type": "websocket.accept"},
+            {
+                "type": "websocket.close",
+                "code": 1008,
+                "reason": "connection cookie required: spa_connection_id",
+            },
+        ]
+
+    async def test_a_socket_with_the_cookie_is_let_in(self, machine) -> None:
+        assert {"type": "websocket.accept"} in machine.browser.sent
+
+    def test_the_front_names_the_cookie_its_handshake_must_carry(self) -> None:
+        assert SpaApplication(code="site0", mount="").handshake_cookie == (
+            SPA_CONNECTION_ID_COOKIE
+        )
+
+
 class TestOpeningTheChannelOfAPage:
     async def test_the_page_is_told_its_channel_is_open(self, machine) -> None:
         answer = await machine.open_channel()
@@ -224,29 +272,54 @@ class TestWhatTheWorkerRefuses:
         assert machine.server.websockets.get_page_socket("ghost") is None
 
 
-class TestASocketWithNoCookie:
-    async def test_a_message_from_a_connection_with_no_cookie_is_refused(
+class TestACallerWithNoCookie:
+    async def test_the_command_refuses_a_request_that_carries_no_connection(
         self, worker_commander_lane
     ) -> None:
-        # The SPA gates its handshake on the cookie, so this cannot happen
-        # through the front door; the command refuses it anyway, because the
-        # answer must never be "some connection".
-        machine = XT_Machine(worker_commander_lane)
-        scope: Scope = {
-            "type": "websocket",
-            "path": "/_wsx",
-            "headers": [(b"host", b"site.example")],
-            "subprotocols": [],
-        }
-        connection = WsxConnection(
-            machine.server, scope, machine.browser.receive, machine.browser.send
+        # No websocket can reach this any more — the handshake gate closes such
+        # a socket first (#70 A) — but the route is a route: an HTTP caller can
+        # knock on it with no cookie at all, and the answer must never be «some
+        # connection».
+        front = XT_Front(worker_commander_lane.commander, code="site0", mount="")
+        control = front.route.node("/_wsx/openchannel")
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/_wsx/openchannel",
+                "headers": [],
+                "genro.page_id": PAGE,
+            },
+            no_body,
         )
-        task = asyncio.create_task(connection.serve())
-        await machine.settle()
-        answer = await machine.open_channel()
-        assert answer.status == 400
-        machine.browser.leave()
-        await task
+        await request.init()
+        with pytest.raises(HTTPBadRequest, match="no cookie"):
+            await control(parameters=None, _request=request)
+
+
+class TestAMessageBeforeTheChannelIsOpen:
+    async def test_the_browser_is_told_what_is_wrong_and_not_that_the_site_broke(
+        self, machine
+    ) -> None:
+        # What the first browser found (#70 C): the refusal was normalised into
+        # the 502 of an upstream that broke, and the reason lived only in the
+        # worker's log. It is a refusal of the CLIENT, not a failure of the
+        # site, and it carries its own status and its own words.
+        answer = await machine.message(
+            WsxEnvelope(id="m1", method="WSK", path="/main/rpc", page_id=PAGE)
+        )
+        assert answer.status == 409
+        assert "no open channel" in answer.data
+
+    async def test_the_page_is_served_once_its_channel_is_open(self, machine) -> None:
+        await machine.open_channel()
+        answer = await machine.message(
+            WsxEnvelope(id="m2", method="WSK", path="/main/rpc", page_id=PAGE)
+        )
+        # The lane's worker hosts no application, so what comes back now is the
+        # site's own failure — a 502 with the fixed text — and no longer the
+        # refusal: the channel is open and the message was passed on.
+        assert answer.status == 502
 
 
 class TestTheChannelSurvivesTheDeposit:
@@ -293,6 +366,27 @@ class TestTheServerSpeaksToTheOpenedPage:
         assert [(m.path, m.data, m.page_id) for m in pushed] == [
             ("/main/refresh", {"n": 1}, PAGE)
         ]
+
+    async def test_bytes_reach_the_browser_through_the_codec(self, machine) -> None:
+        # What the first browser found (#70 B): the lane is JSON, so `data`
+        # went into `json.dumps` as it was and a bytes payload died there with
+        # a TypeError — the browser saw a 502 and no push. The codec that
+        # carries bytes is TYTX, and the worker speaks it before the CALL.
+        await machine.open_channel()
+        delivered = await machine.lane.verb(
+            "send_message", PAGE, "/main/blob", {"blob": b"\x00\x01\xff", "n": 1}
+        )
+        await machine.settle()
+        assert delivered is True
+        pushed = [m for m in machine.browser.answers if m.id is None]
+        assert pushed[0].data == {"blob": b"\x00\x01\xff", "n": 1}
+
+    async def test_what_the_codec_carries_survives_the_whole_road(self, machine) -> None:
+        await machine.open_channel()
+        sent = {"day": date(2026, 9, 7), "total": Decimal("9.99"), "nothing": None}
+        await machine.lane.verb("send_message", PAGE, "/main/typed", sent)
+        await machine.settle()
+        assert [m for m in machine.browser.answers if m.id is None][0].data == sent
 
     async def test_a_page_that_never_opened_its_channel_is_reachable_by_nobody(
         self, machine
