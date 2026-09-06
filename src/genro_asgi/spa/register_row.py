@@ -93,12 +93,14 @@ class PageRow(RegisterRow):
     then ``True`` for the ordinary page or a dict of parameters for one that
     asked for something. A message for a page that never opened its channel is
     refused, so the field is also the proof that the browser and the row agree
-    on who this page is. It does NOT travel in the parcel: a page that comes
-    back from the deposit opens its channel again, because its browser has to
-    reconnect anyway.
+    on who this page is. It TRAVELS in the parcel — it is ``True`` or a dict of
+    plain data — because a user parked for being idle and woken by his next
+    request never lost his websocket: the browser noticed nothing, and a row
+    that came back without its channel would refuse the very next message of a
+    page that is still connected.
     """
 
-    fields_left_behind = RegisterRow.fields_left_behind | {"connection_id", "wsx", "call_lock"}
+    fields_left_behind = RegisterRow.fields_left_behind | {"connection_id", "call_lock"}
 
     def default_fields(self) -> dict[str, Any]:
         """The row's own lock, its channel, and the queue its calls wait in.

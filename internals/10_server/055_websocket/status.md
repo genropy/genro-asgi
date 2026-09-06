@@ -32,7 +32,10 @@ reception-first rule, the placement.
 **The queue of a page** — `call_lock` on `PageRow`
 ([register_row.py](../../../src/genro_asgi/spa/register_row.py)), an
 `asyncio.Lock` among the fields the parcel leaves behind, taken around the
-whole call when the page opened its channel with `sequential`.
+whole call when the page opened its channel with `sequential`. The CHANNEL
+itself travels: a user parked for being idle and woken by his next request
+never lost his websocket, so a row that came back without `wsx` would refuse
+the very next message of a page that is still connected.
 
 **The way back** — `SpaWorker.send_message`, the `websocket` branch the front
 attaches under `CommanderOperations`, and `BaseServer.send_message` at the end

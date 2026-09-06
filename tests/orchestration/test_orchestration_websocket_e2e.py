@@ -249,6 +249,38 @@ class TestASocketWithNoCookie:
         await task
 
 
+class TestTheChannelSurvivesTheDeposit:
+    async def test_a_page_woken_from_the_deposit_still_has_its_channel(
+        self, machine
+    ) -> None:
+        # W-5: a freeze does not touch the websocket, and the browser notices
+        # nothing. So the row must come back with its channel — otherwise the
+        # very next message of a page that is still connected would be refused.
+        await machine.open_channel(sequential=True)
+        worker = machine.lane.worker
+        await worker.freeze_designated_user(USER)
+        assert worker.page_register.get(PAGE) is None
+
+        # The road a request takes when it finds him frozen: the store comes
+        # home, then the connection with the pages hanging under it.
+        await worker.adopt_user(USER)
+        await worker.adopt_connection(USER, CID)
+
+        assert worker.page_register.get(PAGE)["wsx"] == {"sequential": True}
+
+    async def test_the_queue_of_a_woken_page_is_a_fresh_one(self, machine) -> None:
+        # The lock itself never travels: it is an object, and the page that
+        # comes back is served by a loop that never saw the old one.
+        await machine.open_channel(sequential=True)
+        worker = machine.lane.worker
+        before = worker.page_register.get(PAGE)["call_lock"]
+        await worker.freeze_designated_user(USER)
+        await worker.adopt_user(USER)
+        await worker.adopt_connection(USER, CID)
+        after = worker.page_register.get(PAGE)["call_lock"]
+        assert isinstance(after, asyncio.Lock) and after is not before
+
+
 class TestTheServerSpeaksToTheOpenedPage:
     async def test_the_worker_reaches_the_browser_through_the_vertex(self, machine) -> None:
         # The whole road back: the site's own code calls `send_message` on a

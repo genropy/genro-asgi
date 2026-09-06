@@ -2295,13 +2295,9 @@ class SpaWorker:
         SERVICE settled on, which is the one the site named while serving when
         it named one, and the one the request came in on otherwise.
         """
-        cid = payload["http"]["cid"]
         user = payload.get("identity")
         served: dict[str, Any] = {}
-        if user is not None:
-            self.open_request(user)
-        try:
-            await self._resolve_row(user, cid, payload)
+        async with self._serving(payload, payload["http"]["cid"]):
             seam = self.hosted_app_seam
             service_started = time.monotonic()
             try:
@@ -2321,16 +2317,10 @@ class SpaWorker:
                 if user is not None:
                     self._record_service(user, time.monotonic() - service_started)
             return served
-        finally:
-            if user is not None:
-                await self.close_request(user)
-            slot = self.request_slot
-            if slot.connection_previous_user is not None:
-                await self.freeze_connection(slot.connection_id, slot.connection_previous_user)
 
     @contextlib.asynccontextmanager
     async def _page_queue(self, page_id: str | None) -> Any:
-        """Hold the page's queue for the whole call, when that page asked for one.
+        """Refuse a page with no open channel, or hold its queue for the whole call.
 
         Args:
             page_id: the page this call belongs to, ``None`` for a request that
@@ -2366,29 +2356,44 @@ class SpaWorker:
         async with row["call_lock"]:
             yield
 
-    async def _serve_command(self, payload: dict[str, Any]) -> Any:
-        """The prologue, the command on the dispatcher, the end of the call.
+    @contextlib.asynccontextmanager
+    async def _serving(self, payload: dict[str, Any], cid: str | None) -> Any:
+        """The opening and the closing every form of call shares.
 
-        The same opening and the same closing as a request — pendings, the row
-        put in order, the login's tail — around the one thing that differs: the
-        command is resolved on ``worker_dispatcher`` instead of going to the
-        hosted application.
+        Args:
+            payload: the CALL's whole payload — the identity is read from it.
+            cid: the connection this call came in on.
+
+        The call is written in the user's pendings FIRST, before the row is put
+        in order: the pendings cover the adoption too, so no departure can wake
+        in the gap between the loading and the serving of the same call. At the
+        end the call leaves the pendings — which is where a departure that was
+        waiting for it happens — and the login's tail runs, on the connection
+        the SERVICE settled on.
+
+        What differs between the forms is only what happens in between: the
+        hosted application for a request, the dispatcher for a channel command.
         """
-        command = payload["wsx"]
         user = payload.get("identity")
         if user is not None:
             self.open_request(user)
         try:
-            await self._resolve_row(user, command.get("cid"), payload)
-            return self.worker_dispatcher.route.node(WSX_COMMAND_PATH)(
-                **{key: value for key, value in command.items() if key != "cid"}
-            )
+            await self._resolve_row(user, cid, payload)
+            yield user
         finally:
             if user is not None:
                 await self.close_request(user)
             slot = self.request_slot
             if slot.connection_previous_user is not None:
                 await self.freeze_connection(slot.connection_id, slot.connection_previous_user)
+
+    async def _serve_command(self, payload: dict[str, Any]) -> Any:
+        """The shared prologue, and the command resolved on this worker's tree."""
+        command = payload["wsx"]
+        async with self._serving(payload, command.get("cid")):
+            return self.worker_dispatcher.route.node(WSX_COMMAND_PATH)(
+                **{key: value for key, value in command.items() if key != "cid"}
+            )
 
     async def _resolve_row(self, user: str | None, cid: str, payload: dict[str, Any]) -> None:
         """Put the row of an incoming request in order.
