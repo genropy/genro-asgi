@@ -103,7 +103,7 @@ class AsgiServerGrammar(TaskGrammar):
         below it is stable.
         """
 
-    @element(parent_tags="configuration", sub_tags="session[0:1],tasks[0:1]")
+    @element(parent_tags="configuration", sub_tags="session[0:1],tasks[0:1],websocket[0:1]")
     def server(
         self,
         host: str | BagResolver = None,
@@ -127,8 +127,27 @@ class AsgiServerGrammar(TaskGrammar):
         and hands it to ``WorkPool`` (omitted, the stdlib default
         ``min(32, cpu + 4)`` applies).
 
-        Children are server-domain: ``session`` (the session TTL) and ``tasks``
-        (the task backbone, declared by ``TaskGrammar``).
+        Children are server-domain: ``session`` (the session TTL), ``tasks``
+        (the task backbone, declared by ``TaskGrammar``) and ``websocket``.
+        """
+
+    @element(parent_tags="server", sub_tags="")
+    def websocket(
+        self,
+        origins: str | BagResolver = None,
+        max_concurrent: int | BagResolver = None,
+    ) -> None:
+        """Websocket options, server-domain like the session and the tasks.
+
+        ``origins`` is the comma-separated list of Origins a handshake may come
+        from — ``*`` admits every one, and the default, an empty list, admits
+        only the host the handshake came to. A handshake with no ``Origin`` at
+        all passes either way: the gate exists against a page on another site,
+        not against a client of its own.
+
+        ``max_concurrent`` is how many messages of ONE connection may be served
+        at once (default 16). The control ping is answered outside it, so a
+        connection whose slots are all busy still answers "are you there".
         """
 
     @element(parent_tags="server", sub_tags="")

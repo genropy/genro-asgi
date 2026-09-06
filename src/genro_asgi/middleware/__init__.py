@@ -100,6 +100,29 @@ class MiddlewareMixin:
         """The assembled chain: outermost middleware first, base dispatch innermost."""
         return self._middleware_chain
 
+    def get_middleware(self, middleware_class: type[BaseMiddleware]) -> BaseMiddleware | None:
+        """The layer of that class in this chain, or ``None`` when it is off.
+
+        Args:
+            middleware_class: the class to look for; a subclass of it answers too.
+
+        Returns:
+            The assembled instance, or ``None`` — a middleware nobody enabled
+            has none.
+
+        The chain is walked from its head: every layer holds the next one, so
+        the instances need not be kept a second time. What reads this is code
+        that must do for a websocket what a middleware does for HTTP — the
+        handshake asking ``SessionMiddleware`` for the session of a scope the
+        chain never saw.
+        """
+        layer = self.middleware_chain
+        while isinstance(layer, BaseMiddleware):
+            if isinstance(layer, middleware_class):
+                return layer
+            layer = layer.app
+        return None
+
     async def _base_call(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Innermost chain target: the next ``__call__`` after this mixin in the MRO."""
         await super().__call__(scope, receive, send)

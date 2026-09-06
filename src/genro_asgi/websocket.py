@@ -41,6 +41,12 @@ check what it got back, and the iterator ends on it.
 headers, the cookies and the subprotocols the client offered come off the
 scope — headers lowercased and TYTX-hydrated, cookies split out of the
 ``Cookie`` header, exactly as ``Request`` does for HTTP.
+
+``WebSocketRegistry`` is the server's picture of what is connected: the live
+sockets, and the ``page_id → socket`` association a page writes when it opens
+its channel, so the server can address one page later. It is NEUTRAL — it does
+not know the SPA and validates nothing: whether a page belongs to the
+connection asking for it is judged by the application that holds the pool.
 """
 
 from __future__ import annotations
@@ -53,7 +59,7 @@ from genro_tytx import from_tytx
 from .exceptions import WebSocketDisconnect
 from .types import Receive, Scope, Send
 
-__all__ = ["WebSocket"]
+__all__ = ["WebSocket", "WebSocketRegistry"]
 
 
 class WebSocket:
@@ -153,6 +159,27 @@ class WebSocket:
         await self.asgi_send(accept)
         self._connected = True
 
+    async def refuse(self, code: int = 1008, reason: str = "") -> None:
+        """Turn the handshake away without accepting it.
+
+        Args:
+            code: the close code the client sees.
+            reason: the text that travels with it.
+
+        Raises:
+            RuntimeError: this socket was accepted already — turning away what
+                is already in is a ``close``, not a refusal.
+
+        The connect is consumed first: a close written before it is read leaves
+        that message on the wire. Sets ``connected`` to false, so nothing can
+        be written afterwards.
+        """
+        if self._connected or self._closed:
+            raise RuntimeError("this socket cannot refuse: it was accepted already")
+        await self.asgi_receive()
+        self._closed = True
+        await self.asgi_send({"type": "websocket.close", "code": code, "reason": reason})
+
     async def close(self, code: int = 1000, reason: str = "") -> None:
         """End the connection, once.
 
@@ -161,8 +188,12 @@ class WebSocket:
             reason: the text that travels with it.
 
         Raises:
-            RuntimeError: nothing was accepted yet. A refusal accepts FIRST and
-                closes with its code, so the client can read the answer.
+            RuntimeError: nothing was accepted yet — before the accept a
+                handshake is turned away with ``refuse``, which is what a
+                hostile Origin gets. Everything judged AFTER the accept — the
+                home application's cookie, an invalid credential, a server that
+                is not running — is accepted first and closed here with its
+                code, so the browser can read why.
 
         Sets ``connected`` to false. Calling it again writes nothing.
         """
@@ -267,3 +298,66 @@ class WebSocket:
                 yield await self.receive_text()
             except WebSocketDisconnect:
                 return
+
+
+class WebSocketRegistry:
+    """The live sockets of one server, and which one each page speaks on."""
+
+    def __init__(self) -> None:
+        self._sockets: list[WebSocket] = []
+        self._page_sockets: dict[str, WebSocket] = {}
+
+    def register(self, socket: WebSocket) -> None:
+        """Take one accepted socket into the picture.
+
+        Args:
+            socket: the facade of a connection that was just accepted.
+        """
+        self._sockets.append(socket)
+
+    def unregister(self, socket: WebSocket) -> None:
+        """Take one socket out, and every page that still speaks on IT.
+
+        Args:
+            socket: the connection that ended.
+
+        A page whose association has moved to another socket — a reconnection
+        that happened before this one closed — is left alone: the comparison is
+        on the socket itself, never on the page. A socket that was never
+        registered is no error: the ``finally`` of a handshake that failed
+        before the accept comes through here too.
+        """
+        if socket in self._sockets:
+            self._sockets.remove(socket)
+        for page_id in [page for page, bound in self._page_sockets.items() if bound is socket]:
+            del self._page_sockets[page_id]
+
+    def bind_page(self, page_id: str, socket: WebSocket) -> None:
+        """Say that this page speaks on this socket.
+
+        Args:
+            page_id: the page opening its channel.
+            socket: the connection its messages arrive on.
+
+        A page already bound is REBOUND, with no error: a browser that lost its
+        socket and opened a new one says so again, and the association follows
+        it. One socket carries as many pages as the browser has under that
+        connection.
+        """
+        self._page_sockets[page_id] = socket
+
+    def get_page_socket(self, page_id: str) -> WebSocket | None:
+        """The socket that page speaks on, or ``None`` when it speaks on none.
+
+        Args:
+            page_id: the page to address.
+
+        Returns:
+            Its socket, or ``None`` — the page never opened a channel, its
+            socket is gone, or the page itself is.
+        """
+        return self._page_sockets.get(page_id)
+
+    def snapshot(self) -> list[WebSocket]:
+        """The live sockets, in the order they were accepted."""
+        return list(self._sockets)

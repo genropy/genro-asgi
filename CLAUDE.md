@@ -55,6 +55,31 @@ what the middleware chain serves itself passes. `Lifespan.shutdown` turns the
 state first (to `shutdown_mode` — STOPPING by default, QUITTING set by the
 reload child in `factory()`), drains the in-flight requests (bounded), THEN
 runs the hooks in reverse.
+**The websocket is a live connection whose every message is a request (landed
+2026-09-06, #68 phases 1-2).** `BaseServer.on_websocket` — the empty socket of
+D7 until now — gives each socket one `WsxConnection`, whose `serve()` is its
+whole life. The gate answers in ONE shape, accept then close with a readable
+code: a server not RUNNING closes 1013, a path no application serves or a
+missing home cookie closes 1008; the single refusal WITHOUT an accept is a
+hostile Origin (`WebSocket.refuse`), because nobody was admitted to be told.
+The path of the handshake names the home application through `demux`, and its
+`handshake_cookie` property (`None` on the base) says which cookie a
+handshake must carry. Identity is judged ONCE there: `server.authenticate`,
+then the session read straight off `SessionMiddleware.get_session(scope)` —
+the chain never sees a websocket scope — reached through
+`server.get_middleware(SessionMiddleware)`. Every message is a `WsxEnvelope`
+(`WSX://` + JSON, `data` a TYTX string, bytes included since genro-tytx
+0.14.0) and becomes a synthetic http scope with `method: "WSK"`, handed to the
+application `demux` picks — never to `server()`, which would run the whole
+chain per message. A message with an `id` is registered in `requests` and
+answered with its status; one without is an event nobody answers; a text that
+is not WSX and a binary frame are logged and dropped. The ceiling is
+`max_concurrent` per connection (16, `server/websocket` in the config, with
+`origins`), and `/_wsx/ping` is answered inline outside it. `WebSocketRegistry`
+(`server.websockets`) holds the live sockets and the `page_id → socket` binding
+`openchannel` will write; it is neutral and validates nothing. Not built yet:
+the SPA's own branch (phase 4), the server speaking first (phase 3), the raw
+seam (phase 5).
 `Request` reads the ASGI request by itself (landed 2026-09-02): headers and
 cookies off the scope, the query, the body drained ALWAYS from `receive` and
 joined once; the body is decoded by content-type — json/xml/msgpack hydrated,
@@ -431,4 +456,4 @@ commits, still to be entered in the register). Decision registers:
 
 **All general policies are inherited from the parent document: [meta-genro-modules CLAUDE.md](https://github.com/softwellsrl/meta-genro-modules/blob/main/CLAUDE.md)**
 
-**Last Updated**: 2026-09-05
+**Last Updated**: 2026-09-06

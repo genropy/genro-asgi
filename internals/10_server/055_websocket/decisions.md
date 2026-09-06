@@ -157,10 +157,10 @@ server's registry already knows who is connected.
 **Source: owner, 2026-09-05 (W-8), «sì, mi pare bello», revised the same day.**
 At the server every message is a task, with a per-connection ceiling
 (`max_concurrent`) and the control ping outside it; the client correlates on
-the `id`. The ceiling's DEFAULT is not the owner's own word: the register says
-10, the plan says 16, and the value is his to ratify. What his words do settle
-is that there IS a ceiling — «il tetto protegge il server da un client che
-inonda» is the reason option (a) was written that way. This is the semantics the HTTP calls of the same page already have —
+the `id`. The ceiling is **configurable, default 16** (owner, 2026-09-06:
+«configurabile default 16»). It exists because a client that floods must not
+sink the server, and it is a setpoint because how many calls a page fires at
+once is an installation's own business. This is the semantics the HTTP calls of the same page already have —
 a page fires dozens of calls at once — and a slow message blocks neither the
 others nor the ping.
 
@@ -295,7 +295,7 @@ Every name below was baptised by the owner, one per turn, on 2026-09-05 and
 | The method admitted for a raw websocket handed to an application | `serve_websocket` |
 | The page row's channel declaration, and the command that writes it | field `wsx` + `openchannel` |
 | The flag inside the `wsx` dict that puts a page's messages in single file | `sequential` |
-| The config element, with its `origins` and its per-connection ceiling | `server/websocket`, `max_concurrent` (the name is his, the default is not yet) |
+| The config element, with its `origins` and its per-connection ceiling | `server/websocket`, `max_concurrent`, default 16 |
 | The reserved first segment of a control message | `_wsx` |
 | The commander branch the worker's push arrives on | `/commander/websocket/send` |
 | The worker verb that addresses one page | `SpaWorker.send_message(page_id, path, data)` |

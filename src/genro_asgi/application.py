@@ -150,6 +150,23 @@ class BaseApplication:
         return handler(full_path, default=default)
 
     @property
+    def handshake_cookie(self) -> str | None:
+        """The cookie a websocket handshake must carry to reach this application.
+
+        Returns:
+            The cookie's name, or ``None`` — this application gates nothing at
+            the handshake, which is the base answer.
+
+        The path of a handshake names its home application, and the server asks
+        THAT application whether a connection is admissible before accepting
+        one. An application whose messages only make sense for a known
+        connection — the SPA, whose every message is a request of a user — names
+        its cookie here, and a handshake without it is accepted and closed with
+        1008, so the browser reads why.
+        """
+        return None
+
+    @property
     def app_snapshot(self) -> dict[str, Any]:
         """This app as the monitor sees it, at the instant it is read.
 

@@ -72,14 +72,23 @@ class ConfigurationHandler(ConfigHandler):
     def server_kwargs(self) -> dict[str, Any]:
         """The ``server`` section as server kwargs, its children lifted.
 
-        ``session`` becomes ``session_ttl`` and ``tasks`` becomes the ``tasks``
-        tuning dict: both are server-domain (sessions and the task backbone live
-        on the server), so their values lift to the kwargs the owning mixins
-        peel while the config keeps them under ``server`` where they belong.
+        ``session`` becomes ``session_ttl``, ``tasks`` becomes the ``tasks``
+        tuning dict and ``websocket`` the websocket options: all three are
+        server-domain (sessions, the task backbone and the sockets live on the
+        server), so their values lift to the kwargs the owning mixins peel
+        while the config keeps them under ``server`` where they belong. The
+        ``origins`` of a handshake are written as one comma-separated string in
+        a recipe and reach the server as the list it reads.
         """
         kwargs = self.closed_attrs("server", "host", "port", "external_url", "max_threads")
         if self.node("server.session") is not None:
             kwargs["session_ttl"] = self("server.session.ttl")
+        if self.node("server.websocket") is not None:
+            websocket = self.closed_attrs("server.websocket", "origins", "max_concurrent")
+            origins = websocket.get("origins")
+            if origins is not None:
+                websocket["origins"] = [part.strip() for part in str(origins).split(",") if part.strip()]
+            kwargs["websocket"] = websocket
         if self.node("server.tasks") is not None:
             kwargs["tasks"] = self.closed_attrs(
                 "server.tasks", "enabled", "tick_seconds", "mount"

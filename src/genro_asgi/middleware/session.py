@@ -77,6 +77,24 @@ class SessionMiddleware(BaseMiddleware):
         """The session cookie value carried by the request, or ``None``."""
         return cookie_value(scope, self._cookie_name)
 
+    def get_session(self, scope: Scope) -> Any | None:
+        """The session the store holds for this scope's cookie, or ``None``.
+
+        Args:
+            scope: any scope carrying cookies — an HTTP request, or the
+                handshake of a websocket, which the chain never sees.
+
+        Returns:
+            The stored session, or ``None`` when no cookie arrived or the
+            store has nothing for it.
+
+        A pure reading: nothing is created here. The anonymous session of a
+        first visit is born in ``__call__``, which is where a cookie can be
+        issued for it — a websocket handshake has no such moment to offer.
+        """
+        incoming = self._cookie_value(scope)
+        return self.server.session_store.get(incoming) if incoming else None
+
     def _set_cookie(self, session: Any) -> tuple[bytes, bytes]:
         """Build the ``Set-Cookie`` header tuple for a session to (re)issue to the client.
 
@@ -116,8 +134,7 @@ class SessionMiddleware(BaseMiddleware):
         dirty (``_write_back``).
         """
         store = self.server.session_store
-        incoming = self._cookie_value(scope)
-        session = store.get(incoming) if incoming else None
+        session = self.get_session(scope)
         if session is not None:
             scope["session"] = session
             await self.app(scope, receive, send)

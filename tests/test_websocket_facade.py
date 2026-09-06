@@ -153,6 +153,36 @@ class TestClose:
             await ws.close()
 
 
+class TestRefuse:
+    async def test_the_handshake_is_turned_away_with_no_accept(self) -> None:
+        wire = XT_Wire({"type": "websocket.connect"})
+        ws = socket_on(wire)
+        await ws.refuse(1008, "origin not allowed")
+        assert wire.sent == [
+            {"type": "websocket.close", "code": 1008, "reason": "origin not allowed"}
+        ]
+        assert ws.connected is False
+
+    async def test_the_connect_is_consumed_first(self) -> None:
+        wire = XT_Wire({"type": "websocket.connect"})
+        await socket_on(wire).refuse()
+        assert wire.incoming == []
+
+    async def test_refusing_what_was_accepted_is_itself_refused(self) -> None:
+        wire = XT_Wire({"type": "websocket.connect"})
+        ws = socket_on(wire)
+        await ws.accept()
+        with pytest.raises(RuntimeError, match="accepted already"):
+            await ws.refuse()
+
+    async def test_nothing_can_be_written_to_a_refused_socket(self) -> None:
+        wire = XT_Wire({"type": "websocket.connect"})
+        ws = socket_on(wire)
+        await ws.refuse()
+        with pytest.raises(RuntimeError, match="not connected"):
+            await ws.send_text("late")
+
+
 class TestReceive:
     async def test_text_comes_back_as_text(self) -> None:
         wire = XT_Wire(

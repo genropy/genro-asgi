@@ -55,14 +55,28 @@ from .lifespan import QUITTING, RUNNING, STOPPING, Lifespan
 from .pool import WorkPool
 from .request_registry import RequestRegistry
 from .response import Response
+from .websocket import WebSocketRegistry
+from .wsx import WsxConnection
 
 if TYPE_CHECKING:
     from .types import ASGIApp, Receive, Scope, Send
 
 REFUSED_RETRY_AFTER_SECONDS = 5
+
+#: How many messages of ONE websocket connection may be served at once. A
+#: setpoint (owner, 2026-09-06: «configurabile default 16»): the ceiling is
+#: what keeps a client that floods from sinking the server.
+WEBSOCKET_MAX_CONCURRENT = 16
 """The seconds a refused request is told to come back in."""
 
-__all__ = ["QUITTING", "REFUSED_RETRY_AFTER_SECONDS", "RUNNING", "STOPPING", "BaseServer"]
+__all__ = [
+    "QUITTING",
+    "REFUSED_RETRY_AFTER_SECONDS",
+    "RUNNING",
+    "STOPPING",
+    "WEBSOCKET_MAX_CONCURRENT",
+    "BaseServer",
+]
 
 
 class BaseServer:
@@ -71,8 +85,9 @@ class BaseServer:
     Constructor kwargs peeled here: ``applications`` — the applications this
     server serves — ``default`` — the ``code`` of the application ``/``
     redirects to when nothing answers the root (an unknown code raises
-    ``ValueError``) — and ``max_threads`` — the pool's worker count, handed to
-    ``WorkPool`` (``None`` keeps the stdlib default).
+    ``ValueError``) — ``max_threads`` — the pool's worker count, handed to
+    ``WorkPool`` (``None`` keeps the stdlib default) — and ``websocket`` — the
+    websocket options, ``{"origins": [...], "max_concurrent": 16}``.
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -80,6 +95,7 @@ class BaseServer:
         default: str | None = kwargs.pop("default", None)
         max_threads: int | None = kwargs.pop("max_threads", None)
         debug: bool | str = kwargs.pop("debug", False)
+        websocket: dict[str, Any] = kwargs.pop("websocket", None) or {}
         if kwargs:
             unexpected = ", ".join(sorted(kwargs))
             raise TypeError(
@@ -93,6 +109,11 @@ class BaseServer:
         self._pool = WorkPool(self, max_threads=max_threads)
         self._lifespan = Lifespan(self)
         self._registry = RequestRegistry(self)
+        self._websockets = WebSocketRegistry()
+        self._websocket_origins: list[str] = list(websocket.get("origins") or [])
+        self._websocket_max_concurrent: int = int(
+            websocket.get("max_concurrent") or WEBSOCKET_MAX_CONCURRENT
+        )
         self.state = RUNNING
         """``RUNNING``, ``QUITTING`` or ``STOPPING`` — read by the entry point."""
         self.shutdown_mode = STOPPING
@@ -203,6 +224,25 @@ class BaseServer:
         """Base answer: none (``None``). Session capabilities override this."""
         return None
 
+    def get_middleware(self, middleware_class: type) -> Any:
+        """Base answer: none (``None``). The middleware capability overrides this."""
+        return None
+
+    @property
+    def websockets(self) -> WebSocketRegistry:
+        """The live websockets, and which one each page speaks on."""
+        return self._websockets
+
+    @property
+    def websocket_origins(self) -> list[str]:
+        """The Origins a handshake may come from; empty means same-origin only."""
+        return self._websocket_origins
+
+    @property
+    def websocket_max_concurrent(self) -> int:
+        """How many messages of ONE connection may be in flight at once."""
+        return self._websocket_max_concurrent
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """ASGI entry point: dispatch on the scope type.
 
@@ -285,13 +325,17 @@ class BaseServer:
         return Response(status_code=307, headers={"location": location})
 
     async def on_websocket(self, scope: Scope, receive: Receive, send: Send) -> None:
-        """The empty websocket socket (D7): consume the connect, close cleanly.
+        """Live one websocket connection: the gate, the messages, the drain.
 
-        The base accepts nothing and closes with code 1000. The websocket motor
-        (Q1) overrides this hook in a later macro.
+        One ``WsxConnection`` per socket does the whole thing (#68): it judges
+        the handshake, accepts it, turns every message into a request the demux
+        routes like any other, and answers the ones that carry an ``id``. The
+        connection is registered in ``websockets`` for its whole life.
+
+        A server that hosts a socket protocol of its own overrides this hook —
+        it is the seam an application that wants the raw socket is reached by.
         """
-        await receive()
-        await send({"type": "websocket.close", "code": 1000})
+        await WsxConnection(self, scope, receive, send).serve()
 
     @property
     def uvicorn_server(self) -> uvicorn.Server | None:

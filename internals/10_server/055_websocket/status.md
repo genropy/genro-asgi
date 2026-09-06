@@ -5,8 +5,52 @@
 What exists TODAY on the branch, with its `file:line`. Update it in the same
 change that alters the behaviour. Opened at phase 0 of
 [#68](https://github.com/genropy/genro-asgi/issues/68) on `develop` = `a434a23`;
-phase 1 has landed since, and the two objects it built are below. Nothing yet
-USES them: the server still answers a handshake with the empty socket.
+phases 1 and 2 have landed since. The socket is no longer empty: a handshake
+reaches the motor, and every message it carries is served as a request.
+
+## What phase 2 built
+
+**The connection** — `WsxConnection` in
+[wsx.py](../../../src/genro_asgi/wsx.py), 100% covered by
+`tests/test_wsx_connection.py` (36 contract tests). `serve()` is one socket's
+whole life: the gate, the accept, the read loop, the bounded drain. The gate
+closes 1013 on a server that is not RUNNING, 1008 on a path no application
+serves and on a missing home cookie, and REFUSES a hostile Origin before the
+accept. Identity is judged once — `server.authenticate` for the avatar,
+`SessionMiddleware.get_session` for the session — and travels with every
+message. Each message becomes a synthetic http scope (`method: "WSK"`, the
+handshake's headers, `auth`, `session`, and `genro.page_id` /
+`genro.reply_path` when the envelope carried them), routed by `server.demux`
+straight to the application: never through `server()`, whose chain would run
+once per message. An `HTTPException` becomes the answer's status, anything
+else a 500, and the socket survives both.
+
+**The reach into the chain** — `MiddlewareMixin.get_middleware`
+([middleware/\_\_init\_\_.py](../../../src/genro_asgi/middleware/__init__.py))
+walks the assembled chain from its head and hands back the layer of a class,
+or `None` when that middleware is off; `BaseServer.get_middleware` is the base
+answer, `None`, like `authenticate` and `session` beside it.
+`SessionMiddleware.get_session(scope)`
+([middleware/session.py](../../../src/genro_asgi/middleware/session.py)) is the
+pure reading the handshake needs — the session the store holds for a scope's
+cookie, creating nothing — and the middleware's own `__call__` now uses it.
+
+**The registry** — `WebSocketRegistry` in
+[websocket.py](../../../src/genro_asgi/websocket.py), reached as
+`server.websockets`, 12 contract tests. `register` / `unregister` for the live
+sockets, `bind_page` / `get_page_socket` for the association `openchannel`
+will write. A rebind follows a reconnected page; `unregister` drops only the
+pages still bound to THAT socket.
+
+**The refusal** — `WebSocket.refuse(code, reason)`: consumes the connect and
+closes with no accept. The one gate that uses it is the Origin.
+
+**The config** — `server/websocket` with `origins` (comma-separated in a
+recipe, a list on the server) and `max_concurrent`
+([config/elements.py](../../../src/genro_asgi/config/elements.py),
+[config/handler.py](../../../src/genro_asgi/config/handler.py)). The ceiling
+defaults to 16 (`WEBSOCKET_MAX_CONCURRENT` in
+[server.py](../../../src/genro_asgi/server.py)).
 
 ## What phase 1 built
 
@@ -46,18 +90,16 @@ native on msgpack, and the page encodes nothing by hand.
 
 ## What the code held before it
 
-**The empty socket.** `BaseServer.on_websocket`
-([server.py:287-294](../../../src/genro_asgi/server.py)) consumes the connect
-and closes with code 1000. Its docstring names the reason: it is the D7 socket,
-and the motor of Q1 overrides this hook. The websocket branch of
-`BaseServer.__call__` (`server.py:237-238`) reaches it, and does NOT read the
-server's `state`: the 503 with `Retry-After` is on the HTTP branch only
-(`server.py:220-229`).
+**The empty socket, until phase 2.** `BaseServer.on_websocket` consumed the
+connect and closed with code 1000 — the D7 socket, whose docstring said the
+motor of Q1 would override this hook. It does now. The websocket branch of
+`BaseServer.__call__` still does NOT read the server's `state` (the 503 with
+`Retry-After` is on the HTTP branch only): the state is judged inside the gate,
+which renders its own refusal, 1013.
 
-Covered by `tests/test_demux.py:166-178` (`TestEmptyWebsocket`), which drives
-`__call__` at the ASGI level with no websocket client: it calls the server, and
-the websocket branch takes it from there. It is the only test of the whole
-repository that reaches `on_websocket` — no test names it.
+The test that drove it (`tests/test_demux.py`, `TestEmptyWebsocket`) became
+`TestTheWebsocketBranch`, asserting only that `__call__` hands the scope to the
+motor; what the motor does is `tests/test_wsx_connection.py`'s subject.
 
 **The middleware chain does not see it.** `MiddlewareMixin.__call__`
 ([middleware/\_\_init\_\_.py:107-112](../../../src/genro_asgi/middleware/__init__.py))
@@ -83,10 +125,14 @@ already speaks WSX with the same four fields (`channel/frame.py:15-23,
 
 ## What is not there
 
-No per-connection object, no registry, no config
-element, no `handshake_cookie` on any application, no `asgi_app` on the worker,
-no `hosted_app_seam`, no ASGI entrance on `WsgiSeam`, no `openchannel`, no
-`wsx` field on `PageRow`, no `send_message`. `SpaWorker.wsgi_app`
+Nothing that belongs to the SPA: no `openchannel`, no `wsx` field on
+`PageRow`, no `send_message`, and no branch of the front that validates a page
+against `page_connection_map` — `WebSocketRegistry` binds pages, nobody writes
+into it yet. Nothing that lets the server speak first (phase 3), and no
+`serve_websocket` seam for an application that wants the raw socket (phase 5).
+On the worker: no `asgi_app`, no `hosted_app_seam`, no ASGI entrance on
+`WsgiSeam` (phase 4a). `BaseApplication.handshake_cookie` exists and answers
+`None`: no application in the core names a cookie yet. `SpaWorker.wsgi_app`
 ([spa_worker.py:557-559](../../../src/genro_asgi/spa/orchestration/spa_worker.py))
 is the one consumer seam of the http CALL form, and `_serve_request` builds a
 `WsgiSeam` around it per request (`:2134`).
@@ -101,6 +147,7 @@ code follows in phases 1 to 5.
 |---|---|
 | 0 | **DONE** — this folder, Q1 resolved, the namings — no code |
 | 1 | **DONE** — the `WebSocket` facade, `WsxEnvelope`, `WebSocketDisconnect` |
+| 2 | **DONE** — `WsxConnection`, `WebSocketRegistry`, `on_websocket`, the config element |
 | 2 | `WsxConnection`, `WebSocketRegistry`, `on_websocket`, the config element |
 | 3 | the server speaks first, proven on a test application |
 | 4a | `asgi_app`, `AsgiSeam`, `hosted_app_seam`, `WsgiSeam` as the adapter, `run_sync` |
