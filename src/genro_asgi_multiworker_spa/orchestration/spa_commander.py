@@ -295,6 +295,11 @@ class GlobalStoreOperations(RoutingClass):
         self.spa_commander = spa_commander
         self._logger = logging.getLogger(__name__)
 
+    def _check_key(self, key: Any) -> None:
+        """Refuse anything but a string: the dictionary's keys are literal strings."""
+        if not isinstance(key, str):
+            raise TypeError(f"a global-store key is a string, not {type(key).__name__}")
+
     @route()
     async def get(self, key: str) -> dict[str, Any]:
         """Read one key under the lock.
@@ -309,6 +314,7 @@ class GlobalStoreOperations(RoutingClass):
 
         Acts on nothing; waits for a turn in force.
         """
+        self._check_key(key)
         async with self.spa_commander.global_lock.lock:
             store = self.spa_commander.global_register
             return {"key": key, "exists": key in store, "value": to_tytx(store.get(key), "json")}
@@ -327,6 +333,7 @@ class GlobalStoreOperations(RoutingClass):
 
         Acts on ``global_register``.
         """
+        self._check_key(key)
         decoded = from_tytx(value, "json")
         async with self.spa_commander.global_lock.lock:
             self.spa_commander.global_register[key] = decoded
@@ -344,6 +351,7 @@ class GlobalStoreOperations(RoutingClass):
 
         Acts on ``global_register``.
         """
+        self._check_key(key)
         async with self.spa_commander.global_lock.lock:
             self.spa_commander.global_register.pop(key, None)
         return {"key": key}
@@ -368,6 +376,8 @@ class GlobalStoreOperations(RoutingClass):
         Acts on ``global_lock``. A grant that cannot be encoded releases the
         turn and raises, so nothing stays held for an answer that never left.
         """
+        if key is not None:
+            self._check_key(key)
         global_lock = self.spa_commander.global_lock
         await global_lock.acquire(worker, request_id, key)
         try:

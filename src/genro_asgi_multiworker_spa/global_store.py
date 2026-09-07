@@ -45,6 +45,13 @@ already holds. Other threads of the same worker wait normally.
 hydrated by its reader, so a Bag stays a Bag and a datetime a datetime; a
 ``get`` reply carries ``exists`` beside ``value``, so a stored ``None`` and an
 absent key are two answers.
+
+**A commit whose answer never came is uncertain, and says so.** The commit is a
+CALL like any other and waits as long as the wire lives; when the wire fails
+after the commit was sent, the commander may already have published the value.
+The lease then raises :class:`GlobalStoreCommitUnconfirmed` — never a retry, and
+no abort attempt on a wire that is gone. A commander that REFUSED the commit is
+not this case: that is ``CommanderCallFailed``, and nothing was published.
 """
 
 from __future__ import annotations
@@ -56,6 +63,8 @@ from types import TracebackType
 from typing import Any
 
 from genro_tytx import from_tytx, to_tytx
+
+from .orchestration.worker_connector import CommanderCallFailed
 
 #: The routing keys of the global store on the commander's dispatcher.
 GLOBAL_STORE_SET_OP_PATH = "/commander/store/set"
@@ -71,9 +80,33 @@ __all__ = [
     "GLOBAL_STORE_SET_OP_PATH",
     "GLOBAL_STORE_UNLOCK_OP_PATH",
     "GlobalStoreClient",
+    "GlobalStoreCommitUnconfirmed",
     "GlobalStoreLease",
     "GlobalStoreLock",
 ]
+
+
+class GlobalStoreCommitUnconfirmed(Exception):
+    """The commit of a turn was sent and its answer never came: the value MAY be published.
+
+    Args:
+        request_id: the turn whose commit is unconfirmed.
+        key: the key it selected, None for the whole dictionary.
+        cause: what ended the wait — the transport failure, for the log.
+
+    The caller must not repeat the write on its own: the commander may hold it
+    already. Raised by ``GlobalStoreLease`` on the commit path alone.
+    """
+
+    def __init__(self, request_id: str, key: str | None, cause: BaseException) -> None:
+        self.request_id = request_id
+        self.key = key
+        self.cause = cause
+        target = "the whole store" if key is None else f"key {key!r}"
+        super().__init__(
+            f"the commit of turn {request_id} on {target} got no answer "
+            f"({type(cause).__name__}: {cause}): the value may have been published"
+        )
 
 
 class GlobalStoreLock:
@@ -217,10 +250,15 @@ class GlobalStoreLease:
         except Exception:
             await self._abort()
             raise
-        await self.client.worker.call(
-            GLOBAL_STORE_UNLOCK_OP_PATH,
-            {"request_id": self.request_id, "apply": True, "value": text},
-        )
+        try:
+            await self.client.worker.call(
+                GLOBAL_STORE_UNLOCK_OP_PATH,
+                {"request_id": self.request_id, "apply": True, "value": text},
+            )
+        except CommanderCallFailed:
+            raise
+        except Exception as exc:
+            raise GlobalStoreCommitUnconfirmed(self.request_id, self.key, exc) from exc
 
     async def _abort(self) -> None:
         await self.client.worker.call(

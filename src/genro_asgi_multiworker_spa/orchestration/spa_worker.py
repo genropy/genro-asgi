@@ -1209,20 +1209,31 @@ class SpaWorker:
 
         Returns when the wire is gone — EOF, the death signal on a same-host
         socket — or a protocol violation closed it. What a worker without a wire
-        does is not decided here: the caller asks for ``on_wire_lost``.
+        does is not decided here: the caller asks for ``on_wire_lost``. Every
+        CALL still parked for an answer is failed first, with ``ConnectionError``:
+        an answer that can no longer arrive must not be waited for.
         """
-        while True:
-            try:
-                frame = await self.stream.read()
-            except ValueError:
-                self._logger.exception(
-                    "Worker %s: protocol violation from its handler; leaving the wire",
-                    self.name,
-                )
-                return
-            if frame is None:
-                return
-            self.handle_frame(frame)
+        try:
+            while True:
+                try:
+                    frame = await self.stream.read()
+                except ValueError:
+                    self._logger.exception(
+                        "Worker %s: protocol violation from its handler; leaving the wire",
+                        self.name,
+                    )
+                    return
+                if frame is None:
+                    return
+                self.handle_frame(frame)
+        finally:
+            self._fail_parent_calls(ConnectionError("the wire to the handler ended"))
+
+    def _fail_parent_calls(self, cause: BaseException) -> None:
+        """Wake every parked CALL with ``cause``; the answers will never come."""
+        for future in list(self._parent_calls.values()):
+            if not future.done():
+                future.set_exception(cause)
 
     def handle_frame(self, frame: Frame) -> None:
         """Route one envelope from the handler: a CALL to serve, a REPLY to resolve.

@@ -41,7 +41,9 @@ import pytest
 from genro_bag import Bag
 from genro_tytx import to_tytx
 
+from genro_asgi_multiworker_spa.global_store import GlobalStoreCommitUnconfirmed
 from genro_asgi_multiworker_spa.orchestration import FreezeHandler
+from genro_asgi_multiworker_spa.orchestration.worker_connector import CommanderCallFailed
 
 from .conftest import WORKER_NAME, XT_WorkerCommanderLane, wait_for
 
@@ -322,6 +324,46 @@ async def test_a_dead_holder_frees_only_its_turn_with_the_master_untouched(
     assert commander.global_register["k"] == 1
     async with second_worker_commander_lane.worker.global_store.for_update("k") as turn:
         assert turn.value == 1
+
+
+async def test_only_string_keys_are_accepted(worker_commander_lane):
+    # wf:contract: key=None on the wire means the whole dictionary in a turn and
+    # wf:contract: nothing else; any other non-string key is refused by the commander.
+    worker = worker_commander_lane.worker
+    with pytest.raises(CommanderCallFailed, match="TypeError"):
+        await worker.call(STORE_GET, {"key": 3})
+    with pytest.raises(CommanderCallFailed, match="TypeError"):
+        await worker.call(STORE_LOCK, {"worker": WORKER_NAME, "request_id": "r", "key": 3})
+    assert worker_commander_lane.commander.global_lock.holder is None
+
+
+async def test_a_commit_whose_answer_is_lost_is_reported_uncertain(worker_commander_lane):
+    # wf:contract: the commander publishes the value, the wire ends before the
+    # wf:contract: REPLY arrives: the lease raises GlobalStoreCommitUnconfirmed,
+    # wf:contract: retries nothing, and the local turn state is cleared.
+    worker = worker_commander_lane.worker
+    commander = worker_commander_lane.commander
+    commander.global_register["k"] = 1
+    real_release = commander.global_lock.release
+
+    def release_then_lose_the_wire() -> None:
+        # The value is already published when the commander releases; the REPLY
+        # has not left yet. Closing the worker's socket here is the lost answer.
+        real_release()
+        worker.stream.writer.close()
+
+    commander.global_lock.release = release_then_lose_the_wire
+    try:
+        with pytest.raises(GlobalStoreCommitUnconfirmed) as report:
+            async with worker.global_store.for_update("k") as turn:
+                turn.value = 2
+    finally:
+        commander.global_lock.release = real_release
+
+    assert commander.global_register["k"] == 2
+    assert report.value.key == "k" and isinstance(report.value.cause, ConnectionError)
+    assert worker.global_store.active_turn.get() is None
+    assert commander.global_lock.holder is None
 
 
 async def test_the_change_batch_machinery_is_gone():

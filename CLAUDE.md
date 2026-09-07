@@ -245,7 +245,13 @@ decode or a value that does not encode release with `apply=False`, master
 untouched. Every operation waits while a turn is in force, reads of other keys
 included; a release for a turn no longer in force touches nothing, a dead
 holder frees only its own turn, and a second turn or a simple operation from
-the context that already holds one raises instead of waiting on itself. The
+the context that already holds one raises instead of waiting on itself. Keys
+are strings and nothing else (`key=None` on the wire is the whole-store turn).
+A commit whose answer never came — the wire ended after it was sent — raises
+`GlobalStoreCommitUnconfirmed`: the value MAY be published, nothing is retried
+and no abort is attempted on a wire that is gone (a worker whose wire ends fails
+every parked CALL with `ConnectionError`, so nobody waits for an answer that
+cannot arrive). The
 change batch (`CapturingGlobalStore`, `apply_global_store_changes`,
 `genro_bag.datachange`) is gone. Never files or shared memory between
 processes. Datachanges, dbevents, the table
