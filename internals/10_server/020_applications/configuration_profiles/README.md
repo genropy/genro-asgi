@@ -73,7 +73,7 @@ Example profile:
 ## Applying a profile
 
 Reading a profile and putting it in force belongs to the SPA front
-(`src/genro_asgi/applications/spa_app.py`), never to this archive. The front
+(`src/genro_asgi_multiworker_spa/spa_app.py`), never to this archive. The front
 reads three words off its own `orchestration` node — `profiles_path`,
 `profile_name`, `control_enabled`, at `applications.<code>.orchestration` — plus
 `env_settings`, a runtime dict the Python recipe hands to the application element
@@ -86,7 +86,7 @@ configuration is refused rather than started.
 **Boot read — four levels, one composition.** `boot_group_settings` composes
 the effective configuration BEFORE the vertex is built, as
 `defaults ⊕ recipe_settings ⊕ profile ⊕ env_settings`, through
-`GroupPolicy.from_settings` (`src/genro_asgi/spa/orchestration/group_policy.py`
+`GroupPolicy.from_settings` (`src/genro_asgi_multiworker_spa/orchestration/group_policy.py`
 — the frozen dataclass that carries the 14 setpoints, IS the validation and
 collects every violation). The defaults are the dataclass fields; the recipe
 level is what the recipe wrote; the profile level is the named stored profile;

@@ -171,6 +171,15 @@ ruff check src/           # lint
 mypy src/                 # type check (advisory)
 ```
 
+Install the git hooks once per clone (pre-commit runs ruff; pre-push runs the
+tests only when the pushed range changes Python, and only the suite the change
+belongs to — `tests/core`, `tests/spa`, or both):
+
+```bash
+cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+cp hooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+```
+
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full workflow.
 
 ## License

@@ -14,9 +14,9 @@
 
 """One directory of named JSON orchestration profiles, read and written safely.
 
-The module is neutral: it imports nothing from ``applications/`` or ``spa/``,
-so both the mounted profile archive and the spa application read through the
-same component.  It owns the whole delicate part of that storage — name
+The module is neutral: it imports nothing from ``applications/`` nor from the
+``genro_asgi_multiworker_spa`` package, so both the mounted profile archive and
+the spa application read through the same component.  It owns the whole delicate part of that storage — name
 validation, path resolution, symlink refusal, the 1 MiB limit in both
 directions, object-only JSON with non-finite literals rejected at read time,
 and the atomic write — and raises its own ``ValueError`` subclasses, which the

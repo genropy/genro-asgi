@@ -35,11 +35,11 @@ away by that one refusal.
 ## What phase 4 built
 
 **The channel of a page** — `WsxControl` under the front's `_wsx` root
-([spa_app.py](../../../src/genro_asgi/applications/spa_app.py)),
+([spa_app.py](../../../src/genro_asgi_multiworker_spa/spa_app.py)),
 `SpaCommander.serve_wsx_request`
-([spa_commander.py](../../../src/genro_asgi/spa/orchestration/spa_commander.py)),
+([spa_commander.py](../../../src/genro_asgi_multiworker_spa/orchestration/spa_commander.py)),
 `SpaWorker.serve_wsx` and the `WsxCommands` branch
-([spa_worker.py](../../../src/genro_asgi/spa/orchestration/spa_worker.py)),
+([spa_worker.py](../../../src/genro_asgi_multiworker_spa/orchestration/spa_worker.py)),
 14 contract tests in
 `tests/orchestration/test_orchestration_websocket_e2e.py` that enter where a
 real message enters — the socket — over a real pool. `openchannel` is
@@ -52,7 +52,7 @@ the socket by the CONNECTION, only on a 200.
 reception-first rule, the placement.
 
 **The queue of a page** — `call_lock` on `PageRow`
-([register_row.py](../../../src/genro_asgi/spa/register_row.py)), an
+([register_row.py](../../../src/genro_asgi_multiworker_spa/register_row.py)), an
 `asyncio.Lock` among the fields the parcel leaves behind, taken around the
 whole call when the page opened its channel with `sequential`. The CHANNEL
 itself travels: a user parked for being idle and woken by his next request
@@ -79,16 +79,16 @@ moved from the `_server` app's own `bind_kwargs` into
 
 **One seam on the worker** — `SpaWorker.asgi_app`, and the property
 `hosted_app_seam`
-([spa_worker.py](../../../src/genro_asgi/spa/orchestration/spa_worker.py)),
+([spa_worker.py](../../../src/genro_asgi_multiworker_spa/orchestration/spa_worker.py)),
 which is the one road out of `_serve_request`: `AsgiSeam` on the assigned
 application, or `AsgiSeam(WsgiSeam(wsgi_app, worker))` when the consumer took
 the shortcut. Both assigned is a contradiction, and `WorkerEntry` kills the
 process at boot; NEITHER is the base worker, which
-[worker_entry.py](../../../src/genro_asgi/spa/orchestration/worker_entry.py)
+[worker_entry.py](../../../src/genro_asgi_multiworker_spa/orchestration/worker_entry.py)
 declares legitimate — it serves its orders, and an http CALL is refused with
 the property's message (owner, 2026-09-07, N29).
 
-**The two seams** — [environ.py](../../../src/genro_asgi/spa/environ.py), 100%
+**The two seams** — [environ.py](../../../src/genro_asgi_multiworker_spa/environ.py), 100%
 covered, 28 contract tests in
 `tests/orchestration/test_orchestration_asgi_seam.py`. `AsgiSeam` turns the
 `http` dict into an ASGI scope and calls the application as a server would;
@@ -219,7 +219,7 @@ already there — which is why the handshake resolves the identity itself
 ([decisions.md](decisions.md) §5).
 
 **The front has no websocket branch.** `SpaApplication.__call__`
-([spa_app.py:837-844](../../../src/genro_asgi/applications/spa_app.py))
+([spa_app.py:837-844](../../../src/genro_asgi_multiworker_spa/spa_app.py))
 demultiplexes between its own router and the hosted site on the PATH, and never
 reads the scope's type. It sees no websocket scope today because the server
 takes that branch first (`server.py:237-238`) and never reaches the demux.
