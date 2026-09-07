@@ -229,14 +229,14 @@ on the announcement, whichever carries the change — and any reply carries it
 once ``worker_snapshot_ttl`` has run out on the last one. So there is one road
 instead of three, and the beat keeps the only question its name asks.
 
-**The global store is NOT here at all.** There is no replica: the one copy lives
-on the commander, and every access is a CALL on the lane. ``store_set`` and
-``store_del`` are answered once the store holds the write, so the site's own next
-read sees it. ``global_store_lock`` is the read-modify-write form and it is the
-protocol of ``GlobalStoreLease``: the grant carries the store itself, the body
-mutates a captured working copy nobody else can see, and the release carries the
-drained changes up in full shape. A body that raises releases with nothing
-applied, and a process that dies holding the grant has the vertex give it back.
+**The global store is NOT here at all.** There is no replica: the one copy — a
+dictionary — lives on the commander, and every access is a CALL on the lane
+through ``global_store``, a ``GlobalStoreClient``: ``get``/``set``/``delete``
+answered under the commander's lock, and ``for_update`` — the turn, whose
+``GlobalStoreLease`` yields the private working value the grant decoded and
+sends the COMPLETE value back at the exit. A body that raises releases with
+nothing applied, and a process that dies holding the turn has the vertex give
+it back.
 
 **When the wire dies.** The handler watches the process and the process watches
 the wire: two guardians converging on the same safe state. A wire gone means
@@ -263,12 +263,19 @@ from typing import Any, Callable
 
 import psutil
 from genro_routes import RoutingClass, route
-from genro_tytx import from_tytx, to_tytx
+from genro_tytx import to_tytx
 
 from genro_asgi.channel.frame import REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
 from genro_asgi.exceptions import HTTPException
 from ..environ import AsgiSeam, WsgiSeam
-from ..global_store import CapturingGlobalStore, GlobalStoreLease
+from ..global_store import (
+    GLOBAL_STORE_DEL_OP_PATH,
+    GLOBAL_STORE_GET_OP_PATH,
+    GLOBAL_STORE_LOCK_OP_PATH,
+    GLOBAL_STORE_SET_OP_PATH,
+    GLOBAL_STORE_UNLOCK_OP_PATH,
+    GlobalStoreClient,
+)
 from ..register import Register
 from ..register_registry import RegisterRegistry
 from .freeze_handler import FreezeHandler
@@ -329,13 +336,7 @@ CLOCK_NAMES = ("last_refresh_ts", "last_user_ts", "last_rpc_ts")
 #: The routing keys of the lane going UP are paths on the trees the group and
 #: the commander host (#59): the first segment names the level that serves, the
 #: next ones the operation class and the operation — ``/commander/store/get``.
-#: The routing keys of the global store, which lives on the commander and
-#: nowhere else: two blind writes, and the two halves of one grant.
-GLOBAL_STORE_SET_OP_PATH = "/commander/store/set"
-GLOBAL_STORE_DEL_OP_PATH = "/commander/store/del"
-GLOBAL_STORE_GET_OP_PATH = "/commander/store/get"
-GLOBAL_STORE_LOCK_OP_PATH = "/commander/store/lock"
-GLOBAL_STORE_UNLOCK_OP_PATH = "/commander/store/unlock"
+#: The routing keys of the global store are the store module's own, re-exported here.
 
 #: The routing key one observation climbs: a mutation of this process's
 #: registers, as it happens, for whoever is watching at the vertex.
@@ -644,6 +645,7 @@ class SpaWorker:
         self._request_slot_var: contextvars.ContextVar[RequestSlot | None] = (
             contextvars.ContextVar(f"request_slot:{name}", default=None)
         )
+        self._global_store = GlobalStoreClient(self)
         self._announce_failures = 0
         self._observation_tasks: set[asyncio.Task[None]] = set()
         self._unfreeze_waits: dict[str, asyncio.Event] = {}
@@ -1161,114 +1163,14 @@ class SpaWorker:
         self._request_slot_var.set(slot)
         return slot
 
-    def store_set(self, identity: str, path: str, value: Any = None, **addressing: Any) -> Any:
-        """Write one path of the global store: a CALL on the lane, answered once it landed.
+    @property
+    def global_store(self) -> GlobalStoreClient:
+        """This worker's side of the global store: simple operations and ``for_update``.
 
-        Args:
-            identity: whose request this is — the site's own first positional.
-            path: the path of the store to write.
-            value: what to write there.
-            addressing: the addressing the site passes and the store ignores.
-
-        Returns:
-            The path written, as the site's protocol expects. The answer means
-            the store already holds the value: there is no replica to catch up.
-
-        Raises:
-            CommanderCallFailed: the vertex refused the write.
-        """
-        return self.run_on_loop(self.call(GLOBAL_STORE_SET_OP_PATH, {"path": path, "value": value}))
-
-    def store_del(self, identity: str, path: str, **addressing: Any) -> Any:
-        """Remove one path of the global store — it travels exactly like a write.
-
-        Args:
-            identity: whose request this is.
-            path: the path to remove.
-            addressing: the addressing the site passes and the store ignores.
-
-        Returns:
-            The path removed. The node is GONE when the answer lands, not None.
-
-        Raises:
-            CommanderCallFailed: the vertex refused the removal.
-        """
-        return self.run_on_loop(self.call(GLOBAL_STORE_DEL_OP_PATH, {"path": path}))
-
-    def store_get(self, identity: str, path: str, **addressing: Any) -> Any:
-        """Read one path of the global store: a CALL on the lane, the current value back.
-
-        Args:
-            identity: whose request this is — the site's own first positional.
-            path: the path of the store to read.
-            addressing: the addressing the site passes and the store ignores.
-
-        Returns:
-            The value the master holds at that path — decoded whole, datetimes
-            and nested Bags included; None when the store holds nothing there,
-            the Bag's own read semantics. A read pays its round trip on the
-            lane and never holds a stale copy: what it answers is the master
-            at the moment it was asked.
-
-        Raises:
-            CommanderCallFailed: the vertex refused the read.
-        """
-        reply = self.run_on_loop(self.call(GLOBAL_STORE_GET_OP_PATH, {"path": path}))
-        return from_tytx(reply["value"], "json")
-
-    def global_store_lock(self) -> GlobalStoreLease:
-        """One read-modify-write hold of the global store: ``with`` or ``async with``.
-
-        Returns:
-            The lease, which yields the working copy's Bag to its body. The
-            vehicle follows the caller — a pool thread blocks on the loop, a
-            coroutine stays on it — and both are the same protocol.
-
-        NEVER open a lease while holding ``dispatch_lock``: both halves place a
+        NEVER open a turn while holding ``dispatch_lock``: both halves place a
         lane call, and a holder would park on its own lock.
         """
-        return GlobalStoreLease(self)
-
-    async def acquire_global_lock(self, request_id: str) -> CapturingGlobalStore:
-        """Ask the vertex for the store and mount what comes back as a working copy.
-
-        Args:
-            request_id: the hold's own id, which the release quotes back.
-
-        Returns:
-            The working copy, hydrated BEFORE its capture attaches — a captured
-            hydration would ship the whole store back as changes at the release.
-
-        Raises:
-            CommanderCallFailed: the vertex refused the grant.
-        """
-        grant = await self.call(
-            GLOBAL_STORE_LOCK_OP_PATH, {"worker": self.name, "request_id": request_id}
-        )
-        return CapturingGlobalStore(from_tytx(grant["store"], "json"))
-
-    async def release_global_lock(
-        self, request_id: str, copy: CapturingGlobalStore, apply: bool = True
-    ) -> None:
-        """Give the grant back, carrying the drained changes when the body succeeded.
-
-        Args:
-            request_id: the grant being given back.
-            copy: the working copy the body mutated.
-            apply: False when the body raised — the release carries nothing, and
-                the store is left exactly as the grant found it.
-
-        Raises:
-            CommanderCallFailed: the vertex refused the release.
-
-        The copy stops capturing either way: a released hold is thrown away.
-        """
-        changes = copy.drain() if apply else []
-        copy.detach()
-        await self.call(
-            GLOBAL_STORE_UNLOCK_OP_PATH,
-            {"request_id": request_id, "changes": to_tytx(changes, "json")},
-        )
+        return self._global_store
 
     def attach_stream(self, stream: FrameStream) -> None:
         """Take the wire this worker speaks on.

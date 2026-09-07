@@ -65,34 +65,36 @@ class XT_ExtraOperations(RoutingClass):
 
 
 async def test_store_set_then_get_round_trip_over_the_lane(worker_commander_lane):
-    """The global store is served on the tree: a write lands, a read sees it."""
-    assert await worker_commander_lane.worker.call(STORE_SET, {"path": "a.b", "value": 42}) == {
-        "path": "a.b"
-    }
-    reply = await worker_commander_lane.worker.call(STORE_GET, {"path": "a.b"})
-    assert reply["path"] == "a.b"
+    """set and get are leaves of the store branch; the get reply says whether the key exists."""
+    assert await worker_commander_lane.worker.call(
+        STORE_SET, {"key": "a.b", "value": to_tytx(42, "json")}
+    ) == {"key": "a.b"}
+    reply = await worker_commander_lane.worker.call(STORE_GET, {"key": "a.b"})
+    assert reply["key"] == "a.b" and reply["exists"] is True
     assert from_tytx(reply["value"], "json") == 42
 
 
-async def test_store_del_removes_the_node(worker_commander_lane):
-    await worker_commander_lane.worker.call(STORE_SET, {"path": "a.b", "value": 1})
-    assert await worker_commander_lane.worker.call(STORE_DEL, {"path": "a.b"}) == {"path": "a.b"}
-    reply = await worker_commander_lane.worker.call(STORE_GET, {"path": "a.b"})
+async def test_store_del_removes_the_key(worker_commander_lane):
+    await worker_commander_lane.worker.call(STORE_SET, {"key": "a.b", "value": to_tytx(1, "json")})
+    assert await worker_commander_lane.worker.call(STORE_DEL, {"key": "a.b"}) == {"key": "a.b"}
+    reply = await worker_commander_lane.worker.call(STORE_GET, {"key": "a.b"})
+    assert reply["exists"] is False
     assert from_tytx(reply["value"], "json") is None
 
 
-async def test_store_lock_grants_and_unlock_applies(worker_commander_lane):
-    """The two halves of the read-modify-write grant are leaves of the same branch."""
+async def test_store_lock_grants_and_unlock_publishes_the_complete_value(worker_commander_lane):
+    """The two halves of a turn are leaves of the same branch: the release carries the value whole."""
     grant = await worker_commander_lane.worker.call(
-        STORE_LOCK, {"worker": worker_commander_lane.worker_name, "request_id": "r1"}
+        STORE_LOCK, {"worker": worker_commander_lane.worker_name, "request_id": "r1", "key": "k"}
     )
-    assert grant["request_id"] == "r1"
+    assert grant["request_id"] == "r1" and grant["exists"] is False
     assert worker_commander_lane.commander.global_lock.holds("r1")
     reply = await worker_commander_lane.worker.call(
-        STORE_UNLOCK, {"request_id": "r1", "changes": to_tytx([], "json")}
+        STORE_UNLOCK, {"request_id": "r1", "apply": True, "value": to_tytx(7, "json")}
     )
     assert reply == {"applied": True}
     assert not worker_commander_lane.commander.global_lock.holds("r1")
+    assert worker_commander_lane.commander.global_register["k"] == 7
 
 
 async def test_an_observation_call_reaches_the_watchers(worker_commander_lane):
@@ -123,7 +125,7 @@ async def test_a_call_that_does_not_fit_the_signature_is_refused_before_the_body
     with pytest.raises(CommanderCallFailed) as refusal:
         await worker_commander_lane.worker.call(STORE_GET, {"nope": 1})
     assert "TypeError" in str(refusal.value)
-    assert "path" in str(refusal.value)
+    assert "key" in str(refusal.value)
 
 
 async def test_the_announcement_is_the_groups_own_operation(worker_commander_lane):

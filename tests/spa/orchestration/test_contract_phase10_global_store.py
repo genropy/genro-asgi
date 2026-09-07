@@ -15,16 +15,15 @@
 """Phase 10 contract: the global store lives only on the commander.
 
 The ratified digression (registro 2026-08-20 §7-bis): no replicas on the
-workers — verified fact: the 22-name site contract never reads the global store
-directly, it only touches it through ``store_set``, ``store_del`` and the copy
-``global_store_lock`` grants. Every access is a CALL on the phase-7 lane, with
-an immediate REPLY. The lock is the pre_refactoring protocol carried over: the
-grant brings the master's copy, the release applies the drained changes —
-full-shape (attributes, reason, fired), so nothing is lost on the way up.
+workers. Every access is a CALL on the phase-7 lane through the worker's
+``global_store`` client, with an immediate REPLY. Since issue #74 (2026-09-07)
+the store is one dictionary behind one FIFO lock: the grant of a turn brings
+the selected value, the release brings the COMPLETE value back and the
+commander replaces it in one assignment — the change batch of the earlier
+protocol is gone, and so is the replica machinery of the executed phase 5.
 
 Derived from ``tests/test_spa_global_store.py``, the original contract of that
-protocol; what the envelope mechanics of the executed phase 5 added (replicas,
-old_value, the writes slot) dies with this phase.
+protocol.
 """
 
 from __future__ import annotations
@@ -33,6 +32,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from genro_bag import Bag
 
 from genro_asgi_multiworker_spa.orchestration import FreezeHandler, SpaCommander, SpaWorker
 from genro_asgi_multiworker_spa.orchestration import spa_commander as spa_commander_module
@@ -42,6 +42,7 @@ from genro_asgi_multiworker_spa.orchestration import worker_connector as worker_
 from .conftest import WORKER_NAME, XT_WorkerCommanderLane, wait_for
 
 SECOND_WORKER_NAME = "standard_0002"
+STORE_LOCK = "/commander/store/lock"
 
 
 @pytest.fixture
@@ -58,98 +59,94 @@ async def second_worker_commander_lane(worker_commander_lane, tmp_path):
     await lane.close()
 
 
-async def test_store_set_lands_on_the_master_before_it_answers(worker_commander_lane):
-    # wf:contract: store_set(identity, path, value=) is a CALL on the lane;
-    # wf:contract: when it returns {"path": path}, the commander's master
-    # wf:contract: already holds the value — no replica anywhere, no waiting
-    # wf:contract: for any later push.
-    answer = await worker_commander_lane.verb("store_set", "alice", "gnr.a", value=1)
+async def test_a_set_lands_on_the_master_before_it_answers(worker_commander_lane):
+    # wf:contract: global_store.set(key, value) is a CALL on the lane; when it
+    # wf:contract: returns, the commander's master already holds the value — no
+    # wf:contract: replica anywhere, no waiting for any later push.
+    await asyncio.to_thread(worker_commander_lane.worker.global_store.set, "gnr.a", 1)
 
-    assert answer == {"path": "gnr.a"}
     assert worker_commander_lane.commander.global_register["gnr.a"] == 1
 
 
-async def test_store_del_removes_the_node_rather_than_nulling_it(worker_commander_lane):
-    # wf:contract: after store_del returns, the master's node is GONE — not
-    # wf:contract: None — exactly the pre_refactoring delete semantics.
-    await worker_commander_lane.verb("store_set", "alice", "gnr.a", value=1)
-    await worker_commander_lane.verb("store_set", "alice", "gnr.b", value=2)
+async def test_a_delete_removes_the_key_rather_than_nulling_it(worker_commander_lane):
+    # wf:contract: after delete returns, the master's key is GONE — not None.
+    store = worker_commander_lane.worker.global_store
+    await asyncio.to_thread(store.set, "gnr.a", 1)
+    await asyncio.to_thread(store.set, "gnr.b", 2)
 
-    answer = await worker_commander_lane.verb("store_del", "alice", "gnr.a")
+    await asyncio.to_thread(store.delete, "gnr.a")
 
-    assert answer == {"path": "gnr.a"}
-    assert worker_commander_lane.commander.global_register["gnr.a"] is None
-    assert worker_commander_lane.commander.global_register["gnr"].keys() == ["b"]
+    assert worker_commander_lane.commander.global_register == {"gnr.b": 2}
 
 
 async def test_the_grant_carries_the_true_master_state(worker_commander_lane):
-    # wf:contract: global_store_lock's acquire answers with the master's own
-    # wf:contract: copy at grant time — a worker that never saw any state reads
-    # wf:contract: the current truth from the copy, no staleness question.
-    worker_commander_lane.commander.global_register.set_item("gnr.a", 12)
+    # wf:contract: for_update's grant answers with the master's own value at
+    # wf:contract: grant time — a worker that never saw any state reads the
+    # wf:contract: current truth, no staleness question.
+    worker_commander_lane.commander.global_register["gnr.a"] = 12
 
-    async with worker_commander_lane.worker.global_store_lock() as copy:
-        assert copy["gnr.a"] == 12
+    async with worker_commander_lane.worker.global_store.for_update("gnr.a") as turn:
+        assert turn.value == 12
 
 
-async def test_the_release_applies_exactly_what_was_drained_in_full_shape(worker_commander_lane):
-    # wf:contract: changes made on the granted copy land on the master only at
-    # wf:contract: the release, attributes and reason included; while the lock
-    # wf:contract: is held the master shows nothing of them.
+async def test_the_release_publishes_the_complete_value(worker_commander_lane):
+    # wf:contract: the value the body left on the lease lands on the master only
+    # wf:contract: at the release, attributes of a Bag included; while the turn
+    # wf:contract: is in force the master shows nothing of it.
     master = worker_commander_lane.commander.global_register
-    master.set_item("gnr.a", 12)
+    master["gnr"] = Bag({"a": 12})
 
-    async with worker_commander_lane.worker.global_store_lock() as copy:
-        copy.set_item("gnr.a", copy["gnr.a"] * 2, _attributes={"tag": "recount"})
-        assert master["gnr.a"] == 12
+    async with worker_commander_lane.worker.global_store.for_update("gnr") as turn:
+        turn.value.set_item("a", turn.value["a"] * 2, _attributes={"tag": "recount"})
+        assert master["gnr"]["a"] == 12
 
-    assert master["gnr.a"] == 24
-    assert master.get_attr("gnr.a") == {"tag": "recount"}
+    assert master["gnr"]["a"] == 24
+    assert master["gnr"].get_attr("a") == {"tag": "recount"}
 
 
 async def test_a_body_that_raises_applies_nothing(worker_commander_lane):
-    # wf:contract: a lock body that raises releases with nothing applied — the
-    # wf:contract: all-or-nothing of the pre_refactoring lease.
+    # wf:contract: a turn body that raises releases with nothing applied — the
+    # wf:contract: all-or-nothing of the lease.
     master = worker_commander_lane.commander.global_register
-    master.set_item("gnr.a", 1)
+    master["gnr.a"] = 1
 
     with pytest.raises(RuntimeError, match="the site fell over"):
-        async with worker_commander_lane.worker.global_store_lock() as copy:
-            copy.set_item("gnr.a", 99)
+        async with worker_commander_lane.worker.global_store.for_update("gnr.a") as turn:
+            turn.value = 99
             raise RuntimeError("the site fell over")
 
     assert master["gnr.a"] == 1
-    # And the grant is back: the next hold is served.
-    async with worker_commander_lane.worker.global_store_lock() as copy:
-        assert copy["gnr.a"] == 1
+    # And the lock is back: the next turn is served.
+    async with worker_commander_lane.worker.global_store.for_update("gnr.a") as turn:
+        assert turn.value == 1
 
 
 async def test_the_waiters_are_served_in_order_and_see_the_previous_release(
     worker_commander_lane, second_worker_commander_lane
 ):
     # wf:contract: a second holder's grant is taken from the master AFTER the
-    # wf:contract: first holder's release applied: FIFO, read-modify-write safe.
+    # wf:contract: first holder's release published: FIFO, read-modify-write safe.
     master = worker_commander_lane.commander.global_register
-    master.set_item("gnr.a", 1)
+    master["gnr.a"] = 1
     granted = asyncio.Event()
     release_now = asyncio.Event()
     second_read: list[int] = []
 
     async def first_holder() -> None:
-        async with worker_commander_lane.worker.global_store_lock() as copy:
+        async with worker_commander_lane.worker.global_store.for_update("gnr.a") as turn:
             granted.set()
-            copy.set_item("gnr.a", copy["gnr.a"] + 10)
+            turn.value += 10
             await release_now.wait()
 
     async def second_holder() -> None:
-        async with second_worker_commander_lane.worker.global_store_lock() as copy:
-            second_read.append(copy["gnr.a"])
+        async with second_worker_commander_lane.worker.global_store.for_update("gnr.a") as turn:
+            second_read.append(turn.value)
 
     first = asyncio.create_task(first_holder())
     await granted.wait()
     second = asyncio.create_task(second_holder())
 
-    # The second's call is on the wire and unanswered: it is parked on the grant,
+    # The second's call is on the wire and unanswered: it is parked on the lock,
     # which the first still holds.
     await wait_for(lambda: bool(second_worker_commander_lane.worker._parent_calls))
     assert second_read == []
@@ -165,12 +162,12 @@ async def test_a_dead_holders_lock_is_released_with_the_master_untouched(
     worker_commander_lane, second_worker_commander_lane
 ):
     # wf:contract: the holder's channel ending releases the lock without
-    # wf:contract: applying its half-made changes; the next waiter gets a clean
-    # wf:contract: grant — the pre_refactoring death rule, on the new lane.
+    # wf:contract: publishing anything; the next waiter gets a clean grant.
     commander = worker_commander_lane.commander
-    commander.global_register.set_item("gnr.a", 1)
-    working = await worker_commander_lane.worker.acquire_global_lock("hold-1")
-    working.bag.set_item("gnr.a", 99)
+    commander.global_register["gnr.a"] = 1
+    await worker_commander_lane.worker.call(
+        STORE_LOCK, {"worker": WORKER_NAME, "request_id": "hold-1", "key": "gnr.a"}
+    )
 
     assert commander.global_lock.held_by(WORKER_NAME) is True
 
@@ -178,28 +175,26 @@ async def test_a_dead_holders_lock_is_released_with_the_master_untouched(
 
     assert commander.global_lock.holder is None
     assert commander.global_register["gnr.a"] == 1
-    async with second_worker_commander_lane.worker.global_store_lock() as copy:
-        assert copy["gnr.a"] == 1
+    async with second_worker_commander_lane.worker.global_store.for_update("gnr.a") as turn:
+        assert turn.value == 1
 
 
 async def test_the_replica_machinery_is_gone(worker_commander_lane):
     # wf:contract: SpaWorker holds no global replica and no queued writes; no
     # wf:contract: envelope slot carries the global store in either direction;
-    # wf:contract: old_value exists nowhere — the phase-5 envelope mechanics
-    # wf:contract: are fully removed with their tests rewritten (foreman
-    # wf:contract: decision, notes.md).
+    # wf:contract: old_value exists nowhere. ``global_store`` is the CLIENT now
+    # wf:contract: (#74), no longer the name of the phase-5 replica.
     for gone in ("GLOBAL_STORE_KEY", "GLOBAL_WRITES_KEY", "ENVELOPE_SLOT_GLOBAL_STORE"):
         assert not hasattr(worker_connector_module, gone)
     for gone in (
         "global_replica",
-        "global_store",
         "global_register_item_tytx",
         "record_global_write",
         "_global_writes",
         "_take_global_store",
     ):
         assert not hasattr(worker_commander_lane.worker, gone)
-    assert not hasattr(SpaWorker, "global_store")
+    assert isinstance(SpaWorker.global_store, property)
     assert not hasattr(SpaCommander, "apply_global_writes")
 
     written = "".join(

@@ -230,10 +230,25 @@ files one parcel per connection under that same id. The cookie lives 24
 hours, the life the site gives its own connection.
 
 **The global store is the core's; the genropy delivery machinery is not (#59
-block 4, 2026-09-04).** The global store lives ONLY on the commander — no
-replicas — with reads as calls on the lane (`store_get`) and read-modify-write
-through the lock grant/release, the grant carrying the true master state; never
-files or shared memory between processes. Datachanges, dbevents, the table
+block 4, 2026-09-04; dictionary and one lock, #74, 2026-09-07).** The global
+store lives ONLY on the commander — no replicas — as ONE `dict[str, Any]` with
+literal keys and opaque values, behind ONE FIFO lock (`GlobalStoreLock`): a
+worker reaches it through `SpaWorker.global_store`, a `GlobalStoreClient` whose
+`get`/`set`/`delete` are CALLs served under that lock (`get` answers `exists` and
+`value`, so the client tells an absent key from a stored `None` and returns the
+caller's default only for the former), and whose `for_update(key=None)` is the
+turn: a `GlobalStoreLease` (`with` or `async with`) yielding itself with `value`,
+the private copy the grant decoded, and `exists`; the exit sends the COMPLETE
+value back and the commander replaces that key — or the whole dictionary when no
+key was selected — in one assignment; a body that raises, a grant that does not
+decode or a value that does not encode release with `apply=False`, master
+untouched. Every operation waits while a turn is in force, reads of other keys
+included; a release for a turn no longer in force touches nothing, a dead
+holder frees only its own turn, and a second turn or a simple operation from
+the context that already holds one raises instead of waiting on itself. The
+change batch (`CapturingGlobalStore`, `apply_global_store_changes`,
+`genro_bag.datachange`) is gone. Never files or shared memory between
+processes. Datachanges, dbevents, the table
 subscriptions and their source filter, the addressed writes and the
 end-of-request exchange left the core with `DeliveryDesk`, `SubscriptionIndex`
 and the twelve site verbs of `SpaWorker` (`subscribeTable`, `notifyDbEvents`,
@@ -523,10 +538,9 @@ consumer subclasses the row and the registry, as genropy-asgi already does for
 `new_store`. Beside the rows: `SpaWorker.build_request_slot` (the slot of every
 request, on the loop and on the pool thread), `SpaWorker.on_request_served` (the
 `finally` of the stitching; the core leaves nothing on the slot),
-`SpaCommander.new_global_store` and `apply_global_store_changes` (the vertex's
-data — the fourth opaque datum, a new Bag by default at all four levels, the type
-a consumer chooses must be one the TYTX codec knows because the grant carries the
-whole store down the lane). The parcel stays a plain dict built from the row:
+`SpaCommander.new_global_store` (the vertex's data — an empty `dict` by default,
+the type fixed by the store protocol; the VALUES are the consumer's own, and must
+be types the TYTX codec knows because a grant carries them down the lane). The parcel stays a plain dict built from the row:
 no row class reaches the disk.
 
 **Not yet built (second pass).** The deliberate reboot command on `_server`
@@ -543,4 +557,4 @@ commits, still to be entered in the register). Decision registers:
 
 **All general policies are inherited from the parent document: [meta-genro-modules CLAUDE.md](https://github.com/softwellsrl/meta-genro-modules/blob/main/CLAUDE.md)**
 
-**Last Updated**: 2026-09-08
+**Last Updated**: 2026-09-07
