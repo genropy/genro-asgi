@@ -4,7 +4,7 @@
 
 **The need.** An admin drives installations from the shell: start one by name, see what runs, stop it, remove it.
 
-The `genroasgi` command: `serve` (by instance name, with `--reload` for
+The `genro-asgi` command: `serve` (by instance name, with `--reload` for
 development), `apps`, `stop`, `remove`; the instance registry behind them.
 The CLI reads the same recipe the server reads — it adds no words of its
 own.
