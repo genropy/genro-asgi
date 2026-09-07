@@ -80,7 +80,7 @@ Repository = "https://github.com/genropy/genro-asgi"
 "Bug Tracker" = "https://github.com/genropy/genro-asgi/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/genro_asgi"]
+packages = ["src/genro_asgi", "src/genro_asgi_multiworker_spa"]
 exclude = ["**/tests/"]
 
 [tool.pytest.ini_options]
@@ -88,7 +88,7 @@ testpaths = ["tests"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
-addopts = "-v --cov=genro_asgi --cov-report=term-missing"
+addopts = "-v --cov=genro_asgi --cov=genro_asgi_multiworker_spa --cov-report=term-missing"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
@@ -107,13 +107,13 @@ select = ["E4", "E7", "E9", "F"]
 # Fixtures imported from a sibling test module shadow their own name in every
 # test signature that requests them — the pytest idiom ruff reads as F811.
 [tool.ruff.lint.per-file-ignores]
-"tests/orchestration/test_orchestration_cpu_growth.py" = ["F811"]
-"tests/orchestration/test_orchestration_cpu_offload.py" = ["F811"]
-"tests/orchestration/test_orchestration_cpu_temperature_meter.py" = ["F811"]
-"tests/orchestration/test_orchestration_policy_delegation.py" = ["F811"]
-"tests/orchestration/test_orchestration_placement_interval.py" = ["F811"]
-"tests/orchestration/test_orchestration_no_speculative_birth.py" = ["F811"]
-"tests/orchestration/test_orchestration_no_reception_reserve.py" = ["F811"]
+"tests/spa/orchestration/test_orchestration_cpu_growth.py" = ["F811"]
+"tests/spa/orchestration/test_orchestration_cpu_offload.py" = ["F811"]
+"tests/spa/orchestration/test_orchestration_cpu_temperature_meter.py" = ["F811"]
+"tests/spa/orchestration/test_orchestration_policy_delegation.py" = ["F811"]
+"tests/spa/orchestration/test_orchestration_placement_interval.py" = ["F811"]
+"tests/spa/orchestration/test_orchestration_no_speculative_birth.py" = ["F811"]
+"tests/spa/orchestration/test_orchestration_no_reception_reserve.py" = ["F811"]
 
 # mypy is a non-blocking advisor (parent policy): non-strict, findings
 # reviewed but never gating.
@@ -137,7 +137,7 @@ disable_error_code = ["misc", "union-attr"]
 # functools.wraps returns a _Wrapped mypy models as attribute-less; the pattern is
 # the ordinary function-attribute one, and only that code is silenced here.
 [[tool.mypy.overrides]]
-module = "genro_asgi.spa.orchestration.beats"
+module = "genro_asgi_multiworker_spa.orchestration.beats"
 disable_error_code = ["attr-defined"]
 
 # CommunicationMixin forwards __call__ cooperatively to the next class in
@@ -227,27 +227,3 @@ disable_error_code = ["attr-defined"]
 [[tool.mypy.overrides]]
 module = "genro_asgi.applications.server_sections.tasks_section"
 disable_error_code = ["union-attr", "no-any-return"]
-
-# UserStickyWorker owns a WorkPool passing ITSELF as the parent (ratified
-# decision: pool.py is untouched, the parent is only stored, never used at
-# runtime) — a worker is not a BaseServer, so the arg-type is deliberate. Its
-# @route handlers are wrapped by genro-routes, whose decorator returns an
-# untyped callable: a handler calling a sibling handler therefore returns Any
-# where the annotation promises a dict.
-[[tool.mypy.overrides]]
-module = "genro_asgi.spa.worker"
-disable_error_code = ["arg-type", "no-any-return"]
-
-# WorkerEntry resolves its worker class from a dotted reference, so getattr
-# returns Any where the annotations promise a class and an instance
-# (no-any-return); and the SIGTERM handler it installs after building the
-# client sees the same handle mypy still types as Optional (union-attr).
-[[tool.mypy.overrides]]
-module = "genro_asgi.spa.worker_entry"
-disable_error_code = ["no-any-return", "union-attr"]
-
-# The commander loads the very worker class a spawned child would load, from
-# the same dotted reference and the same getattr — identical no-any-return.
-[[tool.mypy.overrides]]
-module = "genro_asgi.spa.commander"
-disable_error_code = ["no-any-return"]

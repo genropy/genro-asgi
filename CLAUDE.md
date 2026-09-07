@@ -161,7 +161,15 @@ logging, wellknown). Auth answers **401 to the anonymous, 403 to the known**;
 admin surfaces live under the `_server` app as sections (auth, monitor,
 users, tokens, tasks) gated by `SERVER_ADMIN`; the monitor renders one page
 over every mounted app via the `app_snapshot`/`app_panel`/`panel_source`
-contract on `BaseApplication`. Sessions: `MemoryStore`, cookie
+contract on `BaseApplication`. **`import genro_asgi` loads no orchestration**
+(landed 2026-09-07): the last edge was the `inspector` section, which read a
+pool from inside the server sections, and it moved to
+`genro_asgi_multiworker_spa/inspector_section.py` — the SPA front attaches it at `_server/inspector`
+on its own startup when `GNR_ASGI_INSPECTOR` is set, names `SpaApplication`
+under `TYPE_CHECKING` only, and reads the ONE pool through
+`self.application.commander`. A server has ONE orchestrated application
+(owner, 2026-09-07), so a second attach is a `FatalBootError`; a lighter
+front for `_server`-like pages is later work. Sessions: `MemoryStore`, cookie
 `Max-Age = ttl x 24`. Filesystem access goes **only through storage nodes**
 (logical volumes, e.g. `GENROASGI:frozen_users`); storage is pinned
 synchronous (`StorageMixin` calls `set_sync()`, tests pin the same) — never
@@ -169,13 +177,26 @@ synchronous (`StorageMixin` calls `set_sync()`, tests pin the same) — never
 `OpenApiApplication`, `McpApplication` and the tasks subsystem (scheduler,
 spool, executor) mount like any other app.
 
-### The SPA machine (`spa/` + `applications/spa_app.py`)
+### The SPA machine (`genro_asgi_multiworker_spa/`)
+
+**One package of its own, beside the core (landed 2026-09-08).** The whole SPA
+world is a second top-level package shipped by the one distribution
+`genro-asgi`: `spa_app.py` (the front) and `spa_console.py` moved out of
+`applications/`, `spa/` became the package root, and `orchestration/`,
+`register*.py`, `global_store.py`, `environ.py` and `inspector_section.py` are
+its modules. It imports the core by absolute path — `genro_asgi.sse`,
+`genro_asgi.streaming`, `genro_asgi.session.session`, `genro_asgi.channel.frame`,
+`genro_asgi.exceptions`, `genro_asgi.orchestration_profile_store` and, for the
+front, twelve more — while the core names it in no import at all. There is no
+re-export at the old paths: a consumer imports `genro_asgi_multiworker_spa.spa_app`,
+never `genro_asgi.applications.spa_app`. The name says what distinguishes this
+machine from the simple SPA still to be built: a pool of worker processes.
 
 **One stack.** The repository cutover happened on 2026-08-22: `main` and the
 tag `v0.35.0` freeze the last dual-stack state (the pre_refactoring
 `UserStickyCommander`/`UserStickyWorker` and their front), and `develop` —
 the base of all work branches — carries ONLY the new core:
-`spa/orchestration/` fronted by `applications/spa_app.py` (`SpaApplication`,
+`orchestration/` fronted by `spa_app.py` (`SpaApplication`,
 which took the vacated name; it was `SpaApplicationNew`). "pre_refactoring"
 now names code that lives only on `main`/`v0.35.0`. Say never "legacy": in
 this code that word names the genropy SITE (`WsgiSeam`, "legacy WSGI
@@ -292,7 +313,7 @@ front declared without either does not boot (`FatalBootError` →
 `lifespan.startup.failed`) — wanting no pool means declaring no spa front. At
 boot `boot_group_settings` composes `defaults ⊕ recipe_settings ⊕ profile ⊕ env_settings` through
 `GroupPolicy.from_settings` — the frozen dataclass in
-`spa/orchestration/group_policy.py` that holds the 16 setpoints, IS the
+`genro_asgi_multiworker_spa/orchestration/group_policy.py` that holds the 16 setpoints, IS the
 validation and collects every violation — BEFORE the vertex is built; the recipe
 and env levels stay separate dicts, so every later apply recomposes from them.
 A missing or invalid profile raises `FatalBootError` (`lifespan.py`): the one
@@ -490,7 +511,7 @@ longer taught op by op.
 
 **The rows are classes, and the seams a consumer overrides are named (landed
 2026-09-04, #59 block 3).** Every register row is a `dict` of the registry's row
-class — `UserRow`, `ConnectionRow`, `PageRow` in `spa/register_row.py` — so
+class — `UserRow`, `ConnectionRow`, `PageRow` in `genro_asgi_multiworker_spa/register_row.py` — so
 `row["field"]` reads everywhere as before, and the class carries what the worker
 used to hard-code: `default_fields` (born with, the row's own `item_lock`
 included), `fields_left_behind` (what the parcel does not carry), `fields_replayed`
@@ -522,4 +543,4 @@ commits, still to be entered in the register). Decision registers:
 
 **All general policies are inherited from the parent document: [meta-genro-modules CLAUDE.md](https://github.com/softwellsrl/meta-genro-modules/blob/main/CLAUDE.md)**
 
-**Last Updated**: 2026-09-06
+**Last Updated**: 2026-09-08

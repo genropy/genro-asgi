@@ -331,11 +331,11 @@ def applications_section(self, cfg):
                  cpu_offload_percent=75.0,      # above this it cedes one user per beat
                  cpu_heating_seconds=1.0,       # the temperature filter, going up
                  cpu_cooling_seconds=5.0,       # and going down: slower on purpose
-                 entry_module="genro_asgi.spa.orchestration.worker_entry",
+                 entry_module="genro_asgi_multiworker_spa.orchestration.worker_entry",
                  worker_class="myshop.app:ShopWorker",
                  worker_kwargs={"site_path": "/srv/shop"})
     groups.group(name="canary", executable="/srv/shop/.venvs/next/bin/python",
-                 entry_module="genro_asgi.spa.orchestration.worker_entry",
+                 entry_module="genro_asgi_multiworker_spa.orchestration.worker_entry",
                  worker_class="myshop.app:ShopWorker")
 ```
 
