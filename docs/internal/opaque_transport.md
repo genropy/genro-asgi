@@ -134,7 +134,8 @@ polling/datachanges envelopes and error recovery. The legacy browser has a
 separate plain-JSON/XML websocket protocol and server-side gnrasync dependency;
 it does not speak core WSX. Core WSX process tests do not establish legacy
 browser websocket/push compatibility. See the bridge's issue72 acceptance
-report for exact evidence and the outstanding compatibility boundary.
+report for exact evidence. On 2026-09-08 the owner explicitly assigned legacy
+WebSocket compatibility to a separate project; it is excluded from issue 72.
 
 Performance methodology and measured results are in
 [opaque_transport_benchmark.md](opaque_transport_benchmark.md). The byte-size
