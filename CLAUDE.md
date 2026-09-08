@@ -241,8 +241,8 @@ turn: a `GlobalStoreLease` (`with` or `async with`) yielding itself with `value`
 the private copy the grant decoded, and `exists`; the exit sends the COMPLETE
 value back and the commander replaces that key — or the whole dictionary when no
 key was selected — in one assignment; a body that raises, a grant that does not
-decode or a value that does not encode release with `apply=False`, master
-untouched. Every operation waits while a turn is in force, reads of other keys
+decode, a value that does not encode or a turn on which `abort()` was called
+release with `apply=False`, master untouched (the lock stays held until the exit). Every operation waits while a turn is in force, reads of other keys
 included; a release for a turn no longer in force touches nothing, a dead
 holder frees only its own turn, and a second turn or a simple operation from
 the context that already holds one raises instead of waiting on itself. Keys

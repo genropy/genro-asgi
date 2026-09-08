@@ -217,7 +217,8 @@ class GlobalStoreLease:
     the key was there at grant time (always True for the whole dictionary).
     A body that raises releases with ``apply=False``; so does a grant that
     cannot be decoded or a value that cannot be encoded, the original error
-    re-raised.
+    re-raised; so does a turn on which ``abort`` was called, whatever the body
+    did to ``value`` afterwards — the lock stays held until the exit either way.
     """
 
     def __init__(self, client: GlobalStoreClient, key: str | None) -> None:
@@ -226,7 +227,16 @@ class GlobalStoreLease:
         self.request_id = uuid.uuid4().hex
         self.value: Any = None
         self.exists = False
+        self.aborted = False
         self._token: contextvars.Token[GlobalStoreLease | None] | None = None
+
+    def abort(self) -> None:
+        """Mark this turn as not to be published: the exit sends ``apply=False``.
+
+        The lock stays held until the ``with`` block exits; once called, nothing
+        the body does to ``value`` reaches the master.
+        """
+        self.aborted = True
 
     async def _acquire(self) -> None:
         worker = self.client.worker
@@ -242,7 +252,7 @@ class GlobalStoreLease:
         self.exists = reply["exists"]
 
     async def _release(self, exc_type: type[BaseException] | None) -> None:
-        if exc_type is not None:
+        if exc_type is not None or self.aborted:
             await self._abort()
             return
         try:

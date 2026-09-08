@@ -211,6 +211,26 @@ async def test_a_body_that_raises_aborts_and_creates_nothing(worker_commander_la
     assert worker_commander_lane.commander.global_lock.holder is None
 
 
+async def test_an_aborted_turn_publishes_nothing_and_frees_the_lock_at_exit(
+    worker_commander_lane,
+):
+    # wf:contract: turn.abort() marks the turn; the lock is still held until the
+    # wf:contract: with exits, then the release carries apply=False — whatever
+    # wf:contract: the body did to value after the call. An absent key stays absent.
+    store = worker_commander_lane.worker.global_store
+    commander = worker_commander_lane.commander
+
+    async with store.for_update("CACHE_TS") as turn:
+        assert turn.exists is False
+        turn.abort()
+        assert commander.global_lock.holder == turn.request_id
+        turn.value = {"foo": 1}
+
+    assert "CACHE_TS" not in commander.global_register
+    assert commander.global_lock.holder is None
+    assert not commander.global_lock.lock.locked()
+
+
 async def test_the_sync_lease_works_from_a_pool_thread(worker_commander_lane):
     store = worker_commander_lane.worker.global_store
     master = worker_commander_lane.commander.global_register
