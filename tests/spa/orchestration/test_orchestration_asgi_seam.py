@@ -29,7 +29,6 @@ The shortcut is covered by the whole existing rig, which passes unchanged:
 from __future__ import annotations
 
 import asyncio
-import base64
 from typing import Any
 
 import pytest
@@ -51,7 +50,7 @@ def http_call(path: str = "/main", body: bytes = b"", **http: Any) -> dict[str, 
         "path": path,
         "query_string": "who=mario",
         "headers": [["host", "site.example:8080"], ["cookie", f"spa_connection_id={CID}"]],
-        "body": base64.b64encode(body).decode("ascii"),
+        "body": body,
         "client": ["10.0.0.9", 51234],
         "scheme": "https",
         "cid": CID,
@@ -62,7 +61,7 @@ def http_call(path: str = "/main", body: bytes = b"", **http: Any) -> dict[str, 
 
 def body_of(served: dict[str, Any]) -> bytes:
     """The answer's body, out of the wire form."""
-    return base64.b64decode(served["body"])
+    return served["body"]
 
 
 def headers_of(served: dict[str, Any]) -> dict[str, str]:
@@ -561,7 +560,7 @@ class TestWhatTheSeamRefuses:
 
         worker = worker_of(XT_SilentWorker, tmp_path)
         try:
-            with pytest.raises(RuntimeError, match="answered nothing"):
+            with pytest.raises(RuntimeError, match="did not start a response"):
                 await worker._serve_request(http_call())
         finally:
             worker.exit_process()

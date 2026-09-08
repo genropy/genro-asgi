@@ -28,6 +28,8 @@ import base64
 from typing import Any
 
 import pytest
+
+from tests.spa.orchestration.frame_helpers import read_http_request, http_reply
 from genro_routes import route
 
 from genro_asgi import AsgiServer
@@ -67,10 +69,10 @@ class ScriptedCommander(SpaCommander):
     async def serve_request(
         self, cid: str, http: dict[str, Any], *, hold_timeout: float
     ) -> dict[str, Any]:
-        self.calls.append((cid, http))
+        self.calls.append((cid, read_http_request(http)))
         if self.failure is not None:
             raise self.failure
-        return self.reply
+        return http_reply(http, self.reply)
 
 
 class ScriptedFront(SpaApplication):

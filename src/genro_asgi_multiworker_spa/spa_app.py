@@ -78,17 +78,18 @@ exception's text carries the inside of the house.
 from __future__ import annotations
 
 import asyncio
-import base64
 import logging
 import os
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from genro_bag import BagResolver
-from genro_tytx import from_tytx
 from genro_builders.builder import element
 from genro_routes import RoutingClass, route
 
+from genro_asgi.asgi_endpoint import BufferedAsgiEndpoint
 from genro_asgi.application import ApplicationGrammar
+from genro_asgi.channel.frame import Frame
+from genro_asgi.http_record import HttpRecord
 from genro_asgi.config.handler import ConfigError
 from genro_asgi.exceptions import HTTPBadRequest, HTTPException, HTTPForbidden, HTTPNotFound
 from genro_asgi.lifespan import FatalBootError
@@ -100,6 +101,7 @@ from genro_asgi.orchestration_profile_store import (
     OrchestrationProfileStore,
 )
 from genro_asgi.response import Response
+from genro_asgi.wsx_payload import SerializedWsxPayload
 from genro_asgi.routed_application import RoutedApplication
 from genro_asgi.server import QUITTING, REFUSED_RETRY_AFTER_SECONDS, RUNNING
 from .inspector_section import INSPECTOR_ENV_VAR, InspectorSection
@@ -430,7 +432,7 @@ class WebsocketOperations(RoutingClass):
             path: what the client routes the message on.
             data: the payload, as the TYTX string the worker put on the lane —
                 the lane is JSON and carries no date, Decimal or bytes of its
-                own, so what the site sent is hydrated back here (#70).
+                own. The frontend forwards this explicit serialized value.
             cid: the connection the worker believes that page belongs to.
 
         Returns:
@@ -447,8 +449,9 @@ class WebsocketOperations(RoutingClass):
         if owner is None or (cid is not None and owner != cid):
             return {"delivered": False}
         server = application.server
-        payload = from_tytx(data, "json") if data is not None else None
-        return {"delivered": await server.send_message(page_id, path, payload)}
+        return {"delivered": await server.send_serialized_message(
+            page_id, path, SerializedWsxPayload(data)
+        )}
 
 
 class WsxControl(RoutingClass):
@@ -518,6 +521,8 @@ class SpaApplication(RoutedApplication):
     """A single-page-application front backed by the new user-sticky pool."""
 
     #: The words this front adds to a recipe, read back under its own code.
+    forwards_payloads = True
+
     grammar = SpaApplicationGrammar
 
     @property
@@ -572,6 +577,7 @@ class SpaApplication(RoutedApplication):
         #: apply recomposes recipe ⊕ profile ⊕ env instead of stacking.
         self.env_settings = dict(env_settings or {})
         super().__init__(**kwargs)
+        self._forward_slots = asyncio.Semaphore(16)
 
     def refuse_moved_words(self, kwargs: dict[str, Any]) -> None:
         """Refuse, by name, the words that moved under ``orchestration``.
@@ -1035,6 +1041,11 @@ class SpaApplication(RoutedApplication):
             await self.forward_request(scope, receive, send)
 
     async def forward_request(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Admit before buffering: at most sixteen bounded HTTP bodies per front."""
+        async with self._forward_slots:
+            await self._forward_request(scope, receive, send)
+
+    async def _forward_request(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Serve a site path through the pool: pack, hand over, translate, answer.
 
         The cookie is read ONCE here and travels down as it came — None included,
@@ -1045,6 +1056,7 @@ class SpaApplication(RoutedApplication):
         """
         carried = self.request_cid(scope)
         http = await self.pack_http(scope, receive, carried)
+        local_response = True
         try:
             reply = await self.commander.serve_request(
                 carried, http, hold_timeout=REQUEST_HOLD_MAX_SECONDS
@@ -1060,6 +1072,11 @@ class SpaApplication(RoutedApplication):
             response = self.gateway_response(failure)
         else:
             response = self.build_response(reply, carried)
+            local_response = False
+        if local_response and scope.get("method") == "WSK":
+            result = await BufferedAsgiEndpoint(response).serve(scope, b"")
+            response = Response(content=result["body"], status_code=result["status"],
+                                headers=result["headers"])
         await response(scope, receive, send)
 
     def busy_response(self, refusal: AssignmentRefused) -> Response:
@@ -1119,7 +1136,7 @@ class SpaApplication(RoutedApplication):
             headers=[("content-type", "text/plain; charset=utf-8")],
         )
 
-    def build_response(self, reply: dict[str, Any], carried: str | None) -> Response:
+    def build_response(self, reply: Frame, carried: str | None) -> Response:
         """The outer response, rebuilt from the site's own answer.
 
         The cookie is written when the connection the site settled on is not the
@@ -1128,13 +1145,13 @@ class SpaApplication(RoutedApplication):
         that reused the connection it arrived with names none, and nothing is
         written.
         """
-        result = reply["result"]
+        result = HttpRecord().decode_response(reply.payload)
         response = Response(
-            content=base64.b64decode(result.get("body") or ""),
+            content=result["body"],
             status_code=int(result.get("status", 200)),
             headers=[(str(name), str(value)) for name, value in result.get("headers") or []],
         )
-        settled = result.get("connection_id")
+        settled = reply.info.get("connection_id")
         if settled is not None and settled != carried:
             response.set_cookie(
                 SPA_CONNECTION_ID_COOKIE,
@@ -1152,46 +1169,33 @@ class SpaApplication(RoutedApplication):
 
     async def read_body(self, receive: Receive) -> bytes:
         """Drain the whole request body off the ASGI receive channel."""
-        body = b""
+        body = bytearray()
         while True:
             message = await receive()
-            body += message.get("body", b"") or b""
+            chunk = message.get("body", b"") or b""
+            if len(body) + len(chunk) > HttpRecord.DEFAULT_MAX_BODY_SIZE:
+                raise HTTPException(413, "request body exceeds buffered transport limit")
+            body.extend(chunk)
             if not message.get("more_body", False):
                 break
-        return body
+        return bytes(body)
 
     async def pack_http(
         self, scope: Scope, receive: Receive, cid: str | None
-    ) -> dict[str, Any]:
-        """Pack the ASGI request into the JSON-safe ``http`` form the child reads.
+    ) -> Frame:
+        """Pack routing facts and a bounded opaque HTTP record for the child.
 
         The headers are forwarded as they came: our cookie is ours to route on
         and the hosted site has no use for it — it reads its own, and the value
         in both is its own connection id anyway.
 
-        ``page_id`` and ``reply_path`` join the dict only when the scope carries
+        ``page_id`` and ``reply_path`` join the routing info only when the scope carries
         them — a message born on a websocket does, a real HTTP request does not
-        — and the seam writes them into the environ or the scope of the hosted
-        code under their ``genro.`` names.
+        — and the endpoint writes them into the hosted scope under their genro names.
         """
-        query_string = scope.get("query_string") or b""
-        client = scope.get("client") or None
-        packed: dict[str, Any] = {
-            "method": str(scope.get("method", "GET")),
-            "path": str(scope.get("path", "/")),
-            "query_string": query_string.decode("latin-1"),
-            "headers": [
-                [name.decode("latin-1"), value.decode("latin-1")]
-                for name, value in scope.get("headers") or []
-            ],
-            "body": base64.b64encode(await self.read_body(receive)).decode("ascii"),
-            "client": list(client) if client else [],
-            "scheme": str(scope.get("scheme", "http")),
-            "cid": cid,
-        }
+        info = {"format": "http", "cid": cid}
         for key in ("genro.page_id", "genro.reply_path"):
-            # A message born on a websocket carries them; a real request does
-            # not, and then they are ABSENT from the dict, never null.
             if key in scope:
-                packed[key.split(".")[1]] = scope[key]
-        return packed
+                info[key.split(".")[1]] = scope[key]
+        return Frame(method="CALL", path="/site" + str(scope.get("path", "/")),
+                     info=info, payload=HttpRecord().encode_request(scope, await self.read_body(receive)))

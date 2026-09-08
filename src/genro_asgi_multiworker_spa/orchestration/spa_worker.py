@@ -265,6 +265,8 @@ import psutil
 from genro_routes import RoutingClass, route
 from genro_tytx import to_tytx
 
+from genro_asgi.channel.control import ControlPayload
+from genro_asgi.http_record import HttpRecord
 from genro_asgi.channel.frame import REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
 from genro_asgi.exceptions import HTTPException
 from ..environ import AsgiSeam, WsgiSeam
@@ -616,7 +618,9 @@ class SpaWorker:
         self.loop: asyncio.AbstractEventLoop | None = None
         #: One future per CALL this worker placed upward, by frame id: the read
         #: loop resolves them as the answers land, in whatever order they do.
-        self._parent_calls: dict[str, asyncio.Future[Any]] = {}
+        self._parent_calls: dict[str, asyncio.Future[Frame]] = {}
+        self._parent_call_paths: dict[str, str] = {}
+        self._abandoned_parent_calls: dict[str, str] = {}
         #: The consumer seam of the http CALL form: an ASGI application a
         #: subclass assigns. None here — this class hosts no application of its
         #: own. Whoever assigns it also gives it this worker, the way the
@@ -1183,6 +1187,7 @@ class SpaWorker:
         from that process's own loop, which is the one the lane then lives on.
         """
         self.stream = stream
+        self._abandoned_parent_calls.clear()
         self.loop = asyncio.get_running_loop()
 
     async def send_presentation(self, config: dict[str, Any]) -> None:
@@ -1199,7 +1204,7 @@ class SpaWorker:
             Frame(
                 method=REGISTER_METHOD,
                 path=REGISTER_PATH,
-                data=self._outbound({ENVELOPE_SLOT_PRESENTATION: os.getpid(), "config": config}),
+                info=self._outbound({ENVELOPE_SLOT_PRESENTATION: os.getpid(), "config": config}),
             )
         )
         await self.stream.read()
@@ -1225,7 +1230,15 @@ class SpaWorker:
                     return
                 if frame is None:
                     return
-                self.handle_frame(frame)
+                try:
+                    self.handle_frame(frame)
+                except ValueError:
+                    self._logger.exception(
+                        "Worker %s: protocol violation routing a handler reply; leaving the wire",
+                        self.name,
+                    )
+                    await self.stream.close()
+                    return
         finally:
             self._fail_parent_calls(ConnectionError("the wire to the handler ended"))
 
@@ -1367,13 +1380,45 @@ class SpaWorker:
         Sends exactly one REPLY, whatever the outcome: the order's result, or
         its error — ``NotFound`` for a path nobody serves, ``TypeError`` for a
         payload that does not fit the order's signature, both raised before any
-        body runs. The http form is told by its payload, not by its path.
+        body runs. The HTTP form is selected by format metadata; only this
+        destination opens the application's HTTP record.
         """
-        payload = frame.data or {}
-        if "http" in payload:
-            await self.serve_http(frame, payload)
+        wire_format = frame.info.get("format")
+        if wire_format == "http":
+            info = frame.info
+            if set(info) - {"format", "cid", "page_id", "reply_path", "identity", "user_frozen"}:
+                raise ValueError("unexpected HTTP routing metadata")
+            if "cid" not in info:
+                raise ValueError("HTTP routing metadata is missing cid")
+            for key in ("cid", "page_id", "reply_path", "identity"):
+                if info.get(key) is not None and not isinstance(info[key], str):
+                    raise ValueError(f"invalid HTTP routing {key}")
+            if not isinstance(info.get("user_frozen", False), bool):
+                raise ValueError("user_frozen must be a boolean")
+            scope, body = HttpRecord().decode_request(frame.payload)
+            http = {**scope, "body": body,
+                    "headers": [(n.decode("latin-1"), v.decode("latin-1"))
+                                for n, v in scope.get("headers", [])],
+                    "query_string": scope.get("query_string", b"").decode("latin-1"),
+                    "cid": frame.info.get("cid")}
+            for key in ("page_id", "reply_path"):
+                if key in frame.info:
+                    http[key] = frame.info[key]
+            await self.serve_http(frame, {**frame.info, "http": http})
             return
+        if wire_format not in (None, "control-json"):
+            raise ValueError("unsupported parent call payload format")
+        payload = ControlPayload().decode(frame.payload) or {}
+        if "http" in payload:
+            raise ValueError("HTTP requests require an opaque HTTP frame")
         if "wsx" in payload:
+            if (frame.info.get("identity") is not None
+                    and not isinstance(frame.info["identity"], str)):
+                raise ValueError("invalid WSX routing identity")
+            if not isinstance(frame.info.get("user_frozen", False), bool):
+                raise ValueError("WSX user_frozen must be a boolean")
+            payload = {**payload, "identity": frame.info.get("identity"),
+                       "user_frozen": frame.info.get("user_frozen", False)}
             await self.serve_wsx(frame, payload)
             return
         try:
@@ -1462,18 +1507,35 @@ class SpaWorker:
         with self.dispatch_lock:
             slot = self.request_slot
             events = slot.worker_events
+        info: dict[str, Any] = {ENVELOPE_SLOT_WORKER_EVENTS: events}
+        if error is not None:
+            info["error"] = error
+            if status is not None:
+                info["status"] = status
+            payload = ControlPayload().encode({"error": error, **({"status": status} if status else {})})
+            info["format"] = "control-json"
+        elif frame.info.get("format") == "http":
+            info["format"] = "http"
+            info["connection_id"] = result.get("connection_id")
+            payload = HttpRecord().encode_response(
+                {key: result[key] for key in ("status", "headers", "body")}
+            )
+        else:
+            info["format"] = "control-json"
+            payload = ControlPayload().encode({"result": result})
+        reply = Frame(id=frame.id, method=REPLY_METHOD, path=frame.path,
+                      info=self._outbound(info), payload=payload)
+        # Serialization failures above leave this call's slot available for an
+        # explicit error reply. Once sending begins, failure is uncertain: close
+        # the wire so its caller fails instead of waiting forever or replaying.
+        with self.dispatch_lock:
             slot.worker_events = []
         self._request_slot_var.set(None)
-        data: dict[str, Any] = {ENVELOPE_SLOT_WORKER_EVENTS: events}
-        if error is not None:
-            data["error"] = error
-            if status is not None:
-                data["status"] = status
-        else:
-            data["result"] = result
-        await self.stream.write(
-            Frame(id=frame.id, method=REPLY_METHOD, path=frame.path, data=self._outbound(data))
-        )
+        try:
+            await self.stream.write(reply)
+        except Exception:
+            await self.stream.close()
+            raise
 
     async def call(
         self, path: str, data: Any = None, timeout: float | None = None
@@ -1496,17 +1558,44 @@ class SpaWorker:
         whatever order the parent gives them. Reachable from a pool thread
         through ``run_on_loop``.
         """
-        frame = Frame(method=CALL_METHOD, path=path, data=data)
-        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
-        self._parent_calls[frame.id] = future
-        try:
-            await self.stream.write(frame)
-            reply = await (future if timeout is None else asyncio.wait_for(future, timeout))
-        finally:
-            self._parent_calls.pop(frame.id, None)
+        frame = Frame(method=CALL_METHOD, path=path, info={"format": "control-json"},
+                      payload=ControlPayload().encode(data))
+        reply_frame = await self.call_frame(frame, timeout=timeout)
+        reply = ControlPayload().decode(reply_frame.payload) or {}
         if "error" in reply:
             raise CommanderCallFailed(path, str(reply["error"]))
         return reply.get("result")
+
+    async def call_frame(self, frame: Frame, timeout: float | None = None) -> Frame:
+        """Call the parent with opaque bytes; parked calls belong to this wire."""
+        if frame.method != CALL_METHOD:
+            raise ValueError("parent request/reply calls require method CALL")
+        if frame.id in self._parent_calls or frame.id in self._abandoned_parent_calls:
+            raise ValueError("duplicate in-flight correlation id")
+        if len(self._parent_calls) >= 256:
+            raise ConnectionError("parent call capacity exhausted; request not sent")
+        future: asyncio.Future[Frame] = asyncio.get_running_loop().create_future()
+        self._parent_calls[frame.id] = future
+        self._parent_call_paths[frame.id] = frame.path
+        sent = False
+        try:
+            sent = True
+            await self.stream.write(frame)
+            if timeout is None:
+                return await asyncio.shield(future)
+            return await asyncio.wait_for(asyncio.shield(future), timeout)
+        except (asyncio.CancelledError, TimeoutError):
+            if sent and not future.done():
+                if len(self._abandoned_parent_calls) >= 256:
+                    await self.stream.close()
+                else:
+                    self._abandoned_parent_calls[frame.id] = frame.path
+            raise
+        finally:
+            self._parent_calls.pop(frame.id, None)
+            self._parent_call_paths.pop(frame.id, None)
+            if not future.done():
+                future.cancel()
 
     def send_message(self, page_id: str, path: str, data: Any = None) -> bool:
         """Write one message of the site onto the page's websocket.
@@ -1526,26 +1615,22 @@ class SpaWorker:
         to the socket, never executed by the page (W-12).
 
         The payload is serialised HERE, before it reaches the lane: the lane is
-        JSON, and a date, a Decimal or a bytes object would die in its
-        ``json.dumps``. What crosses it is the TYTX string the browser's own
-        codec reads at the other end, and the front hydrates it back before the
-        envelope is built (#70).
+        opaque bytes. The browser's codec reads the JSON TYTX value; the
+        frontend only wraps that serialized text in the public WSX envelope.
         """
         with self.dispatch_lock:
             row = self.page_register.get(page_id)
             cid = row.get("connection_id") if row is not None else None
-        reply = self.run_on_loop(
-            self.call(
-                WEBSOCKET_SEND_PATH,
-                {
-                    "page_id": page_id,
-                    "path": path,
-                    "data": to_tytx(data, "json") if data is not None else None,
-                    "cid": cid,
-                },
-            )
-        )
-        return bool((reply or {}).get("delivered"))
+        encoded = to_tytx(data, "json") if data is not None else None
+        reply_frame = self.run_on_loop(self.call_frame(Frame(
+            method=CALL_METHOD, path=WEBSOCKET_SEND_PATH,
+            info={"format": "wsx-json", "page_id": page_id, "reply_path": path,
+                  "cid": cid, "data_present": encoded is not None},
+            payload=encoded.encode("utf-8") if encoded is not None else b"")))
+        reply = ControlPayload().decode(reply_frame.payload) or {}
+        if "error" in reply:
+            raise CommanderCallFailed(WEBSOCKET_SEND_PATH, str(reply["error"]))
+        return bool((reply.get("result") or {}).get("delivered"))
 
     def run_on_loop(self, coro: Any) -> Any:
         """Run a coroutine on this worker's loop from a pool thread, and wait.
@@ -1563,11 +1648,19 @@ class SpaWorker:
 
     def _resolve_parent_reply(self, frame: Frame) -> None:
         """Hand the answer to the parked call; a caller already gone drops it."""
+        abandoned_path = self._abandoned_parent_calls.get(frame.id)
+        if abandoned_path is not None:
+            if frame.path != abandoned_path:
+                raise ValueError("abandoned parent REPLY does not belong to its route")
+            self._abandoned_parent_calls.pop(frame.id, None)
+            return
         future = self._parent_calls.get(frame.id)
         if future is None or future.done():
             self._logger.debug("Worker %s: the REPLY %s has no parked call", self.name, frame.id)
             return
-        future.set_result(frame.data or {})
+        if frame.path != self._parent_call_paths[frame.id]:
+            raise ValueError("parent REPLY does not belong to its parked route")
+        future.set_result(frame)
 
     async def on_wire_lost(self) -> None:
         """The wire is gone: leave, and save nothing.
@@ -2216,8 +2309,16 @@ class SpaWorker:
         self.open_request_slot()
         try:
             await self.answer_call(frame)
-        except Exception:
+        except Exception as failure:
             self._logger.exception("Worker %s: service of CALL %s failed", self.name, frame.path)
+            if self._request_slot_var.get() is not None:
+                try:
+                    await self.send_reply(frame, error=f"{type(failure).__name__}: {failure}")
+                except Exception:
+                    # A malformed/oversized control envelope cannot carry even
+                    # the error. Link loss must release every parked caller.
+                    await self.stream.close()
+                    self._logger.exception("Worker %s: error reply failed", self.name)
 
     async def _serve_request(self, payload: dict[str, Any]) -> dict[str, Any]:
         """The pendings, the row and the stitching — everything that can fail as one.
@@ -2244,7 +2345,7 @@ class SpaWorker:
                     # The message is admitted FIRST: whether this page may speak
                     # at all is the client's own business, and it is answered
                     # before anybody asks what would have served it.
-                    async with self._page_queue(payload["http"].get("page_id")):
+                    async with self._page_queue(payload["http"].get("page_id"), payload["http"]["cid"]):
                         seam = self.hosted_app_seam
                         served = await seam.serve(payload["http"], payload.get("identity"))
                 finally:
@@ -2262,7 +2363,7 @@ class SpaWorker:
             return served
 
     @contextlib.asynccontextmanager
-    async def _page_queue(self, page_id: str | None) -> Any:
+    async def _page_queue(self, page_id: str | None, cid: str | None = None) -> Any:
         """Refuse a page with no open channel, or hold its queue for the whole call.
 
         Args:
@@ -2296,6 +2397,8 @@ class SpaWorker:
                 f"page {page_id!r} has no open channel on this worker: "
                 "send openchannel before any message of its own",
             )
+        if row.get("connection_id") != cid:
+            raise HTTPException(403, "page belongs to another connection")
         channel = row["wsx"]
         if not isinstance(channel, dict) or not channel.get("sequential"):
             yield

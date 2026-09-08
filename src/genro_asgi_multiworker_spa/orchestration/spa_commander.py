@@ -173,11 +173,13 @@ from collections import Counter
 from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any
+from typing import Any, overload
 
 from genro_routes import RoutingClass, route
 import psutil
 from genro_tytx import from_tytx, to_tytx
+from genro_asgi.channel.frame import Frame
+from genro_asgi.channel.control import ControlPayload
 
 from genro_asgi.orchestration_profile_store import (
     OrchestrationProfileNotFoundError,
@@ -689,8 +691,8 @@ class SpaCommander:
         return name
 
     async def serve_request(
-        self, cid: str | None, http: dict[str, Any], *, hold_timeout: float
-    ) -> dict[str, Any]:
+        self, cid: str | None, http: Frame, *, hold_timeout: float
+    ) -> Frame:
         """Serve one request of the hosted site, from the cookie to the answer.
 
         Args:
@@ -718,8 +720,9 @@ class SpaCommander:
         user, worker_handler = await self.resolve_worker(cid, hold_timeout=hold_timeout)
         return await self._call_worker(
             worker_handler,
-            f"{SITE_PATH_PREFIX}{http['path']}",
-            {"http": {**http, "cid": cid}},
+            http.path,
+            Frame(id=http.id, method="CALL", path=http.path,
+                  info={**http.info, "cid": cid}, payload=http.payload),
             user,
         )
 
@@ -807,9 +810,19 @@ class SpaCommander:
             raise self._refused(refusal) from None
         return user, group_handler.worker_handler_map[worker_name]
 
+    @overload
+    async def _call_worker(
+        self, worker_handler: Any, path: str, payload: Frame, user: str | None
+    ) -> Frame: ...
+
+    @overload
     async def _call_worker(
         self, worker_handler: Any, path: str, payload: dict[str, Any], user: str | None
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any]: ...
+
+    async def _call_worker(
+        self, worker_handler: Any, path: str, payload: dict[str, Any] | Frame, user: str | None
+    ) -> dict[str, Any] | Frame:
         """Put one request on a worker's lane and hand its REPLY back.
 
         Args:
@@ -827,14 +840,21 @@ class SpaCommander:
             SiteFailedRequest: his worker answered with a failure.
             ConnectionError: the wire of his worker is gone.
         """
-        reply = await worker_handler.connector.call(
-            path,
-            {
-                **payload,
-                "identity": user,
-                "user_frozen": self.user_is_frozen(user) if user is not None else False,
-            },
-        )
+        trusted = {"identity": user,
+                   "user_frozen": self.user_is_frozen(user) if user is not None else False}
+        if isinstance(payload, Frame):
+            reply = await worker_handler.connector.call_frame(
+                Frame(id=payload.id, method="CALL", path=path,
+                      info={**payload.info, **trusted}, payload=payload.payload)
+            )
+            if "error" in reply.info:
+                raise SiteFailedRequest(user, str(reply.info["error"]), reply.info.get("status"))
+            return reply
+        reply_frame = await worker_handler.connector.call_frame(Frame(
+            method="CALL", path=path, info={"format": "control-json", **trusted},
+            payload=ControlPayload().encode(payload)))
+        reply = {**(ControlPayload().decode(reply_frame.payload) or {}),
+                 **{key: value for key, value in reply_frame.info.items() if key != "format"}}
         if "error" in reply:
             raise SiteFailedRequest(user, str(reply["error"]), reply.get("status"))
         return reply

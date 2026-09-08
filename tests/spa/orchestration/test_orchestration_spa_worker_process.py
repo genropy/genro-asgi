@@ -34,7 +34,6 @@ past it.
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import logging
 import os
@@ -47,8 +46,14 @@ import pytest
 
 
 from genro_asgi_multiworker_spa.spa_app import SPA_CONNECTION_ID_COOKIE
-from genro_asgi.channel.frame import Frame, FrameStream
-from genro_asgi_multiworker_spa.orchestration import FreezeHandler, SpaWorker, WorkerEntry, WorkerHandler
+from tests.spa.orchestration.frame_helpers import call_endpoint, control_frame
+from genro_asgi.channel.frame import FrameStream
+from genro_asgi_multiworker_spa.orchestration import (
+    FreezeHandler,
+    SpaWorker,
+    WorkerEntry,
+    WorkerHandler,
+)
 from genro_asgi_multiworker_spa.orchestration.worker_connector import (
     REPLY_METHOD,
     ENVELOPE_SLOT_WORKER_SNAPSHOT,
@@ -103,8 +108,7 @@ class EchoWorker(SpaWorker):
         if identity is not None and self.connection_register.get(cid) is None:
             self.new_connection(cid, user=identity)
         start_response("200 OK", [("Content-Type", "text/plain"), ("X-Worker", self.name)])
-        return [f"{environ['REQUEST_METHOD']} {environ['PATH_INFO']} "
-                f"for {identity}".encode()]
+        return [f"{environ['REQUEST_METHOD']} {environ['PATH_INFO']} for {identity}".encode()]
 
 
 class EngineWorker(SpaWorker):
@@ -268,7 +272,7 @@ class ParentWire:
             if frame is None:
                 return
             await stream.write(
-                Frame(
+                control_frame(
                     id=frame.id,
                     method=REPLY_METHOD,
                     path=frame.path,
@@ -310,7 +314,7 @@ def cid_of(environ: dict[str, Any]) -> str | None:
 
 def body_of(reply: dict[str, Any]) -> str:
     """The WSGI answer's body, decoded out of the wire form."""
-    return base64.b64decode(reply["result"]["body"]).decode()
+    return reply["result"]["body"].decode()
 
 
 def announced(reply: dict[str, Any]) -> list[str]:
@@ -402,8 +406,8 @@ async def test_an_op_nobody_here_knows_is_refused_by_name(wire):
 async def test_an_http_call_is_served_by_the_site_the_subclass_assigned(wire):
     await wire.take()
 
-    reply = await wire.connector.call(
-        "/site/invoices", http_call("cid-a", "mario"), timeout=5.0
+    reply = await call_endpoint(
+        wire.connector, "/site/invoices", http_call("cid-a", "mario"), timeout=5.0
     )
 
     assert reply["result"]["status"] == 200
@@ -415,8 +419,8 @@ async def test_the_request_finds_its_row_born_and_its_clocks_stamped(wire):
     worker = await wire.take()
     before = time.time()
 
-    reply = await wire.connector.call(
-        "/site/invoices", http_call("cid-a", "mario"), timeout=5.0
+    reply = await call_endpoint(
+        wire.connector, "/site/invoices", http_call("cid-a", "mario"), timeout=5.0
     )
 
     assert announced(reply) == ["new_user", "new_connection"]
@@ -428,11 +432,11 @@ async def test_the_request_finds_its_row_born_and_its_clocks_stamped(wire):
 
 async def test_every_served_call_writes_the_real_clock_again(wire):
     worker = await wire.take()
-    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
+    await call_endpoint(wire.connector, "/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
     first = worker.user_register.get("mario")["last_rpc_ts"]
     age_user(worker, "mario", 60)
 
-    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
+    await call_endpoint(wire.connector, "/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
 
     assert worker.user_register.get("mario")["last_rpc_ts"] > first
     assert worker.connection_register.get("cid-a")["last_rpc_ts"] > first
@@ -443,7 +447,7 @@ async def test_an_anonymous_request_touches_no_register(wire):
     baptises nobody leaves nothing — no rows, no announcements, no leak."""
     worker = await wire.take()
 
-    reply = await wire.connector.call("/site/invoices", http_call("cid-a"), timeout=5.0)
+    reply = await call_endpoint(wire.connector, "/site/invoices", http_call("cid-a"), timeout=5.0)
 
     assert body_of(reply) == "GET /invoices for None"
     assert worker.connection_register.keys() == []
@@ -453,10 +457,10 @@ async def test_an_anonymous_request_touches_no_register(wire):
 
 async def test_the_second_request_of_a_connection_costs_no_new_row(wire):
     worker = await wire.take()
-    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
+    await call_endpoint(wire.connector, "/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
 
-    reply = await wire.connector.call(
-        "/site/invoices", http_call("cid-a", "mario"), timeout=5.0
+    reply = await call_endpoint(
+        wire.connector, "/site/invoices", http_call("cid-a", "mario"), timeout=5.0
     )
 
     assert announced(reply) == []
@@ -465,12 +469,12 @@ async def test_the_second_request_of_a_connection_costs_no_new_row(wire):
 
 async def test_a_frozen_user_comes_home_when_the_envelope_says_so(wire, deposit):
     worker = await wire.take()
-    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
+    await call_endpoint(wire.connector, "/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
     await wire.connector.call(FREEZE_USER_OP_PATH, {"user": "mario"}, timeout=5.0)
     assert deposit.read_user_register_item("mario") is not None
 
-    reply = await wire.connector.call(
-        "/site/invoices", http_call("cid-a", "mario", user_frozen=True), timeout=5.0
+    reply = await call_endpoint(
+        wire.connector, "/site/invoices", http_call("cid-a", "mario", user_frozen=True), timeout=5.0
     )
 
     assert "user_adopted" in announced(reply)
@@ -484,8 +488,8 @@ async def test_a_deposit_that_never_frees_the_folder_answers_the_call_with_its_f
     await wire.take(deposit_lock_wait_limit=0.05)
     deposit.take_lock("mario", "standard_0002")
 
-    reply = await wire.connector.call(
-        "/site/invoices", http_call("cid-a", "mario", user_frozen=True), timeout=5.0
+    reply = await call_endpoint(
+        wire.connector, "/site/invoices", http_call("cid-a", "mario", user_frozen=True), timeout=5.0
     )
 
     assert "TimeoutError" in reply["error"]
@@ -495,10 +499,13 @@ async def test_a_deposit_that_never_frees_the_folder_answers_the_call_with_its_f
 async def test_a_site_that_falls_over_answers_with_its_failure_and_frees_the_user(wire):
     await wire.take()
     # A first request baptises him: the broken one below must not hold him.
-    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
+    await call_endpoint(wire.connector, "/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
 
-    reply = await wire.connector.call(
-        "/site/falls_over", http_call("cid-a", "mario", path=BROKEN_PATH), timeout=5.0
+    reply = await call_endpoint(
+        wire.connector,
+        "/site/falls_over",
+        http_call("cid-a", "mario", path=BROKEN_PATH),
+        timeout=5.0,
     )
 
     assert reply["error"] == "RuntimeError: the site fell over"
@@ -511,16 +518,16 @@ async def test_a_request_that_names_no_connection_is_answered_with_its_failure(w
     payload = http_call("cid-a", "mario")
     del payload["http"]["cid"]
 
-    reply = await wire.connector.call("/site/invoices", payload, timeout=5.0)
+    reply = await call_endpoint(wire.connector, "/site/invoices", payload, timeout=5.0)
 
-    assert reply["error"] == "KeyError: 'cid'"
+    assert reply["error"] == "ValueError: HTTP routing metadata is missing cid"
 
 
 async def test_a_worker_with_no_site_refuses_the_form_and_registers_nobody(wire):
     worker = await wire.take(f"{SpaWorker.__module__}:SpaWorker")
 
-    reply = await wire.connector.call(
-        "/site/invoices", http_call("cid-a", "mario"), timeout=5.0
+    reply = await call_endpoint(
+        wire.connector, "/site/invoices", http_call("cid-a", "mario"), timeout=5.0
     )
 
     # The base worker lives and serves its orders; what it cannot do is serve a
@@ -554,8 +561,8 @@ async def test_a_user_arriving_puts_the_photo_on_the_envelope_whatever_the_ttl(w
     await wire.take()
     await wire.connector.call(PING_OP_PATH, timeout=5.0)
 
-    arrival = await wire.connector.call(
-        "/site/invoices", http_call("cid-a", "mario"), timeout=5.0
+    arrival = await call_endpoint(
+        wire.connector, "/site/invoices", http_call("cid-a", "mario"), timeout=5.0
     )
     quiet = await wire.connector.call(PING_OP_PATH, timeout=5.0)
 
@@ -569,7 +576,7 @@ async def test_a_user_arriving_puts_the_photo_on_the_envelope_whatever_the_ttl(w
 
 async def test_a_user_leaving_puts_the_photo_on_the_envelope_too(wire):
     await wire.take()
-    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
+    await call_endpoint(wire.connector, "/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
     await wire.connector.call(PING_OP_PATH, timeout=5.0)
 
     frozen = await wire.connector.call(FREEZE_USER_OP_PATH, {"user": "mario"}, timeout=5.0)
@@ -580,12 +587,12 @@ async def test_a_user_leaving_puts_the_photo_on_the_envelope_too(wire):
 
 async def test_a_user_waking_puts_the_photo_on_the_envelope_too(wire, deposit):
     await wire.take()
-    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
+    await call_endpoint(wire.connector, "/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
     await wire.connector.call(FREEZE_USER_OP_PATH, {"user": "mario"}, timeout=5.0)
     await wire.connector.call(PING_OP_PATH, timeout=5.0)
 
-    woken = await wire.connector.call(
-        "/site/invoices", http_call("cid-a", "mario", user_frozen=True), timeout=5.0
+    woken = await call_endpoint(
+        wire.connector, "/site/invoices", http_call("cid-a", "mario", user_frozen=True), timeout=5.0
     )
     quiet = await wire.connector.call(PING_OP_PATH, timeout=5.0)
 
@@ -597,7 +604,7 @@ async def test_a_user_waking_puts_the_photo_on_the_envelope_too(wire, deposit):
 
 async def test_the_photo_carries_the_flag_the_transfers_decided(wire):
     worker = await wire.take(worker_snapshot_ttl=0)
-    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
+    await call_endpoint(wire.connector, "/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
     worker.plan_transfers(transfer_users=["mario"])
 
     reply = await wire.connector.call(PING_OP_PATH, timeout=5.0)
@@ -616,8 +623,8 @@ async def test_the_photo_carries_the_flag_the_transfers_decided(wire):
 
 async def test_the_order_to_leave_is_answered_with_everybody_flagged_and_then_taken(wire, deposit):
     worker = await wire.take(worker_snapshot_ttl=0, transfer_start_delay=0.1)
-    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
-    await wire.connector.call("/site/orders", http_call("cid-b", "anna"), timeout=5.0)
+    await call_endpoint(wire.connector, "/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
+    await call_endpoint(wire.connector, "/site/orders", http_call("cid-b", "anna"), timeout=5.0)
 
     leaving = await wire.connector.call(QUIT_OP_PATH, timeout=5.0)
 
@@ -633,11 +640,9 @@ async def test_the_order_to_leave_is_answered_with_everybody_flagged_and_then_ta
 
 async def test_the_order_to_drop_a_user_answers_with_what_it_announced(wire):
     worker = await wire.take()
-    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
+    await call_endpoint(wire.connector, "/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
 
-    reply = await wire.connector.call(
-        DROP_USER_OP_PATH, {"user": "mario"}, timeout=5.0
-    )
+    reply = await wire.connector.call(DROP_USER_OP_PATH, {"user": "mario"}, timeout=5.0)
 
     assert announced(reply) == ["drop_connections", "drop_user"]
     assert worker.user_register.keys() == []
@@ -646,11 +651,9 @@ async def test_the_order_to_drop_a_user_answers_with_what_it_announced(wire):
 
 async def test_the_order_to_drop_a_connection_answers_with_what_it_announced(wire):
     worker = await wire.take()
-    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
+    await call_endpoint(wire.connector, "/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
 
-    reply = await wire.connector.call(
-        DROP_CONNECTION_OP_PATH, {"cid": "cid-a"}, timeout=5.0
-    )
+    reply = await wire.connector.call(DROP_CONNECTION_OP_PATH, {"cid": "cid-a"}, timeout=5.0)
 
     assert announced(reply) == ["drop_connection", "drop_user"]
     assert worker.connection_register.keys() == []
@@ -658,7 +661,7 @@ async def test_the_order_to_drop_a_connection_answers_with_what_it_announced(wir
 
 async def test_the_freeze_order_is_answered_once_the_user_is_parked(wire, deposit):
     worker = await wire.take()
-    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
+    await call_endpoint(wire.connector, "/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
 
     reply = await wire.connector.call(FREEZE_USER_OP_PATH, {"user": "mario"}, timeout=5.0)
 
@@ -689,7 +692,7 @@ async def test_an_envelope_that_is_not_an_order_is_denounced_and_nothing_else(wi
 
     # A REPLY has a lane of its own now — the answer to a call this worker
     # placed upward — so what is denounced is whatever is neither of the two.
-    worker.handle_frame(Frame(method="POST", path="/op/anything"))
+    worker.handle_frame(control_frame(method="POST", path="/op/anything"))
 
     assert "unexpected envelope POST" in caplog.text
     assert worker.exited is False
@@ -710,7 +713,7 @@ async def test_a_violation_of_the_protocol_ends_the_wire_like_a_death(parent_wir
 
 async def test_a_dead_wire_ends_the_worker_and_writes_nothing_to_the_deposit(wire, deposit):
     worker = await wire.take()
-    await wire.connector.call("/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
+    await call_endpoint(wire.connector, "/site/invoices", http_call("cid-a", "mario"), timeout=5.0)
 
     await wire.connector.stop()
 
@@ -864,9 +867,7 @@ async def handler(short_root, repo_on_pythonpath):
     await worker_handler.connector.stop()
 
 
-async def test_a_real_child_serves_its_site_and_ends_alone_when_the_wire_goes(
-    handler, deposit
-):
+async def test_a_real_child_serves_its_site_and_ends_alone_when_the_wire_goes(handler, deposit):
     # It is born in a process of its own, and presents itself with a photo that
     # already knows it is that process: the pid is the one the handler spawned.
     await handler.launch_process()
@@ -876,8 +877,8 @@ async def test_a_real_child_serves_its_site_and_ends_alone_when_the_wire_goes(
     # It is alive, and it serves: the request crosses the process boundary
     # emulated in the envelope and comes back as the site answered it.
     await handler.ping_process()
-    reply = await handler.connector.call(
-        "/site/invoices", http_call("cid-a", "mario"), timeout=10.0
+    reply = await call_endpoint(
+        handler.connector, "/site/invoices", http_call("cid-a", "mario"), timeout=10.0
     )
     assert body_of(reply) == "GET /invoices for mario"
     assert announced(reply) == ["new_user", "new_connection"]

@@ -49,7 +49,7 @@ An in-process member joins through ``attach_local(local_channel)`` — the same
 REGISTER frame and the same receive loop over a queue-backed codec twin, so
 the rubric holds one kind of member however it got here (``local.py``).
 
-Liveness is the frame protocol's: EOF is the death signal, so a member
+Liveness is the frame protocol's: EOF reports connection loss, so a member
 whose stream ends is dropped from the rubric and ``on_channel_lost(member)``
 fires — sweep and relaunch belong to the commander, not here. A deliberate
 ``stop()`` is not a death and fires nothing. A ``ValueError`` from the codec
@@ -69,7 +69,8 @@ import shutil
 import tempfile
 from typing import Any, Callable
 
-from .frame import MAX_FRAME_SIZE, REGISTER_METHOD, Frame, FrameStream
+from .control import ControlPayload
+from .frame import MAX_FRAME_SIZE, MAX_INFO_SIZE, REGISTER_METHOD, Frame, FrameStream
 from .local import LocalChannel, LocalFrameStream
 
 __all__ = [
@@ -84,6 +85,8 @@ __all__ = [
 CALL_METHOD = "CALL"
 REPLY_METHOD = "REPLY"
 EVENT_METHOD = "EVENT"
+MAX_PENDING_CALLS = 1024
+MAX_EVENT_TASKS = 1024
 
 
 class ChannelCallError(Exception):
@@ -122,11 +125,8 @@ class ChannelMember:
         self.stream = stream
 
     async def write(self, frame: Frame) -> None:
-        """Send one frame; a member dying mid-send loses it by design."""
-        try:
-            await self.stream.write(frame)
-        except (BrokenPipeError, ConnectionResetError):
-            self.hub.logger.debug("write to %s: connection already closed", self.name)
+        """Send one frame, surfacing a link failure to its caller."""
+        await self.stream.write(frame)
 
     def __repr__(self) -> str:
         return f"<ChannelMember {self.name} pid={self.pid}>"
@@ -152,13 +152,22 @@ class ChannelHub:
         on_channel_lost: Callable[..., Any] | None = None,
         on_event: Callable[..., Any] | None = None,
         max_size: int = MAX_FRAME_SIZE,
+        max_info_size: int = MAX_INFO_SIZE,
+        max_pending_calls: int = MAX_PENDING_CALLS,
+        max_event_tasks: int = MAX_EVENT_TASKS,
     ) -> None:
         if path is not None and host is not None:
             raise ValueError("give path (uds) or host (tcp), not both")
+        if max_pending_calls < 1 or max_event_tasks < 1:
+            raise ValueError("max_pending_calls and max_event_tasks must be positive")
         self.on_member_joined = on_member_joined
         self.on_channel_lost = on_channel_lost
         self.on_event = on_event
         self.max_size = max_size
+        self.max_info_size = max_info_size
+        self.control_payload = ControlPayload()
+        self.max_pending_calls = max_pending_calls
+        self.max_event_tasks = max_event_tasks
         self.logger = logging.getLogger(__name__)
         self._owned_dir: str | None = None
         if path is None and host is None:
@@ -170,7 +179,8 @@ class ChannelHub:
         self.port = port
         self._server: asyncio.Server | None = None
         self._members: dict[str, ChannelMember] = {}
-        self._pending: dict[str, tuple[str, asyncio.Future[Any]]] = {}
+        self._pending: dict[str, tuple[ChannelMember, str, asyncio.Future[Frame]]] = {}
+        self._abandoned: dict[str, tuple[ChannelMember, str]] = {}
         self._local_loops: set[asyncio.Task[None]] = set()
         self._event_tasks: set[asyncio.Task[None]] = set()
         self._closing = False
@@ -199,9 +209,7 @@ class ChannelHub:
         if self.path is not None:
             self._server = await asyncio.start_unix_server(self._handle_connection, path=self.path)
         else:
-            self._server = await asyncio.start_server(
-                self._handle_connection, self.host, self.port
-            )
+            self._server = await asyncio.start_server(self._handle_connection, self.host, self.port)
             self.port = self._server.sockets[0].getsockname()[1]
         self.logger.info("Channel hub listening on %s", self.address)
 
@@ -252,7 +260,7 @@ class ChannelHub:
         member = self._members.get(name)
         if member is None:
             raise LookupError(f"no member named {name!r}")
-        frame = Frame(method=EVENT_METHOD, path=path, data=data)
+        frame = Frame(method=EVENT_METHOD, path=path, payload=self.control_payload.encode(data))
         await member.write(frame)
         return frame.id
 
@@ -270,14 +278,45 @@ class ChannelHub:
         member = self._members.get(name)
         if member is None:
             raise LookupError(f"no member named {name!r}")
-        frame = Frame(method=CALL_METHOD, path=path, data=data)
-        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
-        self._pending[frame.id] = (name, future)
+        frame = Frame(method=CALL_METHOD, path=path, payload=self.control_payload.encode(data))
+        reply = await self.call_frame(name, frame, timeout=timeout)
+        return self.control_payload.decode(reply.payload)
+
+    async def call_frame(self, name: str, frame: Frame, timeout: float | None = None) -> Frame:
+        """Send an opaque CALL frame and return its matching opaque REPLY."""
+        if frame.method != CALL_METHOD:
+            raise ValueError("call_frame requires a CALL frame")
+        member = self._members.get(name)
+        if member is None:
+            raise LookupError(f"no member named {name!r}")
+        if len(self._pending) >= self.max_pending_calls:
+            raise RuntimeError(f"channel has {self.max_pending_calls} outstanding calls")
+        if frame.id in self._pending:
+            raise RuntimeError(f"a call with id {frame.id!r} is already pending")
+        if frame.id in self._abandoned:
+            raise RuntimeError(f"a call with id {frame.id!r} is awaiting a late reply")
+        future: asyncio.Future[Frame] = asyncio.get_running_loop().create_future()
+        self._pending[frame.id] = (member, frame.path, future)
+        sent = False
         try:
+            # A cancellation during drain cannot prove that no bytes reached
+            # the peer, so crossing the write boundary is conservatively sent.
+            sent = True
             await member.write(frame)
             if timeout is None:
                 return await future
             return await asyncio.wait_for(future, timeout)
+        except (TimeoutError, asyncio.CancelledError):
+            if (
+                sent
+                and (not future.done() or future.cancelled())
+                and self._members.get(member.name) is member
+            ):
+                if len(self._abandoned) >= self.max_pending_calls:
+                    await member.stream.close()
+                else:
+                    self._abandoned[frame.id] = (member, frame.path)
+            raise
         finally:
             self._pending.pop(frame.id, None)
 
@@ -285,7 +324,9 @@ class ChannelHub:
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
         """Per-connection task: require REGISTER as the first frame, then relay."""
-        stream = FrameStream(reader, writer, max_size=self.max_size)
+        stream = FrameStream(
+            reader, writer, max_size=self.max_size, max_info_size=self.max_info_size
+        )
         member = await self._register_connection(stream)
         if member is not None:
             await self._receive_loop(member)
@@ -304,7 +345,16 @@ class ChannelHub:
             self.logger.warning("Connection rejected: first frame is not %s", REGISTER_METHOD)
             await stream.close()
             return None
-        info = frame.data or {}
+        try:
+            info = self.control_payload.decode(frame.payload)
+        except ValueError:
+            self.logger.warning("Connection rejected: invalid REGISTER control payload")
+            await stream.close()
+            return None
+        if not isinstance(info, dict):
+            self.logger.warning("Connection rejected: REGISTER payload is not an object")
+            await stream.close()
+            return None
         name = info.get("name")
         if not name:
             self.logger.warning("Connection rejected: REGISTER without a name")
@@ -343,7 +393,12 @@ class ChannelHub:
             await member.stream.close()
             if self._members.get(member.name) is member:
                 del self._members[member.name]
-                self._fail_pending(member.name, f"channel to {member.name} lost")
+                self._fail_pending(member, f"channel to {member.name} lost")
+                self._abandoned = {
+                    frame_id: expected
+                    for frame_id, expected in self._abandoned.items()
+                    if expected[0] is not member
+                }
                 if not self._closing:
                     self.logger.info("Channel lost: %s", member.name)
                     await self._fire(self.on_channel_lost, member)
@@ -358,34 +413,58 @@ class ChannelHub:
         ordering is not preserved: an ordering-sensitive consumer provides its own.
         """
         if frame.method == REPLY_METHOD:
-            self._resolve_reply(member, frame)
+            await self._resolve_reply(member, frame)
         elif frame.method == EVENT_METHOD:
+            if len(self._event_tasks) >= self.max_event_tasks:
+                self.logger.warning(
+                    "Dropping EVENT %s from %s: event task limit %s reached",
+                    frame.path,
+                    member.name,
+                    self.max_event_tasks,
+                )
+                return
             task = asyncio.create_task(self._fire(self.on_event, member, frame))
             self._event_tasks.add(task)
             task.add_done_callback(self._event_tasks.discard)
         else:
             self.logger.warning("Unknown envelope %s from %s", frame.method, member.name)
 
-    def _resolve_reply(self, member: ChannelMember, frame: Frame) -> None:
+    async def _resolve_reply(self, member: ChannelMember, frame: Frame) -> None:
         """Hand the REPLY payload to the parked future, verbatim.
 
         A REPLY whose caller already went away — its deadline expired, or it
         was cancelled — is dropped: nobody is left to read the envelope.
         """
+        abandoned = self._abandoned.get(frame.id)
+        if abandoned is not None:
+            if abandoned == (member, frame.path):
+                del self._abandoned[frame.id]
+            else:
+                self.logger.warning(
+                    "REPLY %s from %s does not match its abandoned CALL", frame.id, member.name
+                )
+                await member.stream.close()
+            return
         parked = self._pending.get(frame.id)
-        if parked is None or parked[1].done():
+        if parked is None or parked[2].done():
             self.logger.debug("REPLY %s from %s has no parked caller", frame.id, member.name)
             return
-        parked[1].set_result(frame.data or {})
+        if parked[0] is not member or parked[1] != frame.path:
+            self.logger.warning(
+                "REPLY %s from %s does not match its pending CALL", frame.id, member.name
+            )
+            await member.stream.close()
+            return
+        parked[2].set_result(frame)
 
-    def _fail_pending(self, member_name: str | None, reason: str) -> None:
-        """Fail the pending CALLs of one member (``None`` = all) with ``ConnectionError``.
+    def _fail_pending(self, member: ChannelMember | None, reason: str) -> None:
+        """Fail one member's pending CALLs (``None`` = all) with ``ConnectionError``.
 
         The entries stay in ``_pending``: each caller pops its own in the
         ``finally`` of ``call()``.
         """
-        for name, future in self._pending.values():
-            if (member_name is None or name == member_name) and not future.done():
+        for expected_member, _path, future in self._pending.values():
+            if (member is None or expected_member is member) and not future.done():
                 future.set_exception(ConnectionError(reason))
 
     async def _fire(self, callback: Callable[..., Any] | None, *args: Any) -> None:

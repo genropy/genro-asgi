@@ -12,52 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The two seams of the hosted application: facts in, answer out, no transport.
+"""The hosted application's ASGI and WSGI endpoint adapters.
 
-A CALL brings the worker one ``http`` dict — the facts the front packed out of
-a real request — and expects one back. What stands between that dict and the
-application the worker hosts is this module, and it holds one seam per kind of
-application:
+AsgiSeam reconstructs the scope from the HTTP record opened by the worker,
+adds trusted genro.identity/page_id/reply_path, and delegates to the neutral
+BufferedAsgiEndpoint. Bodies are bytes in both directions. The original SPA
+second-read disconnect and finite response-chunk behavior remain available.
 
-- :class:`AsgiSeam` takes the ``http`` dict, builds the ASGI **scope** from it,
-  and calls an ASGI application as a server would: ``(scope, receive, send)``.
-  It is the ONE road out of ``_serve_request``.
-- :class:`WsgiSeam` is an ASGI application itself, wrapped around a WSGI
-  callable: it builds the PEP 3333 environ from a scope and runs that callable
-  on the worker's traffic pool, because WSGI is synchronous.
-
-So there is one seam on the worker, ``asgi_app``, and a legacy WSGI site
-reaches it through ``WsgiSeam``. A worker that hosts only WSGI takes the
-shortcut — it assigns ``wsgi_app`` and the core wraps it — and a consumer whose
-own ASGI application must delegate some paths to a legacy site builds a
-``WsgiSeam`` around that site and calls it from its own router: the mixed
-routing lives there, and the core knows no path prefixes (owner, 2026-09-06,
-form B).
-
-**The wire shape, both ways.** The request dict is JSON-safe because the
-channel is JSON: ``{"method", "path", "query_string", "headers", "body",
-"client", "scheme"}`` — headers a pair-list so duplicates survive, body base64
-like the move package. The reply is ``{"status", "headers", "body"}`` with the
-same conventions.
-
-**One body, whole, both ways.** Streaming is out of scope by ratification: the
-request body arrives as one chunk and the response is consumed to its last one
-before the reply dict exists. An application that never finishes never finishes
-the CALL.
-
-**The identity travels.** The CALL's ``identity`` — the sticky key the pool
-routed on — reaches the hosted code as ``genro.identity``, a scope key for an
-ASGI application and an environ key for a WSGI one, together with
-``genro.page_id`` and ``genro.reply_path`` when the message carried them. On a
-real HTTP request those two are ABSENT, not ``None``.
+WsgiSeam wraps a synchronous application as ASGI and runs it through the
+worker's traffic pool, preserving the active request slot. It translates
+root_path/path to SCRIPT_NAME/PATH_INFO and preserves duplicate headers and
+cookies using the WSGI joining rules. No Python session or Avatar crosses the
+transport; the worker receives only explicitly defined routing context.
 """
 
 from __future__ import annotations
 
-import base64
 import io
 import sys
 from typing import Any, Callable, Iterable
+
+from genro_asgi.asgi_endpoint import BufferedAsgiEndpoint
 
 __all__ = ["AsgiSeam", "WsgiSeam"]
 
@@ -101,15 +76,15 @@ class AsgiSeam:
         scope: dict[str, Any] = {
             "type": "http",
             "asgi": {"version": "3.0", "spec_version": "2.3"},
-            "http_version": "1.1",
+            "http_version": http.get("http_version", "1.1"),
             "method": http.get("method", "GET"),
             "scheme": http.get("scheme") or "http",
             "path": http.get("path", "/"),
-            "raw_path": str(http.get("path", "/")).encode("latin-1"),
-            "root_path": "",
+            "raw_path": http.get("raw_path", str(http.get("path", "/")).encode("utf-8")),
+            "root_path": http.get("root_path", ""),
             "query_string": str(http.get("query_string", "")).encode("latin-1"),
             "headers": headers,
-            "server": (host, int(port)),
+            "server": tuple(http["server"]) if http.get("server") else (host, int(port)),
             "client": (str(client[0]), int(client[1])) if len(client) > 1 else None,
             "genro.identity": identity,
         }
@@ -133,40 +108,16 @@ class AsgiSeam:
             identity: the CALL's identity.
 
         Returns:
-            ``{"status", "headers", "body"}``, the body base64 — the same shape
+            ``{"status", "headers", "body"}``, the body raw bytes — the same shape
             the WSGI road produced before this seam existed.
 
         Raises:
             RuntimeError: the application answered nothing.
         """
         scope = self.build_scope(http, identity)
-        body = base64.b64decode(http.get("body") or "")
-        collected: dict[str, Any] = {"status": None, "headers": [], "chunks": [], "done": False}
-
-        async def receive() -> dict[str, Any]:
-            if collected["done"]:
-                return {"type": "http.disconnect"}
-            collected["done"] = True
-            return {"type": "http.request", "body": body, "more_body": False}
-
-        async def send(message: dict[str, Any]) -> None:
-            if message["type"] == "http.response.start":
-                collected["status"] = message["status"]
-                collected["headers"] = [
-                    [name.decode("latin-1"), value.decode("latin-1")]
-                    for name, value in message.get("headers") or []
-                ]
-            elif message["type"] == "http.response.body":
-                collected["chunks"].append(message.get("body", b""))
-
-        await self.asgi_app(scope, receive, send)
-        if collected["status"] is None:
-            raise RuntimeError("the hosted application answered nothing")
-        return {
-            "status": int(collected["status"]),
-            "headers": collected["headers"],
-            "body": base64.b64encode(b"".join(collected["chunks"])).decode("ascii"),
-        }
+        return await BufferedAsgiEndpoint(self.asgi_app, reject_streaming=False).serve(
+            scope, http.get("body") or b""
+        )
 
 
 class WsgiSeam:

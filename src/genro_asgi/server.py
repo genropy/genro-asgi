@@ -56,6 +56,7 @@ from .pool import WorkPool
 from .request_registry import RequestRegistry
 from .response import Response
 from .websocket import WebSocket, WebSocketRegistry
+from .wsx_payload import SerializedWsxPayload
 from .wsx import WsxConnection, WsxEnvelope
 
 if TYPE_CHECKING:
@@ -269,6 +270,17 @@ class BaseServer:
             return False
         envelope = WsxEnvelope(method="WSK", path=path, data=data, page_id=page_id)
         await socket.send_text(envelope.encode())
+        return True
+
+    async def send_serialized_message(
+        self, page_id: str, path: str, payload: SerializedWsxPayload
+    ) -> bool:
+        """Forward an explicitly serialized application value to its page."""
+        socket = self.websockets.get_page_socket(page_id)
+        if socket is None or not socket.connected:
+            return False
+        await socket.send_text(WsxEnvelope(method="WSK", path=path,
+                                          serialized_data=payload, page_id=page_id).encode())
         return True
 
     @property

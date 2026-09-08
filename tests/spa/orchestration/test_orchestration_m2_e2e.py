@@ -50,16 +50,21 @@ past it, which is the very reason worker names are short.
 
 from __future__ import annotations
 
-import base64
 import logging
 import time
 from http.cookies import SimpleCookie
 from typing import Any
 
 import pytest
+from tests.spa.orchestration.frame_helpers import call_endpoint, read_control
 
 from genro_asgi_multiworker_spa.spa_app import SPA_CONNECTION_ID_COOKIE
-from genro_asgi_multiworker_spa.orchestration import FreezeHandler, SpaWorker, UserOnHold, WorkerHandler
+from genro_asgi_multiworker_spa.orchestration import (
+    FreezeHandler,
+    SpaWorker,
+    UserOnHold,
+    WorkerHandler,
+)
 from genro_asgi_multiworker_spa.orchestration.worker_connector import ENVELOPE_SLOT_WORKER_SNAPSHOT
 
 from .group_stub import GroupStub
@@ -127,8 +132,7 @@ class DrivenWorker(SpaWorker):
                 ("X-Worker", self.name),
             ],
         )
-        return [f"{environ['REQUEST_METHOD']} {environ['PATH_INFO']} "
-                f"for {identity}".encode()]
+        return [f"{environ['REQUEST_METHOD']} {environ['PATH_INFO']} for {identity}".encode()]
 
     async def answer_call(self, frame: Any) -> None:
         """Answer the two orders of the driver, and hand everything else upstairs.
@@ -143,7 +147,7 @@ class DrivenWorker(SpaWorker):
         the reply carries what the departures said and the picture they left.
         """
         if frame.path == PLAN_ORDER:
-            self.plan_transfers(transfer_users=(frame.data or {}).get("users", ()))
+            self.plan_transfers(transfer_users=(read_control(frame) or {}).get("users", ()))
             await self.send_reply(frame, result={})
         elif frame.path == EXECUTE_ORDER:
             await self.execute_transfers()
@@ -190,7 +194,7 @@ def known_at_the_vertex(commander: Any, cid: str, user: str) -> None:
 
 def body_of(reply: dict[str, Any]) -> str:
     """The site's answer, decoded out of the wire form."""
-    return base64.b64decode(reply["result"]["body"]).decode()
+    return reply["result"]["body"].decode()
 
 
 def announced(reply: dict[str, Any]) -> list[str]:
@@ -268,8 +272,11 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     # comes back as the site answered it — headers and body whole. The rows are
     # born on the way in, and the worker events say so.
     before = time.time()
-    reply = await handler.connector.call(
-        "/site/invoices", http_call("cid-a", "mario", path="/invoices"), timeout=CALL_TIMEOUT
+    reply = await call_endpoint(
+        handler.connector,
+        "/site/invoices",
+        http_call("cid-a", "mario", path="/invoices"),
+        timeout=CALL_TIMEOUT,
     )
 
     assert reply["result"]["status"] == 200
@@ -290,8 +297,11 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
 
     # A second user arrives: one of them is about to be parked, the other has
     # just spoken.
-    arrival = await handler.connector.call(
-        "/site/orders", http_call("cid-b", "anna", path="/orders"), timeout=CALL_TIMEOUT
+    arrival = await call_endpoint(
+        handler.connector,
+        "/site/orders",
+        http_call("cid-b", "anna", path="/orders"),
+        timeout=CALL_TIMEOUT,
     )
     assert announced(arrival) == ["new_user", "new_connection"]
 
@@ -299,9 +309,7 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     # the judgment is the group's rung, which this story has not got — and the
     # one nobody named is kept. The decision travels on the photo that answers
     # the order.
-    planned = await handler.connector.call(
-        PLAN_ORDER, {"users": ["mario"]}, timeout=CALL_TIMEOUT
-    )
+    planned = await handler.connector.call(PLAN_ORDER, {"users": ["mario"]}, timeout=CALL_TIMEOUT)
 
     flagged = planned[ENVELOPE_SLOT_WORKER_SNAPSHOT]["users"]
     assert {user: pair["transfer_flag"] for user, pair in flagged.items()} == {
@@ -346,7 +354,8 @@ async def test_the_worker_is_born_serves_parks_wakes_departs_and_a_successor_tak
     # parcels are taken away and the folder goes with the last of them. WHICH
     # worker he comes home to is the vertex's to say — here it is this one
     # because this story runs a single worker.
-    woken = await handler.connector.call(
+    woken = await call_endpoint(
+        handler.connector,
         "/site/invoices",
         http_call("cid-a", "mario", path="/invoices", user_frozen=True),
         timeout=CALL_TIMEOUT,

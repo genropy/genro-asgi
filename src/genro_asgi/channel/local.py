@@ -18,15 +18,15 @@ The single role (design §3.5a) runs commander and worker in ONE process, and
 it must speak the very same protocol as a spawned child: not "the same API",
 the same *bytes*. ``LocalChannel`` is therefore two ``asyncio.Queue``s of
 encoded frames — every envelope crosses through ``Frame.encode()`` and is
-re-parsed on the other side with the same length-prefix + ``WSX://`` + JSON
+re-parsed on the other side with the same versioned info/bytes
 rules ``FrameStream.read`` applies. A payload dict mutated after ``send()``
 cannot reach the peer, exactly as over a socket.
 
 ``LocalFrameStream`` is the codec twin of ``FrameStream`` (the only module
 above the frame protocol allowed to touch bytes): ``read()`` returns ``None``
-at EOF, an oversized or non-wsx frame raises ``ValueError``. A queue sentinel
+at EOF, an oversized or malformed frame raises ``ValueError``. A queue sentinel
 models EOF in both directions, so closing either end has the socket meaning —
-the peer's read ends and the death path runs.
+the peer's read ends and the link-loss callback runs.
 
 ``LocalChannel`` itself IS the member face, with the ``ChannelClient`` API
 (``connect``/``send``/``close``/``wait_closed``, ``on_message``/``on_orphan``,
@@ -40,19 +40,19 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 import logging
 import os
 from typing import Any, Callable
 
 from .frame import (
-    HEADER_SIZE,
     MAX_FRAME_SIZE,
+    MAX_INFO_SIZE,
     REGISTER_METHOD,
     REGISTER_PATH,
-    WSX_PREFIX,
     Frame,
+    FrameCodec,
 )
+from .control import ControlPayload
 
 __all__ = ["LocalChannel", "LocalFrameStream"]
 
@@ -71,10 +71,17 @@ class LocalFrameStream:
         outbound: asyncio.Queue[bytes | None],
         *,
         max_size: int = MAX_FRAME_SIZE,
+        max_info_size: int = MAX_INFO_SIZE,
+        max_queue_size: int = 16,
     ) -> None:
+        if max_queue_size < 1:
+            raise ValueError("max_queue_size must be positive")
         self.inbound = inbound
         self.outbound = outbound
         self.max_size = max_size
+        self.max_info_size = max_info_size
+        self.max_queue_size = max_queue_size
+        self.codec = FrameCodec(max_size=max_size, max_info_size=max_info_size)
         self._closed = False
 
     @property
@@ -87,30 +94,13 @@ class LocalFrameStream:
         wire = await self.inbound.get()
         if wire is None:
             return None
-        length = int.from_bytes(wire[:HEADER_SIZE], "big")
-        if length > self.max_size:
-            raise ValueError(f"frame of {length} bytes exceeds max_size={self.max_size}")
-        payload = wire[HEADER_SIZE : HEADER_SIZE + length]
-        if not payload.startswith(WSX_PREFIX):
-            raise ValueError("frame payload is not a wsx envelope")
-        envelope = json.loads(payload[len(WSX_PREFIX) :])
-        try:
-            return Frame(
-                id=envelope["id"],
-                method=envelope["method"],
-                path=envelope["path"],
-                data=envelope.get("data"),
-            )
-        except (KeyError, TypeError) as exc:
-            raise ValueError(f"invalid wsx envelope: {exc}") from exc
+        return self.codec.get_frame(wire)
 
     async def write(self, frame: Frame) -> None:
-        """Encode and enqueue one frame; writing to a closed end loses it."""
-        wire = frame.encode()
-        if len(wire) - HEADER_SIZE > self.max_size:
-            raise ValueError(
-                f"frame of {len(wire) - HEADER_SIZE} bytes exceeds max_size={self.max_size}"
-            )
+        """Encode and enqueue one frame; a full or closed end raises."""
+        if self.outbound.qsize() >= self.max_queue_size:
+            raise ConnectionError("local channel queue full; frame not sent")
+        wire = self.codec.encode(frame)
         if self._closed:
             raise BrokenPipeError("local channel end is closed")
         await self.outbound.put(wire)
@@ -140,16 +130,33 @@ class LocalChannel:
         on_message: Callable[..., Any] | None = None,
         on_orphan: Callable[..., Any] | None = None,
         max_size: int = MAX_FRAME_SIZE,
+        max_info_size: int = MAX_INFO_SIZE,
+        max_queue_size: int = 16,
     ) -> None:
+        if max_queue_size < 1:
+            raise ValueError("max_queue_size must be positive")
         self.name = name
         self.on_message = on_message
         self.on_orphan = on_orphan
         self.max_size = max_size
+        self.max_info_size = max_info_size
         self.address = "local:"
         to_hub: asyncio.Queue[bytes | None] = asyncio.Queue()
         to_member: asyncio.Queue[bytes | None] = asyncio.Queue()
-        self._member_stream = LocalFrameStream(to_member, to_hub, max_size=max_size)
-        self._hub_stream = LocalFrameStream(to_hub, to_member, max_size=max_size)
+        self._member_stream = LocalFrameStream(
+            to_member,
+            to_hub,
+            max_size=max_size,
+            max_info_size=max_info_size,
+            max_queue_size=max_queue_size,
+        )
+        self._hub_stream = LocalFrameStream(
+            to_hub,
+            to_member,
+            max_size=max_size,
+            max_info_size=max_info_size,
+            max_queue_size=max_queue_size,
+        )
         self._logger = logging.getLogger(__name__)
         self._receive_task: asyncio.Task[None] | None = None
         self._connected = False
@@ -173,10 +180,12 @@ class LocalChannel:
 
     async def connect(self) -> None:
         """Present the REGISTER frame and start the receive loop."""
+        if self.connected:
+            raise RuntimeError("local channel is already connected")
         register = Frame(
             method=REGISTER_METHOD,
             path=REGISTER_PATH,
-            data={"name": self.name, "pid": os.getpid()},
+            payload=ControlPayload().encode({"name": self.name, "pid": os.getpid()}),
         )
         await self._member_stream.write(register)
         self._connected = True
@@ -203,16 +212,15 @@ class LocalChannel:
 
     async def send(self, *, method: str = "POST", path: str = "/", data: Any = None) -> str:
         """Send one frame to the hub (fire-and-forget); returns the frame id."""
-        return await self.send_frame(Frame(method=method, path=path, data=data))
+        return await self.send_frame(
+            Frame(method=method, path=path, payload=ControlPayload().encode(data))
+        )
 
     async def send_frame(self, frame: Frame) -> str:
         """Send an already-built frame — a REPLY reuses the CALL's id."""
         if not self.connected:
             raise ConnectionError("not connected")
-        try:
-            await self._member_stream.write(frame)
-        except BrokenPipeError:
-            self._logger.debug("send: local channel already closed")
+        await self._member_stream.write(frame)
         return frame.id
 
     async def _receive_loop(self) -> None:
