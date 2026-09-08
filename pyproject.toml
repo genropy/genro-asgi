@@ -33,10 +33,10 @@ dependencies = [
     # and not of whoever installs it. `websockets` is what is needed, and
     # nothing more — never `uvicorn[standard]`, which drags in what is not.
     "websockets>=13.0",
-    "genro-bag>=0.21.0",
+    "genro-bag>=0.22.0",
     "genro-builders>=0.23.0",
     "genro-toolbox>=0.14.0",
-    "genro-tytx>=0.14.0",
+    "genro-tytx>=0.15.0",
     "genro-routes>=0.30.0",
     "genro-storage[encryption]>=0.8.0",
     "pyjwt>=2.0",
@@ -52,7 +52,7 @@ test = [
     "pytest-asyncio>=0.23",
     # The suite exercises the TYTX msgpack transport branch of response.py:
     # without this extra that coverage silently vanishes in a clean env.
-    "genro-tytx[msgpack]>=0.14.0",
+    "genro-tytx[msgpack]>=0.15.0",
 ]
 dev = [
     "genro-asgi[test]",
