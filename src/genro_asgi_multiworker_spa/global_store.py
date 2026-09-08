@@ -64,8 +64,6 @@ from typing import Any
 
 from genro_tytx import from_tytx, to_tytx
 
-from .orchestration.worker_connector import CommanderCallFailed
-
 #: The routing keys of the global store on the commander's dispatcher.
 GLOBAL_STORE_SET_OP_PATH = "/commander/store/set"
 GLOBAL_STORE_DEL_OP_PATH = "/commander/store/del"
@@ -265,9 +263,11 @@ class GlobalStoreLease:
                 GLOBAL_STORE_UNLOCK_OP_PATH,
                 {"request_id": self.request_id, "apply": True, "value": text},
             )
-        except CommanderCallFailed:
-            raise
-        except Exception as exc:
+        except ConnectionError as exc:
+            # The wire ended after the commit left: a parked CALL is failed with
+            # ConnectionError, a write on a dead socket raises one of its
+            # subclasses. Anything else — the commander's own refusal included —
+            # propagates as it is.
             raise GlobalStoreCommitUnconfirmed(self.request_id, self.key, exc) from exc
 
     async def _abort(self) -> None:
