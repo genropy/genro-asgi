@@ -11,6 +11,7 @@ WSK only: raw WebSocket, SSE and streaming replies require a later protocol.
 
 import asyncio
 import os
+import secrets
 import sys
 from typing import Any
 
@@ -19,7 +20,7 @@ from .asgi_endpoint import BufferedAsgiEndpoint
 from .channel.frame import Frame
 from .http_record import HttpRecord
 from .transport_limits import FrameTooLarge, HttpBodyTooLarge, http_max_body_size
-from .remote_connection import RemoteCallFailed, RemoteConnection
+from .remote_connection import RemoteCallFailed, RemoteConnection, RemotePeerMismatch
 from .response import Response
 
 
@@ -40,6 +41,7 @@ class RemoteApplication(BaseApplication):
         self.shutdown_timeout = shutdown_timeout
         self.request_timeout = request_timeout
         self.max_calls = max_calls
+        self._instance_id = secrets.token_hex(32) if factory is not None else None
         self.connection = self._new_connection()
         self._connection_closed = False
         self._process: asyncio.subprocess.Process | None = None
@@ -53,13 +55,18 @@ class RemoteApplication(BaseApplication):
             self.connection = self._new_connection()
             self._connection_closed = False
         if self.factory is not None:
+            # A new launch gets a new identity, including after shutdown/restart.
+            await self.connection.close()
+            self._instance_id = secrets.token_hex(32)
+            self.connection = self._new_connection()
+            self._connection_closed = False
             self._process = await asyncio.create_subprocess_exec(
                 sys.executable, "-m", "genro_asgi.remote_runner", "--address", self.address,
                 "--factory", self.factory, "--mount", self.mount or "",
                 "--shutdown-timeout", str(self.shutdown_timeout),
                 "--request-timeout", str(self.request_timeout),
                 "--max-calls", str(self.max_calls),
-                env=dict(os.environ),
+                env={**os.environ, "GNR_ASGI_REMOTE_INSTANCE_ID": self._instance_id},
             )
         try:
             async with asyncio.timeout(self.startup_timeout):
@@ -73,7 +80,7 @@ class RemoteApplication(BaseApplication):
                         self._started = True
                         return
                     except RemoteCallFailed as exc:
-                        if exc.outcome != "not_sent":
+                        if isinstance(exc, RemotePeerMismatch) or exc.outcome != "not_sent":
                             raise
                         await asyncio.sleep(0.05)
         except BaseException:
@@ -153,7 +160,8 @@ class RemoteApplication(BaseApplication):
 
     def _new_connection(self) -> RemoteConnection:
         return RemoteConnection(
-            self.address, timeout=self.request_timeout, max_calls=self.max_calls
+            self.address, timeout=self.request_timeout, max_calls=self.max_calls,
+            expected_instance_id=self._instance_id,
         )
 
     async def _send_local_response(self, response, scope, receive, send) -> None:

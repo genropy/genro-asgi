@@ -67,3 +67,12 @@ host. See [DOCKER.md](DOCKER.md) for build/start commands, the automated live
 HTTP/WSX/restart proof, the optional ARM VM compatibility override, and cleanup.
 The Docker example defaults to frontend port 18764 and published app port 18765,
 so it can run beside the ordinary TCP example above.
+
+## Listener ownership
+
+Owned-process mode checks the child's launch identity at startup and on every
+reconnection; a different runner at the address cannot serve that mount.
+Connect-only mode remains the way to use an independently managed runner.
+UDS mode refuses preexisting paths (including stale sockets and symlinks).
+Choose an unused path; remove a stale path only after checking its owner.
+See [the transport contract](../../docs/internal/opaque_transport.md) for details.

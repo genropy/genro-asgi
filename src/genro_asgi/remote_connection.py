@@ -11,6 +11,10 @@ to stop a peer process. Request limits bound retained bytes at both endpoints.
 import asyncio
 import contextlib
 import ipaddress
+import os
+import socket
+import stat
+import sys
 from typing import Any
 
 from .channel.frame import Frame, FrameStream
@@ -22,6 +26,13 @@ class RemoteCallFailed(ConnectionError):
     def __init__(self, reason: str, *, outcome: str) -> None:
         super().__init__(reason)
         self.outcome = outcome
+
+
+class RemotePeerMismatch(RemoteCallFailed):
+    """The peer is not the runner launched by this mount; no application call sent."""
+
+    def __init__(self) -> None:
+        super().__init__("remote peer does not match the owned runner", outcome="not_sent")
 
 
 class RemoteCallCancelled(asyncio.CancelledError):
@@ -39,6 +50,7 @@ class RemoteAddress:
         self.address = address
         transport, _, location = address.partition(":")
         self.path = None
+        self._socket_identity: tuple[int, int] | None = None
         self.host = None
         self.port = None
         if transport == "uds" and location:
@@ -65,17 +77,61 @@ class RemoteAddress:
 
     async def listen(self, callback: Any) -> asyncio.Server:
         if self.path is not None:
-            return await asyncio.start_unix_server(callback, path=self.path)
+            if self._socket_identity is not None:
+                raise RuntimeError("address already owns a bound socket")
+            # Some platforms allow bind through a dangling symlink. Refuse
+            # every existing directory entry, not just an existing target.
+            try:
+                os.lstat(self.path)
+            except FileNotFoundError:
+                pass
+            else:
+                raise FileExistsError(f"remote socket path already exists: {self.path}")
+            # bind() atomically refuses another runner's socket. Passing path= to
+            # asyncio would first unlink an existing socket, stealing its name.
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                sock.setblocking(False)
+                sock.bind(self.path)
+                bound = os.lstat(self.path)
+                if not stat.S_ISSOCK(bound.st_mode):
+                    raise OSError("bound socket pathname was replaced")
+                self._socket_identity = (bound.st_dev, bound.st_ino)
+                options: dict[str, Any] = {"cleanup_socket": False} if sys.version_info >= (3, 13) else {}
+                return await asyncio.start_unix_server(callback, sock=sock, **options)
+            except BaseException:
+                sock.close()
+                self.unlink_owned_socket()
+                raise
         return await asyncio.start_server(callback, host=self.host, port=self.port)
+
+    def unlink_owned_socket(self) -> None:
+        """Remove only the pathname still naming this listener's socket.
+
+        Call after closing the listener. A replaced pathname belongs to its new
+        owner. Parent directories must be private/operator-controlled; this is
+        lifecycle ownership, not protection against a hostile filesystem writer.
+        """
+        identity, self._socket_identity = self._socket_identity, None
+        if self.path is None or identity is None:
+            return
+        try:
+            current = os.lstat(self.path)
+            if (current.st_dev, current.st_ino) == identity:
+                os.unlink(self.path)
+        except FileNotFoundError:
+            pass
 
 
 class RemoteConnection:
     """One full-duplex frame connection with bounded calls and no replay."""
 
-    def __init__(self, address: str, *, timeout: float = 30.0, max_calls: int = 16) -> None:
+    def __init__(self, address: str, *, timeout: float = 30.0, max_calls: int = 16,
+                 expected_instance_id: str | None = None) -> None:
         if timeout <= 0 or max_calls < 1:
             raise ValueError("timeout and max_calls must be positive")
         self.address = RemoteAddress(address)
+        self.expected_instance_id = expected_instance_id
         self.timeout = timeout
         self._slots = asyncio.Semaphore(max_calls)
         self._connect_lock = asyncio.Lock()
@@ -132,8 +188,24 @@ class RemoteConnection:
                 raise ConnectionError("remote connection is closed")
             if self._stream is None:
                 reader, writer = await self.address.connect()
-                self._stream = FrameStream(reader, writer)
-                self._reader_task = asyncio.create_task(self._read_replies(self._stream))
+                stream = FrameStream(reader, writer)
+                try:
+                    if self.expected_instance_id is not None:
+                        # Do not disclose the expected identity in the request:
+                        # a foreign runner must report its own launch identity.
+                        probe = Frame(method="CALL", path="/_ready")
+                        await stream.write(probe)
+                        reply = await stream.read()
+                        if (reply is None or reply.method != "REPLY" or reply.id != probe.id
+                                or reply.path != probe.path or reply.info.get("ready") is not True
+                                or reply.info.get("instance_id") != self.expected_instance_id):
+                            raise RemotePeerMismatch()
+                except BaseException:
+                    with contextlib.suppress(Exception, asyncio.CancelledError):
+                        await stream.close()
+                    raise
+                self._stream = stream
+                self._reader_task = asyncio.create_task(self._read_replies(stream))
             return self._stream
 
     async def _read_replies(self, stream: FrameStream) -> None:

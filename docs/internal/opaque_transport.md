@@ -77,6 +77,29 @@ complete commands; no custom demux is required. Startup follows endpoint
 readiness, and shutdown drains within a configured bound before terminating
 only an owned child. Connection-only shutdown never signals its peer.
 
+An owned launch generates a fresh random instance identifier. The child receives
+it through the private launch environment (`GNR_ASGI_REMOTE_INSTANCE_ID`, consumed
+by the runner command before constructing the application), not a command-line
+argument. On EVERY new connection, the frontend probes readiness and checks the
+runner's reported identifier before sending application traffic. The expected
+identifier is not included in that probe. A foreign runner causes
+`RemotePeerMismatch` with application-call outcome `not_sent`; startup fails and
+stops only the child this mount spawned. Reconnecting cannot silently switch an
+owned mount to another runner. Connect-only mounts intentionally do not require
+an owned-launch identifier. This is accidental-peer/launch verification, not
+network authentication against a hostile actor with local process access.
+
+UDS listeners reject every preexisting directory entry, including stale sockets
+and dangling symlinks. They use raw socket bind rather than asyncio's path-based
+replacement behavior, so competing runner binds have one winner. Python 3.13+
+automatic pathname cleanup is disabled. On shutdown/setup failure, explicit
+cleanup removes only a pathname with the recorded device/inode of this listener;
+a replacement entry is left alone. Socket directories must be private or
+operator-controlled. An operator must resolve stale paths after verifying their
+owner; the runner does not reclaim them automatically. A SIGKILLed parent can
+still leave its child alive: graceful ownership shutdown is not parent-death
+supervision. A later owned mount now rejects that orphan rather than adopting it.
+
 Transport policy is configured in the environment **before starting every
 communicating process**, including external runners and containers:
 

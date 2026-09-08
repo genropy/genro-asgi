@@ -617,3 +617,14 @@ settings before startup. A locally oversized SPA result keeps its slot until
 the correlated error reply delivers its events and snapshot; the channel stays
 alive if that essential envelope fits. Incoming over-limit frames and uncertain
 writes still fail the connection. See `docs/internal/opaque_transport.md`.
+
+### Remote runner ownership repair (issue 72 review C1/C2)
+
+An owned mount verifies a fresh launch identifier on every connection before
+sending application traffic. The runner consumes the private launch environment
+identifier before creating the application. Readiness from an unrelated runner
+fails startup; only the spawned child is stopped. Connect-only mode stays
+operator-directed. UDS listeners refuse all preexisting entries, bind an explicit
+socket without asyncio's unlink/rebind behavior, and remove only the recorded
+socket device/inode on cleanup. No stale-path reclamation or parent-SIGKILL
+supervision is introduced. See `docs/internal/opaque_transport.md`.

@@ -13,8 +13,8 @@ import asyncio
 import contextlib
 import importlib
 import inspect
+import os
 import signal
-from pathlib import Path
 from typing import Any
 
 from .application import BaseApplication
@@ -33,7 +33,8 @@ class RemoteApplicationRunner:
 
     def __init__(self, factory: str, address: str, *, mount: str = "demo",
                  shutdown_timeout: float = 5.0, request_timeout: float = 30.0,
-                 max_calls: int = 16, allow_network_listener: bool = False) -> None:
+                 max_calls: int = 16, allow_network_listener: bool = False,
+                 instance_id: str | None = None) -> None:
         if shutdown_timeout <= 0 or request_timeout <= 0 or max_calls < 1:
             raise ValueError("timeouts and max_calls must be positive")
         module, separator, name = factory.partition(":")
@@ -46,6 +47,7 @@ class RemoteApplicationRunner:
             self.server = BaseServer(applications=[self.application])
         self.address = RemoteAddress(address, allow_network_listener=allow_network_listener)
         self.mount = mount
+        self.instance_id = instance_id
         self.shutdown_timeout = shutdown_timeout
         self.request_timeout = request_timeout
         self.endpoint = BufferedAsgiEndpoint(self.application)
@@ -72,8 +74,7 @@ class RemoteApplicationRunner:
             if listener is not None:
                 listener.close()
                 await listener.wait_closed()
-                if self.address.path:
-                    Path(self.address.path).unlink(missing_ok=True)
+                self.address.unlink_owned_socket()
             if self._calls:
                 _, pending = await asyncio.wait(self._calls, timeout=self.shutdown_timeout)
                 for task in pending:
@@ -146,7 +147,10 @@ class RemoteApplicationRunner:
             if frame.method != "CALL":
                 raise ValueError("remote service expects CALL")
             if frame.path == "/_ready":
-                reply = Frame(id=frame.id, method="REPLY", path=frame.path, info={"ready": True})
+                info: dict[str, Any] = {"ready": True}
+                if self.instance_id is not None:
+                    info["instance_id"] = self.instance_id
+                reply = Frame(id=frame.id, method="REPLY", path=frame.path, info=info)
             else:
                 if frame.path != "/http" or frame.info.get("format") != "http":
                     raise ValueError("unsupported remote operation")
@@ -199,7 +203,8 @@ class RemoteRunnerCommand:
         asyncio.run(RemoteApplicationRunner(options.factory, options.address,
                     mount=options.mount, shutdown_timeout=options.shutdown_timeout,
                     request_timeout=options.request_timeout, max_calls=options.max_calls,
-                    allow_network_listener=options.allow_network_listener).run())
+                    allow_network_listener=options.allow_network_listener,
+                    instance_id=os.environ.pop("GNR_ASGI_REMOTE_INSTANCE_ID", None)).run())
 
 
 if __name__ == "__main__":
