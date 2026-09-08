@@ -1,30 +1,40 @@
-// Renders the diagrams ourselves: the fence emits <div class="gnr-mermaid">source</div>,
-// which the theme does not touch, so the source is still in the DOM when we get here.
-//
-// useMaxWidth:false keeps every diagram at its NATURAL size instead of squeezing it
-// into the column — a wide diagram then scrolls horizontally and stays readable,
-// rather than shrinking until the labels are dots.
+// Preserve diagram source so switching the Material palette redraws its colors.
 (function () {
+  var serial = 0;
+  var pending = Promise.resolve();
   function render() {
     if (!window.mermaid) return;
-    window.mermaid.initialize({
-      startOnLoad: false,
-      securityLevel: "loose",
-      flowchart: {useMaxWidth: false, htmlLabels: true},
-      sequence: {useMaxWidth: false},
-      theme: document.body.dataset.mdColorScheme === "slate" ? "dark" : "default",
-    });
-    document.querySelectorAll("div.gnr-mermaid").forEach(function (el, i) {
-      if (el.dataset.done) return;
-      el.dataset.done = "1";
-      var src = el.textContent.trim();
-      window.mermaid.render("gnr-d" + i + "-" + Date.now(), src)
-        .then(function (r) { el.innerHTML = r.svg; })
-        .catch(function (e) {
-          el.innerHTML = '<pre style="color:#c00">mermaid: ' + String(e) + "</pre>";
-        });
+    pending = pending.then(async function () {
+      var theme = document.body.dataset.mdColorScheme === "slate" ? "dark" : "default";
+      window.mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+        flowchart: {useMaxWidth: false, htmlLabels: true},
+        sequence: {useMaxWidth: false},
+        theme: theme,
+      });
+      for (var el of document.querySelectorAll("div.gnr-mermaid")) {
+        if (el.dataset.theme === theme) continue;
+        if (!el.dataset.source) el.dataset.source = el.textContent.trim();
+        try {
+          var result = await window.mermaid.render("gnr-d" + (++serial), el.dataset.source);
+          el.innerHTML = result.svg;
+          el.dataset.theme = theme;
+        } catch (error) {
+          var message = document.createElement("pre");
+          message.textContent = "mermaid: " + String(error);
+          el.replaceChildren(message);
+        }
+      }
     });
   }
+  function start() {
+    new MutationObserver(render).observe(document.body, {
+      attributes: true, attributeFilter: ["data-md-color-scheme"]
+    });
+    render();
+  }
   if (window.document$ && window.document$.subscribe) window.document$.subscribe(render);
-  else document.addEventListener("DOMContentLoaded", render);
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
+  else start();
 })();

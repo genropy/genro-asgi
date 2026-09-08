@@ -10,6 +10,9 @@ docs_dir: internals
 site_dir: .mkdocs/site
 use_directory_urls: true
 
+hooks:
+  - .mkdocs/source_views.py
+
 # Fixed on purpose: a shared port makes a deep link work for a colleague who
 # has the reader running — http://127.0.0.1:8771/10_server/010_server/#the-anatomy
 dev_addr: 127.0.0.1:8771
