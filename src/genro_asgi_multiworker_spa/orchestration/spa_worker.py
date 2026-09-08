@@ -267,6 +267,7 @@ from genro_tytx import to_tytx
 
 from genro_asgi.channel.control import ControlPayload
 from genro_asgi.http_record import HttpRecord
+from genro_asgi.transport_limits import FrameTooLarge
 from genro_asgi.channel.frame import REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
 from genro_asgi.exceptions import HTTPException
 from ..environ import AsgiSeam, WsgiSeam
@@ -1528,14 +1529,21 @@ class SpaWorker:
         # Serialization failures above leave this call's slot available for an
         # explicit error reply. Once sending begins, failure is uncertain: close
         # the wire so its caller fails instead of waiting forever or replaying.
+        try:
+            await self.stream.write(reply)
+        except FrameTooLarge:
+            # No bytes were written. Keep the events for the error reply and
+            # ensure the snapshot rejected with this response is sent again.
+            if ENVELOPE_SLOT_WORKER_SNAPSHOT in reply.info:
+                self._population_changed = True
+            raise
+        except Exception:
+            self._request_slot_var.set(None)
+            await self.stream.close()
+            raise
         with self.dispatch_lock:
             slot.worker_events = []
         self._request_slot_var.set(None)
-        try:
-            await self.stream.write(reply)
-        except Exception:
-            await self.stream.close()
-            raise
 
     async def call(
         self, path: str, data: Any = None, timeout: float | None = None

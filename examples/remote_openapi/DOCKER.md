@@ -113,3 +113,22 @@ running for interactive inspection. Logs are in the worktree's
 The associated host regressions passed 27 tests across the new listener,
 RemoteConnection and RemoteApplication suites. Ruff and diff checks passed.
 The existing application code was not changed.
+
+## Frame capacity and attention warnings
+
+The Compose service passes the same transport variables used by the host
+frontend. Export overrides in the shell **before** starting both services, e.g.:
+
+```sh
+export GNR_ASGI_FRAME_MAX_BYTES=268435456
+export GNR_ASGI_FRAME_WARN_BYTES=1048576
+export GNR_ASGI_FRAME_WARN_INTERVAL_SECONDS=60
+```
+
+The body limit follows the frame limit unless `GNR_ASGI_HTTP_MAX_BODY_BYTES`
+is also exported. The complete frame includes HTTP and routing metadata, so its
+maximum is not an exact maximum body size. Restart both sides after changing
+policy. Accepted large frames generate throttled warnings without payload data;
+small frames allocate no extra memory when the maximum is raised. See
+[the transport contract](../../docs/internal/opaque_transport.md) for rejection
+semantics and environment validation.

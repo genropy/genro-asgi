@@ -25,19 +25,21 @@ from typing import Any, Awaitable, Callable
 
 from .wsx_payload import WsxResponseEncoder
 from .types import Scope
+from .transport_limits import DEFAULT_MAX_FRAME_SIZE, HttpBodyTooLarge, http_max_body_size
 
 
 class BufferedAsgiEndpoint:
     """Call an ASGI application with bounded, whole request and response bodies."""
 
-    DEFAULT_MAX_BODY_SIZE = 8 * 1024 * 1024
+    DEFAULT_MAX_BODY_SIZE = DEFAULT_MAX_FRAME_SIZE
 
     def __init__(
         self,
         application: Callable[..., Awaitable[None]],
-        max_body_size: int = DEFAULT_MAX_BODY_SIZE,
+        max_body_size: int | None = None,
         reject_streaming: bool = True,
     ) -> None:
+        max_body_size = http_max_body_size() if max_body_size is None else max_body_size
         if not callable(application):
             raise TypeError("application must be callable")
         if isinstance(max_body_size, bool) or not isinstance(max_body_size, int):
@@ -57,7 +59,7 @@ class BufferedAsgiEndpoint:
         if not isinstance(body, bytes):
             raise TypeError("body must be bytes")
         if len(body) > self.max_body_size:
-            raise ValueError("request body exceeds configured limit")
+            raise HttpBodyTooLarge("request body exceeds configured limit")
         extensions = scope.get("extensions", {})
         if not isinstance(extensions, dict):
             raise TypeError("scope extensions must be a dictionary")
@@ -116,7 +118,7 @@ class BufferedAsgiEndpoint:
                     raise TypeError("HTTP response body must be bytes")
                 next_size = response_size + len(chunk)
                 if next_size > self.max_body_size:
-                    raise ValueError("response body exceeds configured limit")
+                    raise HttpBodyTooLarge("response body exceeds configured limit")
                 more_body = message.get("more_body", False)
                 if not isinstance(more_body, bool):
                     raise TypeError("more_body must be a boolean")

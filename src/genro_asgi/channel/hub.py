@@ -70,7 +70,7 @@ import tempfile
 from typing import Any, Callable
 
 from .control import ControlPayload
-from .frame import MAX_FRAME_SIZE, MAX_INFO_SIZE, REGISTER_METHOD, Frame, FrameStream
+from .frame import REGISTER_METHOD, Frame, FrameStream
 from .local import LocalChannel, LocalFrameStream
 
 __all__ = [
@@ -151,8 +151,7 @@ class ChannelHub:
         on_member_joined: Callable[..., Any] | None = None,
         on_channel_lost: Callable[..., Any] | None = None,
         on_event: Callable[..., Any] | None = None,
-        max_size: int = MAX_FRAME_SIZE,
-        max_info_size: int = MAX_INFO_SIZE,
+        max_size: int | None = None,
         max_pending_calls: int = MAX_PENDING_CALLS,
         max_event_tasks: int = MAX_EVENT_TASKS,
     ) -> None:
@@ -164,7 +163,6 @@ class ChannelHub:
         self.on_channel_lost = on_channel_lost
         self.on_event = on_event
         self.max_size = max_size
-        self.max_info_size = max_info_size
         self.control_payload = ControlPayload()
         self.max_pending_calls = max_pending_calls
         self.max_event_tasks = max_event_tasks
@@ -325,7 +323,7 @@ class ChannelHub:
     ) -> None:
         """Per-connection task: require REGISTER as the first frame, then relay."""
         stream = FrameStream(
-            reader, writer, max_size=self.max_size, max_info_size=self.max_info_size
+            reader, writer, max_size=self.max_size
         )
         member = await self._register_connection(stream)
         if member is not None:

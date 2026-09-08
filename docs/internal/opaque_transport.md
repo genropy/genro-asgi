@@ -7,8 +7,8 @@ Version: 1. Internal transport contract; coordinated peer restart required.
 The internal channel is versioned independently of browser WSX. A fixed magic
 and version precede TWO big-endian unsigned 32-bit lengths, then JSON info,
 then opaque payload bytes. Both lengths and their sum are checked before reading
-the variable parts. Info is limited to 64 KiB; the default combined limit is
-16 MiB. Socket and local queue transports use the same codec and validation.
+the variable parts. There is no separate info ceiling; the default combined
+limit is 256 MiB (excluding the fixed 13-byte header). Socket and local queue transports use the same codec and validation.
 The channel imports no SPA, TYTX, Bag or application codec.
 
 Info owns id, method (CALL/REPLY/EVENT/REGISTER/POST), routing path and payload
@@ -74,8 +74,45 @@ complete commands; no custom demux is required. Startup follows endpoint
 readiness, and shutdown drains within a configured bound before terminating
 only an owned child. Connection-only shutdown never signals its peer.
 
-Defaults are eight MiB per HTTP body, 64 KiB per metadata record, sixteen
-admitted generic calls and thirty seconds per generic request. SPA limits
+Transport policy is configured in the environment **before starting every
+communicating process**, including external runners and containers:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `GNR_ASGI_FRAME_MAX_BYTES` | `268435456` (256 MiB) | Maximum JSON info + opaque payload bytes |
+| `GNR_ASGI_FRAME_WARN_BYTES` | `1048576` (1 MiB) | Log an accepted frame strictly above this size; `0` disables warnings |
+| `GNR_ASGI_FRAME_WARN_INTERVAL_SECONDS` | `60` | Minimum seconds between warnings per codec/connection; `0` logs every large frame |
+| `GNR_ASGI_HTTP_MAX_BODY_BYTES` | Frame maximum | Optional independent buffered HTTP body ceiling, e.g. a lower upload/download policy |
+
+Values must be nonnegative integers; the frame maximum must be positive and fit
+an unsigned 32-bit length. Explicit `FrameCodec`/`FrameStream`/channel `max_size`
+and endpoint/`HttpRecord` `max_body_size` arguments override their environment
+defaults. Configure peers consistently: these settings are not negotiated.
+Spawned workers inherit the environment. Changes require a coordinated restart.
+Warnings report byte count, threshold, direction, method, route and worker name
+when carried in the snapshot. They never include payload contents. Throttling
+is shared between send/receive on a codec; a new connection starts a new window.
+
+No memory is reserved by either threshold. A 128 KiB frame has identical wire
+bytes under a 16 MiB or 256 MiB maximum. Large accepted frames still incur whole
+body buffering and copies; the maximum is not a process-wide memory budget.
+HTTP metadata no longer has a separate 64 KiB cap. The complete HTTP record,
+routing metadata and worker snapshot must together fit the outer frame; a body
+exactly equal to the frame maximum cannot fit after adding that overhead.
+
+A local frame-size rejection raises `FrameTooLarge` before writing any bytes.
+Outgoing oversized HTTP requests receive 413. Oversized worker results become
+correlated error replies (HTTP 502 at the frontend), preserving lifecycle events
+and a snapshot rejected with the original result, and leaving unrelated calls
+and the connection alive. The operation may already have executed: it is never
+replayed. If even the essential control/error envelope cannot fit, SPA still
+closes the link rather than silently losing lifecycle events. Configure the
+maximum to accommodate that envelope; ordinary result-size refusal does not
+require disconnection. Incoming over-limit headers close the offending
+connection before reading its body: there is no safe resynchronization without
+draining an untrusted body. Partial writes likewise remain uncertain failures.
+
+Defaults are sixteen admitted generic calls and thirty seconds per generic request. SPA limits
 its admitted buffered bodies to sixteen and preserves its existing placement
 and lifecycle deadlines. A closed or malformed connection fails pending calls;
 an uncertain call is never replayed. `RemoteCallFailed.outcome` is `not_sent`

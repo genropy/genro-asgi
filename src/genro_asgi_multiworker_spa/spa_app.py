@@ -90,6 +90,7 @@ from genro_asgi.asgi_endpoint import BufferedAsgiEndpoint
 from genro_asgi.application import ApplicationGrammar
 from genro_asgi.channel.frame import Frame
 from genro_asgi.http_record import HttpRecord
+from genro_asgi.transport_limits import FrameTooLarge, HttpBodyTooLarge, http_max_body_size
 from genro_asgi.config.handler import ConfigError
 from genro_asgi.exceptions import HTTPBadRequest, HTTPException, HTTPForbidden, HTTPNotFound
 from genro_asgi.lifespan import FatalBootError
@@ -1055,12 +1056,14 @@ class SpaApplication(RoutedApplication):
         cookie is written with.
         """
         carried = self.request_cid(scope)
-        http = await self.pack_http(scope, receive, carried)
         local_response = True
         try:
+            http = await self.pack_http(scope, receive, carried)
             reply = await self.commander.serve_request(
                 carried, http, hold_timeout=REQUEST_HOLD_MAX_SECONDS
             )
+        except (FrameTooLarge, HttpBodyTooLarge):
+            response = Response(content="Request too large", status_code=413)
         except AssignmentRefused as refusal:
             self._logger.warning("Front %s: %s", self.code, refusal)
             response = self.busy_response(refusal)
@@ -1173,8 +1176,8 @@ class SpaApplication(RoutedApplication):
         while True:
             message = await receive()
             chunk = message.get("body", b"") or b""
-            if len(body) + len(chunk) > HttpRecord.DEFAULT_MAX_BODY_SIZE:
-                raise HTTPException(413, "request body exceeds buffered transport limit")
+            if len(body) + len(chunk) > http_max_body_size():
+                raise HttpBodyTooLarge("request body exceeds buffered transport limit")
             body.extend(chunk)
             if not message.get("more_body", False):
                 break

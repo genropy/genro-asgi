@@ -203,3 +203,27 @@ async def test_wrong_route_reply_closes_generation_and_fails_parked_call(peer) -
     await peer.reply(fresh)
     await replacement
     await connection.close()
+
+
+async def test_oversized_send_preserves_other_calls_and_connection(peer, monkeypatch):
+    from genro_asgi.transport_limits import FrameTooLarge
+
+    monkeypatch.setenv("GNR_ASGI_FRAME_MAX_BYTES", "1024")
+    connection = RemoteConnection(peer.address, timeout=3)
+    try:
+        first = asyncio.create_task(connection.call(call_frame("first")))
+        received = await asyncio.wait_for(peer.received.get(), 1)
+        with pytest.raises(FrameTooLarge):
+            await connection.call(call_frame("large", payload=b"x" * 2048))
+        assert "large" not in connection._pending
+        assert "large" not in connection._abandoned
+        await peer.reply(received)
+        assert (await first).payload == b"ok"
+        after = asyncio.create_task(connection.call(call_frame("after")))
+        received_after = await asyncio.wait_for(peer.received.get(), 1)
+        assert received_after.generation == received.generation
+        await peer.reply(received_after)
+        assert (await after).payload == b"ok"
+        assert peer.received.empty()
+    finally:
+        await connection.close()

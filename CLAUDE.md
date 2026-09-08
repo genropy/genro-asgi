@@ -184,8 +184,8 @@ spool, executor) mount like any other app.
 ### Opaque internal transport (issue #72)
 
 `Frame` is routing `info` plus opaque `payload: bytes`. The `GNRF` v1 header
-(`!4sBII`) bounds JSON info to 64 KiB and info plus payload to 16 MiB before
-reading them. `FrameCodec` is shared by socket and local queues and imports no
+(`!4sBII`) bounds JSON info plus payload to a configurable 256 MiB before
+reading them, with throttled attention warnings above 1 MiB. `FrameCodec` is shared by socket and local queues and imports no
 application codec. Control endpoints explicitly use `ControlPayload`; HTTP
 endpoints use `HttpRecord` (bounded metadata, ordered duplicate headers,
 reversible path/query bytes and an unencoded body). The SPA commander routes
@@ -603,3 +603,16 @@ commits, still to be entered in the register). Decision registers:
 **All general policies are inherited from the parent document: [meta-genro-modules CLAUDE.md](https://github.com/softwellsrl/meta-genro-modules/blob/main/CLAUDE.md)**
 
 **Last Updated**: 2026-09-08
+
+### Buffered transport capacity (issue 72 follow-up, 2026-09-08)
+
+Channel metadata and payload share one configurable ceiling, 256 MiB by default;
+there is no separate 64 KiB metadata cap. `GNR_ASGI_FRAME_MAX_BYTES`,
+`GNR_ASGI_FRAME_WARN_BYTES` (1 MiB), and
+`GNR_ASGI_FRAME_WARN_INTERVAL_SECONDS` (60) configure bounded transport and
+throttled size warnings. HTTP body limits follow the frame policy unless
+`GNR_ASGI_HTTP_MAX_BODY_BYTES` sets a separate cap. All peers need matching
+settings before startup. A locally oversized SPA result keeps its slot until
+the correlated error reply delivers its events and snapshot; the channel stays
+alive if that essential envelope fits. Incoming over-limit frames and uncertain
+writes still fail the connection. See `docs/internal/opaque_transport.md`.

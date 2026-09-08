@@ -21,13 +21,15 @@ import struct
 from typing import Any
 
 
+from .transport_limits import DEFAULT_MAX_FRAME_SIZE, HttpBodyTooLarge, http_max_body_size
+
+
 class HttpRecord:
     """Bounded, versioned encoding for an HTTP scope and its opaque body."""
 
     MAGIC = b"HTTP"
     VERSION = 1
-    MAX_METADATA_SIZE = 64 * 1024
-    DEFAULT_MAX_BODY_SIZE = 8 * 1024 * 1024
+    DEFAULT_MAX_BODY_SIZE = DEFAULT_MAX_FRAME_SIZE
     _HEADER = struct.Struct(">4sBI")
     _REQUEST_FIELDS = frozenset(
         {
@@ -44,7 +46,8 @@ class HttpRecord:
         }
     )
 
-    def __init__(self, max_body_size: int = DEFAULT_MAX_BODY_SIZE) -> None:
+    def __init__(self, max_body_size: int | None = None) -> None:
+        max_body_size = http_max_body_size() if max_body_size is None else max_body_size
         if isinstance(max_body_size, bool) or not isinstance(max_body_size, int):
             raise TypeError("max_body_size must be an integer")
         if max_body_size < 0:
@@ -68,8 +71,6 @@ class HttpRecord:
             ).encode("ascii")
         except (TypeError, ValueError, RecursionError) as exc:
             raise ValueError("metadata is not valid JSON") from exc
-        if len(encoded_metadata) > self.MAX_METADATA_SIZE:
-            raise ValueError("HTTP metadata exceeds 64 KiB")
         return self._HEADER.pack(self.MAGIC, self.VERSION, len(encoded_metadata)) + encoded_metadata + body
 
     def decode(self, payload: bytes) -> tuple[dict[str, Any], bytes]:
@@ -82,14 +83,12 @@ class HttpRecord:
             raise ValueError("invalid HTTP record magic")
         if version != self.VERSION:
             raise ValueError(f"unsupported HTTP record version: {version}")
-        if metadata_size > self.MAX_METADATA_SIZE:
-            raise ValueError("HTTP metadata exceeds 64 KiB")
         metadata_end = self._HEADER.size + metadata_size
         if metadata_end > len(payload):
             raise ValueError("truncated HTTP record metadata")
         body_size = len(payload) - metadata_end
         if body_size > self.max_body_size:
-            raise ValueError("HTTP body exceeds configured limit")
+            raise HttpBodyTooLarge("HTTP body exceeds configured limit")
         encoded_metadata = payload[self._HEADER.size : metadata_end]
         try:
             metadata = json.loads(
@@ -158,7 +157,7 @@ class HttpRecord:
         if not isinstance(body, bytes):
             raise TypeError("body must be bytes")
         if len(body) > self.max_body_size:
-            raise ValueError("HTTP body exceeds configured limit")
+            raise HttpBodyTooLarge("HTTP body exceeds configured limit")
 
     def _check_json_value(self, value: Any, path: str) -> None:
         if value is None or isinstance(value, (str, bool)):

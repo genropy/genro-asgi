@@ -18,6 +18,7 @@ from .application import BaseApplication
 from .asgi_endpoint import BufferedAsgiEndpoint
 from .channel.frame import Frame
 from .http_record import HttpRecord
+from .transport_limits import FrameTooLarge, HttpBodyTooLarge, http_max_body_size
 from .remote_connection import RemoteCallFailed, RemoteConnection
 from .response import Response
 
@@ -110,7 +111,7 @@ class RemoteApplication(BaseApplication):
                         if message["type"] == "http.disconnect":
                             return
                         chunk = message.get("body", b"")
-                        if len(body) + len(chunk) > HttpRecord.DEFAULT_MAX_BODY_SIZE:
+                        if len(body) + len(chunk) > http_max_body_size():
                             await self._send_local_response(
                                 Response(content="Request too large", status_code=413),
                                 scope,
@@ -141,6 +142,8 @@ class RemoteApplication(BaseApplication):
                         local_response = False
                         response = Response(content=result["body"], status_code=result["status"],
                                             headers=result["headers"])
+        except (FrameTooLarge, HttpBodyTooLarge):
+            response = Response(content="Request too large", status_code=413)
         except (RemoteCallFailed, TimeoutError):
             response = Response(content="Remote application unavailable", status_code=503)
         if local_response:

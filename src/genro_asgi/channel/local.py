@@ -45,8 +45,6 @@ import os
 from typing import Any, Callable
 
 from .frame import (
-    MAX_FRAME_SIZE,
-    MAX_INFO_SIZE,
     REGISTER_METHOD,
     REGISTER_PATH,
     Frame,
@@ -70,18 +68,16 @@ class LocalFrameStream:
         inbound: asyncio.Queue[bytes | None],
         outbound: asyncio.Queue[bytes | None],
         *,
-        max_size: int = MAX_FRAME_SIZE,
-        max_info_size: int = MAX_INFO_SIZE,
+        max_size: int | None = None,
         max_queue_size: int = 16,
     ) -> None:
         if max_queue_size < 1:
             raise ValueError("max_queue_size must be positive")
         self.inbound = inbound
         self.outbound = outbound
-        self.max_size = max_size
-        self.max_info_size = max_info_size
         self.max_queue_size = max_queue_size
-        self.codec = FrameCodec(max_size=max_size, max_info_size=max_info_size)
+        self.codec = FrameCodec(max_size=max_size)
+        self.max_size = self.codec.max_size
         self._closed = False
 
     @property
@@ -129,8 +125,7 @@ class LocalChannel:
         *,
         on_message: Callable[..., Any] | None = None,
         on_orphan: Callable[..., Any] | None = None,
-        max_size: int = MAX_FRAME_SIZE,
-        max_info_size: int = MAX_INFO_SIZE,
+        max_size: int | None = None,
         max_queue_size: int = 16,
     ) -> None:
         if max_queue_size < 1:
@@ -139,7 +134,6 @@ class LocalChannel:
         self.on_message = on_message
         self.on_orphan = on_orphan
         self.max_size = max_size
-        self.max_info_size = max_info_size
         self.address = "local:"
         to_hub: asyncio.Queue[bytes | None] = asyncio.Queue()
         to_member: asyncio.Queue[bytes | None] = asyncio.Queue()
@@ -147,14 +141,12 @@ class LocalChannel:
             to_member,
             to_hub,
             max_size=max_size,
-            max_info_size=max_info_size,
             max_queue_size=max_queue_size,
         )
         self._hub_stream = LocalFrameStream(
             to_hub,
             to_member,
             max_size=max_size,
-            max_info_size=max_info_size,
             max_queue_size=max_queue_size,
         )
         self._logger = logging.getLogger(__name__)

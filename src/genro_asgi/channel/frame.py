@@ -22,16 +22,23 @@ import asyncio
 import copy
 import json
 import math
+import logging
+import time
 import struct
 import uuid
 from typing import Any
+
+from ..transport_limits import (
+    DEFAULT_MAX_FRAME_SIZE, DEFAULT_WARN_FRAME_SIZE, FrameTooLarge,
+    frame_max_size, integer_setting,
+)
 
 CHANNEL_MAGIC = b"GNRF"
 CHANNEL_VERSION = 1
 HEADER = struct.Struct("!4sBII")
 HEADER_SIZE = HEADER.size
-MAX_INFO_SIZE = 64 * 1024
-MAX_FRAME_SIZE = 16 * 1024 * 1024
+MAX_FRAME_SIZE = DEFAULT_MAX_FRAME_SIZE
+_logger = logging.getLogger(__name__)
 REGISTER_METHOD = "REGISTER"
 REGISTER_PATH = "/register"
 RESERVED_INFO_KEYS = frozenset({"id", "method", "path"})
@@ -42,7 +49,7 @@ __all__ = [
     "CHANNEL_VERSION",
     "HEADER_SIZE",
     "MAX_FRAME_SIZE",
-    "MAX_INFO_SIZE",
+    "FrameTooLarge",
     "REGISTER_METHOD",
     "REGISTER_PATH",
     "Frame",
@@ -118,10 +125,36 @@ class FrameCodec:
     """Encode, decode and validate one version of the frame protocol."""
 
     def __init__(
-        self, *, max_size: int = MAX_FRAME_SIZE, max_info_size: int = MAX_INFO_SIZE
+        self, *, max_size: int | None = None, warn_size: int | None = None,
+        warning_interval: int | None = None,
     ) -> None:
-        self.max_size = max_size
-        self.max_info_size = max_info_size
+        self.max_size = frame_max_size() if max_size is None else max_size
+        self.warn_size = (integer_setting("GNR_ASGI_FRAME_WARN_BYTES", DEFAULT_WARN_FRAME_SIZE)
+                          if warn_size is None else warn_size)
+        self.warning_interval = (integer_setting("GNR_ASGI_FRAME_WARN_INTERVAL_SECONDS", 60)
+                                 if warning_interval is None else warning_interval)
+        for name, value, minimum in (("max_size", self.max_size, 1),
+                                     ("warn_size", self.warn_size, 0),
+                                     ("warning_interval", self.warning_interval, 0)):
+            if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+                raise ValueError(f"{name} must be an integer >= {minimum}")
+        if self.max_size > 2**32 - 1:
+            raise ValueError("max_size must fit an unsigned 32-bit integer")
+        self._last_warning: float | None = None
+
+    def warn_large_frame(self, frame: Frame, size: int, direction: str) -> None:
+        if not self.warn_size or size <= self.warn_size:
+            return
+        now = time.monotonic()
+        if self._last_warning is not None and now - self._last_warning < self.warning_interval:
+            return
+        self._last_warning = now
+        snapshot = frame.info.get("worker_snapshot")
+        worker = snapshot.get("name") if isinstance(snapshot, dict) else None
+        _logger.warning(
+            "Large transport frame: bytes=%s threshold=%s direction=%s method=%s path=%s worker=%s",
+            size, self.warn_size, direction, frame.method, frame.path, worker,
+        )
 
     def reject_constant(self, value: str) -> None:
         raise ValueError(f"non-finite JSON number {value!r}")
@@ -168,14 +201,8 @@ class FrameCodec:
             raise ValueError("invalid frame magic")
         if version != CHANNEL_VERSION:
             raise ValueError(f"unsupported frame version {version}")
-        if info_length > self.max_info_size:
-            raise ValueError(
-                f"frame info of {info_length} bytes exceeds max_info_size={self.max_info_size}"
-            )
         if info_length + payload_length > self.max_size:
-            raise ValueError(
-                f"frame of {info_length + payload_length} bytes exceeds max_size={self.max_size}"
-            )
+            raise FrameTooLarge(info_length + payload_length, self.max_size)
         return info_length, payload_length
 
     def encode(self, frame: Frame) -> bytes:
@@ -185,8 +212,11 @@ class FrameCodec:
             info = json.dumps(record, allow_nan=False, separators=(",", ":")).encode()
         except (TypeError, ValueError, RecursionError) as exc:
             raise ValueError(f"invalid frame info: {exc}") from exc
+        size = len(info) + len(frame.payload)
+        if size > self.max_size:
+            raise FrameTooLarge(size, self.max_size)
         header = HEADER.pack(CHANNEL_MAGIC, CHANNEL_VERSION, len(info), len(frame.payload))
-        self.get_header_lengths(header)
+        self.warn_large_frame(frame, size, "send")
         return header + info + frame.payload
 
     def get_frame(self, wire: bytes) -> Frame:
@@ -214,13 +244,15 @@ class FrameCodec:
             path = record.pop("path")
         except KeyError as exc:
             raise ValueError(f"frame info missing {exc.args[0]!r}") from exc
-        return Frame(
+        frame = Frame(
             id=frame_id,
             method=method,
             path=path,
             info=record,
             payload=wire[HEADER_SIZE + ilength :],
         )
+        self.warn_large_frame(frame, ilength + plength, "receive")
+        return frame
 
 
 class FrameStream:
@@ -229,14 +261,12 @@ class FrameStream:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
         *,
-        max_size: int = MAX_FRAME_SIZE,
-        max_info_size: int = MAX_INFO_SIZE,
+        max_size: int | None = None,
     ) -> None:
         self.reader = reader
         self.writer = writer
-        self.max_size = max_size
-        self.max_info_size = max_info_size
-        self.codec = FrameCodec(max_size=max_size, max_info_size=max_info_size)
+        self.codec = FrameCodec(max_size=max_size)
+        self.max_size = self.codec.max_size
         self._write_lock = asyncio.Lock()
 
     async def read(self) -> Frame | None:

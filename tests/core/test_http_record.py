@@ -81,8 +81,8 @@ def test_metadata_and_body_limits_are_enforced_on_both_paths():
         record.encode({}, b"four")
     with pytest.raises(ValueError):
         record.decode(b"HTTP\x01\x00\x00\x00\x02{}four")
-    with pytest.raises(ValueError):
-        HttpRecord().encode({"large": "x" * (64 * 1024)}, b"")
+    metadata = {"large": "x" * (64 * 1024)}
+    assert HttpRecord().decode(HttpRecord().encode(metadata, b"")) == (metadata, b"")
     with pytest.raises(ValueError):
         HttpRecord().decode(b"HTTP\x01" + struct.pack(">I", 64 * 1024 + 1))
 

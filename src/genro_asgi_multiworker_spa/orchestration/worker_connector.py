@@ -40,7 +40,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from genro_asgi.channel.control import ControlPayload
-from genro_asgi.channel.frame import MAX_FRAME_SIZE, REGISTER_METHOD, Frame, FrameStream
+from genro_asgi.channel.frame import REGISTER_METHOD, Frame, FrameStream
+from genro_asgi.transport_limits import FrameTooLarge
 
 CALL_METHOD = "CALL"
 REPLY_METHOD = "REPLY"
@@ -97,7 +98,7 @@ class WorkerConnector:
         worker_handler: Any,
         socket_path: str | Path,
         *,
-        max_size: int = MAX_FRAME_SIZE,
+        max_size: int | None = None,
     ) -> None:
         self.worker_handler = worker_handler
         self.socket_path = Path(socket_path)
@@ -372,10 +373,16 @@ class WorkerConnector:
             )
         stream = self._live_stream()
         try:
-            await stream.write(
-                Frame(id=frame.id, method=REPLY_METHOD, path=frame.path,
-                      info={"format": "control-json"}, payload=encoded)
-            )
+            reply = Frame(id=frame.id, method=REPLY_METHOD, path=frame.path,
+                          info={"format": "control-json"}, payload=encoded)
+            try:
+                await stream.write(reply)
+            except FrameTooLarge as exc:
+                await stream.write(Frame(
+                    id=frame.id, method=REPLY_METHOD, path=frame.path,
+                    info={"format": "control-json"},
+                    payload=ControlPayload().encode({"error": str(exc)}),
+                ))
         except Exception:
             await stream.close()
             self._logger.warning(

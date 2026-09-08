@@ -46,7 +46,7 @@ import os
 from typing import Any, Callable
 
 from .control import ControlPayload
-from .frame import MAX_FRAME_SIZE, MAX_INFO_SIZE, REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
+from .frame import REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
 
 __all__ = ["ChannelClient"]
 
@@ -62,8 +62,7 @@ class ChannelClient:
         on_message: Callable[..., Any] | None = None,
         on_orphan: Callable[..., Any] | None = None,
         connect_timeout: float = 10.0,
-        max_size: int = MAX_FRAME_SIZE,
-        max_info_size: int = MAX_INFO_SIZE,
+        max_size: int | None = None,
     ) -> None:
         self.address = address
         self.name = name
@@ -71,7 +70,6 @@ class ChannelClient:
         self.on_orphan = on_orphan
         self.connect_timeout = connect_timeout
         self.max_size = max_size
-        self.max_info_size = max_info_size
         self.control_payload = ControlPayload()
         transport, _, rest = address.partition(":")
         self._uds_path: str | None = None
@@ -123,7 +121,7 @@ class ChannelClient:
                 await asyncio.sleep(interval)
                 interval = min(interval * 2, 0.5)
         self._stream = FrameStream(
-            reader, writer, max_size=self.max_size, max_info_size=self.max_info_size
+            reader, writer, max_size=self.max_size
         )
         register = Frame(
             method=REGISTER_METHOD,
