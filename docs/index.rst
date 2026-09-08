@@ -10,6 +10,9 @@ the server is an object you build, run, and throw away.
 New here? Start with :doc:`getting-started`. Coming from another ASGI framework?
 Read :doc:`coming-from-fastapi`.
 
+These pages describe the development checkout. Source and release packages may
+differ; see :doc:`building` for local builds and publication status.
+
 .. toctree::
    :maxdepth: 2
    :caption: Getting started
@@ -17,6 +20,7 @@ Read :doc:`coming-from-fastapi`.
    getting-started
    concepts
    coming-from-fastapi
+   building
 
 .. toctree::
    :maxdepth: 2

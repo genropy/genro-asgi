@@ -61,10 +61,11 @@ runs the hooks in reverse.
 **The websocket is a live connection whose every message is a request (landed
 2026-09-06, #68 phases 1-2).** `BaseServer.on_websocket` — the empty socket of
 D7 until now — gives each socket one `WsxConnection`, whose `serve()` is its
-whole life. The gate answers in ONE shape, accept then close with a readable
-code: a server not RUNNING closes 1013, a path no application serves or a
-missing home cookie closes 1008; the single refusal WITHOUT an accept is a
-hostile Origin (`WebSocket.refuse`), because nobody was admitted to be told.
+whole life. `BaseServer.on_websocket` first refuses a server that is not
+RUNNING before accepting, for both raw sockets and WSX. A browser sees a failed
+handshake, not a readable close code. Inside WSX, a path no application serves
+or a missing home cookie is accepted then closed with 1008. A hostile Origin
+is refused without accepting (`WebSocket.refuse`).
 The path of the handshake names the home application through `demux`, and its
 `handshake_cookie` property (`None` on the base) says which cookie a
 handshake must carry. Identity is judged ONCE there: `server.authenticate`,
@@ -85,13 +86,14 @@ writes to a page with `BaseServer.send_message(page_id, path, data)` — the
 shape of a request, no `id`, `True` = written to the socket and never
 "executed by the page" (the registry stays a map: the sending lives on the
 server, and there is none by identity or by connection until something reads
-it). Not built yet: the SPA's own branch and `openchannel`, which is what will
-bind a page to its socket (phase 4), and the raw seam (phase 5).
+it). The SPA's own branch and `openchannel` (phase 4), and the raw seam
+(phase 5), are delivered and described below.
 **An application may take the socket itself (landed 2026-09-07, #68 phase 5).**
 The handshake's path names the application through the same demux, and one that
 defines `serve_websocket` is handed the raw scope, receive and send, its mount
-already off the path. Nothing of the motor runs then — no accept, no Origin
-gate, no registry, no state refusal: whoever takes the socket takes all of it.
+already off the path. After the common server-state gate, nothing of the
+WSX motor runs — no accept, no Origin gate, no registry: whoever takes the
+socket takes responsibility for its protocol and handshake policy.
 It is the admitted mode of the design, the seam a hosted framework with a
 websocket protocol of its own reaches the server by; the core builds nothing
 beyond it.
@@ -161,8 +163,10 @@ a list). genro-tytx is used ONLY as a serializer (`from_tytx`, `from_qs`,
 transport → media type map lives in `media_types.py`.
 Middleware wraps the dispatch (errors, authentication, session, cors,
 logging, wellknown). Auth answers **401 to the anonymous, 403 to the known**;
-admin surfaces live under the `_server` app as sections (auth, monitor,
-users, tokens, tasks) gated by `SERVER_ADMIN`; the monitor renders one page
+admin surfaces live under the `_server` app as sections: users, tokens and
+tasks require `SUPERADMIN`, the monitor requires `SERVER_ADMIN`, and login
+entry points are public. The SPA-owned inspector has no route authorization
+rule of its own. The monitor renders one page
 over every mounted app via the `app_snapshot`/`app_panel`/`panel_source`
 contract on `BaseApplication`. **`import genro_asgi` loads no orchestration**
 (landed 2026-09-07): the last edge was the `inspector` section, which read a
@@ -214,7 +218,7 @@ barrier, request chain, single-writer fold via `EnvelopeHandler`, freezer
 via `FreezeHandler`) → n `GroupHandler` (placement,
 capacity, growth and shrink) → n `WorkerHandler` (process, wire,
 surveillance) → `SpaWorker` (the live users/connections/pages state and the
-hosted WSGI site behind `WsgiSeam`). Usersticky principle unchanged: ALL
+hosted ASGI application, optionally wrapping WSGI through `WsgiSeam`). Usersticky principle unchanged: ALL
 pages of a user live in the same process as the user's store. A group whose
 recipe declares `engine_factory` owns a **template process**
 (`template_entry.py`, synchronous, one per group): it builds the group

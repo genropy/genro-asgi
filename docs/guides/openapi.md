@@ -1,6 +1,6 @@
 # OpenAPI & Swagger
 
-> **Status:** 🔴 DA REVISIONARE
+> **Status:** Draft; implementation checked against the development source on 2026-09-08.
 
 ## What it does
 
@@ -11,11 +11,13 @@ routes *are* the spec.
 ## When to use it
 
 When you want a documented, browsable REST API. Subclass `OpenApiApplication`
-instead of `RoutedApplication`, declare `openapi_info`, and enable the plugins.
+instead of `RoutedApplication` and declare `openapi_info`.
 
 ## Setup
 
-Two things are needed: the base class and the plugins.
+`OpenApiApplication` supplies the schema and documentation endpoints.
+`AsgiServer` automatically arms the `openapi` and `pydantic` plugins on its
+routed applications; no explicit enable switches are needed.
 
 ```python
 from genro_asgi import AsgiServer, OpenApiApplication
@@ -31,13 +33,14 @@ class Shop(OpenApiApplication):
         return {"query": q, "hits": []}
 
 
-server = AsgiServer(applications=[Shop()], plugins={"openapi": True, "pydantic": True})
+server = AsgiServer(applications=[Shop()])
 server.serve(host="127.0.0.1", port=8000)
 ```
 
 - `openapi_info` is a class attribute carrying at least `title` and `version`.
-- `plugins={"openapi": True, "pydantic": True}` arms the OpenAPI generation and
-  pydantic-based validation.
+- The fixed `openapi` and `pydantic` plugins cannot be disabled. Explicit
+  `plugins` entries configure their options. A composition without
+  `PluginMixin` does not supply this pair.
 
 `OpenApiApplication` also accepts these keyword arguments:
 
@@ -88,8 +91,10 @@ UI.
 
 - The documentation prefix is **`_meta`**, not `openapi`. Every meta URL is
   `/_meta/...`.
-- Swagger requires the plugins to be armed — `plugins={"openapi": True,
-  "pydantic": True}`. Without them the schema and UI are not generated.
+- `AsgiServer` supplies the schema plugins automatically. The root `openapi`
+  configuration section is accepted by the grammar but has no core consumer;
+  set title, version and description in the application’s `openapi_info` class
+  attribute.
 - `GET /_meta/docs` returns `404` when the app was created with `docs="off"`.
 - The `_server` app has its own OpenAPI view of the system endpoints at
   `/_server/_meta/schema_json` and `/_server/_meta/docs` — separate from your

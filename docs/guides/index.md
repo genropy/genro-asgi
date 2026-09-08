@@ -1,6 +1,6 @@
 # How-to Guides
 
-> **Status:** 🔴 DA REVISIONARE
+> **Status:** Draft; implementation checked against the development source on 2026-09-08.
 
 Task-focused recipes for the capabilities genro-asgi grows on top of the core.
 Each one assumes you have read [Getting started](../getting-started.md) and
@@ -18,6 +18,11 @@ streaming
 middleware
 configuration
 cli
+requests
+applications
+lifecycle
+websockets
+multiworker-spa
 ```
 
 ## The guides
@@ -25,8 +30,7 @@ cli
 - **[Authentication](authentication.md)** — configure basic / bearer / JWT
   backends and API keys, protect routes with `auth_rule`, and work with the
   `Avatar` identity.
-- **[Sessions](sessions.md)** — arm the session subsystem, choose a memory or
-  file store, control the session cookie, and attach an avatar at login.
+- **[Sessions](sessions.md)** — arm the session subsystem, use the memory store and shutdown snapshot, control the session cookie, and attach an avatar at login.
 - **[OpenAPI & Swagger](openapi.md)** — turn `@route` methods into an OpenAPI 3.1
   schema and a Swagger UI under the `_meta` prefix, direct or mounted.
 - **[MCP](mcp.md)** — expose routes as tools an AI agent can call over MCP
@@ -44,10 +48,15 @@ cli
   single application, manage the named ones with `apps`/`stop`/`remove`, and
   reload on source changes.
 
+- **[Requests and errors](requests.md)** — body decoding, uploads, validation and status codes.
+- **[Mounting applications](applications.md)** — prefixes, root dispatch and hosted ASGI applications.
+- **[Lifecycle](lifecycle.md)** — startup hooks, admission state and bounded shutdown.
+- **[WebSockets](websockets.md)** — WSX messages, handshake rules and the raw socket seam.
+- **[Multiworker SPA](multiworker-spa.md)** — package boundary, hosted applications and global store.
+
 ## How each guide is structured
 
-Every how-to follows the same six-part shape, so you can skim to the part you
-need:
+Capability recipes use the following sections where applicable:
 
 1. **What it does** — the capability in one or two sentences.
 2. **When to use it** — the situation that calls for it.

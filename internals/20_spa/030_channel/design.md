@@ -1,8 +1,8 @@
 # Channel
 
-**Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.1 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
-**The shelf.** The shelf every conversation between processes rides: frames on Unix sockets, the hub, the lane.
+Processes exchange framed messages over Unix sockets through channels.
 
 The wire between processes: `Frame` / `FrameStream` over Unix sockets,
 `ChannelHub` / `ChannelClient` / `LocalChannel`. Consumed by the

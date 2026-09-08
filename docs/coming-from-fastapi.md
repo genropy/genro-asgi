@@ -1,6 +1,6 @@
 # Coming from Starlette / FastAPI
 
-> **Status:** 🔴 DA REVISIONARE
+> **Status:** Draft; implementation checked against the development source on 2026-09-08.
 
 If you already know Starlette or FastAPI, genro-asgi will feel familiar in the
 small — you still decorate a callable to make a route, params still bind to the
@@ -37,18 +37,18 @@ served as REST, as an OpenAPI schema, and as MCP tools without being rewritten.
 | Create the app | `app = FastAPI()` | subclass `RoutedApplication` (or `OpenApiApplication`); build `AsgiServer(applications=[App()])` |
 | Define a route | `@app.get("/greet")` on a function | `@route()` on a **method** (name = URL segment), imported from `genro_routes` |
 | Path / query params | function args + `Path`/`Query` | method args bind to the query string, typed, with defaults |
-| Request body / validation | pydantic model as a param | the `pydantic` plugin (`plugins={"pydantic": True}`) |
+| Request body / validation | pydantic model as a param | the `pydantic` plugin, automatically armed by `AsgiServer` |
 | JSON response | `return {...}` / `JSONResponse` | `return {...}` (dict → JSON) |
 | HTML response | `HTMLResponse` | `@route(media_type="text/html")` returning a string |
 | Dependency injection | `Depends(...)` | no DI container — reach through the object graph (`self.server`, the request) |
 | Middleware | `app.add_middleware(...)` | `middleware={...}` kwarg on `AsgiServer`; ordered built-in chain |
 | Auth / security | `Security(...)`, security schemes | `auth={...}` kwarg + `@route(auth_rule="...")`, default-deny, `Avatar` |
 | Sessions | `SessionMiddleware` (Starlette) | `SessionMixin` via `session_store`/`session_ttl`; `Session` + `Avatar` |
-| Mount a sub-app | `app.mount("/api", subapp)` | secondary mounts (dict by URL prefix); demux on first path segment |
+| Mount a sub-app | `app.mount("/api", subapp)` | `BaseApplication` with `code` and `mount`; demux on first path segment |
 | OpenAPI / Swagger | automatic at `/docs`, `/openapi.json` | `OpenApiApplication` + plugins; `/_meta/docs`, `/_meta/schema_json` |
 | Start the server | `uvicorn.run(app, ...)` / `uvicorn app:app` | `server.serve(host=..., port=...)` (programmatic uvicorn, blocking) |
 | Start it from a shell | `fastapi run main.py` / `uvicorn main:app --reload` | `genro-asgi serve ./config.py [--reload]` |
-| WebSocket / streaming | `WebSocket`, `StreamingResponse` | `StreamingResponse` (from `genro_asgi.streaming`), `SseStream` (from `genro_asgi.sse`) |
+| WebSocket / streaming | `WebSocket`, `StreamingResponse` | WSX messages or `serve_websocket`; HTTP `StreamingResponse` and `SseStream.response()` |
 | Tools for an AI agent | (not built in) | `@route(channel_channels="mcp")` on an `McpApplication` / `McpOpenApiApplication` |
 
 ## The same endpoint, side by side
@@ -88,7 +88,7 @@ class Shop(OpenApiApplication):
         return {"query": q, "hits": []}
 
 
-server = AsgiServer(applications=[Shop()], plugins={"openapi": True, "pydantic": True})
+server = AsgiServer(applications=[Shop()])
 server.serve(host="127.0.0.1", port=8000)
 ```
 
@@ -125,8 +125,8 @@ endpoint and an MCP tool.
 - **Features are config, not construction.** You do not add a capability by
   restructuring code; auth, sessions, tasks and plugins already exist on
   `AsgiServer` and are fed by kwargs (`auth=...`, `middleware=...`, `tasks=...`,
-  `plugins=...`). A capability you did not configure is present but idle, not
-  absent.
+  `plugins=...`). Sessions, auth middleware and tasks are enabled by the shipped composition;
+  explicit options can disable them.
 - **The OpenAPI prefix is `_meta`.** Not `/docs` and `/openapi.json` — the Swagger
   UI is at `/_meta/docs` and the schema at `/_meta/schema_json`.
 - **An internal `_server` app is always mounted.** Login, task management and the

@@ -1,6 +1,6 @@
 # Websocket
 
-**Version**: 0.2 · **Last Updated**: 2026-09-07 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.3 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
 How a message on a socket becomes a method call: who holds the connection, what
 a message looks like, how it reaches an application in this process or a worker
@@ -14,19 +14,23 @@ in another, and how the server addresses one page by itself.
 | `WsxEnvelope` | one message as a class: `id?`, `method`, `path`, `data`, `page_id?`, `reply_path?`, and the answer's `id`, `status`, `data`. The `WSX://` prefix is its marker, and `data` is the TYTX string |
 | `WsxConnection` | one per connection: it accepts, gates, resolves the identity once, then reads messages and serves each on a task of its own under a per-connection ceiling |
 | `WebSocketRegistry` | every live connection of the server, and the `page_id → socket` association `openchannel` writes. Neutral: it knows no application |
-| `BaseServer.on_websocket` | the entrance: it demultiplexes first, hands the raw socket to an application that defines `serve_websocket`, and otherwise builds a `WsxConnection` and drives it |
+| `BaseServer.on_websocket` | the entrance: it checks server state before demux, hands the raw socket to an application that defines `serve_websocket`, and otherwise builds a `WsxConnection` and drives it |
 | `WsxControl` | the front's routing class under `_wsx`: `openchannel`, the command a page sends before anything of its own |
 | `WsxCommands` | the worker's dispatcher branch for the same command, where the channel is written on the page's row |
 | `server/websocket` | the config element: `origins`, `max_concurrent` |
 
 ## 1. The handshake, in order
 
-The order is the design, because each step decides whether the next one runs.
+The server checks its state before resolving an application or accepting the
+connection. For WSX, the application, Origin and cookie gates precede message
+dispatch.
 
-1. **The state.** A server that is not `RUNNING` accepts and closes 1013:
-   accepting first is what lets the code reach the browser at all.
-2. **The Origin, BEFORE the accept.** The one refusal that happens without an
-   accept, because a rejected origin must not get a socket. With `origins`
+1. **The state.** A server that is not `RUNNING` refuses before accept, for
+   both WSX and raw applications. The browser sees a failed handshake rather
+   than a readable 1013 close frame. The state gate precedes demux, as recorded
+   in [WebSocket decisions](decisions.md).
+2. **The Origin, BEFORE the accept.** A rejected origin must not get an
+   accepted WSX socket. With `origins`
    declared the header must be in the list; without it, same-origin.
 3. **The accept.**
 4. **The identity, once.** The header first through the server's own
@@ -35,7 +39,8 @@ The order is the design, because each step decides whether the next one runs.
 5. **The home application.** The handshake's path names it through the server's
    demux, and its `handshake_cookie` says which cookie the socket must carry.
    Missing cookie → 1008 «connection cookie required». No application at that
-   path → 1008 «no application at this path». No home application → no gate.
+   path → 1008 «no application at this path». A home application whose
+   `handshake_cookie` is `None` has no cookie gate.
 6. **The registration.** The connection enters the registry, and leaves it in
    the `finally` of the read loop, whatever ends it.
 

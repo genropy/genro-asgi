@@ -1,6 +1,6 @@
 # Getting Started
 
-> **Status:** 🔴 DA REVISIONARE
+> **Status:** Draft; implementation checked against the development source on 2026-09-08.
 
 Welcome to **genro-asgi**. This page takes you from installation to a running
 server that answers real HTTP requests, then explains the hello-world line by
@@ -31,11 +31,26 @@ familiar; the differences are covered in
 
 ## Installation
 
+Requires Python 3.11 or newer. Use a virtual environment:
+
 ```bash
-pip install genro-asgi
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install genro-asgi
 ```
 
-Requires Python 3.11+.
+These pages describe the development checkout. A released package can lag behind
+`develop`; for the exact APIs documented here, install from your checkout:
+
+```bash
+git clone --branch develop https://github.com/genropy/genro-asgi.git
+cd genro-asgi
+python -m pip install -e '.[docs]'
+```
+
+One distribution supplies both `genro_asgi` and `genro_asgi_multiworker_spa`.
+The hello-world uses only the core; see [Multiworker SPA](guides/multiworker-spa.md)
+when your application needs a pool of worker processes.
 
 ## Hello world
 
@@ -65,7 +80,7 @@ if __name__ == "__main__":
     server.serve(host="127.0.0.1", port=8000)
 ```
 
-Run it:
+Run it (stop with **Ctrl-C** in the same terminal):
 
 ```bash
 python hello.py
@@ -126,9 +141,12 @@ def greet(self, name: str = "world") -> dict[str, str]:
 
 Parameters in the method signature bind to the request's query string, typed and
 with defaults. `GET /greet?name=genro` calls `greet(name="genro")`; `GET /greet`
-with no query string uses the default `"world"`. The annotation drives coercion —
-declare `max_price: float` and the incoming string is converted to a float
-before your method runs.
+with no query string uses the default `"world"`. `AsgiServer` automatically arms
+the `pydantic` plugin to validate and coerce annotated parameters, such as
+`max_price: float`, together with the `openapi` plugin. These two plugins cannot
+be disabled; explicit plugin entries configure their options. A composition
+without `PluginMixin` does not supply this pair. See
+[Requests and errors](guides/requests.md).
 
 ### Building and serving
 

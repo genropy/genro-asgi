@@ -1,9 +1,8 @@
 API Reference
 =============
 
-The API reference is generated from the source docstrings. Every public symbol
-exported from ``genro_asgi`` is documented on the pages below, grouped by
-subsystem.
+The API reference is generated from the source docstrings. The pages below group the core and selected multiworker integration surfaces
+by subsystem; private implementation helpers are not an API guarantee.
 
 .. toctree::
    :maxdepth: 2
@@ -18,3 +17,5 @@ subsystem.
    channel
    storage
    plugins
+   websocket
+   multiworker-spa

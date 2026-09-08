@@ -4,12 +4,12 @@ Middleware
 The middleware base and mixin, and the shipped middleware: errors, well-known,
 logging, CORS, authentication, session.
 
-.. automodule:: genro_asgi.middleware
+.. automodule:: genro_asgi.middleware.base
    :members:
    :show-inheritance:
 
-.. automodule:: genro_asgi.middleware.base
-   :members:
+.. automodule:: genro_asgi.middleware
+   :members: MiddlewareMixin, default_registry
    :show-inheritance:
 
 .. automodule:: genro_asgi.middleware.errors

@@ -1,6 +1,6 @@
 # Core Concepts
 
-> **Status:** 🔴 DA REVISIONARE
+> **Status:** Draft; implementation checked against the development source on 2026-09-08.
 
 This page explains the model behind genro-asgi: how a server relates to the
 applications it serves, how a request finds its handler, and the design
@@ -25,15 +25,16 @@ lifespan, and the request registry.
 `AsgiServer` is the shipped, batteries-included server. It is a **composition of
 capability mixins** stacked over `BaseServer` in a single MRO — communication,
 auth, session, middleware, plugins, storage, and tasks. Each mixin contributes a
-feature, and each feature is turned on through a constructor keyword argument:
+feature configured through constructor keyword arguments. Sessions, auth
+middleware and the task backbone are active on the shipped composition:
 
 ```python
 server = AsgiServer(
     applications=[App()],
-    auth={...},          # arms the auth middleware
+    auth={...},          # configures header credentials
     middleware={...},    # arms other middleware
-    tasks=True,          # arms the task backbone
-    plugins={...},       # arms OpenAPI / pydantic plugins
+    tasks=True,          # default; False disables the task backbone
+    plugins={...},       # tunes fixed OpenAPI / pydantic plugins and adds extras
 )
 ```
 
@@ -96,9 +97,9 @@ method and the body survive the hop.
 
 ### The automatic `_server` app
 
-Every server automatically mounts an internal application at `/_server/`. You do
+`AsgiServer` automatically mounts an internal application at `/_server/`. You do
 not configure it into existence — it is always present. On a public server it is
-**full** (login, monitoring, OpenAPI of the system endpoints, task management);
+a management surface (login, monitoring, OpenAPI of system endpoints, task management);
 its endpoints live under `/_server/...` and never leak into your own app's route
 tree.
 
@@ -130,20 +131,21 @@ Key forms you will use across the guides:
 ### `auth_rule` and default-deny
 
 A route carrying `auth_rule="admin"` is protected: the caller's avatar must carry
-the matching tag. Protection is **default-deny** — a protected route answers
-`403` even when no auth middleware is configured, so you never accidentally ship
-an open endpoint that was meant to be closed. The [authentication
+the matching tag. Protection is **default-deny**: an anonymous caller gets `401`, including when
+no auth middleware is configured; an authenticated caller with insufficient
+tags gets `403`. The [authentication
 guide](guides/authentication.md) covers the credential side.
 
 ## Requests and responses
 
-- A `Request` object wraps the incoming ASGI scope: query parameters bind to your
-  handler's signature, and the body is available for parsing.
-- A handler's **return value** determines the response: return a `dict` for JSON,
-  a string with `media_type="text/html"` for HTML, or an explicit `Response`
-  object for full control.
-- For long or open-ended bodies, return a `StreamingResponse` or an `SseStream`
-  (see the [streaming guide](guides/streaming.md)).
+- `Request.init()` reads and decodes the complete body before a routed handler
+  runs. Query and form fields become kwargs; JSON normally becomes `body_data`.
+  See [Requests and errors](guides/requests.md) for multipart uploads and validation.
+- Return a `dict` for JSON or a string with `media_type="text/html"` for HTML.
+  A `Response` is an ASGI callable for applications that handle the ASGI triple
+  directly; returning it from a routed handler does not send it as a response.
+- For incremental HTTP output, return a `StreamingResponse`, or the result of
+  `SseStream.response()` (see [streaming](guides/streaming.md)).
 
 Both `Request` and `Response` are importable from `genro_asgi`.
 
@@ -155,8 +157,8 @@ genro-asgi is a spec-first redesign; its principles are ratified in
 - **No globals — state lives in instances.** There is no module-level server and
   no ambient request. A server is an object you build; its components reach each
   other through an explicit parent reference (an application holds
-  `self.server`, a request holds `self.application`). Two servers in the same
-  process are fully isolated.
+  `self.server`, a request holds `self.application`). Each server owns its runtime objects; shared external storage and explicitly
+  supplied collaborators still require deliberate isolation.
 - **Config is data, not structure.** You describe what you want with plain data
   (dicts, config-builder calls) and hand it to objects that already exist. You do
   not restructure code to switch a backend; you change the data.

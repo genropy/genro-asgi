@@ -1,6 +1,6 @@
 # Background Tasks
 
-> **Status:** 🔴 DA REVISIONARE
+> **Status:** Draft; implementation checked against the development source on 2026-09-08.
 
 ## What it does
 
@@ -11,12 +11,13 @@ are managed over HTTP under `/_server/tasks`.
 ## When to use it
 
 When an operation should not block the caller (send an email, crunch a report) or
-must run on a schedule (nightly cleanup, periodic sync). Arm the task backbone
-and drive it either from code or over HTTP.
+must run on a schedule (nightly cleanup, periodic sync). The backbone is enabled by default on `AsgiServer`; drive it from code or
+authorized management requests.
 
 ## Setup
 
-Tasks are a mixin capability of `AsgiServer`, armed with the `tasks` kwarg:
+Tasks are a mixin capability of `AsgiServer`, enabled by default and configured
+with the `tasks` kwarg:
 
 ```python
 from genro_asgi import AsgiServer, RoutedApplication
@@ -37,7 +38,7 @@ server.serve(host="127.0.0.1", port=8000)
 
 `tasks` accepts:
 
-- `True` / `False` — arm or leave off.
+- `True` (default) / `False` — enable or disable.
 - a dict `{"enabled": ..., "tick_seconds": ..., "mount": ...}` for finer control.
 
 Once armed, `server.tasks` (lazily provisioned) exposes the backbone:
@@ -48,8 +49,10 @@ Once armed, `server.tasks` (lazily provisioned) exposes the backbone:
 Queue a one-off job by creating a descriptor and handing it to the spool:
 
 ```python
+from uuid import uuid4
 from genro_asgi.tasks import new_descriptor
 
+task_id = uuid4().hex
 d = new_descriptor(task_id, owner="alice", mount="", node_path="sum_sync")
 server.tasks.spool.create(d, {"a": 2, "b": 3})
 ```
@@ -75,12 +78,15 @@ def cleanup(self) -> dict:
 - `task_every="1s"` — run on an interval. Use `task_cron=...` instead for a cron
   expression.
 
-The scheduler drives them; from code you can call `scheduler.tick()` to advance it
+The scheduler drives them; from async code you can `await scheduler.tick()` to advance it
 and `scheduler.run_now(code)` to trigger a scheduled task immediately.
 
 ## Managing tasks over HTTP
 
-The `_server` app exposes the task backbone under `/_server/tasks/...`:
+The `_server` app exposes the task backbone under `/_server/tasks/...`. These
+endpoints require `SUPERADMIN` (and the server management gate); anonymous curl
+requests receive 401. Authenticate with an appropriately authorized credential:
+
 
 - schedule side: `list`, `create`, `enable`, `disable`, `run_now`, `logs`.
 - spool side: `spool_list`, `progress`, `cancel`, `result`.
@@ -104,8 +110,8 @@ $ curl "http://127.0.0.1:8000/_server/tasks/result?..."
 
 - The task symbols come from `genro_asgi.tasks` — `from genro_asgi.tasks import
   new_descriptor`, not from the package top level.
-- `server.tasks` is lazy: reaching for it before `tasks` is armed will not give
-  you a live backbone. Arm it with `tasks=True` (or a config dict).
+- `server.tasks` is lazy and enabled by default. Access with `tasks=False` raises
+  `RuntimeError`; it does not silently return an inactive manager.
 - Interval vs cron is `task_every=...` **or** `task_cron=...` on `@route`, not
   both.
 - The MCP push stream (`GET /mcp`) depends on the task backbone — it is `405`

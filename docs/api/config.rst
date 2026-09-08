@@ -9,7 +9,7 @@ the read door the runtime reads it through.
    :show-inheritance:
 
 .. automodule:: genro_asgi.config.elements
-   :members:
+   :members: AsgiServerGrammar
    :show-inheritance:
 
 .. automodule:: genro_asgi.config.handler

@@ -1,11 +1,11 @@
 # Architecture overview
 
-> **Status:** 🔴 DA REVISIONARE
+> **Status:** Draft; implementation checked against the development source on 2026-09-08.
 
 This page explains how genro-asgi is put together and the principles behind it.
 It is *explanation*, not a how-to: read it to understand why the pieces are
 shaped the way they are. The normative source is
-[`SPECIFICATION.md`](https://github.com/genropy/genro-asgi/blob/main/SPECIFICATION.md)
+[`SPECIFICATION.md`](https://github.com/genropy/genro-asgi/blob/develop/SPECIFICATION.md)
 (the decision log, D1…); this page summarizes it and never contradicts it.
 
 ## Core principles
@@ -14,7 +14,8 @@ These are the guiding principles of the redesign (SPECIFICATION.md §1). They
 explain most of the design decisions you will meet in the code.
 
 - **No globals.** The server is an instance with its own state — no module-level
-  variables, no singletons. `del server` garbage-collects everything it owns.
+  variables, no singletons. Use the lifespan shutdown to release resources; deleting a reference does not
+  replace stopping active tasks, threads or child processes.
   State lives in objects, connected by semantic parent references.
 - **Config is data, not structure.** What a server *is* comes from a
   configuration recipe rendered onto it; the code shape does not change with the
@@ -35,7 +36,7 @@ explain most of the design decisions you will meet in the code.
 ```text
 uvicorn
   → AsgiServer                      the server IS the ASGI app
-    → middleware chain              errors → cors → auth → session (ordered)
+    → middleware chain              errors → wellknown → logging → cors → session → auth
       → demultiplex                 first path segment → mount, else root app
         → application               a RoutedApplication (or a subclass)
           → @route handler(**params)
@@ -43,9 +44,9 @@ uvicorn
               → ASGI send
 ```
 
-Middleware order is a number, not a class trait: the chain sorts by it, smaller
-is more outer. Only `errors` is on by default; `session` and `auth` are armed by
-their mixins when you configure them.
+Each middleware class declares numeric `middleware_order`; the chain sorts by
+it, lowest outermost. The registry enables `errors` by default; `AsgiServer` also arms `session`
+and `auth` through its mixins, even without explicit credential/store kwargs.
 
 ## The two layers: server and application
 
@@ -71,7 +72,7 @@ the root — there is no separate mechanism.
 `AsgiServer` is the shipped composition (D22): it stacks every capability mixin
 over `BaseServer` in one MRO — communication, auth, session, middleware,
 plugins, storage, tasks. This is the complete mono-process async server. You
-turn a capability on through a constructor kwarg (`auth=…`, `middleware=…`,
+configure a capability through a constructor kwarg (`auth=…`, `middleware=…`,
 `tasks=…`, `plugins=…`); the mixin peels the kwargs it understands and forwards
 the rest down the cooperative `__init__` chain.
 
@@ -135,8 +136,23 @@ in the tree, never a slice of it.
 The how-to — writing the recipe, the resolvers, the read stack, an application's
 own grammar — is the [Configuration guide](../guides/configuration.md).
 
+## WebSockets and the multiworker package
+
+The core implements [WSX and raw WebSocket hosting](../guides/websockets.md).
+WSX messages enter the application through a synthetic HTTP scope, using the
+same routing and cleanup logic; they bypass the HTTP middleware chain.
+
+The separate top-level package `genro_asgi_multiworker_spa` supplies the SPA front,
+commander, worker processes and hosted ASGI/WSGI adapters. It ships in this same
+distribution. Importing `genro_asgi` does not import that package. A hosted worker
+request and response are buffered; this path is distinct from the core's direct
+HTTP streaming. See [Multiworker SPA](../guides/multiworker-spa.md).
+
+Application hooks and the server's admission state are described in
+[Lifecycle](../guides/lifecycle.md).
+
 ## Where to go next
 
 - [Getting started](../getting-started.md) — install and run.
 - [Concepts](../concepts.md) — the model in more practical terms.
-- [`SPECIFICATION.md`](https://github.com/genropy/genro-asgi/blob/main/SPECIFICATION.md) — the full decision log.
+- [`SPECIFICATION.md`](https://github.com/genropy/genro-asgi/blob/develop/SPECIFICATION.md) — the full decision log.

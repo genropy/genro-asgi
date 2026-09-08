@@ -1,6 +1,33 @@
 # Inspector — current state
 
-**Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.2 · **Last Updated**: 2026-09-08 · **Status**: 🔴 evidence refreshed; design ratification unchanged
 
-The feature's local memory: what exists TODAY on develop, with the
-decisions that shaped it. Update it in the same change that alters the behaviour.
+Verified against source revision `2465fcc` (develop baseline). Test references
+below identify the executable contracts; they are not a new coverage percentage.
+
+## SPA-owned diagnostic surface
+
+`InspectorSection` lives in `genro_asgi_multiworker_spa`, with its owning
+`SpaApplication` as parent. The front attaches it under `/_server/inspector`
+on startup only when `GNR_ASGI_INSPECTOR` is present. A second inspector attach
+raises `FatalBootError`. The generic core imports no SPA machinery for it.
+
+Its `page`, `census` and `stream` routes carry no `auth_rule`: mounting is the
+diagnostic gate. Therefore it must not be described as protected by the
+monitor's `SERVER_ADMIN` rule. The census reads the owning front's commander;
+the SSE stream starts with a census and subscribes to observation events,
+unsubscribing when the reader leaves. It does not call the hosted site or mint
+a site connection merely to inspect the pool.
+
+The September decision moving ownership supersedes the older inspector
+contribution-contract plan. Further per-application panels remain an open
+direction, not part of this read surface.
+
+Claim anchors: [`InspectorSection`](../../../../src/genro_asgi_multiworker_spa/inspector_section.py#L61), [`SpaApplication`](../../../../src/genro_asgi_multiworker_spa/spa_app.py#L517), [`page`](../../../../src/genro_asgi_multiworker_spa/inspector_section.py#L73), [`census`](../../../../src/genro_asgi_multiworker_spa/inspector_section.py#L82), [`stream`](../../../../src/genro_asgi_multiworker_spa/inspector_section.py#L91).
+
+## Source and test evidence
+
+- [src/genro_asgi_multiworker_spa/inspector_section.py](../../../../src/genro_asgi_multiworker_spa/inspector_section.py)
+- [src/genro_asgi_multiworker_spa/spa_app.py](../../../../src/genro_asgi_multiworker_spa/spa_app.py)
+- [tests/spa/test_inspector_section.py](../../../../tests/spa/test_inspector_section.py)
+- [tests/spa/orchestration/test_orchestration_observation.py](../../../../tests/spa/orchestration/test_orchestration_observation.py)

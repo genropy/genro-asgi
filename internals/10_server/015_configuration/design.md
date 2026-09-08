@@ -1,11 +1,15 @@
 # Configuration
 
-**Version**: 0.3 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.4 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
 How an installation is described, how the description is read while it runs,
 and how each part of the system contributes its own words to it.
 
 ## What a configuration is
+
+A configuration describes an installation through a declared grammar. The
+software reads that description to assemble its applications and shared
+services.
 
 Two deployments of the same software are not the same installation. One serves
 a shop on port 8000 with a single database; the other serves the shop and an
@@ -136,6 +140,12 @@ The same installation is described at three levels, and they stack:
    that exists only on this host, where the key material comes from, the
    listener. Set once, inherited by every installation deployed there.
 3. **What the site says.** Always last, always winning.
+
+### BaseConfiguration defaults hooks
+
+`BaseConfiguration` exposes `server_section`, `storage_section` and
+`storage_mounts` hooks. Its inherited `storage_section` calls `storage_mounts`;
+a site overrides the hook whose defaults it wants to replace.
 
 A recipe governs its own inheritance: it declares where its middle layer comes
 from, and it may decline it entirely and sit straight on the package defaults.
@@ -271,9 +281,11 @@ connections at shutdown before cancelling them: without the bound one endless
 response — an SSE stream a client never closes — holds the process for ever and
 the lifespan shutdown, which stops the applications, never runs.
 
-Two children are server-domain and so live here rather than under an
-application: **`session`**, which carries how long a session lives, and
-**`tasks`**, whose words belong to the task backbone and are declared by it.
+Three children are server-domain and so live here rather than under an
+application: **`session`**, which carries how long a session lives;
+**`tasks`**, whose words belong to the task backbone and are declared by it;
+and **`websocket`**, which declares allowed origins and per-connection
+concurrency.
 
 The remaining sections are named here and described where they belong:
 `middleware`, `authentication`, `storage`, `applications`, `databases`,
@@ -335,6 +347,8 @@ class ServerConfiguration(BaseConfiguration):
         section.local(name="site", base_path=SITE_DIR)
 
 
+# Omitting storage_key leaves encryption unconfigured; an empty resolver is
+# different: it promised key material and failed to supply it.
 # The resolver reads the environment when the value is asked for. In a real
 # deployment the key comes from the host; here it is a throwaway so the recipe
 # runs as written. Resolving to empty is a boot error, not a silent skip.

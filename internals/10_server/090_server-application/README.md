@@ -1,8 +1,16 @@
 # Server application (`_server`)
 
-**Version**: 0.1 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.3 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
-The one place where the server itself is administered: the `_server` app every
-server mounts without anyone configuring it. It hosts the admin surfaces as
-sections — auth, users, tokens, tasks, monitor, inspector — gated by the
-`SERVER_ADMIN` permission.
+`AsgiServer` automatically mounts `ServerApplication` at `/_server`.
+The application hosts login methods and the users, tokens, tasks and monitor
+sections. Login entry points are public. Users, tokens and tasks require
+`SUPERADMIN`; the monitor requires `SERVER_ADMIN`. A denied caller receives
+401 when anonymous and 403 when identified.
+
+The optional inspector belongs to `genro_asgi_multiworker_spa`.
+`SpaApplication` attaches it to `/_server/inspector` during startup when
+`GNR_ASGI_INSPECTOR` is enabled. That mounting gate does not confer the
+monitor's `SERVER_ADMIN` rule: the inspector has no route authorization rule.
+
+> [Inspector](inspector/README.md) · [Authentication](../050_authentication/README.md).

@@ -1,6 +1,6 @@
 # 00 Overview — how to read this folder
 
-**Version**: 0.5 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.6 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
 genro-asgi as three worlds, read in order: **10_server** (the machine and
 everything an installation runs on), **20_spa** (the SPA world and its
@@ -10,8 +10,9 @@ folders ARE the reading order: no entry needs a concept that comes later.
 
 A **feature** is a human term before a technical one: a need users or
 admins have, and our idea to solve it. A few entries are **shelves**
-instead — technical strata the features stand on — and say so in their
-opening line.
+instead — technical strata the features stand on. That editorial
+classification belongs in `tech_notes.md`; subject openings explain the
+subject itself.
 
 ## The documents, and the cycle they serve
 
@@ -157,19 +158,27 @@ A fragment cannot be checked; a whole recipe can. Which is the point: these are
 **executable examples, and they are executed, never proof-read** — the same
 rule that caught two broken examples in the published guides.
 
-So the format is fixed even though the check is not written yet:
+The complete, currently executable recipes use this format:
 
 - one recipe per entry, the LAST section of its `design.md`, under the heading
   `## A configuration that includes it`;
 - a single fenced `python` block, self-contained — imports included, one
-  `AsgiConfigBuilder` subclass, nothing referenced that the block does not
+  `AsgiConfigBuilder` subclass (including the shipped `BaseConfiguration`), nothing referenced that the block does not
   define or import;
 - it must build: `AsgiServer(config=<that class>)` constructs without raising.
 
-**Owed:** a test that collects every one of those blocks and constructs a
-server from each, so a recipe that stops working breaks the suite instead of
-rotting unnoticed. Until it exists, the recipes are kept honest by hand — and
-the longer that lasts, the less they are worth.
+`tests/test_documentation_recipes.py` collects every complete recipe under that
+heading and constructs its server in a separate process. Each process has a
+private configuration home, temporary directory and a 20-second timeout. Run
+`python -m pytest tests/test_documentation_recipes.py -o addopts=''` from the
+repository root after installing `.[test]`. This proves construction, not
+lifespan startup or HTTP responses. Five complete recipes exist at the
+2026-09-08 baseline; entries without one still owe their recipe.
+
+Design fragments requiring future APIs must be labelled as proposals. They do
+not become executable examples merely because the intended design uses present
+tense. Keep those fragments outside the complete-recipe section until their
+APIs exist; record the missing recipe in the coverage matrix.
 
 **Settled, 2026-08-24:** the **essentials of routing** have a home. A path's
 resolution can be filtered on three independent axes, one per bundled plugin of
@@ -300,9 +309,7 @@ from inside a single one. The assembly point today is `.phased/roadmap.md`.
 - **Static is never a goal.** Where a design says something is fixed at boot,
   fixed at construction, or changeable only by restart, it says WHY it could
   not be made dynamic. Immobility is a limit we have not yet removed, never a
-  property to celebrate. *(Owner, 2026-08-23. Where this principle finally
-  gets written — here, in the specification, or in the coding rules — is
-  itself an open friction in `10_server/010_server/decisions.md`, S4.)*
+  property to celebrate. *(Owner, 2026-08-23; ratified as D32 on 2026-08-25.)*
 - **A feature lives where it is born.** Restart is born in the server world;
   what the SPA, the subcommanders or Kubernetes add to it are sections of
   its own documents — never twin folders.
@@ -350,6 +357,7 @@ flowchart TB
 | [030 middleware](../10_server/030_middleware/README.md) | the uniform middleware chain every request passes |
 | [040 sessions](../10_server/040_sessions/README.md) | per-user server-side state between requests |
 | [050 authentication](../10_server/050_authentication/README.md) | 401 vs 403 · [avatar](../10_server/050_authentication/avatar/README.md) · [tags](../10_server/050_authentication/tags/README.md) |
+| [055 websocket](../10_server/055_websocket/README.md) | WSX requests and events, handshake identity, page channels, and the raw WebSocket seam |
 | [060 storage](../10_server/060_storage/README.md) | the only access to the filesystem, through storage nodes |
 | [065 db](../10_server/065_db/README.md) | databases mounted through the recipe, no backend in the core |
 | [070 tasks](../10_server/070_tasks/README.md) | work that is no HTTP request |
@@ -393,3 +401,20 @@ flowchart LR
     SRVA[server-application] --> MON[monitor] & INS[inspector] & TSK & AUTH[authentication]
     CLI[cli] --> CFG[configuration]
 ```
+
+## Vocabulary in historical records
+
+Older records use several informal words alongside the public names. They do
+not name additional classes or architectural layers.
+
+| Historical word | Name to search |
+|---|---|
+| vertex | `SpaCommander`, the coordinator of the multiworker application |
+| photo | `WorkerHandler.worker_snapshot`, the last worker observation carried by an envelope |
+| lane | the channel carrying CALL/REPLY frames between worker and front |
+| turn | `GlobalStoreLease`, holding the commander's store lock until release |
+| motor | `WsxConnection`, owning the WSX connection protocol |
+
+These mappings follow the existing source docstrings and decision registers.
+They are reading aids, not new API names. The bridge's delivery machinery is
+described in its own contract; it is not part of the generic core.

@@ -1,6 +1,6 @@
 # Middleware
 
-> **Status:** 🔴 DA REVISIONARE
+> **Status:** Draft; implementation checked against the development source on 2026-09-08.
 
 ## What it does
 
@@ -12,12 +12,14 @@ an object that always exists; you arm it through config.
 
 Whenever you need behaviour that applies across routes rather than inside a single
 handler: turning exceptions into clean responses, adding CORS headers, logging
-requests, and so on. Most stages are off by default and armed with the
-`middleware` kwarg.
+requests, and so on. Use the `middleware` kwarg to configure stages. On `AsgiServer`, errors,
+sessions and authentication are active by default; the last two are armed by
+the capability mixins.
 
 ## The built-in chain
 
-The registry ships these middleware, with a priority and a default state.
+The registry ships these middleware with a priority. The table shows the
+registry default; `AsgiServer` additionally arms session and auth via its mixins.
 **Lower priority number = more outer** (runs first on the way in, last on the way
 out):
 
@@ -32,9 +34,9 @@ out):
 
 Only the `http` scope is processed by the chain.
 
-Two of these arm themselves as a side effect: passing `session_store`/`session_ttl`
-arms `session`, and passing `auth=...` arms `auth`. You rarely toggle those two
-directly.
+`SessionMixin` and `AuthMixin` arm their stages simply by being composed into
+`AsgiServer`, even without `session_store` or `auth` kwargs. Explicit
+`middleware={"session": False, "auth": False}` disables them.
 
 ## Setup — arming a stage
 
@@ -121,8 +123,8 @@ With `logging` armed, requests appear in the server's log output.
 
 ## Gotchas
 
-- `errors` is the only stage on by default — it is why an unknown path is a clean
-  `404` in the hello-world. The rest are off until you arm them.
+- The registry enables `errors`; the shipped `AsgiServer` also arms `session`
+  and `auth`. CORS, logging and wellknown require explicit configuration.
 - A call the handler cannot take is answered by the dispatcher, never a `500`,
   on two distinct codes: a call that does not fit the signature — an unknown
   keyword, a missing required argument, one positional too many — answers
@@ -135,5 +137,5 @@ With `logging` armed, requests appear in the server's log output.
   arming a custom stage, register it in `middleware_registry` first.
 - Ordering is by priority, lower = more outer. A custom stage lands according to
   its own priority in the chain.
-- Do not hand-arm `session`/`auth` when you are already passing
-  `session_store`/`auth` — those kwargs arm the respective middleware for you.
+- Session and auth are already armed on `AsgiServer`; configure their middleware
+  options when needed, or explicitly disable them.

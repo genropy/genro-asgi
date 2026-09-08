@@ -1,6 +1,6 @@
 # Middleware — decisions
 
-**Version**: 0.4 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.5 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
 **The middleware chain, with the work finished.** Read this as a report from
 the day everything described here is running: it says what the chain *is*, and
@@ -129,8 +129,13 @@ reach them.
 
 ## 8. The middleware chain is the machine's, not an application's
 
-**Source: owner, 2026-08-23.** The chain runs before the demux, so no layer can
-be armed for one application and not another. That is deliberate: the questions
+**Attribution unverified, 2026-09-08.** The earlier attribution to an owner
+ruling dated 2026-08-23 has not been recovered. The chain currently runs before
+the demux. The following uniform-scope rationale is a proposed restriction,
+not a verified owner decision; S6 remains open. Its precise question is whether
+application-specific middleware activation should be forbidden by design.
+
+The proposed rationale is that the questions
 the middleware chain answers — who is calling, may this origin read the answer,
 what does a raised exception become — must have one answer per machine, or two
 applications on one server would disagree about them, and a caller would learn
@@ -145,6 +150,21 @@ distinction.
 ---
 
 # Open frictions
+
+## Evidence follow-up — 2026-09-08
+
+- Current status distinguishes standalone `Response.ERROR_MAP` from the actual
+  outer middleware's generic 500 policy; handler-body `TypeError` no longer
+  receives the historical sync-only 400 mapping.
+- Inner CORS/session response wrappers are still bypassed by outer error
+  responses. Disabling errors and unknown log-level fallback remain implemented
+  limitations. This documentation task does not silently fix their runtime.
+- Historical uncovered branches are not a current coverage result.
+
+The earlier findings below retain their historical wording; the follow-up above
+and [current status](status.md) identify what still applies. No decision status
+is promoted by this audit.
+
 
 Scaffolding for the interview, not a register. Each voice carries a **family
 tag**; the skeleton's frictions — 010, 015, 020, 025, 030 — are settled in one
@@ -168,6 +188,13 @@ decision as
 [020 applications](../020_applications/decisions.md) S5 — or the table goes.
 Recorded in the same wording in
 [020 applications](../020_applications/decisions.md), friction S14.
+
+**Implementation follow-up, 2026-09-08 (not a new ratification).** The
+historical no-WebSocket finding below is superseded by the delivered
+`BaseServer.on_websocket`, `WsxConnection` and raw `serve_websocket` seam.
+The Origin gate belongs to WSX handshake processing; raw applications own their
+handshake policy after the server state gate. Evidence and owner provenance:
+[WebSocket decisions](../055_websocket/decisions.md) and [WebSocket status](../055_websocket/status.md).
 
 **S2 [placement · cross] — the WebSocket origin gate has nowhere to live.**
 Invariant 4 (SPECIFICATION.md:674) requires an origin gate on WebSocket

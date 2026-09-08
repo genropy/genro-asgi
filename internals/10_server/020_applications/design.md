@@ -1,6 +1,6 @@
 # Applications
 
-**Version**: 0.3 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.3 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
 What an application is, what it owes the server that hosts it, and everything
 that happens between a request arriving at the application and an answer going
@@ -22,7 +22,7 @@ There are two classes to subclass, and almost everybody wants the second.
 `BaseApplication` is the contract and nothing else: it satisfies the server
 and answers requests however it likes, which suits something that is not a
 site at all — a raw proxy, a single endpoint. `RoutedApplication` adds the
-routing tree, and everything from block 2 onwards describes it.
+routing tree, dispatch and response handling.
 
 That is what makes an application portable. The same class can be installed
 twice on one server under two names, or moved to another server entirely, and
@@ -163,7 +163,7 @@ decides what may be survived, never the server.
 ## 2. An application is a routing class
 
 The class you subclass is two things at once. Toward the server it is an
-application — the contract of block 1. Toward its own insides it is a
+application with its identity and lifecycle contract. Toward its own insides it is a
 **routing class**: a class whose marked methods *are* its addressable
 behaviour.
 
@@ -195,8 +195,7 @@ Two facts from there are used by the blocks that follow, and are stated here so
 those blocks read on their own. **A route may carry options beside it**, like
 the `auth_rule` above, which nothing in the handler body reads. And **every
 tree can describe itself** — its routes, their declared parameters, the options
-beside them — which is what the machine-readable faces of block 8 are built
-from.
+beside them — the metadata used by OpenAPI and MCP.
 
 > The routing system is [025 routing system](../025_routing-system/README.md).
 
@@ -284,11 +283,15 @@ served. What a handler needs, it declares as a parameter and receives as an
 argument. This is the difference between a handler you can call from a test
 with three values and a handler that only runs inside a server.
 
-Behind that, one object holds the request. It is built once and parsed once:
+### Request body parsing
+
+One object holds the request. It is built once and parsed once:
 headers, cookies, the query string and the body are read at the start, and
 everything after that reads the result. The body is **hydrated by
 content-type** — a submitted JSON, XML or msgpack document arrives as values,
 not as bytes, and a form arrives as typed fields.
+
+### Request identifiers: x-request-id and x-external-id
 
 Two identifiers ride along, and they are kept apart on purpose. The **request
 id** is this machine's own handle on the request: it is taken from the
@@ -303,7 +306,9 @@ The request also carries what the layers above it resolved: who is acting
 for the application, prepared on first use and closed at the end of the
 request without the handler doing anything about it.
 
-**Fitting arguments to parameters.** The values that arrive are a query string
+### Body argument binding: body_data and body_raw
+
+ The values that arrive are a query string
 and possibly a body, and the shapes differ: a query is already a set of named
 values, while a submitted JSON document is one value that happens to be a
 mapping. A handler declaring `x` and `y` is written for the first shape. So
@@ -320,7 +325,9 @@ The decision reads the parameters the handler actually declares, never the
 wire format, which is why the same handler serves a form, a JSON document and
 a call from a machine-readable interface unchanged.
 
-**One transport, honoured both ways.** A caller may ask for a typed transport
+### Typed request and response transport
+
+ A caller may ask for a typed transport
 by header — the same serialization the framework uses between its own
 processes. The request records it, and the answer goes back in it. A caller
 that asks nothing gets JSON.
@@ -482,6 +489,13 @@ handler is written once.
 
 ---
 
+## Shared capabilities and application contracts
+
+Every program a server hosts is one of these. The administrative surface, the
+machine-readable interfaces and the front that serves a hosted site are all
+applications by exactly the contract above, and each of them adds only what is
+its own.
+
 ## A configuration that includes it
 
 One class installed twice, each installation reading its own words, with an
@@ -578,10 +592,3 @@ The first row is the one that surprises. `Shop` is the site root, so every
 unclaimed path reaches it — including `/`, which arrives as `/` and finds no
 route of that name. Being the catch-all makes an application reachable; it does
 not give it a home page. One is written like any other route.
-
-## What stands on this
-
-Every program a server hosts is one of these. The administrative surface, the
-machine-readable interfaces and the front that serves a hosted site are all
-applications by exactly the contract above, and each of them adds only what is
-its own.

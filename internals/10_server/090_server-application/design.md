@@ -1,12 +1,16 @@
 # Server application (`_server`)
 
-**Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.3 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
-**The need.** An admin needs one place where the server itself is administered. Our answer: the automatic `_server` app, admin surfaces as sections behind `SERVER_ADMIN`.
+`AsgiServer` automatically mounts `ServerApplication` at `/_server`.
+The application hosts login methods and the users, tokens, tasks and monitor
+sections. Login entry points are public. Users, tokens and tasks require
+`SUPERADMIN`; the monitor requires `SERVER_ADMIN`. A denied caller receives
+401 when anonymous and 403 when identified.
 
-The automatic system app every server mounts. It hosts admin surfaces as
-*sections* (auth, users, tokens, tasks, monitor, inspector), gated by the
-`SERVER_ADMIN` permission with the house rule: 401 to the anonymous, 403 to
-the known.
+The optional inspector belongs to `genro_asgi_multiworker_spa`.
+`SpaApplication` attaches it to `/_server/inspector` during startup when
+`GNR_ASGI_INSPECTOR` is enabled. That mounting gate does not confer the
+monitor's `SERVER_ADMIN` rule: the inspector has no route authorization rule.
 
-Interactions: monitor · inspector · tasks · authentication.
+> [Inspector](inspector/README.md) · [Authentication](../050_authentication/README.md).

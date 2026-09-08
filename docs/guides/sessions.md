@@ -1,6 +1,6 @@
 # Sessions
 
-> **Status:** 🔴 DA REVISIONARE
+> **Status:** Draft; implementation checked against the development source on 2026-09-08.
 
 ## What it does
 
@@ -11,13 +11,13 @@ request through the cookie.
 ## When to use it
 
 When callers need to stay logged in, or when you want to carry per-user state
-between requests without re-authenticating each time. Arm the session subsystem
-and it keeps a store, sets the cookie, and rehydrates the session for you.
+between requests without re-authenticating each time. The session subsystem is active on `AsgiServer` by default. It keeps a store,
+sets the cookie, and rehydrates the session for you.
 
 ## Setup
 
-Sessions are a mixin capability of `AsgiServer` (`SessionMixin`). Arming it wires
-the session middleware automatically. The relevant constructor kwargs are:
+Sessions are a mixin capability of `AsgiServer` (`SessionMixin`). Its presence wires
+the session middleware automatically (unless explicitly disabled). The relevant constructor kwargs are:
 
 - `session_store` — the backing store; `None` defaults to `MemorySessionStore`.
 - `session_ttl` — the session lifetime.

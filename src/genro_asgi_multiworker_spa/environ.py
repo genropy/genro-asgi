@@ -72,8 +72,10 @@ class AsgiSeam:
     """One ASGI application, called from the facts of a CALL."""
 
     def __init__(self, asgi_app: Any) -> None:
-        """Args:
-        asgi_app: the application to call, ``(scope, receive, send)``.
+        """Initialize this instance.
+
+        Args:
+            asgi_app: the application to call, ``(scope, receive, send)``.
         """
         self.asgi_app = asgi_app
 
@@ -181,10 +183,12 @@ class WsgiSeam:
     """
 
     def __init__(self, wsgi_app: Callable[..., Iterable[bytes]], worker: Any) -> None:
-        """Args:
-        wsgi_app: the consumer's WSGI callable, ``(environ, start_response)``.
-        worker: the worker whose traffic pool runs it — WSGI is synchronous,
-            and the request's slot follows the work onto that thread.
+        """Initialize this instance.
+
+        Args:
+            wsgi_app: the consumer's WSGI callable, ``(environ, start_response)``.
+            worker: the worker whose traffic pool runs it — WSGI is synchronous,
+                and the request's slot follows the work onto that thread.
         """
         self.wsgi_app = wsgi_app
         self.worker = worker

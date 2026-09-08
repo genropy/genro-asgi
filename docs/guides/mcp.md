@@ -1,6 +1,6 @@
 # MCP
 
-> **Status:** 🔴 DA REVISIONARE
+> **Status:** Draft; implementation checked against the development source on 2026-09-08.
 
 ## What it does
 
@@ -41,10 +41,12 @@ Both are importable from `genro_asgi`.
 Expose a method as an MCP tool with `channel_channels`:
 
 ```python
+from genro_asgi import AsgiServer, McpOpenApiApplication
 from genro_routes import route
 
 
 class Calc(McpOpenApiApplication):
+    mount = ""
     openapi_info = {"title": "Calc", "version": "1.0.0"}
 
     @route(channel_channels="mcp")
@@ -54,12 +56,25 @@ class Calc(McpOpenApiApplication):
     @route(channel_channels="mcp,rest")
     def mul(self, a: int = 0, b: int = 0) -> dict:
         return {"result": a * b}
+
+
+if __name__ == "__main__":
+    AsgiServer(applications=[Calc()]).serve(host="127.0.0.1", port=8000)
 ```
 
-- `channel_channels="mcp"` — the method is an MCP tool only.
-- `channel_channels="mcp,rest"` — the method is **both** an MCP tool and a REST
-  endpoint (dual). This is the point of protocol-neutral routing: one method,
-  two transports, one parameter-handling path.
+Save this as `calc.py`, run `python calc.py`, and stop it with Ctrl-C after
+the checks below.
+
+- `channel_channels="mcp"` includes the method in the MCP tool surface.
+- `channel_channels="mcp,rest"` declares both channel names for consumers that
+  filter by channel.
+
+HTTP dispatch does not apply this channel filter. Either declaration leaves
+the route callable directly over HTTP; channel metadata is not an HTTP access
+restriction. Use authorization rules to restrict callers.
+
+`AsgiServer` automatically arms the `pydantic` and `openapi` plugins used by
+this example. Explicit entries are needed only to configure their options.
 
 ## The `/mcp` endpoint
 
@@ -74,7 +89,8 @@ Parameter handling for `tools/call` is the same as for REST: the arguments bind
 to the method signature, typed and with defaults.
 
 A `GET` on `/mcp` opens an SSE push stream (see [streaming](streaming.md)). It
-returns `405` if the server has no task backbone armed.
+returns `405` when tasks are explicitly disabled (`tasks=False`) or the server
+has no task capability. Tasks are enabled by default on `AsgiServer`.
 
 ## How to verify it
 
@@ -98,7 +114,8 @@ curl -X POST http://127.0.0.1:8000/mcp \
 ## Gotchas
 
 - Only routes carrying `channel_channels` that includes `"mcp"` appear as tools.
-  A plain `@route()` is REST-only and is not offered to the agent.
+  A plain `@route()` is not offered as an MCP tool. Channel metadata does not
+  prevent HTTP access; authorization rules govern access restrictions.
 - `GET /mcp` (the SSE push stream) is `405` unless the server has tasks armed —
   see the [tasks guide](tasks.md).
 - The MCP JSON-RPC lives on `/mcp` (segment configurable via

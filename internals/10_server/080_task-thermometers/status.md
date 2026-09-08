@@ -1,6 +1,32 @@
-# Task thermometers (termometri) — current state
+# Task thermometers — current state
 
-**Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.2 · **Last Updated**: 2026-09-08 · **Status**: 🔴 evidence refreshed; design ratification unchanged
 
-The feature's local memory: what exists TODAY on develop, with the
-decisions that shaped it. Update it in the same change that alters the behaviour.
+Verified against source revision `2465fcc` (develop baseline). Test references
+below identify the executable contracts; they are not a new coverage percentage.
+
+## Snapshot and live progress
+
+`TaskManager.publish_progress(task_id, data)` requires an active task, writes
+`progress.json` through its spool and publishes the same data to the descriptor's
+launching session when one exists. `EventHub` fans out through bounded queues,
+dropping oldest intermediate events for a slow subscriber. No subscribers means
+no live publication, while the spool snapshot remains available.
+
+`TaskSpool.request_cancel` writes a marker and `is_cancelled` reads it. A batch
+must poll and honor that signal itself; the progress API does not interrupt it.
+The folder's terminal position records the outcome. SSE push tests cover the
+snapshot/live boundary; there is no durable per-event replay log in the hub.
+
+Claim anchors: [`TaskManager`](../../../src/genro_asgi/tasks/manager.py#L68), [`publish_progress`](../../../src/genro_asgi/tasks/manager.py#L160), [`EventHub`](../../../src/genro_asgi/tasks/hub.py#L47), [`TaskSpool`](../../../src/genro_asgi/tasks/spool.py#L116), [`request_cancel`](../../../src/genro_asgi/tasks/spool.py#L266), [`is_cancelled`](../../../src/genro_asgi/tasks/spool.py#L273).
+
+## Source and test evidence
+
+- [src/genro_asgi/tasks/manager.py](../../../src/genro_asgi/tasks/manager.py)
+- [src/genro_asgi/tasks/spool.py](../../../src/genro_asgi/tasks/spool.py)
+- [src/genro_asgi/tasks/hub.py](../../../src/genro_asgi/tasks/hub.py)
+- [src/genro_asgi/mcp/engine.py](../../../src/genro_asgi/mcp/engine.py)
+- [tests/core/test_task_manager.py](../../../tests/core/test_task_manager.py)
+- [tests/core/test_task_spool.py](../../../tests/core/test_task_spool.py)
+- [tests/core/test_event_hub.py](../../../tests/core/test_event_hub.py)
+- [tests/core/test_mcp_push.py](../../../tests/core/test_mcp_push.py)

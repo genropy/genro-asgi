@@ -1,6 +1,6 @@
 # Streaming & SSE
 
-> **Status:** 🔴 DA REVISIONARE
+> **Status:** Draft; implementation checked against the development source on 2026-09-08.
 
 ## What it does
 
@@ -95,3 +95,19 @@ The `-N` flag disables curl's buffering so you see chunks as they come.
   return; do not return the `SseStream` itself.
 - The MCP push stream (`GET /mcp`) is built on this same SSE machinery; it depends
   on the task backbone being armed (see [tasks](tasks.md) and [MCP](mcp.md)).
+
+## Where buffering still applies
+
+The examples above describe a `StreamingResponse` returned directly by a core
+`RoutedApplication`. The request body has already been fully read before that
+handler runs; streaming the response does not stream an upload.
+
+A [multiworker SPA](multiworker-spa.md) buffers the complete hosted request and
+response through `AsgiSeam`/`WsgiSeam`. It does not deliver incremental chunks or
+endless SSE from the hosted worker. [WSX](websockets.md) also requires a finite
+response and rejects a response with `more_body=True`.
+
+The server's default `shutdown_timeout_seconds=5.0` limits uvicorn's wait for
+open streams during shutdown before cancellation. Application shutdown hooks
+then run; this is not a five-second bound on the entire shutdown sequence.
+See [Lifecycle](lifecycle.md).

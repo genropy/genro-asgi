@@ -1,6 +1,50 @@
 # Authentication — current state
 
-**Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.2 · **Last Updated**: 2026-09-08 · **Status**: 🔴 evidence refreshed; design ratification unchanged
 
-The feature's local memory: what exists TODAY on develop, with the
-decisions that shaped it. Update it in the same change that alters the behaviour.
+Verified against source revision `2465fcc` (develop baseline). Test references
+below identify the executable contracts; they are not a new coverage percentage.
+
+## Credential precedence
+
+`AuthCore` verifies configured Basic, static Bearer and JWT credentials.
+`gak_` API keys use the API-key store and never fall through to JWT on a miss.
+A present invalid Authorization header raises `HTTPUnauthorized`; it does not
+fall back to a logged-in session. `AuthMixin.authenticate` uses the session's
+root avatar only when no Authorization header is supplied.
+
+The server's local user and token stores are optional. Configured store
+descriptors use storage nodes; a ready store can be supplied directly.
+Bootstrap admin configuration upserts that account at boot. Password login and
+OIDC methods live on `ServerApplication` and attach an avatar in place. OIDC
+configuration requires a declared `external_url` at server construction.
+
+Claim anchors: [`AuthCore`](../../../src/genro_asgi/auth/core.py#L79), [`AuthMixin`](../../../src/genro_asgi/auth/mixin.py#L67), [`authenticate`](../../../src/genro_asgi/auth/mixin.py#L151), [`authenticate`](../../../src/genro_asgi/auth/core.py#L160), [`ServerApplication`](../../../src/genro_asgi/applications/server_app.py#L111).
+
+## Authorization and hosted-site identity
+
+`RoutedApplication` passes avatar tags to the auth plugin: unknown identity
+receives 401, insufficient tags receive 403. The error middleware negotiates
+the login challenge. The monitor declares `SERVER_ADMIN`; users, tokens and tasks declare
+`SUPERADMIN`. Login endpoints are public.
+
+A hosted site's connection-user change updates the SPA pool's indexes. It does
+not implement the separately recorded return-path conversion into a core
+session avatar with server-configured tags. That bridge/session work remains
+a distinct target.
+
+Claim anchors: [`RoutedApplication`](../../../src/genro_asgi/routed_application.py#L111).
+
+Behavior evidence: [`MonitorSection`](../../../src/genro_asgi/applications/server_sections/monitor_section.py#L75), [`UsersSection`](../../../src/genro_asgi/applications/server_sections/users_section.py#L61), [`TokensSection`](../../../src/genro_asgi/applications/server_sections/tokens_section.py#L57), [`TasksSection`](../../../src/genro_asgi/applications/server_sections/tasks_section.py#L60).
+
+## Source and test evidence
+
+- [src/genro_asgi/auth/core.py](../../../src/genro_asgi/auth/core.py)
+- [src/genro_asgi/auth/mixin.py](../../../src/genro_asgi/auth/mixin.py)
+- [src/genro_asgi/applications/server_app.py](../../../src/genro_asgi/applications/server_app.py)
+- [src/genro_asgi/routed_application.py](../../../src/genro_asgi/routed_application.py)
+- [src/genro_asgi_multiworker_spa/spa_app.py](../../../src/genro_asgi_multiworker_spa/spa_app.py)
+- [tests/core/test_auth.py](../../../tests/core/test_auth.py)
+- [tests/core/test_login_flow.py](../../../tests/core/test_login_flow.py)
+- [tests/core/test_oidc.py](../../../tests/core/test_oidc.py)
+- [tests/core/test_api_key_store.py](../../../tests/core/test_api_key_store.py)

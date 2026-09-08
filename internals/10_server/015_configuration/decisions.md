@@ -1,6 +1,6 @@
 # Configuration — decisions
 
-**Version**: 0.4 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.5 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
 **Configuration, with the work finished.** Read this as a report from the day
 everything described here is running: it says what a configuration *is*, and
@@ -228,7 +228,7 @@ Its children are the words that are server-domain rather than
 application-domain: how long a session lives, and the task backbone's own
 vocabulary, declared by the task backbone.
 
-The other sections — middleware, identity, storage, applications, databases,
+The other sections — middleware, authentication, storage, applications, databases,
 plugins — are named at the top level and described by the entry that owns each.
 
 ## 8. What it is not
@@ -244,6 +244,21 @@ to find something at runtime.
 ---
 
 # Open frictions
+
+## Evidence follow-up — 2026-09-08
+
+- The general live-tree target remains undelivered. SPA group-profile hot
+  apply is a narrower implemented mechanism, not a replacement for that target.
+- The five complete recipes are now checked by
+  `tests/test_documentation_recipes.py`; this closes the automated construction
+  check for those recipes, not the promise of a recipe for every future feature.
+- `BaseConfiguration` hooks and optional storage-key behavior are described in
+  current status; omission of key material is distinct from an empty resolver.
+
+The earlier findings below retain their historical wording; the follow-up above
+and [current status](status.md) identify what still applies. No decision status
+is promoted by this audit.
+
 
 Scaffolding for the interview, not a register. Settling a voice edits this
 document — and, where the contradiction lives upstream, edits the source too.

@@ -1,6 +1,6 @@
 # Websocket — decisions
 
-**Version**: 0.2 · **Last Updated**: 2026-09-07 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.3 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
 **The websocket, with the work finished.** Read this as a report from the day
 everything described here is running: it says what the transport *is*, and
@@ -152,9 +152,11 @@ socket there. For the SPA the identity is the connection id in the cookie, and
 a login changes the owner of that id exactly as it does over HTTP.
 
 Every message is then placed like a request: the barrier, the index, the worker
-of the moment. The worker does not know a websocket exists — no CALL announces
-an opening or a closing, nothing is frozen, nothing is moved. After a transfer
-the next message goes to the new worker and the browser never notices.
+of the moment. The worker does not own the physical websocket and receives
+no physical-disconnect notification. The later §6 and §14a rules qualify this:
+`openchannel` declares the page's channel on its worker row, and that `wsx`
+field travels in frozen parcels while its process-local queue does not. After
+a transfer the next message goes to the new worker on that declared channel.
 
 What is given up is presence: the worker cannot tell whether the browser is
 still there. Whoever wants presence builds it with a message of its own — the
@@ -192,7 +194,7 @@ socket's home application through the server's demux, and that application's
 `None` for an application that requires none. The owner's words: «assente →
 accept e 1008 "connection cookie required"». A handshake on a path no
 application serves is accepted and closed 1008, «no application at this path».
-With no home application there is no gate at all.
+With a home application that declares no cookie, there is no cookie gate.
 
 Per message the rule holds independently: a message addressed to the SPA from a
 socket carrying no connection id is answered with status 403.
@@ -255,9 +257,11 @@ what is left of the path, the query, the body, `Set-Cookie` and the redirects.
 `wsgi_app` remains as the shortcut for whoever hosts WSGI only, and the core
 serves it through that same adapter: one road, not two. Assigning both is an
 explicit error — the shortcut is an alternative, not an addition — and
-assigning neither is an error as well; `SpaWorker.hosted_app_seam` is where
-both are judged, and a badly configured worker dies at boot rather than at its
-first request.
+assigning neither was originally specified as an error as well. **That last
+requirement was explicitly reversed by the owner on 2026-09-07 in §14 below:**
+a worker without either callable may boot; requesting its absent hosted seam
+fails at use. Declaring both remains a boot error. `SpaWorker.hosted_app_seam`
+resolves the callable when it is needed.
 
 The mixed routing lives in the CONSUMER's ASGI router, which calls the adapter
 for the legacy paths and serves the new ones itself. The core knows no path

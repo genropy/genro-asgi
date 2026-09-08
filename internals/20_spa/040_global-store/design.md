@@ -1,6 +1,6 @@
 # Global store
 
-**Version**: 0.2 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.3 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
 **The need.** The hosted application needs one state shared across every user and page, with a safe read-modify-write — no torn writes, no stale copies.
 
@@ -30,15 +30,19 @@ dictionary and nothing else.
 only when `exists` is false, and the stored value — `None` included — otherwise.
 The default never travels to the commander.
 
-## The turn
+## GlobalStoreLease read-modify-write
+
+Worker-handler fragment: `worker` is the live `SpaWorker`; this is not a
+standalone configuration recipe. Run it from a pool thread, or use `async with`
+inside an async handler.
 
 ```python
 store = worker.global_store              # GlobalStoreClient
 
 with store.for_update("CACHE_TS") as turn:
     if not turn.exists:
-        turn.value = LegacyBag()
-    turn.value.setItem("foo", 1)
+        turn.value = {}
+    turn.value["foo"] = 1
 ```
 
 `for_update(key=None)` answers a `GlobalStoreLease`, usable with `with` from a
@@ -75,7 +79,7 @@ sequenceDiagram
     C->>C: decode · one assignment on global_register · release · next waiter
 ```
 
-## Deaths and lost answers
+## Worker failure and GlobalStoreCommitUnconfirmed
 
 A release quoting a request id that is not the holder's publishes nothing and
 frees nothing: it answers `{"applied": False}`. It must never free a newer turn.

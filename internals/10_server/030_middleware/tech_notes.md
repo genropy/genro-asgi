@@ -1,6 +1,30 @@
 # Middleware — tech notes
 
-**Version**: 0.1 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.2 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
+
+
+## Renewal evidence — 2026-09-08
+
+The current implementation is recorded in [status](status.md), verified against
+`2465fcc`. The August notes below are archival: their line references, coverage
+numbers, test paths, missing-consumer assertions and proposed next steps are not
+fresh measurements or current work authorization. The original detailed status
+can be recovered with `git show 2465fcc:internals/10_server/030_middleware/status.md`.
+
+The five complete server/configuration/application/routing/middleware recipes
+are now collected by `tests/test_documentation_recipes.py`; the documentation
+renewal verified construction in isolated subprocesses. Other code blocks are
+contextual fragments unless explicitly identified as a complete recipe. A
+constructed server is not proof that every request or lifecycle path succeeds.
+
+Historical interviews were recovered in the original repository's
+`temp/internal_doc/` directory, including `interview_010_server.md` (moved there
+on 2026-08-29). These are local archives, not files promised in a new checkout
+and not owner ratifications by themselves. Do not recreate absent answers or
+start implementation steps from an old scaffold. Current tests live under
+`tests/core/` and `tests/spa/`; their `x/` directories still contain initializers.
+
+## August audit trail (preserved)
 
 For whoever works ON this entry, not for whoever reads about the middleware
 chain. The working trail: what decided what, what is easy to look for and not

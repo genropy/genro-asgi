@@ -33,5 +33,6 @@ Its parts:
 - **what does not travel here** — datachanges and dbevents stay pull
 - **the admitted seam** — an application that wants the raw websocket
 
-Read [050 authentication](../050_authentication/README.md) first: the handshake
-resolves an avatar the same way an HTTP request does.
+The handshake resolves an avatar using the HTTP authentication rules.
+
+> [Authentication](../050_authentication/README.md).

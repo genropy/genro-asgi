@@ -1,6 +1,6 @@
 # The `genro-asgi` command
 
-> **Status:** 🔴 DA REVISIONARE
+> **Status:** Draft; implementation checked against the development source on 2026-09-08.
 
 ## What it does
 
@@ -9,7 +9,7 @@ server without you writing an entry point, and it keeps a small registry of
 named servers so you can start, list and stop them from any shell.
 
 ```
-genro-asgi serve <source> [--host H] [--port P] [--reload] [--name N]
+genro-asgi serve <source> [--host H] [--port P] [--reload] [--name N] [--debug [PARAMETERS]]
 genro-asgi apps
 genro-asgi stop <name>
 genro-asgi remove <name>
@@ -204,8 +204,9 @@ quick: stopped (pid 75171)
   stored in the registry as you typed it, so `genro-asgi serve demo` from a
   different directory will not find a relative `./config.py`. Register with an
   absolute path if you plan to relaunch from elsewhere.
-- **No `--workers`.** Multi-process supervision is genro-juggler's job, not this
-  command's. There is no `--debug` either.
+- **No `--workers`.** The CLI starts one server process (plus a reload supervisor when requested).
+  A [multiworker SPA](multiworker-spa.md) starts its own configured pool. `--debug` declares a usage mode (optionally a comma-separated parameter list);
+  the core does not branch on it.
 - **Exit codes:** `0` success, `2` argparse usage errors, `1` runtime errors —
   reported as one line on stderr.
 - **`--reload` is a development tool.** It costs a supervisor process and a file

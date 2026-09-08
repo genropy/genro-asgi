@@ -1,6 +1,6 @@
 # Authentication
 
-> **Status:** 🔴 DA REVISIONARE
+> **Status:** Draft; implementation checked against the development source on 2026-09-08.
 
 ## What it does
 
@@ -16,8 +16,9 @@ routes with `auth_rule`.
 
 ## Setup
 
-Auth is a mixin capability of `AsgiServer`. You arm it by passing the `auth`
-keyword argument; doing so wires the auth middleware automatically.
+Auth is a mixin capability of `AsgiServer`; its middleware is active by default.
+The `auth` keyword configures header credential backends. Without them, session
+identity can still be resolved.
 
 ```python
 from genro_asgi import AsgiServer, RoutedApplication
@@ -69,8 +70,8 @@ def secret(self) -> dict:
 ```
 
 `auth_rule="admin"` means the caller's avatar must carry the `admin` tag.
-Protection is **default-deny**: this route answers `403` even if no auth is
-configured at all, so a protected endpoint is never accidentally open.
+Protection is **default-deny**: an anonymous caller receives `401` even if no auth is
+configured at all; a known caller without the required tag receives `403`, so a protected endpoint is never accidentally open.
 
 ## The Avatar
 
@@ -177,7 +178,7 @@ time, so the secret never sits in the recipe. The same section carries
 
 ```console
 $ curl -i http://127.0.0.1:8000/secret
-HTTP/1.1 403 Forbidden
+HTTP/1.1 401 Unauthorized
 
 $ curl -u alice:wonderland http://127.0.0.1:8000/secret
 {"classified": true}
@@ -188,9 +189,9 @@ $ curl -H "Authorization: Bearer sk_live_xyz" http://127.0.0.1:8000/public
 
 ## Gotchas
 
-- `auth_rule` is default-deny: a protected route is `403` even with no auth
-  configured. If a route unexpectedly returns `403`, check whether it carries an
-  `auth_rule` the caller's avatar does not satisfy.
+- `auth_rule` is default-deny: anonymous callers receive `401`, known callers
+  with insufficient tags receive `403`. HTML clients may be redirected to login
+  by the error middleware; use `Accept: application/json` to inspect the API status.
 - `jwt` is a **list**, not a dict — a single verifier still goes inside a
   one-element list.
 - An invalid `Authorization` header is `401` and does **not** fall back to the

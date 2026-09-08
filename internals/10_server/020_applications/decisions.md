@@ -1,6 +1,6 @@
 # Applications — decisions
 
-**Version**: 0.4 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.5 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
 **The application layer, with the work finished.** Read this as a report from
 the day everything described here is running: it says what an application
@@ -273,6 +273,30 @@ protocols is exactly that situation.
 
 # Open frictions
 
+## Evidence follow-up — 2026-09-08
+
+- S4's discarded body and S5's sync `TypeError` reported as 400 were corrected
+  by the Request parsing and argument-error changes. Current dispatch is
+  signature mismatch 400, validation failure 422, handler-body exception 500;
+  `tests/core/test_routed_application.py` names all three contracts. S9's old
+  combined failure is historical; error-detail policy still needs its own source.
+- D31 prohibits passing a live Request to a handler. On 2026-09-06 the owner
+  explicitly approved N37: move opt-in `_request` injection to
+  `RoutedApplication.bind_kwargs` and remove the server-specific override
+  (Claude session `60d6d5d6-c863-414c-8eec-a8deb8c89af4`, record 1857,
+  18:32:00.586Z). This common seam was deliberate. The instruction did not
+  discuss D31 or its effects design; its broader reconciliation remains open.
+- The design's single 400 argument outcome differs from implemented 400/422.
+  This audit records the discrepancy without silently making code the new target.
+- S8's historical streaming-handover coverage, S10's unread-surface assertions
+  and S15's four-site count are historical measurements. Current consumers and
+  test locations must be checked before using them to remove code or plan tests.
+
+The earlier findings below retain their historical wording; the follow-up above
+and [current status](status.md) identify what still applies. No decision status
+is promoted by this audit.
+
+
 Scaffolding for the interview, not a register. Each voice below is a question
 to settle; settling it edits this document — and, where the contradiction
 lives upstream, edits the source too. This section shrinks to nothing, and
@@ -316,6 +340,13 @@ There are two halves: a server-side defect blamed on the caller, and an
 internal message disclosed to them.
 
 ## Gaps in what exists
+
+**Implementation follow-up, 2026-09-08 (not a new ratification).** The
+historical no-WebSocket finding below is superseded by the delivered
+`BaseServer.on_websocket`, `WsxConnection` and raw `serve_websocket` seam.
+The Origin gate belongs to WSX handshake processing; raw applications own their
+handshake policy after the server state gate. Evidence and owner provenance:
+[WebSocket decisions](../055_websocket/decisions.md) and [WebSocket status](../055_websocket/status.md).
 
 **S6 [unratified] — an application cannot answer a WebSocket.** The only WebSocket entry point is
 the server's, and at the base it accepts the connection and closes it politely;

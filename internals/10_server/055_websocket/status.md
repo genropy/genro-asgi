@@ -1,9 +1,10 @@
 # Websocket — current state
 
-**Version**: 0.2 · **Last Updated**: 2026-09-07 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.3 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
-What exists TODAY on the branch, with its `file:line`. Update it in the same
-change that alters the behaviour. Opened at phase 0 of
+Verified against `2465fcc`. Historical phase order and test totals are archived
+in [technical notes](tech_notes.md); they are not a current coverage measurement.
+Opened at phase 0 of
 [#68](https://github.com/genropy/genro-asgi/issues/68) on `develop` = `a434a23`;
 all six phases of code have landed since — 1, 2, 3, 4a, 4 and 5. The socket is
 no longer empty: a handshake reaches the motor, every message it carries is
@@ -11,28 +12,20 @@ served as a request of its user on his own row, a page opens its channel and is
 bound to its socket, the site can write back to it, and an application that
 wants the socket itself is handed it.
 
-**The measure, at the head of the branch.** The whole suite is 1946 passed at
-97% coverage; the websocket's own tests are **170**, across
-`tests/test_websocket_facade.py` (31), `tests/test_wsx_envelope.py` (29),
-`tests/test_websocket_registry.py` (12), `tests/test_wsx_connection.py` (37),
-`tests/test_websocket_server_send.py` (8), `tests/test_websocket_raw_seam.py`
-(6), `tests/orchestration/test_orchestration_websocket_e2e.py` (16) and
-`tests/orchestration/test_orchestration_asgi_seam.py` (31). The three modules
-the motor lives in — `websocket.py`, `wsx.py`, `spa/environ.py` — are covered
-100% by those alone.
-
-## What phase 5 built
+## Raw WebSocket application seam
 
 **The admitted mode** — `BaseApplication` defines no `serve_websocket`, and an
 application that defines one is handed the raw scope, receive and send by
 `BaseServer.on_websocket` ([server.py](../../../src/genro_asgi/server.py)),
 with its mount already off the path. Nothing else of the motor runs for it. 7
-contract tests in `tests/test_websocket_raw_seam.py`, including the two that
+contract tests in `tests/core/test_websocket_raw_seam.py`, including the two that
 draw the line: the raw application is never even named while the server is not
 RUNNING, because the state is judged above the demux, and both modes are turned
 away by that one refusal.
 
-## What phase 4 built
+Claim anchors: [`BaseServer`](../../../src/genro_asgi/server.py#L86), [`on_websocket`](../../../src/genro_asgi/server.py#L365).
+
+## Page channel binding, worker dispatch and sequential calls
 
 **The channel of a page** — `WsxControl` under the front's `_wsx` root
 ([spa_app.py](../../../src/genro_asgi_multiworker_spa/spa_app.py)),
@@ -41,7 +34,7 @@ away by that one refusal.
 `SpaWorker.serve_wsx` and the `WsxCommands` branch
 ([spa_worker.py](../../../src/genro_asgi_multiworker_spa/orchestration/spa_worker.py)),
 14 contract tests in
-`tests/orchestration/test_orchestration_websocket_e2e.py` that enter where a
+`tests/spa/orchestration/test_orchestration_websocket_e2e.py` that enter where a
 real message enters — the socket — over a real pool. `openchannel` is
 validated by the front against `page_connection_map`, written on the page's row
 by the worker through the same prologue a request goes through, and bound to
@@ -75,7 +68,9 @@ moved from the `_server` app's own `bind_kwargs` into
 `RoutedApplication.bind_kwargs`: the seam is nobody's private business, and
 `openchannel` is its second reader.
 
-## What phase 4a built
+Claim anchors: [`WsxControl`](../../../src/genro_asgi_multiworker_spa/spa_app.py#L454), [`SpaCommander`](../../../src/genro_asgi_multiworker_spa/orchestration/spa_commander.py#L494), [`serve_wsx_request`](../../../src/genro_asgi_multiworker_spa/orchestration/spa_commander.py#L726), [`serve_wsx`](../../../src/genro_asgi_multiworker_spa/orchestration/spa_worker.py#L1416), [`SpaWorker`](../../../src/genro_asgi_multiworker_spa/orchestration/spa_worker.py#L564), [`WsxCommands`](../../../src/genro_asgi_multiworker_spa/orchestration/spa_worker.py#L492), [`websocket`](../../../src/genro_asgi/config/elements.py#L142), [`openchannel`](../../../src/genro_asgi_multiworker_spa/spa_app.py#L471), [`openchannel`](../../../src/genro_asgi_multiworker_spa/orchestration/spa_worker.py#L507), [`resolve_worker`](../../../src/genro_asgi_multiworker_spa/orchestration/spa_commander.py#L753).
+
+## Hosted ASGI and WSGI worker seams
 
 **One seam on the worker** — `SpaWorker.asgi_app`, and the property
 `hosted_app_seam`
@@ -88,9 +83,8 @@ process at boot; NEITHER is the base worker, which
 declares legitimate — it serves its orders, and an http CALL is refused with
 the property's message (owner, 2026-09-07, N29).
 
-**The two seams** — [environ.py](../../../src/genro_asgi_multiworker_spa/environ.py), 100%
-covered, 28 contract tests in
-`tests/orchestration/test_orchestration_asgi_seam.py`. `AsgiSeam` turns the
+**The two seams** — [environ.py](../../../src/genro_asgi_multiworker_spa/environ.py), verified by
+`tests/spa/orchestration/test_orchestration_asgi_seam.py`. `AsgiSeam` turns the
 `http` dict into an ASGI scope and calls the application as a server would;
 `WsgiSeam` is an ASGI application around a WSGI callable, its dict entrance
 gone with its two readers. `SCRIPT_NAME` is `root_path` and `PATH_INFO` what is
@@ -101,27 +95,31 @@ CALL's slot following onto the thread.
 **What did not change**: the whole existing rig passes untouched. The bridge
 assigns `wsgi_app` and knows nothing of the adapter it now goes through.
 
-## What phase 3 built
+Claim anchors: [`SpaWorker`](../../../src/genro_asgi_multiworker_spa/orchestration/spa_worker.py#L564), [`hosted_app_seam`](../../../src/genro_asgi_multiworker_spa/orchestration/spa_worker.py#L689), [`_serve_request`](../../../src/genro_asgi_multiworker_spa/orchestration/spa_worker.py#L2222), [`AsgiSeam`](../../../src/genro_asgi_multiworker_spa/environ.py#L71), [`WsgiSeam`](../../../src/genro_asgi_multiworker_spa/environ.py#L174), [`WorkerEntry`](../../../src/genro_asgi_multiworker_spa/orchestration/worker_entry.py#L90), [`run_sync`](../../../src/genro_asgi/server.py#L222), [`run_sync`](../../../src/genro_asgi_multiworker_spa/orchestration/spa_worker.py#L719).
+
+## Server-initiated page messages
 
 **The server speaks first** — `BaseServer.send_message(page_id, path, data)`
 ([server.py](../../../src/genro_asgi/server.py)), 8 contract tests in
-`tests/test_websocket_server_send.py`. It finds the socket that page speaks on
+`tests/core/test_websocket_server_send.py`. It finds the socket that page speaks on
 and writes one message with the shape of a request and NO `id`: not an answer,
 and nobody answers it. `True` says it was written to the socket, `False` that
 the page speaks on none or that its socket already closed — delivered means
 written, never executed by the page. The name and the signature are
-`SpaWorker.send_message`'s, which is what will call it from a worker.
+`SpaWorker.send_message`'s, which calls it from a worker through the commander.
 
 Reduced from the plan by the owner (2026-09-07, N28): the sending lives on the
 server, which knows the protocol, and the registry stays a map. There is no
 sending by identity or by connection, and the registry does not learn a
 socket's identity, because nothing reads either yet.
 
-## What phase 2 built
+Claim anchors: [`BaseServer`](../../../src/genro_asgi/server.py#L86), [`send_message`](../../../src/genro_asgi/server.py#L248), [`send_message`](../../../src/genro_asgi_multiworker_spa/orchestration/spa_worker.py#L1511), [`SpaWorker`](../../../src/genro_asgi_multiworker_spa/orchestration/spa_worker.py#L564).
+
+## WSX handshake, registry and concurrency configuration
 
 **The connection** — `WsxConnection` in
-[wsx.py](../../../src/genro_asgi/wsx.py), 100% covered by
-`tests/test_wsx_connection.py`. `serve()` is one socket's whole life: the gate,
+[wsx.py](../../../src/genro_asgi/wsx.py), covered in the historical phase run by
+`tests/core/test_wsx_connection.py`. `serve()` is one socket's whole life: the gate,
 the accept, the read loop, the bounded drain. The gate closes 1008 on a path no
 application serves and on a missing home cookie, and REFUSES a hostile Origin
 before the accept. It never sees a connection the machine had already refused:
@@ -149,11 +147,11 @@ cookie, creating nothing — and the middleware's own `__call__` now uses it.
 [websocket.py](../../../src/genro_asgi/websocket.py), reached as
 `server.websockets`, 12 contract tests. `register` / `unregister` for the live
 sockets, `bind_page` / `get_page_socket` for the association `openchannel`
-will write. A rebind follows a reconnected page; `unregister` drops only the
+writes. A rebind follows a reconnected page; `unregister` drops only the
 pages still bound to THAT socket.
 
 **The refusal** — `WebSocket.refuse(code, reason)`: consumes the connect and
-closes with no accept. The one gate that uses it is the Origin.
+closes with no accept. Both the Origin gate and the server state gate use refusal before acceptance.
 
 **The config** — `server/websocket` with `origins` (comma-separated in a
 recipe, a list on the server) and `max_concurrent`
@@ -162,10 +160,12 @@ recipe, a list on the server) and `max_concurrent`
 defaults to 16 (`WEBSOCKET_MAX_CONCURRENT` in
 [server.py](../../../src/genro_asgi/server.py)).
 
-## What phase 1 built
+Claim anchors: [`WsxConnection`](../../../src/genro_asgi/wsx.py#L193), [`refuse`](../../../src/genro_asgi/websocket.py#L162), [`demux`](../../../src/genro_asgi/server.py#L325), [`on_websocket`](../../../src/genro_asgi/server.py#L365), [`websocket`](../../../src/genro_asgi/config/elements.py#L142), [`authenticate`](../../../src/genro_asgi/server.py#L231), [`SessionMiddleware`](../../../src/genro_asgi/middleware/session.py#L55), [`get_session`](../../../src/genro_asgi/middleware/session.py#L80), [`HTTPException`](../../../src/genro_asgi/exceptions.py#L48), [`MiddlewareMixin`](../../../src/genro_asgi/middleware/__init__.py#L80).
+
+## WebSocket facade and WSX envelope
 
 **The facade** — [websocket.py](../../../src/genro_asgi/websocket.py), 100%
-covered by `tests/test_websocket_facade.py` (27 contract tests). `WebSocket`
+covered by `tests/core/test_websocket_facade.py` (27 contract tests). `WebSocket`
 wraps scope, `receive` and `send`: `accept()` consumes the connect and answers
 it (with a subprotocol and with response headers, the one place a websocket can
 carry a `Set-Cookie`), `close()` writes once and refuses to run before an
@@ -176,8 +176,8 @@ nobody accepted, and iterating yields the incoming texts until that disconnect.
 headers, cookies, offered subprotocols — are read off the scope in the
 constructor, the way `Request` reads an HTTP request.
 
-**The envelope** — [wsx.py](../../../src/genro_asgi/wsx.py), 100% covered by
-`tests/test_wsx_envelope.py` (29 contract tests). `WsxEnvelope(text)` reads a
+**The envelope** — [wsx.py](../../../src/genro_asgi/wsx.py), covered in the historical phase run by
+`tests/core/test_wsx_envelope.py` (29 contract tests). `WsxEnvelope(text)` reads a
 message, `WsxEnvelope(id=…, method=…, path=…, data=…)` builds one, and
 `encode()` gives the wire text. A field nobody set does not reach the wire, so
 an event has no `id` and a request has no `status`. `data` is a Python value
@@ -198,7 +198,9 @@ not a value a read can return, so it arrives as an exception.
 the `RAW` type: bytes in a message travel base64 under `::RAW` on JSON and
 native on msgpack, and the page encodes nothing by hand.
 
-## What the code held before it
+Claim anchors: [`WebSocket`](../../../src/genro_asgi/websocket.py#L65), [`accept`](../../../src/genro_asgi/websocket.py#L129), [`WebSocketDisconnect`](../../../src/genro_asgi/exceptions.py#L122), [`connected`](../../../src/genro_asgi/websocket.py#L105), [`WsxEnvelope`](../../../src/genro_asgi/wsx.py#L101), [`encode`](../../../src/genro_asgi/wsx.py#L172).
+
+## HTTP middleware and transport boundaries
 
 **The empty socket, until phase 2.** `BaseServer.on_websocket` consumed the
 connect and closed with code 1000 — the D7 socket, whose docstring said the
@@ -207,9 +209,9 @@ renders as a 503 with `Retry-After` is read here too, at the top of
 `on_websocket`: each transport judges the same fact and renders its own
 refusal, and this one turns the handshake away before the accept.
 
-The test that drove it (`tests/test_demux.py`, `TestEmptyWebsocket`) became
+The test that drove it (`tests/core/test_demux.py`, `TestEmptyWebsocket`) became
 `TestTheWebsocketBranch`, asserting only that `__call__` hands the scope to the
-motor; what the motor does is `tests/test_wsx_connection.py`'s subject.
+motor; what the motor does is `tests/core/test_wsx_connection.py`'s subject.
 
 **The middleware chain does not see it.** `MiddlewareMixin.__call__`
 ([middleware/\_\_init\_\_.py:107-112](../../../src/genro_asgi/middleware/__init__.py))
@@ -218,13 +220,13 @@ through. So at the handshake `scope["auth"]` and `scope["session"]` are NOT
 already there — which is why the handshake resolves the identity itself
 ([decisions.md](decisions.md) §5).
 
-**The front has no websocket branch.** `SpaApplication.__call__`
+**The front receives synthetic HTTP scopes.** `SpaApplication.__call__`
 ([spa_app.py:837-844](../../../src/genro_asgi_multiworker_spa/spa_app.py))
 demultiplexes between its own router and the hosted site on the PATH, and never
-reads the scope's type. It sees no websocket scope today because the server
-takes that branch first (`server.py:237-238`) and never reaches the demux.
+reads the scope's type. It receives WSX messages as synthetic HTTP scopes from the connection motor.
+The raw handshake scope stays with the server's WebSocket entry point.
 
-**The pieces the motor will stand on already exist.** The demux
+**The pieces used by the motor.** The demux
 (`server.py:247-273`), the request registry (`server.py:95`, registered in the
 HTTP cycle at `:225-240`), the identity (`auth/core.py:160-179`,
 `auth/mixin.py:151-163`), the session from the cookie
@@ -233,30 +235,24 @@ walk (`routed_application.py:173-218`), and the lane's own envelope, which
 already speaks WSX with the same four fields (`channel/frame.py:15-23,
 94-100`).
 
-## What is not there, and why
+Claim anchors: [`middleware`](../../../src/genro_asgi/config/elements.py#L167), [`BaseServer`](../../../src/genro_asgi/server.py#L86), [`on_websocket`](../../../src/genro_asgi/server.py#L365), [`MiddlewareMixin`](../../../src/genro_asgi/middleware/__init__.py#L80), [`SpaApplication`](../../../src/genro_asgi_multiworker_spa/spa_app.py#L517).
 
-**Nobody names a handshake cookie.** `BaseApplication.handshake_cookie` exists and answers `None`: no application in
-the core names a cookie yet, the SPA included — a front that wants its
-handshake gated names it in its own subclass.
+## SPA cookie gate, worker refusals and buffered protocol
+
+**The SPA requires its connection cookie.** `BaseApplication.handshake_cookie`
+returns `None`; `SpaApplication.handshake_cookie` overrides it with
+`spa_connection_id` (#70 / PR #71). A missing cookie is accepted then closed
+1008. `SpaApplication.gateway_response` also preserves explicit worker refusal
+status and text, including the 409 for a page that skipped `openchannel`.
+Evidence: `tests/spa/test_spa_application.py` and
+`tests/spa/orchestration/test_orchestration_websocket_e2e.py`.
+
+**The worker protocol is still the buffered baseline.** `pack_http` uses a
+JSON-safe dict with base64 body, and `AsgiSeam` collects the response. Issue #72
+has not changed that protocol in this revision.
 
 `SPECIFICATION.md` §6 Q1 is marked RESOLVED as of this phase: the design it
 asked for is [decisions.md](decisions.md) and [design.md](design.md), and the
 code follows in phases 1 to 5.
 
-## The order of the work
-
-| Phase | What lands | |
-|---|---|---|
-| 0 | this folder, Q1 resolved, the namings — no code | **DONE** |
-| 1 | the `WebSocket` facade, `WsxEnvelope`, `WebSocketDisconnect` | **DONE** |
-| 2 | `WsxConnection`, `WebSocketRegistry`, `on_websocket`, the config element | **DONE** |
-| 3 | the server speaks first, proven on a test application | **DONE** |
-| 4a | `asgi_app`, `AsgiSeam`, `hosted_app_seam`, `WsgiSeam` as the adapter, `run_sync` | **DONE** |
-| 4 | the SPA: message → CALL, `openchannel`, the per-page queue, the push | **DONE** |
-| 5 | `serve_websocket`, the admitted raw seam | **DONE** |
-| 6 | documents | **DONE** |
-| 7 | release 0.43.0 | |
-
-Tests first in every phase, one commit per phase, the suite green. The working
-plan of the phases is local to the machine this work runs on and is not
-committed; what it decides lands here.
+Claim anchors: [`handshake_cookie`](../../../src/genro_asgi_multiworker_spa/spa_app.py#L524), [`SpaApplication`](../../../src/genro_asgi_multiworker_spa/spa_app.py#L517), [`gateway_response`](../../../src/genro_asgi_multiworker_spa/spa_app.py#L1096), [`openchannel`](../../../src/genro_asgi_multiworker_spa/spa_app.py#L471), [`openchannel`](../../../src/genro_asgi_multiworker_spa/orchestration/spa_worker.py#L507), [`pack_http`](../../../src/genro_asgi_multiworker_spa/spa_app.py#L1163), [`AsgiSeam`](../../../src/genro_asgi_multiworker_spa/environ.py#L71).

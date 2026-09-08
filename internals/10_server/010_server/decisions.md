@@ -1,6 +1,6 @@
 # Server — decisions
 
-**Version**: 0.5 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.6 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
 **The ground floor, with the work finished.** Read this document as a report
 from the day everything described here is running: it says what the server
@@ -178,9 +178,14 @@ with the same gesture the framework itself is built with.
 
 ## 7. The registry: one mechanism, two duties, different consumers
 
-**Source: D5 as amended by D30, owner, 2026-08-24.** Two duties, identical on
-every server: (1) make the request being served reachable by the running
-handler — the "current request"; (2) keep the picture of in-flight requests.
+**Historical source: D5 as amended by D30, owner, 2026-08-24.** D30 gave the
+registry two duties: expose the current request and track in-flight requests.
+**Subsequent restriction: D31** reserves registry access to framework machinery
+and describes a thin registry item, not a handler's live Request. The later
+N37 instruction (2026-09-06) explicitly approved opt-in `_request` injection in
+`RoutedApplication.bind_kwargs`; it does not make the registry itself a public
+handler API. The remaining reconciliation with the broader effects target is
+recorded in [Applications decisions](../020_applications/decisions.md).
 **Construction is not among them**: the server dispatches the raw ASGI scope
 and the owning application builds the `Request` its handlers receive — each
 surface builds the request it needs. The websocket branch, when it reopens,
@@ -292,6 +297,26 @@ arrives as its own capability, in its own entry of this world.
 ---
 
 # Open frictions
+
+## Evidence follow-up — 2026-09-08
+
+- The universal startup-hook isolation wording conflicts with the explicit
+  `FatalBootError` startup failure used by required SPA configuration. The
+  unactionable-configuration refusal was owner-approved on August 23 and
+  made an explicit startup requirement in approved profile design v0.3.1
+  on August 28 (historical `temp/design_profili_fase2_2026-08-28.md`,
+  lines 81–82, 462 and T3/T4). The fatal exception is deliberate; precise
+  reconciliation of the older universal hook wording remains open.
+- D7's empty socket is a phase-0 record superseded by the September WebSocket
+  decisions. The base now owns a WebSocket registry as well.
+- August uncovered-line counts are not current evidence; tests were split into
+  core/SPA packages. Test inventory is not being reclassified here.
+- Dynamic application installation and the D29 site index remain undelivered.
+
+The earlier findings below retain their historical wording; the follow-up above
+and [current status](status.md) identify what still applies. No decision status
+is promoted by this audit.
+
 
 Scaffolding for the interview, not a register. Each voice below is a question
 to settle; settling it edits this document — and, where the contradiction

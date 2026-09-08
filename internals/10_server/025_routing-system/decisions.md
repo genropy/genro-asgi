@@ -1,6 +1,6 @@
 # Routing system — decisions
 
-**Version**: 0.5 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.6 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
 **The routing system, with the work finished.** Read this as a report from the
 day everything described here is running: it says what a routing class, a walk
@@ -214,6 +214,20 @@ consumed.
 ---
 
 # Open frictions
+
+## Evidence follow-up — 2026-09-08
+
+- The current status explains the server fixed pair versus application auth
+  arming and the two OpenAPI metadata paths. The documentation gap is addressed;
+  design choices about registry collisions, per-application plugin scope and
+  HTTP method enforcement are not decided by this editorial clarification.
+- Old coverage percentages and fixed call-site counts are archived observations,
+  not new coverage evidence.
+
+The earlier findings below retain their historical wording; the follow-up above
+and [current status](status.md) identify what still applies. No decision status
+is promoted by this audit.
+
 
 Scaffolding for the interview, not a register. Each voice carries a **family
 tag**: the frictions of the server skeleton — 010, 015, 020, 025, 030 — are

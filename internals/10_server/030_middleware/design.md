@@ -1,11 +1,14 @@
 # Middleware
 
-**Version**: 0.3 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.4 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
 The middleware chain every request passes through on its way in and on its way
 out, and the six things this core puts in it.
 
 ## What a middleware is
+
+A middleware is an ASGI layer around the dispatch. It can inspect a request,
+wrap the response, or refuse the request before an application handles it.
 
 An application answers requests. It should not also be deciding whether the
 caller is who they say they are, whether a browser from another origin may
@@ -202,10 +205,10 @@ sees a socket, and none of them can act on one.
 That is a boundary worth naming rather than passing over, because two of these
 layers are exactly what a socket would want: the origin check before a
 handshake is accepted, and the identity resolved before the conversation
-begins. Neither reaches one. Where they go when this core grows long-lived
-conversations is the channel's subject, not this page's.
+begins. Neither middleware layer runs on a WebSocket scope. WSX handshake processing
+performs those checks once; a raw application owns its handshake policy.
 
-> [20_spa/030 channel](../../20_spa/030_channel/README.md).
+> [055 WebSocket](../055_websocket/README.md).
 
 **And the middleware chain does not know applications.** It runs before the
 server has decided who will serve the request, so a layer cannot be armed for
@@ -242,7 +245,7 @@ not the description mentions it. Naming them changes nothing; naming one
 
 ---
 
-## 7. Writing one
+## 7. BaseMiddleware extension and StampMiddleware example
 
 A layer is a subclass of `BaseMiddleware`. It declares **where it goes** and
 **whether it is on when nobody says**, and it implements the ASGI call:
@@ -299,8 +302,10 @@ server = AsgiServer(
 ```
 
 That server's middleware chain is `ErrorMiddleware · StampMiddleware ·
-SessionMiddleware · AuthMiddleware`, and every answer carries
-`x-served-by: web-01`.
+SessionMiddleware · AuthMiddleware`. Responses emitted through `StampMiddleware`
+carry `x-served-by: web-01`. If downstream processing raises, the outer
+`ErrorMiddleware` generates the error response outside that wrapper, so the
+header is absent from that response.
 
 The asymmetry with the six is deliberate and worth stating: **a middleware of
 your own cannot be named in the description.** The section's words are the six
@@ -309,6 +314,14 @@ and because the description is mapped onto that same argument, a site that has
 both a description and a hand-passed switch has two writers for one value.
 
 ---
+
+## Shared capabilities and application contracts
+
+Every request served by an installation of this core passes through the
+middleware chain, so the identity the route resolution filters on and the
+session a handler reads are both put there by it. The administrative surface's
+login flow is the outermost layer's challenge negotiation seen from the other
+side.
 
 ## A configuration that includes it
 
@@ -397,11 +410,3 @@ it.
 And `/robots.txt` never reached the shop. The probe filter raised, and errors
 turned the raise into the 404 — two layers cooperating without either building
 a response.
-
-## What stands on this
-
-Every request served by an installation of this core passes through the
-middleware chain, so the identity the route resolution filters on and the
-session a handler reads are both put there by it. The administrative surface's
-login flow is the outermost layer's challenge negotiation seen from the other
-side.

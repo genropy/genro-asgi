@@ -1,11 +1,13 @@
 # Tags
 
-**Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.2 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
-**The need.** Permissions must be words, not code: a surface is gated by a tag, and an admin reasons in tags.
+Authorization tags name permissions carried by an avatar. Routes declare the
+tags they require: `SUPERADMIN` protects the core users, tokens and tasks
+sections; `SERVER_ADMIN` protects the monitor. Public login entry points and
+the separately mounted SPA inspector do not inherit those rules.
 
-The permission vocabulary (`SERVER_ADMIN` gates the `_server` sections).
-Backlog 2026-08-21: per-section auth tags in config, with the standing
+Per-section tags in configuration are a design direction, with the standing
 constraint that the monitor's gate is never weakened.
 
-Interactions: authentication (they live on the avatar) · server-application (its sections are consumers).
+> [Server application](../../090_server-application/README.md).

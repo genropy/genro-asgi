@@ -21,7 +21,7 @@ from pathlib import Path
 
 # The package is expected to be installed (``pip install -e ".[docs]"``); add
 # ``src`` to the path as a fallback so autodoc resolves imports either way.
-sys.path.insert(0, str(Path("..").resolve() / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 project = "genro-asgi"
 copyright = "2025-2026, Softwell S.r.l."
@@ -65,6 +65,7 @@ napoleon_include_init_with_doc = True
 autodoc_member_order = "bysource"
 autodoc_typehints = "description"
 autodoc_default_options = {
-    "members": True,
+    # A string default allows explicit directive member lists to narrow the API.
+    "members": "",
     "show-inheritance": True,
 }

@@ -113,15 +113,17 @@ class WsxEnvelope:
         reply_path: str | None = None,
         status: int | None = None,
     ) -> None:
-        """Args:
-        text: a WSX message to read; the keywords are ignored when it is given.
-        id: what correlates an answer with its message; ``None`` for an event.
-        method: the request's method — ``WSK`` for a page's rpc.
-        path: the request's path, which names the application and the route.
-        data: the payload, as a Python value.
-        page_id: the page the message belongs to, when it belongs to one.
-        reply_path: where the page asks to be called back.
-        status: the answer's status; ``None`` on a request.
+        """Initialize this instance.
+
+        Args:
+            text: a WSX message to read; the keywords are ignored when it is given.
+            id: what correlates an answer with its message; ``None`` for an event.
+            method: the request's method — ``WSK`` for a page's rpc.
+            path: the request's path, which names the application and the route.
+            data: the payload, as a Python value.
+            page_id: the page the message belongs to, when it belongs to one.
+            reply_path: where the page asks to be called back.
+            status: the answer's status; ``None`` on a request.
 
         Raises:
             ValueError: ``text`` is not a WSX message, its body is not JSON, or
@@ -192,12 +194,14 @@ class WsxConnection:
     """One websocket connection speaking WSX, from the handshake to the end."""
 
     def __init__(self, server: Any, scope: Scope, receive: Receive, send: Send) -> None:
-        """Args:
-        server: the server this connection belongs to — it owns the demux, the
-            identity, the request registry and the websocket registry.
-        scope: the ASGI websocket scope of the handshake.
-        receive: the ASGI receive callable.
-        send: the ASGI send callable.
+        """Initialize this instance.
+
+        Args:
+            server: the server this connection belongs to — it owns the demux, the
+                identity, the request registry and the websocket registry.
+            scope: the ASGI websocket scope of the handshake.
+            receive: the ASGI receive callable.
+            send: the ASGI send callable.
         """
         self.server = server
         self.socket = WebSocket(scope, receive, send)

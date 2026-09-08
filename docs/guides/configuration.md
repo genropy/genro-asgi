@@ -1,6 +1,6 @@
 # Configuration
 
-> **Status:** 🔴 DA REVISIONARE
+> **Status:** Draft; implementation checked against the development source on 2026-09-08.
 
 ## What it does
 
@@ -231,8 +231,8 @@ the children live in the mounted one. An undeclared child is a boot error.
 One line each; the deep dives live in their own guides.
 
 - **`server`** — `host`, `port`, `external_url` (the PUBLIC address, not the
-  listener), `max_threads`, plus the children `session` (its
-  `ttl`) and `tasks` (see [Background tasks](tasks.md)).
+  listener), `max_threads`, `shutdown_timeout_seconds` (default 5.0), plus `websocket`
+  (`origins`, `max_concurrent`), `session` (its `ttl`) and `tasks` (see [Background tasks](tasks.md)).
 - **`middleware`** — one `{name: bool | dict}` switch per middleware; a dict
   enables it and becomes its options (see [Middleware](middleware.md)).
 - **`authentication`** — the whole identity surface in one section:
@@ -247,11 +247,12 @@ One line each; the deep dives live in their own guides.
 - **`databases`** — one descriptor per database: `db_class` and its connection
   kwargs; the core never imports a driver.
 - **`plugins`** — the router plugins armed on every routed app.
-- **`openapi`** — `title`, `version`, `description` (see
-  [OpenAPI & Swagger](openapi.md)).
-- **`commander`** — the SPA pool: the vertex's paths and policies plus one
-  `group` per family of workers (see
-  [The pool section](#the-pool-section-commander-and-its-groups)).
+- **`openapi`** — accepted by the grammar but not consumed by the core. Set
+  schema title, version and description with the `OpenApiApplication`
+  `openapi_info` class attribute instead (see [OpenAPI & Swagger](openapi.md)).
+The SPA pool belongs to an application's `orchestration` subtree; it is not a
+root section. See [The pool subtree](#the-pool-subtree-orchestration-its-commander-and-its-groups)
+and [Multiworker SPA](multiworker-spa.md).
 
 ## The storage section
 
@@ -304,15 +305,16 @@ its reception into being at boot, then grows on demand and shrinks when capacity
 is spare, so the count is something you read in the log, never something you set.
 
 ```python
+from genro_asgi_multiworker_spa.spa_app import SpaApplication
+
+
 def applications_section(self, cfg):
     """The front, its orchestration, one vertex, two groups on two interpreters."""
     front = cfg.applications().application(
         app_class=SpaApplication, code="shop", mount="",
     )
     orchestration = front.orchestration(
-        profiles_path="/var/lib/shop/profiles",   # where the stored profiles live
-        profile_name="busy_hours",                # the one the boot must find
-        control_enabled=True,                     # apply/reload/status under /_orchestration
+        control_enabled=False,  # runtime profile operations require one group
     )
     commander = orchestration.commander(
         frozen_users_path="/var/lib/shop/frozen_users",
@@ -339,6 +341,10 @@ def applications_section(self, cfg):
                  worker_class="myshop.app:ShopWorker")
 ```
 
+Named profiles, environment overrides and runtime `apply`/`reload`/`status`
+currently require exactly one group. The two-group template above uses recipe
+settings directly, without a named profile or environment overrides.
+
 **The node is required, and so is the commander under it.** A spa front IS its
 pool: one declared without `orchestration` would answer every request with a
 raise, so the server does not start and the recipe is asked for the node. Wanting
@@ -363,6 +369,8 @@ environment, and no word of any grammar.
 because the vertex reads back what a worker wrote there) and `instance_dir` (the
 sockets). Every group is handed both.
 
+### Group memory percentages
+
 **The memory is a cascade of percentages, and only the machine is measured in
 bytes.** `memory_max_percent` on `commander` is the server's concession on the
 machine; `memory_max_percent` on a `group` is that group's share of the
@@ -386,6 +394,8 @@ window the hottest that admits takes him anyway: the interval orders the walk,
 it refuses nobody and births nobody. Nobody estimates what a user will cost: the
 gate is the CPU admission, the heads and the memory veto.
 
+### CPU admission thresholds
+
 **The CPU keys are the soft admission, and its brake.** `cpu_admission_close_percent`
 (experimental, off when omitted) is the smoothed CPU above which a worker stops
 taking NEW users; it reopens below `cpu_admission_reopen_percent`, and between the two
@@ -399,6 +409,8 @@ Without it, closing the emptiest worker while demand still stands hands its
 users back to the hot one, which regrows seconds later. With the CPU policy off
 the brake does not exist at all.
 
+### `cpu_heating_seconds` and `cpu_cooling_seconds`
+
 **The temperature the CPU keys read is filtered.** The commander samples each
 worker's CPU every 100 ms; a saturated process reads 0% or 100% on such a short
 window, so no judge reads the raw sample. `cpu_heating_seconds` (default 1) and
@@ -410,6 +422,8 @@ several seconds of real silence to reopen, so a user it just ceded does not come
 back on the next request. The raw sample stays visible in the pool census as
 `cpu_temperature_sample_percent`, beside the filtered `cpu_temperature_percent`.
 
+### `cpu_close_percent` retirement
+
 **`cpu_close_percent` is where the pool shrinks.** Past the CPU quiet, the coldest
 worker is closed when its temperature, shared by the survivors, keeps every one
 of them under this key (unset, the reopen threshold itself; set while the CPU
@@ -417,6 +431,8 @@ admission is on, never above `cpu_admission_reopen_percent`),
 and its memory, shared the same way, keeps every survivor under
 `worker_memory_admission_percent`. A worker with no temperature yet suspends the
 judgment. Its users go to the freezer and wake where their next request lands.
+
+### `cpu_offload_percent` user selection
 
 **`cpu_offload_percent` is what makes a hot worker slim down.** Closing the
 admission protects the workers to come; it does nothing for the users already
@@ -482,6 +498,8 @@ server asks its environment for more. And no clocks — the beat, the patience o
 a departure and the cadences are module constants, because an installation tunes
 policies, not timings.
 
+### Orchestration decision journal
+
 **The account of what the pool does** is `orchestration_log_path` (with
 `orchestration_log_max_bytes` and `orchestration_log_backup_count`): one row per
 order, saying who decided, what, on whom, with which numbers in front of them and
@@ -518,12 +536,41 @@ number of active users, the computed material threshold, and how many
 contributors were material and cedible. The two standing conditions are written
 once when they begin, not at every heartbeat.
 
+The pool snippet above is an installation template: it needs your `ShopWorker`,
+existing storage paths and interpreters. It is not
+a standalone hello-world. The core recipe below has different prerequisites.
+
 ## A complete recipe
 
 Server, middleware, an environment secret, and one application with a grammar of
-its own:
+its own. Use this self-contained block as your `config.py`; do not concatenate
+the earlier examples, which declare alternative recipe classes. The storage
+directory and environment prerequisites are described below.
 
 ```python
+from genro_asgi import AsgiServer, RoutedApplication
+from genro_asgi.application import ApplicationGrammar
+from genro_asgi.config import AsgiConfigBuilder
+from genro_bag.resolvers import EnvResolver
+from genro_builders.builder import element
+from genro_routes import route
+from genro_storage import StorageManager
+
+
+class ShopGrammar(ApplicationGrammar):
+    @element(node_label="catalog")
+    def catalog(self, title: str = None, page_size: int = 20) -> None:
+        """The catalog title and page size."""
+
+
+class Shop(RoutedApplication):
+    grammar = ShopGrammar
+
+    @route()
+    def index(self) -> dict:
+        return {"catalog": self.config("catalog.title")}
+
+
 class ServerConfiguration(AsgiConfigBuilder):
     def main(self, root):
         cfg = root.configuration()

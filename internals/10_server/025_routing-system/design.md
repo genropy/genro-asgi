@@ -1,6 +1,6 @@
 # Routing system
 
-**Version**: 0.4 · **Last Updated**: 2026-08-24 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.5 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
 How a path becomes a method call: what a routing class is, how a tree is walked
 and filtered, and how a capability is added to what a tree does without editing
@@ -125,8 +125,11 @@ branch inherits what its parents declared and adds its own.
 
 **Channel** is where the request came from — `rest`, `mcp`, `web`, a bot — and
 it is the mechanism by which one tree presents different surfaces to different
-consumers. A route that should be callable by a model and not by a browser says
-so once, beside itself, and both faces are built from the same tree.
+consumers when those consumers supply a channel. The MCP face supplies its
+channel when walking the tree; HTTP dispatch supplies none. As recorded in
+[the decisions](decisions.md), channel metadata can narrow the tool face but
+does not prevent a browser from calling an HTTP route. HTTP access restrictions
+belong to the route's authorization rules.
 
 The failure a filter produces is not the failure of a missing path, and the
 distinction survives all the way to the caller: a route withheld for lack of an
@@ -290,7 +293,7 @@ application the server hosts.
 
 ---
 
-## 9. Writing one
+## 9. BasePlugin extension hooks
 
 A plugin is a subclass of the routing library's `BasePlugin`, with two class
 attributes — the **code** it will be named by, and a description — and as many
@@ -349,6 +352,13 @@ only the plugins that already exist does not.
 
 ---
 
+## Shared capabilities and application contracts
+
+The OpenAPI face of an application and the tool face for models are both built
+by reading metadata plugins contributed, so both rest on this. Authorization
+uses the filtering half, and the dispatch of every routed application reads the
+signatures the fixed pair captured.
+
 ## A configuration that includes it
 
 A whole installation that adds one plugin by name, tunes one of the fixed
@@ -362,6 +372,7 @@ from genro_routes import route
 
 from genro_asgi import AsgiServer, RoutedApplication
 from genro_asgi.config import BaseConfiguration
+from genro_asgi.plugins.openapi import router_openapi
 
 
 class Catalogue(RoutedApplication):
@@ -443,10 +454,3 @@ declared, neither constrains what the server will actually answer.
 `router_openapi` is the OpenAPI reader of the tree, and it works on any armed
 tree without an OpenAPI application being mounted. It belongs to
 [020 applications / openapi](../020_applications/openapi/README.md).
-
-## What stands on this
-
-The OpenAPI face of an application and the tool face for models are both built
-by reading metadata plugins contributed, so both rest on this. Authorization
-uses the filtering half, and the dispatch of every routed application reads the
-signatures the fixed pair captured.

@@ -1,6 +1,53 @@
 # Channel — current state
 
-**Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.2 · **Last Updated**: 2026-09-08 · **Status**: 🔴 evidence refreshed; design ratification unchanged
 
-The feature's local memory: what exists TODAY on develop, with the
-decisions that shaped it. Update it in the same change that alters the behaviour.
+Verified against source revision `2465fcc` (develop baseline). Test references
+below identify the executable contracts; they are not a new coverage percentage.
+
+## Generic channel and SPA worker protocol
+
+`Frame` and `FrameStream` live in `genro_asgi.channel.frame`. The wire is a
+four-byte big-endian length followed by `WSX://` and JSON. `FrameStream` limits
+size (default 16 MiB), rejects invalid framing and reports EOF as no next frame.
+`ChannelHub`, `ChannelClient` and `LocalChannel` serve generic communication.
+
+The SPA `WorkerConnector` and worker layer use correlated CALL/REPLY frames on
+one socket, in both directions. Replies resolve pending calls inline; inbound
+calls run as tasks so a slow operation does not stop frame reading. A dead wire
+fails parked calls and notifies the owning worker handler. The underlying
+Frame id is therefore already used for request/reply, despite older generic
+frame docstrings calling that a future extension.
+
+Claim anchors: [`Frame`](../../../src/genro_asgi/channel/frame.py#L52), [`FrameStream`](../../../src/genro_asgi/channel/frame.py#L106), [`ChannelHub`](../../../src/genro_asgi/channel/hub.py#L135), [`ChannelClient`](../../../src/genro_asgi/channel/client.py#L53), [`LocalChannel`](../../../src/genro_asgi/channel/local.py#L127), [`WorkerConnector`](../../../src/genro_asgi_multiworker_spa/orchestration/worker_connector.py#L144).
+
+## Payload ownership and current limits
+
+The connector passes envelopes to the handler; the orchestration envelope chain
+interprets worker events and snapshots. HTTP body bytes are currently base64
+inside JSON-safe payloads. The global store has no replicated worker snapshot:
+reads and leases are explicit calls to the commander. Historical connector
+comments about replicas are superseded by #74's implementation.
+
+Browser `WsxEnvelope` is a different codec: its data uses TYTX within the WSX
+text envelope. Do not substitute it for the internal Frame format merely
+because both start with `WSX://`. The proposed opaque transport of #72 is not
+part of this baseline. The earlier cross-entry 'no application WebSocket'
+friction was overtaken by the delivered WSX and raw application seam.
+
+Claim anchors: [`WsxEnvelope`](../../../src/genro_asgi/wsx.py#L101).
+
+## Source and test evidence
+
+- [src/genro_asgi/channel/frame.py](../../../src/genro_asgi/channel/frame.py)
+- [src/genro_asgi/channel/hub.py](../../../src/genro_asgi/channel/hub.py)
+- [src/genro_asgi/channel/client.py](../../../src/genro_asgi/channel/client.py)
+- [src/genro_asgi/channel/local.py](../../../src/genro_asgi/channel/local.py)
+- [src/genro_asgi_multiworker_spa/orchestration/worker_connector.py](../../../src/genro_asgi_multiworker_spa/orchestration/worker_connector.py)
+- [src/genro_asgi_multiworker_spa/orchestration/spa_worker.py](../../../src/genro_asgi_multiworker_spa/orchestration/spa_worker.py)
+- [src/genro_asgi/wsx.py](../../../src/genro_asgi/wsx.py)
+- [tests/core/test_channel.py](../../../tests/core/test_channel.py)
+- [tests/core/test_channel_hub.py](../../../tests/core/test_channel_hub.py)
+- [tests/core/test_channel_local.py](../../../tests/core/test_channel_local.py)
+- [tests/spa/orchestration/test_orchestration_worker_connector.py](../../../tests/spa/orchestration/test_orchestration_worker_connector.py)
+- [tests/spa/orchestration/test_contract_phase7_worker_call_lane.py](../../../tests/spa/orchestration/test_contract_phase7_worker_call_lane.py)

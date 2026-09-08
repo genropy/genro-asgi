@@ -1,6 +1,6 @@
 # Task thermometers (termometri)
 
-**Version**: 0.1 · **Last Updated**: 2026-08-22 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.1 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
 **The need.** Whoever launches a long batch wants to see it move while it runs, and to stop it politely without corrupting its work.
 
@@ -13,7 +13,11 @@ visible.
 
 Interactions: tasks (spool = source of truth) · SSE/event hub (the live courier).
 
-## The pairing
+## TaskManager.publish_progress persistence and live events
+
+`TaskManager.publish_progress` writes the spool snapshot and publishes the
+same progress on the live event channel. The task’s active worker performs
+both operations in one call.
 
 ```mermaid
 flowchart LR

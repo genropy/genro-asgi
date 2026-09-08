@@ -1,6 +1,6 @@
 # Orchestration profile archive
 
-**Version**: 0.1 · **Last Updated**: 2026-08-28 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.2 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
 ## Purpose
 
@@ -87,7 +87,7 @@ configuration is refused rather than started.
 the effective configuration BEFORE the vertex is built, as
 `defaults ⊕ recipe_settings ⊕ profile ⊕ env_settings`, through
 `GroupPolicy.from_settings` (`src/genro_asgi_multiworker_spa/orchestration/group_policy.py`
-— the frozen dataclass that carries the 14 setpoints, IS the validation and
+— the frozen dataclass that declares the setpoints, IS the validation and
 collects every violation). The defaults are the dataclass fields; the recipe
 level is what the recipe wrote; the profile level is the named stored profile;
 `env_settings` is the last word. The two immutable levels — recipe and env —
@@ -109,8 +109,8 @@ reconciliation list and the response payload, all built in advance. Stage 2 is
 a plain `def` of guaranteed assignments with no `await`: `GroupHandler.apply_policy`,
 then `active_profile`, `configuration_generation` (+1 on every success, even an
 idempotent one) and `last_apply`. Stage 3 is best effort: the audit lines and
-`ping_now()`, each in its own `try/except`. A refusal leaves the machine exactly
-where it was.
+`ping_now()`, each in its own `try/except`. A refusal preserves effective policy, active profile and generation; it still
+updates rejection diagnostics in `last_apply` and the audit destinations.
 
 **One group per profile — a phase constraint.** A named profile addresses
 exactly one group. A machine with several groups fails the boot when a profile

@@ -1,13 +1,16 @@
 # Server
 
-**Version**: 0.5 · **Last Updated**: 2026-08-23 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.6 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
 What a server is, what it is made of, and how a request gets from the
 network to the program that answers it.
 
 ## What a server is
 
-One machine, one process, one port — and behind that port several unrelated
+A server hosts applications, selects the application for each request, and owns
+their shared lifecycle, request registry and work pool.
+
+One process can expose several unrelated
 things: a shop, an administrative surface, a machine-readable API. They were
 written by different people at different times, and each of them was written
 as if it owned the whole site.
@@ -97,9 +100,6 @@ The order of the layers is not decorative: a layer that reads another's work
 must sit above it, and a layer that must wrap the server's own start-up must
 sit below the ones that don't. The chain is where those relations are stated
 once.
-
-> Each capability has its own entry in `10_server`. This block only says that
-> they exist, that they stack, and that the base does not know them.
 
 ---
 
@@ -215,7 +215,11 @@ the empty string, so the first branch matches and forwards the same `/`.
 
 ## 4. The registry — the current request, and the picture
 
-Two questions get asked constantly and have nothing to do with routing:
+The registry records in-flight requests and exposes the current thin registry
+item to dispatch machinery. It does not expose the application’s `Request`
+object to handlers.
+
+It answers two questions:
 
 - *which request am I serving right now?* — asked by the server's own
   machinery around the dispatch: a middleware layer, the logging, the
@@ -254,11 +258,9 @@ case.
 
 ## 5. The lifespan — who starts first, who stops last
 
-Applications have things to build at start-up and things to release at
-shutdown: a connection, a scheduler, a background loop.
-
-The server runs the start hook of each application **in installation order**,
-and the stop hook **in reverse**. The reversal is the point: something built
+The server runs application startup hooks **in installation order** and
+shutdown hooks **in reverse**. Hooks build and release resources such as
+connections, schedulers and background loops. The reversal is the point: something built
 on top of something else is torn down first, so the layer it depends on is
 still alive while it does. A hook may be written as ordinary code or as
 asynchronous code, and the server works out which at the moment it calls it.
@@ -279,8 +281,8 @@ boot outright. That earlier gate belongs to
 
 ## 6. The work pool — where blocking code runs
 
-A server runs on an event loop, and an event loop has exactly one rule: never
-block it. But plenty of useful code blocks — a database driver, a file read, a
+The server owns one thread pool for blocking work; asynchronous handlers stay
+on the event loop. Blocking work must not stop that loop. But plenty of useful code blocks — a database driver, a file read, a
 library that was never written for asynchronous use.
 
 So the server owns **one** thread pool, and only blocking work goes to it.
@@ -315,10 +317,13 @@ when the handler failed — the request's end-of-life callbacks run and the
 entry is removed. A handler that raises is not an exception to this: it is the
 reason the guarantee is written that way.
 
-**WebSocket.** A scope type that is present and, at the base, empty: it accepts
-the connection request and closes it politely. The base server has no
-long-lived conversations. A composition that needs them supplies its own
-behaviour here.
+**WebSocket.** The server owns the WSX connection and routes each message to
+an application. An application declaring `serve_websocket` receives the raw
+ASGI connection instead. Both modes pass the server's state gate before accept;
+the raw application then owns its protocol and handshake policy.
+
+> The connection and the message contract are
+> [055 WebSocket](../055_websocket/decisions.md).
 
 **Lifespan.** The ordered start-and-stop conversation described above, plus
 the teardown of anything the server built for itself while running.
@@ -372,6 +377,15 @@ administrative surface is never something an installation can forget.
 > [090 server-application](../090_server-application/README.md).
 
 ---
+
+## Shared capabilities and application contracts
+
+Everything else in genro-asgi is one of two things: a **capability mixin**
+stacked on the server, or an **application** it hosts. Authentication,
+sessions, the middleware chain, storage and background work are the first kind.
+The administrative surface, the SPA front and the machine-readable interfaces
+are the second. Both rest on exactly what is described above, and neither
+changes any of it.
 
 ## A configuration that includes it
 
@@ -438,12 +452,3 @@ under, which is why the same class can be installed twice somewhere else.
 
 And `server.pool.metrics` answers `{'total': 0, 'busy': 0}` — the pool has not
 been built, because no blocking handler has run yet.
-
-## What stands on this
-
-Everything else in genro-asgi is one of two things: a **capability mixin**
-stacked on the server, or an **application** it hosts. Authentication,
-sessions, the middleware chain, storage and background work are the first kind.
-The administrative surface, the SPA front and the machine-readable interfaces
-are the second. Both rest on exactly what is described above, and neither
-changes any of it.

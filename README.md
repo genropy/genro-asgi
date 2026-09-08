@@ -145,7 +145,8 @@ their backends come from config.
 ## Documentation
 
 Full documentation (guides, architecture, API reference) is built with Sphinx
-under [`docs/`](docs/) and published on Read the Docs.
+under [`docs/`](docs/). See [building the documentation](docs/building.md) for
+local builds and the current Read the Docs verification status.
 
 - [Getting started](docs/getting-started.md)
 - [Coming from Starlette / FastAPI](docs/coming-from-fastapi.md)
