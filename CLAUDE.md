@@ -217,6 +217,30 @@ streaming/SSE, raw websocket and remote SPA group orchestration are separate
 work. See `docs/internal/opaque_transport.md` and `examples/remote_openapi/` for
 configuration, acceptance evidence and coordinated upgrade/rollback.
 
+### Buffered transport capacity (issue 72 follow-up, 2026-09-08)
+
+Channel metadata and payload share one configurable ceiling, 256 MiB by default;
+there is no separate 64 KiB metadata cap. `GNR_ASGI_FRAME_MAX_BYTES`,
+`GNR_ASGI_FRAME_WARN_BYTES` (1 MiB), and
+`GNR_ASGI_FRAME_WARN_INTERVAL_SECONDS` (60) configure bounded transport and
+throttled size warnings. HTTP body limits follow the frame policy unless
+`GNR_ASGI_HTTP_MAX_BODY_BYTES` sets a separate cap. All peers need matching
+settings before startup. A locally oversized SPA result keeps its slot until
+the correlated error reply delivers its events and snapshot; the channel stays
+alive if that essential envelope fits. Incoming over-limit frames and uncertain
+writes still fail the connection. See `docs/internal/opaque_transport.md`.
+
+### Remote runner ownership repair (issue 72 review C1/C2)
+
+An owned mount verifies a fresh launch identifier on every connection before
+sending application traffic. The runner consumes the private launch environment
+identifier before creating the application. Readiness from an unrelated runner
+fails startup; only the spawned child is stopped. Connect-only mode stays
+operator-directed. UDS listeners refuse all preexisting entries, bind an explicit
+socket without asyncio's unlink/rebind behavior, and remove only the recorded
+socket device/inode on cleanup. No stale-path reclamation or parent-SIGKILL
+supervision is introduced. See `docs/internal/opaque_transport.md`.
+
 ### The SPA machine (`genro_asgi_multiworker_spa/`)
 
 **One package of its own, beside the core (landed 2026-09-08).** The whole SPA
@@ -605,26 +629,3 @@ commits, still to be entered in the register). Decision registers:
 
 **Last Updated**: 2026-09-08
 
-### Buffered transport capacity (issue 72 follow-up, 2026-09-08)
-
-Channel metadata and payload share one configurable ceiling, 256 MiB by default;
-there is no separate 64 KiB metadata cap. `GNR_ASGI_FRAME_MAX_BYTES`,
-`GNR_ASGI_FRAME_WARN_BYTES` (1 MiB), and
-`GNR_ASGI_FRAME_WARN_INTERVAL_SECONDS` (60) configure bounded transport and
-throttled size warnings. HTTP body limits follow the frame policy unless
-`GNR_ASGI_HTTP_MAX_BODY_BYTES` sets a separate cap. All peers need matching
-settings before startup. A locally oversized SPA result keeps its slot until
-the correlated error reply delivers its events and snapshot; the channel stays
-alive if that essential envelope fits. Incoming over-limit frames and uncertain
-writes still fail the connection. See `docs/internal/opaque_transport.md`.
-
-### Remote runner ownership repair (issue 72 review C1/C2)
-
-An owned mount verifies a fresh launch identifier on every connection before
-sending application traffic. The runner consumes the private launch environment
-identifier before creating the application. Readiness from an unrelated runner
-fails startup; only the spawned child is stopped. Connect-only mode stays
-operator-directed. UDS listeners refuse all preexisting entries, bind an explicit
-socket without asyncio's unlink/rebind behavior, and remove only the recorded
-socket device/inode on cleanup. No stale-path reclamation or parent-SIGKILL
-supervision is introduced. See `docs/internal/opaque_transport.md`.
