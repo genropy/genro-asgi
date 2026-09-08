@@ -50,6 +50,7 @@ myst_heading_anchors = 3
 
 html_theme = "sphinx_rtd_theme"
 html_static_path = ["_static"]
+html_css_files = ["diagrams.css"]
 
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),

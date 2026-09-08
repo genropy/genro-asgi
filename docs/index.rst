@@ -8,7 +8,7 @@ background tasks, OpenAPI and MCP by composition. No globals, no module state â€
 the server is an object you build, run, and throw away.
 
 New here? Start with :doc:`getting-started`. Coming from another ASGI framework?
-Read :doc:`coming-from-fastapi`.
+Read :doc:`coming-from-fastapi`. For common questions, see :doc:`faq`.
 
 These pages describe the development checkout. Source and release packages may
 differ; see :doc:`building` for local builds and publication status.
@@ -20,6 +20,7 @@ differ; see :doc:`building` for local builds and publication status.
    getting-started
    concepts
    coming-from-fastapi
+   faq
    building
 
 .. toctree::

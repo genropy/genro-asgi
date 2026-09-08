@@ -3,6 +3,8 @@
 > **Status:** Draft; implementation checked against the development source on 2026-09-08.
 
 Task-focused recipes for the capabilities genro-asgi grows on top of the core.
+For troubleshooting and common choices, see the [FAQ](../faq.md).
+
 Each one assumes you have read [Getting started](../getting-started.md) and
 [Core concepts](../concepts.md).
 

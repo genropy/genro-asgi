@@ -24,6 +24,15 @@ Nothing to install. `genro_asgi.config` ships `AsgiConfigBuilder` (the dialect
 you subclass) and `ConfigurationHandler` (the read door the server builds for
 itself); `AsgiServer.grammar` is the grammar they validate against.
 
+## At a glance
+
+```{figure} ../_static/diagrams/configuration-flow.svg
+:figclass: flow-diagram
+:alt: Recipes layer into a configuration handler; explicit constructor arguments override effective server settings.
+
+Recipe reads and effective constructor settings are separate: overriding port does not rewrite server.config.
+```
+
 ## The recipe
 
 A recipe subclasses `AsgiConfigBuilder` and overrides `main(self, root)`. `main`

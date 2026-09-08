@@ -6,6 +6,15 @@ The core supports two ways to serve a WebSocket: its WSX message protocol, and
 an application's `serve_websocket(scope, receive, send)` raw seam. The
 `websockets` backend required by uvicorn is a package dependency.
 
+## At a glance
+
+```{figure} ../_static/diagrams/websocket-flow.svg
+:figclass: flow-diagram
+:alt: Both WebSocket modes share the server-state gate. Raw applications own their protocol; WSX supplies its own handshake and routes messages.
+
+The raw seam and WSX have different protocol owners. Neither should be confused with the ordinary HTTP middleware path.
+```
+
 ## Sending a WSX request
 
 A WSX frame is text: `WSX://` followed by JSON. Its `data` field is a **TYTX

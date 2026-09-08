@@ -41,6 +41,15 @@ attach when enabled, but there is no unconditional general boot validation of
 that restriction. Configure the group policies and read the pool's status;
 there is no fixed worker-count setting in this configuration.
 
+## At a glance
+
+```{figure} ../_static/diagrams/spa-flow.svg
+:figclass: flow-diagram
+:alt: SPA front, commander and worker lead to a hosted application; worker requests and responses are buffered.
+
+Placement keeps all pages of one user on the same worker. Replies return through the front; the global store remains commander-owned.
+```
+
 ## Hosting ASGI or WSGI
 
 A consumer's `SpaWorker` subclass assigns its hosted application to `asgi_app`.

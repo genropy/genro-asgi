@@ -33,6 +33,13 @@ explain most of the design decisions you will meet in the code.
 
 ## The request flow
 
+```{figure} ../_static/diagrams/http-flow.svg
+:figclass: flow-diagram
+:alt: Enabled HTTP middleware wraps core dispatch, which selects an application and calls its routed handler.
+
+The response returns through ASGI send. Middleware may answer before core dispatch.
+```
+
 ```text
 uvicorn
   → AsgiServer                      the server IS the ASGI app

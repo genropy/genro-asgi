@@ -4,7 +4,7 @@
   "baseline": "2465fcc47dadb1761ec1c09466c847715725daa9",
   "scope": "Every internals Markdown and public Sphinx source page; code evidence is not new architectural ratification. Linked source views show current checkout line positions.",
   "internals_count": 132,
-  "public_count": 34,
+  "public_count": 35,
   "internals": [
     {
       "path": "internals/00_overview/README.md",
@@ -5005,10 +5005,10 @@
       ],
       "freshness": "assessed 2026-09-08; draft, no ratification",
       "finding_and_action": "Corrected middleware order/defaults, deterministic cleanup claim, package boundary and links.",
-      "text_sha256": "0d4d37307ccda0bc90065a887f6cf7ad772e3e0603583223461ad316747f3cb6",
+      "text_sha256": "03bdd6818ee5c09b8a9c78114c04d5917f97447aab1f7e77fe2ffb2a29afd1d1",
       "links": "Sphinx warning gate plus full rendered HTML local target/anchor check",
       "verification": "sphinx-final.log; sphinx-rtd-style.log; sphinx-links.log; public-recipes-results.json; public-construction.log",
-      "reviewed_sha256": "0d4d37307ccda0bc90065a887f6cf7ad772e3e0603583223461ad316747f3cb6",
+      "reviewed_sha256": "03bdd6818ee5c09b8a9c78114c04d5917f97447aab1f7e77fe2ffb2a29afd1d1",
       "original_sha256": "77e2926dfb3a8ef8795e7bce4361396aa10a684b6d698657596567e812035937",
       "changed": true
     },
@@ -5145,10 +5145,10 @@
       ],
       "freshness": "assessed 2026-09-08; draft, no ratification",
       "finding_and_action": "Pool is app subtree, broken anchor fixed, websocket/shutdown keys added; full configuration eight readbacks verified with private directory/env. Pool is explicitly installation template.",
-      "text_sha256": "31ad31155c1c33abc68510fec429e7859725582eda6ef8b26c6455813be8480a",
+      "text_sha256": "abb0a865805e63e38709c023fa61ac1eb31cc973d9fb24bc2936a38d931c02d8",
       "links": "Sphinx warning gate plus full rendered HTML local target/anchor check",
       "verification": "sphinx-final.log; sphinx-rtd-style.log; sphinx-links.log; public-recipes-results.json; public-construction.log",
-      "reviewed_sha256": "31ad31155c1c33abc68510fec429e7859725582eda6ef8b26c6455813be8480a",
+      "reviewed_sha256": "abb0a865805e63e38709c023fa61ac1eb31cc973d9fb24bc2936a38d931c02d8",
       "original_sha256": "f55b92fdae17cb97251ea0b1a1ff8cd986d5cc9905bc7e6f178fb2d10ac6b6ab",
       "changed": true
     },
@@ -5160,10 +5160,10 @@
       ],
       "freshness": "assessed 2026-09-08; draft, no ratification",
       "finding_and_action": "All public guides connected; memory store/snapshot wording corrected.",
-      "text_sha256": "df9cb09e5b94a066f05eaff9686f4b0177335de9c026bb4cd3a4135e5a52c728",
+      "text_sha256": "7d0bc4686dee05a389fbfc86c07a41151dc48e626384a5500c8d42a78e903796",
       "links": "Sphinx warning gate plus full rendered HTML local target/anchor check",
       "verification": "sphinx-final.log; sphinx-rtd-style.log; sphinx-links.log; public-recipes-results.json; public-construction.log",
-      "reviewed_sha256": "df9cb09e5b94a066f05eaff9686f4b0177335de9c026bb4cd3a4135e5a52c728",
+      "reviewed_sha256": "7d0bc4686dee05a389fbfc86c07a41151dc48e626384a5500c8d42a78e903796",
       "original_sha256": "f235a152240484a2ca0f6c99c9da03ffced8f87b9222208769220791be3ee044",
       "changed": true
     },
@@ -5230,10 +5230,10 @@
       ],
       "freshness": "assessed 2026-09-08; draft, no ratification",
       "finding_and_action": "New package/seam/whole-body/worker events/global-store guide; examples require connected worker and are labeled fragments; no new architecture ratified.",
-      "text_sha256": "8267e0541d15e4a0d48e89158a92720c72290b6228d3bfa8e07d020775cfaefc",
+      "text_sha256": "bd6db0cdcacc118b701c106fbddc3ee9e583d62a767f0f1db6e443fdcbc97eca",
       "links": "Sphinx warning gate plus full rendered HTML local target/anchor check",
       "verification": "sphinx-final.log; sphinx-rtd-style.log; sphinx-links.log; public-recipes-results.json; public-construction.log",
-      "reviewed_sha256": "8267e0541d15e4a0d48e89158a92720c72290b6228d3bfa8e07d020775cfaefc",
+      "reviewed_sha256": "bd6db0cdcacc118b701c106fbddc3ee9e583d62a767f0f1db6e443fdcbc97eca",
       "original_sha256": null,
       "changed": true
     },
@@ -5335,10 +5335,10 @@
       ],
       "freshness": "assessed 2026-09-08; draft, no ratification",
       "finding_and_action": "New WSX/raw guidance; real websocket roundtrip; current synthetic WSK, gate, queued-task limit and SPA openchannel contract.",
-      "text_sha256": "799185236c1baec48ebab2a32e3138c12335cf4850e5f1196c94473ab0748530",
+      "text_sha256": "eb2c409d9e5c227a747c3619b37f6eeeca32707f94ba653c776eb03b0c7e1a04",
       "links": "Sphinx warning gate plus full rendered HTML local target/anchor check",
       "verification": "sphinx-final.log; sphinx-rtd-style.log; sphinx-links.log; public-recipes-results.json; public-construction.log",
-      "reviewed_sha256": "799185236c1baec48ebab2a32e3138c12335cf4850e5f1196c94473ab0748530",
+      "reviewed_sha256": "eb2c409d9e5c227a747c3619b37f6eeeca32707f94ba653c776eb03b0c7e1a04",
       "original_sha256": null,
       "changed": true
     },
@@ -5351,12 +5351,54 @@
       ],
       "freshness": "assessed 2026-09-08; draft, no ratification",
       "finding_and_action": "Development checkout and local-build/publication distinction added.",
-      "text_sha256": "ff5b082af70c2dfe4fc7064b3575a0c94f72139773fff41fbe255c6ade6a54d0",
+      "text_sha256": "cf1c39738843c28a73f1fe2b7a5d0388c8520c2158a6f2ce62c28369e02799ed",
       "links": "Sphinx warning gate plus full rendered HTML local target/anchor check",
       "verification": "sphinx-final.log; sphinx-rtd-style.log; sphinx-links.log; public-recipes-results.json; public-construction.log",
-      "reviewed_sha256": "ff5b082af70c2dfe4fc7064b3575a0c94f72139773fff41fbe255c6ade6a54d0",
+      "reviewed_sha256": "cf1c39738843c28a73f1fe2b7a5d0388c8520c2158a6f2ce62c28369e02799ed",
       "original_sha256": "39c6cad0354274bf86e49a0e03be436c8b946b4b45ecc9b6b059f2f1aeb2d690",
       "changed": true
+    },
+    {
+      "page": "docs/faq.md",
+      "source_revision": "2465fcc47dadb1761ec1c09466c847715725daa9",
+      "source_evidence": [
+        "docs/getting-started.md",
+        "docs/guides/configuration.md",
+        "docs/guides/requests.md",
+        "docs/guides/authentication.md",
+        "docs/guides/openapi.md",
+        "docs/guides/mcp.md",
+        "docs/guides/websockets.md",
+        "docs/guides/multiworker-spa.md"
+      ],
+      "freshness": "assessed 2026-09-08; user-requested follow-up",
+      "finding_and_action": "18 practical questions and linked answers; no executable examples or new architectural decisions.",
+      "original_sha256": null,
+      "changed": true,
+      "verification": "sphinx-diagrams-final.log; sphinx-diagrams-links.log; desktop/mobile browser inspection",
+      "reviewed_sha256": "0af4fa0beddf5a6ba87c8ef0341fa90314efcb2c1753a85f07b9bc4654c409c4"
+    }
+  ],
+  "diagram_assets": [
+    {
+      "path": "docs/_static/diagrams/configuration-flow.svg",
+      "sha256": "212cdd36d42afd4ffb18a88eef496230cb7ba64b7879f4084704e95daf136e31",
+      "verification": "Sphinx local asset/link check and browser inspection; accessible SVG title/description and figure alt/caption"
+    },
+    {
+      "path": "docs/_static/diagrams/http-flow.svg",
+      "sha256": "3f6d2cd4b394dc1c2480be795806730e9dc95921ddb528dea5234ad233855f12",
+      "verification": "Sphinx local asset/link check and browser inspection; accessible SVG title/description and figure alt/caption"
+    },
+    {
+      "path": "docs/_static/diagrams/spa-flow.svg",
+      "sha256": "8e1bb63b5c1ab9401ff0a236c6cb83bd8546a6dd3d2bcde0ac422313d50f51d1",
+      "verification": "Sphinx local asset/link check and browser inspection; accessible SVG title/description and figure alt/caption"
+    },
+    {
+      "path": "docs/_static/diagrams/websocket-flow.svg",
+      "sha256": "b93d92b50e8e5c0838ee7f257a9b9a4f26fb3eed8238e1510da7808cbfb9a7ed",
+      "verification": "Sphinx local asset/link check and browser inspection; accessible SVG title/description and figure alt/caption"
     }
   ]
 }
