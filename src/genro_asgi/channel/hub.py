@@ -62,6 +62,7 @@ member death.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import logging
 import os
@@ -311,7 +312,9 @@ class ChannelHub:
                 and self._members.get(member.name) is member
             ):
                 if len(self._abandoned) >= self.max_pending_calls:
-                    await member.stream.close()
+                    # Cleanup must not replace this caller's timeout/cancellation.
+                    with contextlib.suppress(Exception, asyncio.CancelledError):
+                        await member.stream.close()
                 else:
                     self._abandoned[frame.id] = (member, frame.path)
             raise
@@ -354,8 +357,8 @@ class ChannelHub:
             await stream.close()
             return None
         name = info.get("name")
-        if not name:
-            self.logger.warning("Connection rejected: REGISTER without a name")
+        if not isinstance(name, str) or not name:
+            self.logger.warning("Connection rejected: REGISTER without a valid name")
             await stream.close()
             return None
         if name in self._members:
@@ -365,7 +368,13 @@ class ChannelHub:
             self.logger.warning("Connection rejected: name %s is already registered", name)
             await stream.close()
             return None
-        member = ChannelMember(self, name, int(info.get("pid", 0)), stream)
+        try:
+            pid = int(info.get("pid", 0))
+        except (TypeError, ValueError, OverflowError):
+            self.logger.warning("Connection rejected: REGISTER with invalid pid")
+            await stream.close()
+            return None
+        member = ChannelMember(self, name, pid, stream)
         self._members[name] = member
         await self._fire(self.on_member_joined, member)
         self.logger.info("Member joined: %s", member)

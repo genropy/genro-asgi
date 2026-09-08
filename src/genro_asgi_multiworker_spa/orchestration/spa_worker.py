@@ -2353,7 +2353,7 @@ class SpaWorker:
                     # The message is admitted FIRST: whether this page may speak
                     # at all is the client's own business, and it is answered
                     # before anybody asks what would have served it.
-                    async with self._page_queue(payload["http"].get("page_id"), payload["http"]["cid"]):
+                    async with self._page_queue(payload["http"].get("page_id")):
                         seam = self.hosted_app_seam
                         served = await seam.serve(payload["http"], payload.get("identity"))
                 finally:
@@ -2371,7 +2371,7 @@ class SpaWorker:
             return served
 
     @contextlib.asynccontextmanager
-    async def _page_queue(self, page_id: str | None, cid: str | None = None) -> Any:
+    async def _page_queue(self, page_id: str | None) -> Any:
         """Refuse a page with no open channel, or hold its queue for the whole call.
 
         Args:
@@ -2405,8 +2405,8 @@ class SpaWorker:
                 f"page {page_id!r} has no open channel on this worker: "
                 "send openchannel before any message of its own",
             )
-        if row.get("connection_id") != cid:
-            raise HTTPException(403, "page belongs to another connection")
+        # The site owns the connection name; it may differ from the cookie
+        # carried by the request. This gate checks channel readiness and order.
         channel = row["wsx"]
         if not isinstance(channel, dict) or not channel.get("sequential"):
             yield

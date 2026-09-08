@@ -627,3 +627,24 @@ async def test_address_before_start_raises(socket_dir):
 async def test_path_and_host_together_are_rejected():
     with pytest.raises(ValueError):
         ChannelHub(path="/tmp/x.sock", host="127.0.0.1")
+
+
+@pytest.mark.parametrize("pid", [{}, "invalid"])
+async def test_malformed_register_pid_closes_only_offending_socket(uds_harness, pid):
+    survivor = MemberPeer(uds_harness.hub.address, "W:good")
+    await survivor.connect()
+    await uds_harness.wait_members(1)
+    reader, writer = await asyncio.open_unix_connection(uds_harness.hub.path)
+    try:
+        writer.write(control_frame(method=REGISTER_METHOD, path=REGISTER_PATH,
+                                   data={"name": "W:bad", "pid": pid}).encode())
+        await writer.drain()
+        assert await asyncio.wait_for(reader.read(), timeout=1) == b""
+        assert uds_harness.hub.resolve("W:bad") is None
+        survivor.reply_result = "alive"
+        reply = await uds_harness.hub.call("W:good", "/ping", timeout=1)
+        assert reply["result"] == "alive"
+    finally:
+        writer.close()
+        await writer.wait_closed()
+        await survivor.close()

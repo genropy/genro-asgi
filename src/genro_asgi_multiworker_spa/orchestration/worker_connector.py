@@ -34,6 +34,7 @@ releases the private socket. Limits reject excess pending calls before sending.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import logging
 from pathlib import Path
@@ -371,8 +372,9 @@ class WorkerConnector:
             encoded = ControlPayload().encode(
                 {"error": f"{type(exc).__name__}: child call result is not encodable: {exc}"}
             )
-        stream = self._live_stream()
+        stream = None
         try:
+            stream = self._live_stream()
             reply = Frame(id=frame.id, method=REPLY_METHOD, path=frame.path,
                           info={"format": "control-json"}, payload=encoded)
             try:
@@ -384,11 +386,13 @@ class WorkerConnector:
                     payload=ControlPayload().encode({"error": str(exc)}),
                 ))
         except Exception:
-            await stream.close()
+            if stream is not None:
+                with contextlib.suppress(Exception):
+                    await stream.close()
             self._logger.warning(
-                "The answer to %s found no wire on %s", frame.path, self.socket_path.name
+                "The answer to %s found no wire on %s", frame.path, self.socket_path.name,
+                exc_info=True,
             )
-            raise
 
     def _take_envelope(self, frame: Frame) -> Frame:
         """Push the envelope into the fold before the caller is answered.

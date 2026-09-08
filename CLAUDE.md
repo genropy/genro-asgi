@@ -191,7 +191,8 @@ endpoints use `HttpRecord` (bounded metadata, ordered duplicate headers,
 reversible path/query bytes and an unencoded body). The SPA commander routes
 without opening HTTP bytes, and stamps authoritative identity/freeze metadata.
 Worker events and snapshots travel in reply info and are folded before resolving
-the caller. A page request is checked against its connection in the worker too.
+the caller. The worker page gate checks channel readiness and sequential ordering;
+it does not compare the inbound cookie with the connection name owned by the site.
 
 Browser WSX remains `WSX://` JSON with a serialized JSON TYTX data field.
 `WsxEnvelope.serialized_data` is the forwarding view; `.data` explicitly decodes

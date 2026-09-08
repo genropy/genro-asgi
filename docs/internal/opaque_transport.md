@@ -15,7 +15,8 @@ Info owns id, method (CALL/REPLY/EVENT/REGISTER/POST), routing path and payload
 format. Additional metadata has explicit endpoint ownership. Routing keys are
 nonempty bounded strings; metadata must be a JSON object with no duplicate keys,
 non-finite numbers or reserved-key injection. Replies echo correlation and route.
-A protocol violation closes only that connection. Partial frames are failures;
+A malformed REGISTER (including an invalid PID) is rejected with socket closure,
+without affecting other members. A protocol violation closes only that connection. Partial frames are failures;
 EOF at a frame boundary is clean link loss, never proof of remote process death.
 Concurrent stream writes serialize, bounded messages and outstanding requests
 provide backpressure. Lost/possibly delivered calls are never replayed.
@@ -61,7 +62,9 @@ distinct serialized forms; empty HTTP body still means absent WSX data.
 Synthetic WSK body uses serialized input directly. Application endpoints adapt
 XML/msgpack replies to browser JSON when needed; routing intermediaries do not.
 Control failures may encode their own values. Page ownership, openchannel binding
-only after success, event no-reply and correlation remain.
+only after success, event no-reply and correlation remain. The worker page queue
+checks readiness and ordering, not equality between the incoming cookie and the
+connection name assigned by the hosted site.
 
 ## Configuration and compatibility
 
