@@ -43,6 +43,17 @@ from genro_asgi.channel import (
     Frame,
     FrameStream,
 )
+from genro_asgi.channel.control import ControlPayload
+
+CONTROL = ControlPayload()
+
+
+def control_frame(*, data=None, **kwargs):
+    return Frame(payload=CONTROL.encode(data), **kwargs)
+
+
+def data_of(frame):
+    return CONTROL.decode(frame.payload)
 
 
 class MemberPeer:
@@ -68,7 +79,7 @@ class MemberPeer:
             reader, writer = await asyncio.open_connection(host, int(port))
         self.stream = FrameStream(reader, writer)
         await self.stream.write(
-            Frame(
+            control_frame(
                 method=REGISTER_METHOD,
                 path=REGISTER_PATH,
                 data={"name": self.name, "pid": os.getpid()},
@@ -85,8 +96,11 @@ class MemberPeer:
                 pass
         await self.stream.close()
 
-    async def send(self, method: str, path: str, data: Any = None) -> None:
-        await self.stream.write(Frame(method=method, path=path, data=data))
+    async def send(
+        self, method: str, path: str, data: Any = None, *, id: str | None = None
+    ) -> None:
+        kwargs = {"id": id} if id is not None else {}
+        await self.stream.write(control_frame(method=method, path=path, data=data, **kwargs))
 
     async def wait_frames(self, count: int, timeout: float = 5.0) -> None:
         deadline = asyncio.get_running_loop().time() + timeout
@@ -111,7 +125,7 @@ class MemberPeer:
         else:
             data["result"] = self.reply_result
         await self.stream.write(
-            Frame(id=call.id, method=REPLY_METHOD, path=call.path, data=data)
+            control_frame(id=call.id, method=REPLY_METHOD, path=call.path, data=data)
         )
 
 
@@ -207,7 +221,7 @@ async def test_call_returns_the_reply_payload_verbatim(uds_harness):
     assert payload == {"result": {"ok": 1}, "events": peer.reply_events}
     assert peer.received[0].method == CALL_METHOD
     assert peer.received[0].path == "/op/new_user"
-    assert peer.received[0].data == {"identity": "u1"}
+    assert data_of(peer.received[0]) == {"identity": "u1"}
     await peer.close()
 
 
@@ -316,8 +330,134 @@ async def test_stop_fails_every_parked_call(socket_dir):
 async def test_call_on_unknown_member_raises_lookup(uds_harness):
     with pytest.raises(LookupError):
         await uds_harness.hub.call("W:ghost", "/op/new_user", None, timeout=0.5)
-    with pytest.raises(LookupError):
-        await uds_harness.hub.post("W:ghost", "/op/new_user", None)
+
+
+async def test_call_frame_requires_call_and_rejects_duplicate_pending_id(uds_harness):
+    peer = MemberPeer(uds_harness.hub.address, "W:one")
+    await peer.connect()
+    await uds_harness.wait_members(1)
+    peer.answer_calls = False
+    with pytest.raises(ValueError, match="requires a CALL"):
+        await uds_harness.hub.call_frame(
+            "W:one", Frame(id="event", method=EVENT_METHOD, path="/event")
+        )
+    first = asyncio.create_task(
+        uds_harness.hub.call_frame("W:one", Frame(id="same", method=CALL_METHOD, path="/one"))
+    )
+    await peer.wait_frames(1)
+    with pytest.raises(RuntimeError, match="already pending"):
+        await uds_harness.hub.call_frame("W:one", Frame(id="same", method=CALL_METHOD, path="/two"))
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+
+
+async def test_reply_from_another_member_cannot_complete_a_call(uds_harness):
+    one = MemberPeer(uds_harness.hub.address, "W:one")
+    two = MemberPeer(uds_harness.hub.address, "W:two")
+    await one.connect()
+    await two.connect()
+    await uds_harness.wait_members(2)
+    one.answer_calls = False
+    pending = asyncio.create_task(
+        uds_harness.hub.call_frame(
+            "W:one", Frame(id="owned", method=CALL_METHOD, path="/ask"), timeout=1
+        )
+    )
+    await one.wait_frames(1)
+    await two.send(REPLY_METHOD, "/ask", {"result": "spoof"}, id="owned")
+    await asyncio.wait_for(two._task, timeout=1)
+    assert not pending.done()
+    assert uds_harness.hub.resolve("W:two") is None
+    await one.send(REPLY_METHOD, "/ask", {"result": "real"}, id="owned")
+    assert data_of(await pending) == {"result": "real"}
+
+
+async def test_late_reply_cannot_resolve_reused_id_or_wrong_path(uds_harness):
+    peer = MemberPeer(uds_harness.hub.address, "W:one")
+    peer.answer_calls = False
+    await peer.connect()
+    await uds_harness.wait_members(1)
+    expired = Frame(id="late", method=CALL_METHOD, path="/old")
+    with pytest.raises(TimeoutError):
+        await uds_harness.hub.call_frame("W:one", expired, timeout=0.01)
+    with pytest.raises(RuntimeError, match="awaiting a late reply"):
+        await uds_harness.hub.call_frame("W:one", Frame(id="late", method=CALL_METHOD, path="/new"))
+    await peer.send(REPLY_METHOD, "/wrong", {"result": "wrong"}, id="late")
+    await uds_harness.wait_lost(1)
+    assert uds_harness.hub.resolve("W:one") is None
+
+    replacement_peer = MemberPeer(uds_harness.hub.address, "W:one")
+    replacement_peer.answer_calls = False
+    await replacement_peer.connect()
+    await uds_harness.wait_members(1)
+    replacement = asyncio.create_task(uds_harness.hub.call_frame("W:one", expired))
+    await replacement_peer.wait_frames(1)
+    await replacement_peer.send(REPLY_METHOD, "/old", {"result": "fresh"}, id="late")
+    assert data_of(await replacement) == {"result": "fresh"}
+
+
+async def test_cancel_during_write_reserves_id_until_late_reply(uds_harness, monkeypatch):
+    peer = MemberPeer(uds_harness.hub.address, "W:one")
+    peer.answer_calls = False
+    await peer.connect()
+    await uds_harness.wait_members(1)
+    member = uds_harness.hub.resolve("W:one")
+    original_write = type(member).write
+    transmitted = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocked_after_write(self, frame):
+        await original_write(self, frame)
+        transmitted.set()
+        await release.wait()
+
+    monkeypatch.setattr(type(member), "write", blocked_after_write)
+    frame = Frame(id="during-write", method=CALL_METHOD, path="/old")
+    call = asyncio.create_task(uds_harness.hub.call_frame("W:one", frame))
+    await transmitted.wait()
+    await peer.wait_frames(1)
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+    with pytest.raises(RuntimeError, match="awaiting a late reply"):
+        await uds_harness.hub.call_frame("W:one", frame)
+    await peer.send(REPLY_METHOD, "/old", {"result": "late"}, id="during-write")
+    await asyncio.sleep(0.01)
+
+    monkeypatch.setattr(type(member), "write", original_write)
+    replacement = asyncio.create_task(uds_harness.hub.call_frame("W:one", frame))
+    await peer.wait_frames(2)
+    await peer.send(REPLY_METHOD, "/old", {"result": "fresh"}, id="during-write")
+    assert data_of(await replacement) == {"result": "fresh"}
+    release.set()
+
+
+async def test_inbound_event_background_work_is_bounded(socket_dir, caplog):
+    gate = asyncio.Event()
+
+    async def held_event(member, frame):
+        await gate.wait()
+
+    harness = HubHarness(path=os.path.join(socket_dir, "bounded.sock"))
+    harness.hub.on_event = held_event
+    harness.hub.max_event_tasks = 1
+    await harness.hub.start()
+    try:
+        peer = MemberPeer(harness.hub.address, "W:one")
+        await peer.connect()
+        await harness.wait_members(1)
+        await peer.send(EVENT_METHOD, "/first")
+        while len(harness.hub._event_tasks) != 1:
+            await asyncio.sleep(0)
+        await peer.send(EVENT_METHOD, "/dropped")
+        await asyncio.sleep(0.02)
+        assert len(harness.hub._event_tasks) == 1
+        assert "event task limit 1 reached" in caplog.text
+        gate.set()
+    finally:
+        await harness.hub.stop()
 
 
 async def test_post_reaches_one_member_only(uds_harness):
@@ -331,7 +471,7 @@ async def test_post_reaches_one_member_only(uds_harness):
     await one.wait_frames(1)
     assert one.received[0].id == frame_id
     assert one.received[0].method == EVENT_METHOD
-    assert one.received[0].data == {"users": 3}
+    assert data_of(one.received[0]) == {"users": 3}
     assert two.received == []
     await one.close()
     await two.close()
@@ -348,7 +488,7 @@ async def test_inbound_event_reaches_the_consumer(uds_harness):
         assert asyncio.get_running_loop().time() < deadline, "no event reached the hub"
         await asyncio.sleep(0.01)
     name, frame = uds_harness.events[0]
-    assert (name, frame.path, frame.data) == ("W:one", "/op/drop_user", {"seq": 7})
+    assert (name, frame.path, data_of(frame)) == ("W:one", "/op/drop_user", {"seq": 7})
     await peer.close()
 
 
@@ -425,7 +565,7 @@ async def test_protocol_violation_isolates_that_member(uds_harness):
 
     reader, writer = await asyncio.open_unix_connection(uds_harness.hub.path)
     writer.write(
-        Frame(
+        control_frame(
             method=REGISTER_METHOD, path=REGISTER_PATH, data={"name": "W:bad", "pid": 1}
         ).encode()
     )
@@ -469,7 +609,7 @@ async def test_duplicate_name_refuses_the_new_connection(uds_harness):
 
 async def test_connection_without_register_is_rejected(uds_harness):
     reader, writer = await asyncio.open_unix_connection(uds_harness.hub.path)
-    writer.write(Frame(method=EVENT_METHOD, path="/hello", data=None).encode())
+    writer.write(control_frame(method=EVENT_METHOD, path="/hello", data=None).encode())
     await writer.drain()
     assert await reader.read() == b""
     assert uds_harness.hub.members == {}
@@ -487,3 +627,24 @@ async def test_address_before_start_raises(socket_dir):
 async def test_path_and_host_together_are_rejected():
     with pytest.raises(ValueError):
         ChannelHub(path="/tmp/x.sock", host="127.0.0.1")
+
+
+@pytest.mark.parametrize("pid", [{}, "invalid"])
+async def test_malformed_register_pid_closes_only_offending_socket(uds_harness, pid):
+    survivor = MemberPeer(uds_harness.hub.address, "W:good")
+    await survivor.connect()
+    await uds_harness.wait_members(1)
+    reader, writer = await asyncio.open_unix_connection(uds_harness.hub.path)
+    try:
+        writer.write(control_frame(method=REGISTER_METHOD, path=REGISTER_PATH,
+                                   data={"name": "W:bad", "pid": pid}).encode())
+        await writer.drain()
+        assert await asyncio.wait_for(reader.read(), timeout=1) == b""
+        assert uds_harness.hub.resolve("W:bad") is None
+        survivor.reply_result = "alive"
+        reply = await uds_harness.hub.call("W:good", "/ping", timeout=1)
+        assert reply["result"] == "alive"
+    finally:
+        writer.close()
+        await writer.wait_closed()
+        await survivor.close()

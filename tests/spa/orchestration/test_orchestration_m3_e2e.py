@@ -64,7 +64,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-import base64
 import shutil
 import tempfile
 from http.cookies import SimpleCookie
@@ -72,6 +71,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.spa.orchestration.frame_helpers import call_endpoint
 
 from genro_asgi_multiworker_spa.spa_app import SPA_CONNECTION_ID_COOKIE
 from genro_asgi.config import ConfigurationHandler
@@ -178,8 +178,7 @@ class X_SpaWorker_m3(X_SpaWorker):
             # core-only world where no site renames it.
             self.new_connection(cid, user=identity)
         start_response("200 OK", [("Content-Type", "text/plain"), ("X-Worker", self.name)])
-        return [f"{environ['REQUEST_METHOD']} {environ['PATH_INFO']} "
-                f"for {identity}".encode()]
+        return [f"{environ['REQUEST_METHOD']} {environ['PATH_INFO']} for {identity}".encode()]
 
 
 def http_call(cid: str, identity: str, *, path: str, **payload: Any) -> dict[str, Any]:
@@ -209,7 +208,7 @@ def cid_of(environ: dict[str, Any]) -> str | None:
 
 def body_of(reply: dict[str, Any]) -> str:
     """The site's answer, decoded out of the wire form."""
-    return base64.b64decode(reply["result"]["body"]).decode()
+    return reply["result"]["body"].decode()
 
 
 def announced(reply: dict[str, Any]) -> list[str]:
@@ -232,8 +231,11 @@ async def serve(group: GroupHandler, user: str, cid: str, path: str, **payload: 
     """
     worker_name = group.user_worker_map.get(user) or await group.assign_user(user)
     handler = group.worker_handler_map[worker_name]
-    return await handler.connector.call(
-        f"/site{path}", http_call(cid, user, path=path, **payload), timeout=CALL_TIMEOUT
+    return await call_endpoint(
+        handler.connector,
+        f"/site{path}",
+        http_call(cid, user, path=path, **payload),
+        timeout=CALL_TIMEOUT,
     )
 
 

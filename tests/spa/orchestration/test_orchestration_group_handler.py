@@ -55,6 +55,7 @@ from genro_asgi_multiworker_spa.orchestration.worker_handler import (
     WORKER_ENV_VAR,
     WorkerHandler,
 )
+from tests.spa.orchestration.frame_helpers import control_frame
 
 from .conftest import kill_process, wait_for
 
@@ -65,6 +66,7 @@ def warm(worker_handler, cpu_temperature_percent: float) -> None:
     worker_handler.cpu_temperature_sampled_at = real_time.monotonic()
     worker_handler.cpu_temperature_interval_seconds = 0.1
 
+
 CHILD_SCRIPT = '''
 """A scripted worker of a group: one photo, one answer, one departure."""
 
@@ -72,6 +74,8 @@ import asyncio
 import json
 import os
 import time
+
+from tests.spa.orchestration.frame_helpers import call_endpoint, control_frame, read_control
 
 from genro_asgi.channel.frame import REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
 
@@ -108,7 +112,7 @@ async def live() -> None:
     reader, writer = await asyncio.open_unix_connection(payload["uds_url"].removeprefix("uds:"))
     stream = FrameStream(reader, writer)
     await stream.write(
-        Frame(
+        control_frame(
             method=REGISTER_METHOD,
             path=REGISTER_PATH,
             data={{"pid": os.getpid(), "{snapshot_key}": photo}},
@@ -125,7 +129,7 @@ async def live() -> None:
             # event of the departure rides it. Refused on demand, which is the
             # departure that did not happen.
             if frame.path == "{freeze_path}":
-                user = (frame.data or {{}})["user"]
+                user = (read_control(frame) or {{}})["user"]
                 # Taken and never answered: the order that outlives the caller's
                 # own deadline, which is the wait the group puts a ceiling on.
                 if kwargs["freeze_unanswered"]:
@@ -146,20 +150,20 @@ async def live() -> None:
                         ],
                     }}
                 await stream.write(
-                    Frame(id=frame.id, method="REPLY", path=frame.path, data=data)
+                    control_frame(id=frame.id, method="REPLY", path=frame.path, data=data)
                 )
                 continue
             # The order to forget somebody: the row goes and the departure is
             # ANNOUNCED, which is what prunes the indexes above.
             if frame.path == "{drop_path}":
-                user = (frame.data or {{}})["user"]
+                user = (read_control(frame) or {{}})["user"]
                 # Taken and never answered, like the freeze above: the drop order
                 # has a ceiling of its own and the group must not sit on it.
                 if kwargs["drop_unanswered"]:
                     continue
                 photo["users"].pop(user, None)
                 await stream.write(
-                    Frame(
+                    control_frame(
                         id=frame.id,
                         method="REPLY",
                         path=frame.path,
@@ -177,7 +181,7 @@ async def live() -> None:
             if frame.path != "{quit_path}" or kwargs["photo_on_quit"]:
                 data["{snapshot_key}"] = photo
             await stream.write(
-                Frame(id=frame.id, method="REPLY", path=frame.path, data=data)
+                control_frame(id=frame.id, method="REPLY", path=frame.path, data=data)
             )
             # Asked to leave it leaves, after answering: the answer is what
             # carries the photo of everybody it is about to park.
@@ -390,9 +394,7 @@ async def test_a_process_that_never_starts_breaks_the_group_until_one_does(make_
     assert group.state == "running"
 
 
-async def test_a_worker_past_the_restart_setpoint_is_replaced_by_a_fresh_one(
-    make_group, commander
-):
+async def test_a_worker_past_the_restart_setpoint_is_replaced_by_a_fresh_one(make_group, commander):
     group = make_group(rss_bytes=int(0.99 * WORKER_CEILING), users=["mario"])
     known_at_the_vertex(commander, "cid-a", "mario")
     doomed = await group.start_worker()
@@ -646,8 +648,10 @@ async def test_every_order_of_the_group_leaves_its_row_in_the_orchestration_log(
     rows = [record.getMessage() for record in caplog.records]
     assert any("order=start_worker subject=standard_0001" in row for row in rows)
     assert any("order=restart_worker subject=standard_0001" in row for row in rows)
-    assert any("order=drop_worker subject=standard_0001 numbers=None outcome=quitted" in row
-               for row in rows)
+    assert any(
+        "order=drop_worker subject=standard_0001 numbers=None outcome=quitted" in row
+        for row in rows
+    )
     assert any("order=start_worker subject=standard_0002" in row for row in rows)
 
 
@@ -834,9 +838,7 @@ async def test_a_worker_at_its_user_ceiling_makes_the_placement_father_a_new_one
     assert sorted(group.user_worker_map.values()) == ["standard_0001", "standard_0002"]
 
 
-async def test_at_the_ceiling_with_no_way_to_grow_the_placement_surrenders(
-    make_group, commander
-):
+async def test_at_the_ceiling_with_no_way_to_grow_the_placement_surrenders(make_group, commander):
     group = make_group(worker_max_users=1)
     await group.start_worker()
     commander.record_connection_user("cid-a", "guest_first1")
@@ -933,7 +935,11 @@ async def test_a_request_arriving_under_the_order_waits_and_is_served_after_it(
     order = asyncio.ensure_future(group.freeze_hosted_user("mario"))
     await ordered.wait()
     request = asyncio.ensure_future(
-        commander.serve_request("cid-a", {"path": "/invoices"}, hold_timeout=5.0)
+        commander.serve_request(
+            "cid-a",
+            control_frame(method="CALL", path="/invoices", data={"http": {"path": "/invoices"}}),
+            hold_timeout=5.0,
+        )
     )
     await asyncio.sleep(0.05)
 
@@ -945,13 +951,11 @@ async def test_a_request_arriving_under_the_order_waits_and_is_served_after_it(
     confirm.set()
 
     assert await order is True
-    assert "error" not in await request
+    assert "error" not in (await request).info
     assert group.user_worker_map["mario"] == worker_handler.name
 
 
-async def test_the_group_parks_whoever_has_gone_quiet_and_spares_the_active(
-    make_group, commander
-):
+async def test_the_group_parks_whoever_has_gone_quiet_and_spares_the_active(make_group, commander):
     """The valve is the GROUP's: it reads the silence off the photo and orders.
 
     Mario has been silent a minute past a valve set to half of one, and his
@@ -980,9 +984,7 @@ async def test_the_group_parks_whoever_has_gone_quiet_and_spares_the_active(
     assert worker_handler.hosted_users == {"anna"}
 
 
-async def test_whoever_is_past_his_own_expiry_is_dropped_and_not_parked(
-    make_group, commander
-):
+async def test_whoever_is_past_his_own_expiry_is_dropped_and_not_parked(make_group, commander):
     """The other verdict: he is forgotten whole, and nothing of his is written.
 
     The horizon is the vertex's own — the one it applies to a parcel in the
@@ -1041,9 +1043,7 @@ async def test_a_drop_order_nobody_answers_expires_and_gives_the_block_back(
     assert group.user_worker_map["ugo"] == worker_handler.name
 
 
-async def test_a_drop_order_that_cannot_be_sent_frees_the_user_and_the_round(
-    make_group, commander
-):
+async def test_a_drop_order_that_cannot_be_sent_frees_the_user_and_the_round(make_group, commander):
     """A wire gone under the order: the hold falls and the other users are judged.
 
     The expiry road raises the block before it orders, so an order that cannot
@@ -1098,9 +1098,7 @@ async def test_an_order_nobody_answers_expires_and_leaves_the_user_where_he_was(
     assert group.user_worker_map["mario"] == worker_handler.name
 
 
-async def test_an_order_cancelled_under_the_await_gives_the_block_back(
-    make_group, commander
-):
+async def test_an_order_cancelled_under_the_await_gives_the_block_back(make_group, commander):
     """The quit cancels the beat: a user caught mid-order must not stay blocked."""
     group = make_group(freeze_unanswered=True)
     worker_handler = await group.start_worker()
@@ -1160,7 +1158,11 @@ async def test_a_request_arriving_under_the_expiry_order_waits_instead_of_routin
     round_of_the_group = asyncio.ensure_future(group.check_user_activity(now=True))
     await ordered.wait()
     request = asyncio.ensure_future(
-        commander.serve_request("cid-c", {"path": "/invoices"}, hold_timeout=5.0)
+        commander.serve_request(
+            "cid-c",
+            control_frame(method="CALL", path="/invoices", data={"http": {"path": "/invoices"}}),
+            hold_timeout=5.0,
+        )
     )
     await asyncio.sleep(0.05)
 
@@ -1173,4 +1175,4 @@ async def test_a_request_arriving_under_the_expiry_order_waits_instead_of_routin
 
     assert "ugo" not in commander.user_map
     assert "ugo" not in commander.user_hold_event_map
-    assert "error" not in await request
+    assert "error" not in (await request).info

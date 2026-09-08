@@ -28,6 +28,7 @@ import json
 import os
 import shutil
 import socket
+import struct
 import tempfile
 
 import pytest
@@ -42,6 +43,18 @@ from genro_asgi.channel import (
     FrameStream,
 )
 from genro_asgi.communication import CommunicationMixin
+from genro_asgi.channel.control import ControlPayload
+from genro_asgi.channel.frame import FrameCodec
+
+CONTROL = ControlPayload()
+
+
+def control_frame(*, data=None, **kwargs):
+    return Frame(payload=CONTROL.encode(data), **kwargs)
+
+
+def data_of(frame):
+    return CONTROL.decode(frame.payload)
 
 
 class FakeHub:
@@ -137,20 +150,20 @@ async def stream_pair(max_size: int = MAX_FRAME_SIZE) -> tuple[FrameStream, Fram
 
 class TestFrameProtocol:
     def test_frame_id_generated_when_not_given(self) -> None:
-        one, two = Frame(), Frame()
+        one, two = control_frame(), control_frame()
         assert one.id and two.id and one.id != two.id
-        assert Frame(id="fixed").id == "fixed"
+        assert control_frame(id="fixed").id == "fixed"
 
     async def test_round_trip(self) -> None:
         one, two = await stream_pair()
-        sent = Frame(method="POST", path="/events/ready", data={"n": 1})
+        sent = control_frame(method="POST", path="/events/ready", data={"n": 1})
         await one.write(sent)
         received = await two.read()
         assert received is not None
         assert received.id == sent.id
         assert received.method == "POST"
         assert received.path == "/events/ready"
-        assert received.data == {"n": 1}
+        assert data_of(received) == {"n": 1}
         await one.close()
         await two.close()
 
@@ -163,27 +176,79 @@ class TestFrameProtocol:
     async def test_oversized_write_raises(self) -> None:
         one, two = await stream_pair(max_size=32)
         with pytest.raises(ValueError, match="exceeds max_size"):
-            await one.write(Frame(data={"blob": "x" * 100}))
+            await one.write(control_frame(data={"blob": "x" * 100}))
         await one.close()
         await two.close()
 
     async def test_envelope_missing_method_raises(self) -> None:
         one, two = await stream_pair()
-        payload = b"WSX://" + json.dumps({"id": "x", "path": "/foo"}).encode("utf-8")
-        one.writer.write(len(payload).to_bytes(4, "big") + payload)
+        info = json.dumps({"id": "x", "path": "/foo"}).encode("utf-8")
+        one.writer.write(struct.pack("!4sBII", b"GNRF", 1, len(info), 0) + info)
         await one.writer.drain()
-        with pytest.raises(ValueError, match="invalid wsx envelope"):
+        with pytest.raises(ValueError, match="missing 'method'"):
             await two.read()
         await one.close()
         await two.close()
 
     async def test_envelope_non_dict_payload_raises(self) -> None:
         one, two = await stream_pair()
-        payload = b"WSX://" + json.dumps(["a", "b"]).encode("utf-8")
-        one.writer.write(len(payload).to_bytes(4, "big") + payload)
+        info = json.dumps(["a", "b"]).encode("utf-8")
+        one.writer.write(struct.pack("!4sBII", b"GNRF", 1, len(info), 0) + info)
         await one.writer.drain()
-        with pytest.raises(ValueError, match="invalid wsx envelope"):
+        with pytest.raises(ValueError, match="must be a JSON object"):
             await two.read()
+        await one.close()
+        await two.close()
+
+    def test_payload_is_opaque_and_info_is_separate(self) -> None:
+        frame = Frame(info={"format": "application/x-test"}, payload=b"\x00\xffnot-json")
+        received = FrameCodec().get_frame(frame.encode())
+        assert received.info == {"format": "application/x-test"}
+        assert received.payload == b"\x00\xffnot-json"
+
+    def test_reserved_info_keys_are_rejected(self) -> None:
+        with pytest.raises(ValueError, match="reserved keys"):
+            Frame(info={"method": "EVENT"})
+
+    def test_explicit_empty_id_and_unknown_method_are_rejected(self) -> None:
+        with pytest.raises(ValueError, match="frame id"):
+            Frame(id="")
+        with pytest.raises(ValueError, match="unsupported frame method"):
+            Frame(method="UNKNOWN")
+
+    def test_nested_info_cannot_be_mutated_after_validation(self) -> None:
+        source = {"route": {"parts": ["one"]}}
+        frame = Frame(info=source)
+        source["route"]["parts"].append(float("nan"))
+        exposed = frame.info
+        exposed["route"]["parts"].append("two")
+        assert FrameCodec().get_frame(frame.encode()).info == {"route": {"parts": ["one"]}}
+
+    def test_duplicate_info_keys_are_rejected(self) -> None:
+        info = b'{"id":"x","method":"POST","path":"/","path":"/again"}'
+        wire = struct.pack("!4sBII", b"GNRF", 1, len(info), 0) + info
+        with pytest.raises(ValueError, match="duplicate JSON key"):
+            FrameCodec().get_frame(wire)
+
+    def test_unknown_version_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="unsupported frame version"):
+            FrameCodec().get_header_lengths(struct.pack("!4sBII", b"GNRF", 2, 0, 0))
+
+    def test_control_payload_is_explicit_and_strict(self) -> None:
+        codec = ControlPayload()
+        assert codec.decode(codec.encode({"value": None})) == {"value": None}
+        with pytest.raises(ValueError, match="non-finite"):
+            codec.decode(b'{"value":NaN}')
+
+    async def test_concurrent_writes_remain_complete_frames(self) -> None:
+        one, two = await stream_pair()
+        frames = [Frame(path=f"/{index}", payload=bytes([index])) for index in range(100)]
+        writes = asyncio.gather(*(one.write(frame) for frame in frames))
+        received = [await two.read() for _ in frames]
+        await writes
+        assert {(frame.path, frame.payload) for frame in received} == {
+            (frame.path, frame.payload) for frame in frames
+        }
         await one.close()
         await two.close()
 
@@ -197,10 +262,33 @@ class TestChannelClient:
         register = hub.frames[0]
         assert register.method == REGISTER_METHOD
         assert register.path == REGISTER_PATH
-        assert register.data == {"name": "child_01", "pid": os.getpid()}
+        assert data_of(register) == {"name": "child_01", "pid": os.getpid()}
         await client.close()
         assert client.connected is False
         assert client.closed is True
+
+    async def test_connect_twice_is_refused(self, hub, hub_path) -> None:
+        client = ChannelClient(f"uds:{hub_path}", "child_01")
+        await client.connect()
+        with pytest.raises(RuntimeError, match="already connected"):
+            await client.connect()
+        await client.close()
+
+    async def test_reconnect_after_link_loss_keeps_the_new_generation(self, hub, hub_path) -> None:
+        client = ChannelClient(f"uds:{hub_path}", "child_01")
+        await client.connect()
+        await hub.wait_frames(1)
+        await hub.streams[0].close()
+        await asyncio.wait_for(client.wait_closed(), timeout=5)
+
+        await client.connect()
+        await hub.wait_frames(2)
+        await asyncio.sleep(0)
+        assert client.connected is True
+        await client.send(path="/new-generation", data={"ok": True})
+        await hub.wait_frames(3)
+        assert hub.frames[-1].path == "/new-generation"
+        await client.close()
 
     async def test_send_relays_frames_to_the_hub(self, hub, hub_path) -> None:
         client = ChannelClient(f"uds:{hub_path}", "child_01")
@@ -211,7 +299,7 @@ class TestChannelClient:
         assert event.id == frame_id
         assert event.method == "POST"
         assert event.path == "/events/ready"
-        assert event.data == {"n": 1}
+        assert data_of(event) == {"n": 1}
         await client.close()
 
     async def test_send_before_connect_raises(self, hub_path) -> None:
@@ -327,13 +415,17 @@ class TestCommunicationMixin:
 
     def test_cooperative_chain_names_leftover_kwargs(self, hub_path) -> None:
         with pytest.raises(TypeError, match="bogus"):
-            ChannelServer(applications=[BaseApplication(mount="")], parent=f"uds:{hub_path}", bogus=1)
+            ChannelServer(
+                applications=[BaseApplication(mount="")], parent=f"uds:{hub_path}", bogus=1
+            )
 
     async def test_armed_parent_connects_at_startup_disconnects_at_shutdown(
         self, hub, hub_path
     ) -> None:
         events: list[str] = []
-        server = ChannelServer(applications=[RecordingApp(mount="", events=events)], parent=f"uds:{hub_path}")
+        server = ChannelServer(
+            applications=[RecordingApp(mount="", events=events)], parent=f"uds:{hub_path}"
+        )
         gate = asyncio.Event()
         queue = [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}]
         sent: list[dict[str, object]] = []
@@ -351,8 +443,8 @@ class TestCommunicationMixin:
         await hub.wait_frames(1)  # REGISTER reached the hub while the server runs
         register = hub.frames[0]
         assert register.method == REGISTER_METHOD
-        assert register.data["name"] == server.parent_channel.name
-        assert register.data["pid"] == os.getpid()
+        assert data_of(register)["name"] == server.parent_channel.name
+        assert data_of(register)["pid"] == os.getpid()
         assert server.parent_channel.connected is True
         gate.set()
         await asyncio.wait_for(task, timeout=5)
@@ -365,7 +457,9 @@ class TestCommunicationMixin:
     async def test_unreachable_hub_fails_startup_and_no_hook_runs(self, hub_path) -> None:
         # hub_path exists but nothing is bound there: connect retries then fails
         events: list[str] = []
-        server = ChannelServer(applications=[RecordingApp(mount="", events=events)], parent=f"uds:{hub_path}")
+        server = ChannelServer(
+            applications=[RecordingApp(mount="", events=events)], parent=f"uds:{hub_path}"
+        )
         server.parent_channel.connect_timeout = 0.2
         queue = [{"type": "lifespan.startup"}]
         sent: list[dict[str, object]] = []

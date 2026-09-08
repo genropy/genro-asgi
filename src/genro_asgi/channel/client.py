@@ -23,7 +23,7 @@ from below, never the reverse.
 race: the hub socket may not be bound yet) and presents the child with a
 REGISTER frame (``data={"name", "pid"}``). Steady state is fire-and-forget
 frames in both directions. There is no steady-state reconnection: when the
-hub side goes away (EOF — the death signal on same-host sockets),
+hub side goes away (EOF — the connection-loss signal),
 ``on_orphan(client)`` fires and the child is expected to terminate cleanly.
 A deliberate ``close()`` fires no orphan signal.
 
@@ -45,7 +45,8 @@ import logging
 import os
 from typing import Any, Callable
 
-from .frame import MAX_FRAME_SIZE, REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
+from .control import ControlPayload
+from .frame import REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
 
 __all__ = ["ChannelClient"]
 
@@ -61,7 +62,7 @@ class ChannelClient:
         on_message: Callable[..., Any] | None = None,
         on_orphan: Callable[..., Any] | None = None,
         connect_timeout: float = 10.0,
-        max_size: int = MAX_FRAME_SIZE,
+        max_size: int | None = None,
     ) -> None:
         self.address = address
         self.name = name
@@ -69,6 +70,7 @@ class ChannelClient:
         self.on_orphan = on_orphan
         self.connect_timeout = connect_timeout
         self.max_size = max_size
+        self.control_payload = ControlPayload()
         transport, _, rest = address.partition(":")
         self._uds_path: str | None = None
         self._tcp: tuple[str, int] | None = None
@@ -102,6 +104,8 @@ class ChannelClient:
 
     async def connect(self) -> None:
         """Connect with boot-time retry/backoff, present the REGISTER frame."""
+        if self.connected:
+            raise RuntimeError("channel client is already connected")
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.connect_timeout
         interval = 0.05
@@ -116,16 +120,18 @@ class ChannelClient:
                     ) from None
                 await asyncio.sleep(interval)
                 interval = min(interval * 2, 0.5)
-        self._stream = FrameStream(reader, writer, max_size=self.max_size)
+        self._stream = FrameStream(
+            reader, writer, max_size=self.max_size
+        )
         register = Frame(
             method=REGISTER_METHOD,
             path=REGISTER_PATH,
-            data={"name": self.name, "pid": os.getpid()},
+            payload=self.control_payload.encode({"name": self.name, "pid": os.getpid()}),
         )
         await self._stream.write(register)
         self._connected = True
         self._closed_event.clear()
-        self._receive_task = asyncio.create_task(self._receive_loop())
+        self._receive_task = asyncio.create_task(self._receive_loop(self._stream))
         self._logger.info("Connected to hub at %s as %s", self.address, self.name)
 
     async def close(self) -> None:
@@ -155,11 +161,14 @@ class ChannelClient:
         """
         if self._stream is None or not self.connected:
             raise ConnectionError("not connected")
-        frame = Frame(method=method, path=path, data=data)
-        try:
-            await self._stream.write(frame)
-        except (BrokenPipeError, ConnectionResetError):
-            self._logger.debug("send: hub connection already closed")
+        frame = Frame(method=method, path=path, payload=self.control_payload.encode(data))
+        return await self.send_frame(frame)
+
+    async def send_frame(self, frame: Frame) -> str:
+        """Send an already encoded frame without opening its payload."""
+        if self._stream is None or not self.connected:
+            raise ConnectionError("not connected")
+        await self._stream.write(frame)
         return frame.id
 
     async def _open_connection(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
@@ -169,7 +178,7 @@ class ChannelClient:
         host, port = self._tcp
         return await asyncio.open_connection(host, port)
 
-    async def _receive_loop(self) -> None:
+    async def _receive_loop(self, stream: FrameStream) -> None:
         """Read frames until the channel ends; hub gone → orphan.
 
         A protocol violation from the hub (oversized or non-wsx frame) is a
@@ -180,7 +189,7 @@ class ChannelClient:
         try:
             while True:
                 try:
-                    frame = await self._stream.read()
+                    frame = await stream.read()
                 except ValueError:
                     self._logger.exception("Protocol violation from the hub; closing the channel")
                     break
@@ -190,8 +199,10 @@ class ChannelClient:
         except asyncio.CancelledError:
             return
         finally:
-            self._connected = False
-            await self._stream.close()
+            if self._stream is stream:
+                self._connected = False
+                self._stream = None
+            await stream.close()
             self._closed_event.set()
             if not self._closing:
                 self._logger.info("Hub connection lost: %s is orphan", self.name)

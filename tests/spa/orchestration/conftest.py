@@ -37,6 +37,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.spa.orchestration.frame_helpers import control_frame, read_control
+
 from genro_asgi.channel.frame import Frame
 from genro_asgi_multiworker_spa.orchestration import FreezeHandler, GroupHandler, SpaCommander, SpaWorker
 from genro_asgi_multiworker_spa.orchestration import spa_worker as spa_worker_module
@@ -120,7 +122,7 @@ class XT_Wire:
         self.frames.append(frame)
         if frame.method == CALL_METHOD:
             self.worker.handle_frame(
-                Frame(id=frame.id, method=REPLY_METHOD, path=frame.path, data={"result": {}})
+                control_frame(id=frame.id, method=REPLY_METHOD, path=frame.path, data={"result": {}})
             )
 
     def replies(self) -> list[Frame]:
@@ -139,7 +141,7 @@ class XT_Wire:
         return [
             event
             for frame in self.calls(ANNOUNCE_OP_PATH)
-            for event in frame.data[ENVELOPE_SLOT_WORKER_EVENTS]
+            for event in read_control(frame)[ENVELOPE_SLOT_WORKER_EVENTS]
         ]
 
 

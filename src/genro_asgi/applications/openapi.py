@@ -141,6 +141,7 @@ class OpenApiMeta(RoutingClass):
         paths_data = router_openapi(app.route, **app.schema_filters())
         return {
             "openapi": "3.1.0",
+            "servers": [{"url": f"/{app.mount}" if app.mount else "/"}],
             "info": {
                 "title": info.get("title", type(app).__name__),
                 "version": info.get("version", "1.0.0"),

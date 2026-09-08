@@ -12,96 +12,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""WorkerConnector: the wire of ONE WorkerHandler, and nothing but that wire.
+"""The local worker's private connection and its two request/reply lanes.
 
-One socket per handler, created and owned by it, its path handed to the child
-in the spawn payload: whoever connects there IS the process of that handler.
-Identity comes from the address, so the presentation carries no name — the
-child says its pid and echoes the config it was given, and the answer brings
-back the global store. Nothing else travels at birth: the cold memory (the
-parcels) the child fetches itself from the deposit.
+Every Frame carries routing/control info and opaque payload bytes. call_frame
+parks a correlated reply without opening application bytes; call is the
+explicit JSON endpoint for orchestration control values. The worker's info
+(worker_events and snapshot) is folded before the caller receives its reply.
+The normalized info accompanies the same payload bytes throughout.
 
-**The wire knows its handler, and asks it.** Everything the connector cannot
-answer by itself it asks ``self.worker_handler`` — what to do with an envelope
-that arrived, what the answer to the presentation is, that the wire has died. No
-callbacks are handed in at construction: a second road to an object already in
-hand is one road too many.
+A child presents on its private UDS path, and a second simultaneous connection
+is refused. This connector remains local-only: its handler owns supervision.
+Link loss fails pending calls without replay. The connector's notification is
+a connection fact; connecting to a generic remote service uses the separate
+RemoteConnection and grants no authority over that service's process.
 
-**The wire reads nothing.** It does not know what a worker event means, what a
-photo is, or that a global store exists: an envelope that arrives goes WHOLE to
-the handler, which pushes it into the chain of the fold, and what comes back is
-written down as the answer. An envelope that leaves was composed by that same
-chain, by whoever is sending it. So the protocol lives here and the meaning lives
-there, and neither has to be changed for the other.
-
-**The store goes whole, every time.** There is no delta and no version number:
-the master replaces the replica entire, so nothing can arrive out of order. It
-costs the whole store per change, which at this scale is nothing — the global
-store is measured in kilobytes and changes something like once every three
-hours. Today it travels on one envelope only, the answer to the presentation,
-because that is the only process holding none of it; the update to a process
-already alive replaces the replica the same way when it arrives.
-
-**The store goes down whole and comes up as writes.** The descent replaces the
-replica; the climb carries what the hosted site wrote on it, in a
-``global_writes`` slot beside the photo. No lane is opened for it: the writes
-ride the envelope that was already going up, and the fold applies them to the
-master before the caller of that envelope is unblocked. So the asymmetry below
-holds unchanged — there is still nothing but the presentation and the REPLYs
-coming up this wire.
-
-**Stale socket, always unlinked.** The socket file outlives the process that
-crashed, and a bind over it fails; the path is cleared before every bind. The
-directory holding the sockets is private (0700): connecting there means
-commanding a worker.
-
-**One connector, one stream.** There is no rubric here and no routing by name —
-the multi-member switchboard belongs to the machine that dies at the cutover.
-A second connection arriving while the wire is taken is refused, loudly: the
-handler never runs two processes at once, so the newcomer is the anomaly and
-the resident is the real one. The address survives the relaunch: the killed
-child's successor presents itself on the same socket and the wire lives again.
-
-**Every envelope may carry the photo.** Whatever the child sends — its
-presentation or a reply — can bring a ``worker_snapshot`` slot beside its own
-payload, and it travels up with the rest of the envelope: whoever reads photos
-reads it there. So the photo has ONE road instead of three, a live process has a
-photo from birth, and the beat is left with the only question its name asks: are
-you alive.
-
-**Two lanes, one wire, and the doctrine of the channel on both.** Down go CALLs
-and the REPLYs to what the child asked; up come the presentation at birth, the
-REPLYs to what was asked of it, and the child's own CALLs. A REPLY is resolved
-INLINE — its payload handed to the parked caller, O(1), the loop staying on the
-wire — and a CALL is served as a TASK, so a slow answer cannot make this wire
-deaf to the next frame. The conversations interleave without confusion because
-every frame carries its id: the transport was always full duplex, and the second
-lane needed no machinery of its own. A CALL the handler does not serve comes back
-as an error REPLY, never as a dropped frame; anything that is neither method is
-logged as an unexpected envelope, because there is no third lane.
-
-An error REPLY carries its text under ``error``, and MAY carry a ``status``
-beside it: only a refusal knows what the caller should be answered — a page
-that never opened its channel is a 409 whose words are meant for the browser —
-and everything else leaves it out, which is how the front tells a refusal of
-the client from a site that broke (#70).
-
-**The end of the wire is a LOCAL fact of this handler.** EOF — the death signal
-on a same-host socket — or a protocol violation closes the stream, fails every
-pending CALL and tells the handler through ``on_child_lost``, which is where the
-burial starts. A deliberate ``stop()`` announces nothing: that death was
-ordered.
+Inbound calls are served in separate tasks so they cannot block reply reading.
+Each connection owns its pending calls; shutdown cancels service tasks and
+releases the private socket. Limits reject excess pending calls before sending.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import logging
 from pathlib import Path
 from typing import Any, Callable
 
-from genro_asgi.channel.frame import MAX_FRAME_SIZE, REGISTER_METHOD, Frame, FrameStream
+from genro_asgi.channel.control import ControlPayload
+from genro_asgi.channel.frame import REGISTER_METHOD, Frame, FrameStream
+from genro_asgi.transport_limits import FrameTooLarge
 
 CALL_METHOD = "CALL"
 REPLY_METHOD = "REPLY"
@@ -158,7 +99,7 @@ class WorkerConnector:
         worker_handler: Any,
         socket_path: str | Path,
         *,
-        max_size: int = MAX_FRAME_SIZE,
+        max_size: int | None = None,
     ) -> None:
         self.worker_handler = worker_handler
         self.socket_path = Path(socket_path)
@@ -166,7 +107,9 @@ class WorkerConnector:
         self._logger = logging.getLogger(__name__)
         self._server: asyncio.Server | None = None
         self._stream: FrameStream | None = None
-        self._pending: dict[str, asyncio.Future[Any]] = {}
+        self._pending: dict[str, asyncio.Future[Frame]] = {}
+        self._pending_paths: dict[str, str] = {}
+        self._abandoned: dict[str, str] = {}
         self._connected_event = asyncio.Event()
         self._service_tasks: set[asyncio.Task[None]] = set()
         self._closing = False
@@ -227,17 +170,43 @@ class WorkerConnector:
         Raises:
             ConnectionError: no child is on the wire, or it died waiting.
         """
+        frame = Frame(method=CALL_METHOD, path=path, info={"format": "control-json"},
+                      payload=ControlPayload().encode(data))
+        reply = await self.call_frame(frame, timeout=timeout)
+        return {**(ControlPayload().decode(reply.payload) or {}),
+                **{key: value for key, value in reply.info.items() if key != "format"}}
+
+    async def call_frame(self, frame: Frame, timeout: float | None = None) -> Frame:
+        """Send opaque bytes once and await this connection's correlated reply."""
         stream = self._live_stream()
-        frame = Frame(method=CALL_METHOD, path=path, data=data)
-        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        if frame.method != CALL_METHOD:
+            raise ValueError("worker request/reply calls require method CALL")
+        if frame.id in self._pending or frame.id in self._abandoned:
+            raise ValueError("duplicate in-flight correlation id")
+        if len(self._pending) >= 256:
+            raise ConnectionError("worker call capacity exhausted; request not sent")
+        future: asyncio.Future[Frame] = asyncio.get_running_loop().create_future()
         self._pending[frame.id] = future
+        self._pending_paths[frame.id] = frame.path
+        sent = False
         try:
+            sent = True
             await stream.write(frame)
             if timeout is None:
-                return await future
-            return await asyncio.wait_for(future, timeout)
+                return await asyncio.shield(future)
+            return await asyncio.wait_for(asyncio.shield(future), timeout)
+        except (asyncio.CancelledError, TimeoutError):
+            if sent and not future.done():
+                if len(self._abandoned) >= 256:
+                    await stream.close()
+                else:
+                    self._abandoned[frame.id] = frame.path
+            raise
         finally:
             self._pending.pop(frame.id, None)
+            self._pending_paths.pop(frame.id, None)
+            if not future.done():
+                future.cancel()
 
     def _live_stream(self) -> FrameStream:
         """The child's stream, or ``ConnectionError`` when there is no child."""
@@ -257,6 +226,7 @@ class WorkerConnector:
             await stream.close()
             return
         self._stream = stream
+        self._abandoned.clear()
         presented = False
         try:
             presented = await self._present(stream)
@@ -295,10 +265,11 @@ class WorkerConnector:
                 id=frame.id,
                 method=REPLY_METHOD,
                 path=frame.path,
-                data=self.worker_handler.read_envelope(frame.data or {}),
+                info={"format": "control-json"},
+                payload=ControlPayload().encode(self.worker_handler.read_envelope(frame.info)),
             )
         )
-        self._logger.info("Child presented itself on %s: %s", self.socket_path.name, frame.data)
+        self._logger.info("Child presented itself on %s: %s", self.socket_path.name, frame.info)
         return True
 
     async def _receive_loop(self, stream: FrameStream) -> None:
@@ -329,7 +300,8 @@ class WorkerConnector:
     def _dispatch(self, frame: Frame) -> None:
         """Route one inbound frame: a REPLY resolves its caller, a CALL is served as a task."""
         if frame.method == REPLY_METHOD:
-            self._take_envelope(frame)
+            self._validate_reply_route(frame)
+            frame = self._take_envelope(frame)
             self._resolve_reply(frame)
         elif frame.method == CALL_METHOD:
             task = asyncio.create_task(self._serve_child_call(frame))
@@ -339,6 +311,15 @@ class WorkerConnector:
             self._logger.warning(
                 "Unexpected envelope %s from the child on %s", frame.method, self.socket_path.name
             )
+
+    def _validate_reply_route(self, frame: Frame) -> None:
+        """Reject a correlated REPLY on the wrong route before folding its metadata."""
+        abandoned_path = self._abandoned.get(frame.id)
+        if abandoned_path is not None and frame.path != abandoned_path:
+            raise ValueError("abandoned REPLY does not belong to its route")
+        pending_path = self._pending_paths.get(frame.id)
+        if pending_path is not None and frame.path != pending_path:
+            raise ValueError("REPLY does not belong to its parked route")
 
     async def _serve_child_call(self, frame: Frame) -> None:
         """Serve one CALL the child placed, and answer it.
@@ -353,7 +334,28 @@ class WorkerConnector:
         answered once, always, so nobody is left parked on a dropped frame.
         """
         try:
-            answer = self.worker_handler.serve_child_call(frame.path, frame.data or {})
+            wire_format = frame.info.get("format")
+            if wire_format == "wsx-json":
+                if frame.path != "/commander/websocket/send":
+                    raise ValueError("serialized page data requires the websocket route")
+                info = frame.info
+                if set(info) != {"format", "page_id", "cid", "reply_path", "data_present"}:
+                    raise ValueError("invalid serialized websocket metadata")
+                if (not isinstance(info["page_id"], str)
+                        or not isinstance(info["reply_path"], str)
+                        or (info["cid"] is not None and not isinstance(info["cid"], str))
+                        or not isinstance(info["data_present"], bool)):
+                    raise ValueError("invalid serialized websocket metadata types")
+                if not info["data_present"] and frame.payload:
+                    raise ValueError("absent websocket data must have an empty payload")
+                payload = {"page_id": info["page_id"], "cid": info.get("cid"),
+                           "path": info["reply_path"],
+                           "data": frame.payload.decode("utf-8") if info.get("data_present") else None}
+            elif wire_format not in (None, "control-json"):
+                raise ValueError("unsupported child call payload format")
+            else:
+                payload = ControlPayload().decode(frame.payload) or {}
+            answer = self.worker_handler.serve_child_call(frame.path, payload)
             if inspect.isawaitable(answer):
                 answer = await answer
             data: dict[str, Any] = {"result": answer}
@@ -365,15 +367,34 @@ class WorkerConnector:
             )
             data = {"error": f"{type(exc).__name__}: {exc}"}
         try:
-            await self._live_stream().write(
-                Frame(id=frame.id, method=REPLY_METHOD, path=frame.path, data=data)
+            encoded = ControlPayload().encode(data)
+        except Exception as exc:
+            encoded = ControlPayload().encode(
+                {"error": f"{type(exc).__name__}: child call result is not encodable: {exc}"}
             )
-        except ConnectionError:
+        stream = None
+        try:
+            stream = self._live_stream()
+            reply = Frame(id=frame.id, method=REPLY_METHOD, path=frame.path,
+                          info={"format": "control-json"}, payload=encoded)
+            try:
+                await stream.write(reply)
+            except FrameTooLarge as exc:
+                await stream.write(Frame(
+                    id=frame.id, method=REPLY_METHOD, path=frame.path,
+                    info={"format": "control-json"},
+                    payload=ControlPayload().encode({"error": str(exc)}),
+                ))
+        except Exception:
+            if stream is not None:
+                with contextlib.suppress(Exception):
+                    await stream.close()
             self._logger.warning(
-                "The answer to %s found no wire on %s", frame.path, self.socket_path.name
+                "The answer to %s found no wire on %s", frame.path, self.socket_path.name,
+                exc_info=True,
             )
 
-    def _take_envelope(self, frame: Frame) -> None:
+    def _take_envelope(self, frame: Frame) -> Frame:
         """Push the envelope into the fold before the caller is answered.
 
         Args:
@@ -387,24 +408,36 @@ class WorkerConnector:
         not answerable for it. The events of that envelope stay half applied,
         which is the declared price until the escalation of F48 exists.
         """
+        info = frame.info
         try:
-            self.worker_handler.read_envelope(frame.data or {})
+            self.worker_handler.read_envelope(info)
         except Exception:
             self._logger.exception(
                 "The fold refused the envelope %s from the child on %s",
                 frame.id,
                 self.socket_path.name,
             )
+        return Frame(id=frame.id, method=frame.method, path=frame.path,
+                     info=info, payload=frame.payload)
+
 
     def _resolve_reply(self, frame: Frame) -> None:
         """Hand the REPLY payload to the parked caller; a caller already gone drops it."""
+        abandoned_path = self._abandoned.get(frame.id)
+        if abandoned_path is not None:
+            if frame.path != abandoned_path:
+                raise ValueError("abandoned REPLY does not belong to its route")
+            self._abandoned.pop(frame.id, None)
+            return
         future = self._pending.get(frame.id)
         if future is None or future.done():
             self._logger.debug(
                 "REPLY %s on %s has no parked caller", frame.id, self.socket_path.name
             )
             return
-        future.set_result(frame.data or {})
+        if frame.path != self._pending_paths[frame.id]:
+            raise ValueError("REPLY does not belong to its parked route")
+        future.set_result(frame)
 
     def _fail_pending(self, reason: str) -> None:
         """Fail every CALL still waiting with ``ConnectionError``; each caller pops its own."""

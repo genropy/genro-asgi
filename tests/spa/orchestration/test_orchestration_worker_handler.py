@@ -64,6 +64,8 @@ import asyncio
 import json
 import os
 
+from tests.spa.orchestration.frame_helpers import control_frame, read_control
+
 from genro_asgi.channel.frame import REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
 
 
@@ -80,7 +82,7 @@ async def live() -> None:
     reader, writer = await asyncio.open_unix_connection(payload["uds_url"].removeprefix("uds:"))
     stream = FrameStream(reader, writer)
     await stream.write(
-        Frame(
+        control_frame(
             method=REGISTER_METHOD,
             path=REGISTER_PATH,
             data={{"pid": os.getpid(), "config": payload, "{snapshot_key}": photo_of(payload)}},
@@ -94,7 +96,7 @@ async def live() -> None:
         if frame.method == "CALL" and behaviour != "mute":
             photo = {{"pid": os.getpid(), "asked_on": frame.path, "rss_mb": 42}}
             await stream.write(
-                Frame(
+                control_frame(
                     id=frame.id,
                     method="REPLY",
                     path=frame.path,

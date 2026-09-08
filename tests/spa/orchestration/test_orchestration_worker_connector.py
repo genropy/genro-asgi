@@ -33,6 +33,8 @@ from typing import Any
 
 import pytest
 
+from tests.spa.orchestration.frame_helpers import control_frame, read_control
+
 from genro_asgi.channel.frame import REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
 from genro_asgi_multiworker_spa.orchestration import WorkerConnector
 from genro_asgi_multiworker_spa.orchestration.worker_connector import (
@@ -60,7 +62,7 @@ class ChildPeer:
         reader, writer = await asyncio.open_unix_connection(self.socket_path)
         self.stream = FrameStream(reader, writer)
         await self.stream.write(
-            Frame(
+            control_frame(
                 method=REGISTER_METHOD,
                 path=REGISTER_PATH,
                 data={"pid": os.getpid(), "config": config},
@@ -84,7 +86,7 @@ class ChildPeer:
         await self.stream.close()
 
     async def send(self, method: str, path: str, data: Any = None) -> None:
-        await self.stream.write(Frame(method=method, path=path, data=data))
+        await self.stream.write(control_frame(method=method, path=path, data=data))
 
     async def wait_frames(self, count: int, timeout: float = 5.0) -> None:
         deadline = asyncio.get_running_loop().time() + timeout
@@ -101,7 +103,7 @@ class ChildPeer:
             self.received.append(frame)
             if frame.method == CALL_METHOD and self.answer_calls:
                 await self.stream.write(
-                    Frame(
+                    control_frame(
                         id=frame.id,
                         method=REPLY_METHOD,
                         path=frame.path,
@@ -174,7 +176,7 @@ async def test_the_presentation_is_answered_with_what_the_chain_composed(connect
     reply = await child.present(config={"pool_size": 4})
 
     assert reply.method == REPLY_METHOD
-    assert reply.data == handler.descent
+    assert read_control(reply) == handler.descent
     await connector.wait_connected()
     assert connector.connected is True
 
@@ -191,8 +193,50 @@ async def test_a_call_travels_and_its_reply_comes_back(connector):
     assert payload == {"result": {"alive": True}, "worker_events": []}
     assert child.received[0].method == CALL_METHOD
     assert child.received[0].path == "/probe"
-    assert child.received[0].data == {"kwargs": {}}
+    assert read_control(child.received[0]) == {"kwargs": {}}
 
+    await child.close()
+
+
+async def test_timed_out_id_waits_for_its_late_reply_before_reuse(connector):
+    child = ChildPeer(str(connector.socket_path))
+    await child.present()
+    child.answer_calls = False
+    request = control_frame(id="reserved", method=CALL_METHOD, path="/probe", data={})
+
+    with pytest.raises(TimeoutError):
+        await connector.call_frame(request, timeout=0.02)
+    with pytest.raises(ValueError, match="duplicate in-flight correlation id"):
+        await connector.call_frame(request, timeout=0.02)
+
+    await child.stream.write(control_frame(
+        id="reserved", method=REPLY_METHOD, path="/probe", data={"result": "late"}
+    ))
+    await wait_for(lambda: "reserved" not in connector._abandoned)
+    child.answer_calls = True
+    child.reply_result = "fresh"
+    reply = await connector.call_frame(request, timeout=1)
+    assert read_control(reply)["result"] == "fresh"
+    await child.close()
+
+
+async def test_wrong_route_reply_is_a_link_protocol_violation(connector, handler):
+    child = ChildPeer(str(connector.socket_path))
+    await child.present()
+    child.answer_calls = False
+    request = control_frame(id="owned", method=CALL_METHOD, path="/right", data={})
+    pending = asyncio.create_task(connector.call_frame(request, timeout=2))
+    await child.wait_frames(1)
+    folded_before = len(handler.envelopes)
+    await child.stream.write(control_frame(
+        id="owned", method=REPLY_METHOD, path="/wrong", data={"result": "misrouted"}
+    ))
+
+    with pytest.raises(ConnectionError, match="wire.*down"):
+        await pending
+    await wait_for(lambda: not connector.connected)
+    assert handler.losses == 1
+    assert len(handler.envelopes) == folded_before
     await child.close()
 
 
@@ -224,9 +268,24 @@ async def test_a_call_the_handler_has_no_hook_for_comes_back_as_an_error(connect
 
     answer = child.received[0]
     assert answer.method == REPLY_METHOD
-    assert "AttributeError" in answer.data["error"]
+    assert "AttributeError" in read_control(answer)["error"]
     assert handler.losses == 0
 
+    await child.close()
+
+
+async def test_an_unencodable_child_call_result_comes_back_as_an_error(connector, handler):
+    child = ChildPeer(str(connector.socket_path))
+    await child.present()
+    child.answer_calls = False
+    handler.serve_child_call = lambda path, payload: object()
+
+    await child.send(CALL_METHOD, "/op/unencodable", {"value": 1})
+    await child.wait_frames(1)
+
+    answer = read_control(child.received[0])
+    assert "not encodable" in answer["error"]
+    assert connector.connected is True
     await child.close()
 
 
@@ -282,7 +341,7 @@ async def test_the_successor_finds_the_same_socket(connector, handler):
     reply = await successor.present()
     await connector.wait_connected()
 
-    assert reply.data == {"descending": "what the chain composes now"}
+    assert read_control(reply) == {"descending": "what the chain composes now"}
 
     await successor.close()
 
@@ -305,7 +364,7 @@ async def test_a_second_child_on_a_taken_wire_is_refused(connector):
 async def test_a_child_that_does_not_present_itself_is_refused(connector):
     intruder = ChildPeer(str(connector.socket_path))
     await intruder.connect_without_presenting()
-    await intruder.stream.write(Frame(method=CALL_METHOD, path="/whatever"))
+    await intruder.stream.write(control_frame(method=CALL_METHOD, path="/whatever"))
 
     assert await intruder.stream.read() is None
     assert connector.connected is False

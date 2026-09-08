@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import struct
 from typing import Any
 
 import pytest
@@ -39,6 +40,17 @@ from genro_asgi.channel import (
     LocalChannel,
     LocalFrameStream,
 )
+from genro_asgi.channel.control import ControlPayload
+
+CONTROL = ControlPayload()
+
+
+def control_frame(*, data=None, **kwargs):
+    return Frame(payload=CONTROL.encode(data), **kwargs)
+
+
+def data_of(frame):
+    return CONTROL.decode(frame.payload)
 
 
 class LocalPeer:
@@ -73,7 +85,7 @@ class LocalPeer:
             else:
                 data["result"] = self.reply_result
             await self.channel.send_frame(
-                Frame(id=frame.id, method=REPLY_METHOD, path=frame.path, data=data)
+                control_frame(id=frame.id, method=REPLY_METHOD, path=frame.path, data=data)
             )
 
     def _on_orphan(self, channel: LocalChannel) -> None:
@@ -127,7 +139,7 @@ async def test_event_from_the_hub_reaches_the_member(harness):
     await peer.wait_frames(1)
     frame = peer.received[0]
     assert (frame.method, frame.path, frame.id) == (EVENT_METHOD, "/occupancy", frame_id)
-    assert frame.data == {"users": 3}
+    assert data_of(frame) == {"users": 3}
     await peer.channel.close()
 
 
@@ -140,7 +152,7 @@ async def test_event_from_the_member_reaches_the_hub(harness):
         assert asyncio.get_running_loop().time() < deadline, "hub saw no event"
         await asyncio.sleep(0.01)
     name, frame = harness.events[0]
-    assert (name, frame.path, frame.data) == ("W:local-1", "/op/new_user", {"seq": 1})
+    assert (name, frame.path, data_of(frame)) == ("W:local-1", "/op/new_user", {"seq": 1})
     await peer.channel.close()
 
 
@@ -148,11 +160,11 @@ async def test_payload_mutated_after_send_does_not_reach_the_peer(harness):
     peer = LocalPeer("W:local-1")
     await peer.join(harness.hub)
     payload = {"users": 1}
-    frame = Frame(method=EVENT_METHOD, path="/occupancy", data=payload)
+    frame = control_frame(method=EVENT_METHOD, path="/occupancy", data=payload)
     await harness.hub.resolve("W:local-1").write(frame)
     payload["users"] = 999
     await peer.wait_frames(1)
-    assert peer.received[0].data == {"users": 1}
+    assert data_of(peer.received[0]) == {"users": 1}
 
     outbound = {"seq": 1}
     await peer.channel.send(method=EVENT_METHOD, path="/op/new_user", data=outbound)
@@ -161,7 +173,7 @@ async def test_payload_mutated_after_send_does_not_reach_the_peer(harness):
     while not harness.events:
         assert asyncio.get_running_loop().time() < deadline, "hub saw no event"
         await asyncio.sleep(0.01)
-    assert harness.events[0][1].data == {"seq": 1}
+    assert data_of(harness.events[0][1]) == {"seq": 1}
     await peer.channel.close()
 
 
@@ -177,7 +189,7 @@ async def test_call_reply_delivers_the_payload_verbatim(harness):
 
     assert payload == {"result": {"ok": True}, "events": [{"op": "new_user", "seq": 1}]}
     assert peer.received[0].method == CALL_METHOD
-    assert peer.received[0].data == {"identity": "u1"}
+    assert data_of(peer.received[0]) == {"identity": "u1"}
     await peer.channel.close()
 
 
@@ -185,9 +197,7 @@ async def test_error_reply_rides_the_payload(harness):
     peer = LocalPeer("W:local-1")
     peer.reply_error = "unsupported until phase B"
     await peer.join(harness.hub)
-    payload = await harness.hub.call(
-        "W:local-1", "/op/new_user", {"identity": "u1"}, timeout=5.0
-    )
+    payload = await harness.hub.call("W:local-1", "/op/new_user", {"identity": "u1"}, timeout=5.0)
     assert payload == {"error": "unsupported until phase B", "events": []}
     await peer.channel.close()
 
@@ -219,12 +229,20 @@ async def test_send_before_connect_is_refused():
         await channel.send(path="/op/new_user")
 
 
+async def test_connect_twice_is_refused():
+    channel = LocalChannel("W:local-1")
+    await channel.connect()
+    with pytest.raises(RuntimeError, match="already connected"):
+        await channel.connect()
+    await channel.close()
+
+
 async def test_decode_error_is_a_protocol_violation():
     inbound: asyncio.Queue[bytes | None] = asyncio.Queue()
     outbound: asyncio.Queue[bytes | None] = asyncio.Queue()
     stream = LocalFrameStream(inbound, outbound)
-    await inbound.put(len(b"NOPE").to_bytes(4, "big") + b"NOPE")
-    with pytest.raises(ValueError, match="not a wsx envelope"):
+    await inbound.put(struct.pack("!4sBII", b"NOPE", 1, 2, 0) + b"{}")
+    with pytest.raises(ValueError, match="invalid frame magic"):
         await stream.read()
 
 
@@ -233,8 +251,10 @@ async def test_oversized_frame_is_refused_both_ways():
     outbound: asyncio.Queue[bytes | None] = asyncio.Queue()
     stream = LocalFrameStream(inbound, outbound, max_size=64)
     with pytest.raises(ValueError, match="exceeds max_size"):
-        await stream.write(Frame(method=EVENT_METHOD, path="/big", data={"blob": "x" * 200}))
-    await inbound.put((200).to_bytes(4, "big") + b"x" * 200)
+        await stream.write(
+            control_frame(method=EVENT_METHOD, path="/big", data={"blob": "x" * 200})
+        )
+    await inbound.put(struct.pack("!4sBII", b"GNRF", 1, 10, 190) + b"x" * 200)
     with pytest.raises(ValueError, match="exceeds max_size"):
         await stream.read()
 
@@ -250,3 +270,22 @@ async def test_closing_one_end_ends_both_reads():
     await asyncio.wait_for(channel.wait_closed(), timeout=5.0)
     with pytest.raises(ConnectionError):
         await channel.send(path="/late")
+
+
+async def test_local_queue_admission_is_bounded_and_close_never_waits():
+    inbound, outbound = asyncio.Queue(), asyncio.Queue()
+    stream = LocalFrameStream(inbound, outbound)
+    for _ in range(16):
+        await stream.write(Frame(payload=b"opaque"))
+    with pytest.raises(ConnectionError, match="not sent"):
+        await stream.write(Frame(payload=b"overflow"))
+    assert outbound.qsize() == 16
+    await asyncio.wait_for(stream.close(), 1)
+
+
+async def test_local_queue_limit_is_configurable():
+    inbound, outbound = asyncio.Queue(), asyncio.Queue()
+    stream = LocalFrameStream(inbound, outbound, max_queue_size=1)
+    await stream.write(Frame(payload=b"first"))
+    with pytest.raises(ConnectionError, match="not sent"):
+        await stream.write(Frame(payload=b"second"))

@@ -30,6 +30,9 @@ from typing import Any
 
 import pytest
 
+from tests.spa.orchestration.frame_helpers import control_frame, read_http_request, http_reply
+from genro_asgi.http_record import HttpRecord
+
 from genro_asgi_multiworker_spa.orchestration import (
     AssignmentRefused,
     GroupHandler,
@@ -77,6 +80,11 @@ class ConnectorDouble:
             raise self.failure
         return self.reply
 
+    async def call_frame(self, frame, timeout=None):
+        data = {**{k: v for k, v in frame.info.items() if k not in ("format", "cid")},
+                "http": read_http_request(frame)}
+        return http_reply(frame, await self.call(frame.path, data, timeout))
+
 
 @pytest.fixture
 def commander(short_root):
@@ -109,13 +117,14 @@ def worker_at(group, name: str, occupancy_percent: float = 10.0, **wire: Any) ->
 
 def request(path: str = "/invoices") -> dict[str, Any]:
     """The http form as the front packs it, minus the cid the chain adds."""
-    return {
+    return control_frame(method="CALL", path=SITE_PATH_PREFIX + path, data={"http": {
         "method": "GET",
         "path": path,
         "query_string": "",
         "headers": [["host", "site.example:8080"]],
         "body": "",
-    }
+    }})
+
 
 
 async def test_a_newcomer_travels_anonymous_and_the_site_baptises(commander, group):
@@ -125,14 +134,14 @@ async def test_a_newcomer_travels_anonymous_and_the_site_baptises(commander, gro
 
     reply = await commander.serve_request(None, request(), hold_timeout=HOLD_TIMEOUT)
 
-    assert reply == {"result": {"status": 200}}
+    assert HttpRecord().decode_response(reply.payload)["status"] == 200
     # Nothing was minted: the request travelled anonymous, to the reception.
     assert commander.connection_user_map == {}
     assert commander.user_map == {}
     path, payload = worker_handler.connector.calls[0]
     assert path == f"{SITE_PATH_PREFIX}/invoices"
     assert payload == {
-        "http": {**request(), "cid": None},
+        "http": {**read_http_request(request()), "cid": None},
         "identity": None,
         "user_frozen": False,
     }
@@ -235,7 +244,7 @@ async def test_a_request_for_a_user_on_hold_leaves_the_moment_he_is_home(command
 
     commander.mark_user_adopted("mario")
 
-    assert await serving == {"result": {"status": 200}}
+    assert HttpRecord().decode_response((await serving).payload)["status"] == 200
     assert commander.counters["requests_refused"] == 0
 
 

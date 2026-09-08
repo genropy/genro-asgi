@@ -30,6 +30,8 @@ from typing import Any
 
 import pytest
 
+from tests.spa.orchestration.frame_helpers import http_reply
+
 from genro_asgi import AsgiServer
 from genro_asgi_multiworker_spa.spa_app import ORCHESTRATION_ROOT, SpaApplication
 from genro_asgi.config.builder import AsgiConfigBuilder
@@ -64,13 +66,14 @@ class QuietCommander(SpaCommander):
         self, cid: str | None, http: dict[str, Any], *, hold_timeout: float
     ) -> dict[str, Any]:
         """What the hosted site answers, so a fall-through is visible from outside."""
-        return {
+        return http_reply(http, {
             "result": {
                 "status": 200,
                 "headers": [],
                 "body": base64.b64encode(SITE_BODY).decode(),
             }
-        }
+        })
+
 
 
 class ProfiledFront(SpaApplication):

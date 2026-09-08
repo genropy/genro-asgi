@@ -32,6 +32,7 @@ import time
 from typing import Any
 
 import pytest
+from tests.spa.orchestration.frame_helpers import read_control
 from genro_bag import Bag
 
 from genro_asgi_multiworker_spa.orchestration import (
@@ -167,7 +168,7 @@ async def test_an_avatar_switch_does_not_strand_the_wait_on_the_person_who_stays
     worker.change_connection_user("a1b2", "carlo")
     await worker.execute_transfers()
     for announcement in wire.calls(ANNOUNCE_OP_PATH):
-        worker_handler.read_envelope(announcement.data)
+        worker_handler.read_envelope(read_control(announcement))
 
     assert vertex.user_map["mario"]["on_hold"] is None
     assert vertex.user_hold_event_map == {}
@@ -289,7 +290,7 @@ async def test_a_deposit_that_refuses_leaves_everything_alive(worker, monkeypatc
     assert worker.connection_register.get("a1b2")["user"] == "mario"
     assert "mario" in worker.user_register
     assert worker.page_register.get("page-0") is not None
-    assert guest not in worker.user_register    # it became mario's at the login
+    assert guest not in worker.user_register  # it became mario's at the login
     assert worker.freeze_failures == 1
     assert events_of(worker, "user_frozen") == []
 
@@ -324,7 +325,7 @@ async def test_a_folder_that_never_comes_free_leaves_everything_alive_too(tmp_pa
     assert worker.connection_register.get("a1b2")["user"] == "mario"
     assert "mario" in worker.user_register
     assert worker.page_register.get("page-0") is not None
-    assert guest not in worker.user_register    # it became mario's at the login
+    assert guest not in worker.user_register  # it became mario's at the login
     assert worker.freeze_failures == 1
     assert events_of(worker, "user_frozen") == []
     # And nothing of the attempt is left behind to block what comes next.

@@ -23,7 +23,7 @@ delivered, or from the fields somebody is about to send::
     await socket.send_text(reply.encode())
 
 The prefix is what tells a WSX message from any other text on the socket, and
-the fields are the ones the channel's own ``Frame`` already carries, so a
+the routing fields parallel the internal channel's info, so a
 message copies into a CALL one field at a time.
 
 **A request carries ``method`` and ``path``; an answer carries ``status``.**
@@ -34,11 +34,12 @@ message the server sends by itself never has one. ``reply_path`` is where a
 page asks to be called back when the work is done. A field nobody set does not
 reach the wire — a null there would read as a value.
 
-**``data`` is a value here and a string on the wire.** What travels inside the
-JSON body is the TYTX string ``to_tytx(value, "json")`` produces, and reading
-an envelope hydrates it back: Decimals, dates and Bags survive, in both
-languages. Whoever writes a client reads ``data`` as a string to hydrate, never
-as a nested object to walk.
+**The application data stays serialized while routing.** The outer JSON
+contains a TYTX string. WsxEnvelope parses only that JSON and keeps an explicit
+SerializedWsxPayload. Its data property is an opt-in consumer decoder; routing
+uses serialized_data. Value constructors and public send_message still serialize
+ordinary Python values. Application endpoints adapt XML/msgpack responses to
+browser JSON, while forwarding responses travel without application codecs.
 
 **A text that is not a WSX message raises.** So does a body that is not JSON,
 and one that is not an object. All three are the same thing to a reader — this
@@ -69,11 +70,11 @@ import json
 import logging
 from typing import Any
 
-from genro_tytx import from_tytx, to_tytx
+from genro_tytx import to_tytx
 
 from .application import BaseApplication
 from .exceptions import HTTPException, WebSocketDisconnect
-from .media_types import TRANSPORT_MIME
+from .wsx_payload import SerializedWsxPayload, WsxResponseEncoder
 from .middleware.session import SessionMiddleware
 from .types import Receive, Scope, Send
 from .websocket import WebSocket
@@ -112,6 +113,7 @@ class WsxEnvelope:
         page_id: str | None = None,
         reply_path: str | None = None,
         status: int | None = None,
+        serialized_data: SerializedWsxPayload | None = None,
     ) -> None:
         """Initialize this instance.
 
@@ -137,14 +139,25 @@ class WsxEnvelope:
             page_id = fields.get("page_id")
             reply_path = fields.get("reply_path")
             status = fields.get("status")
-            data = from_tytx(fields["data"], "json") if fields.get("data") is not None else None
+            serialized_data = SerializedWsxPayload(fields.get("data"))
+        for name, value in (("id", id), ("method", method), ("path", path),
+                            ("page_id", page_id), ("reply_path", reply_path)):
+            if value is not None and (not isinstance(value, str) or len(value) > 4096):
+                raise ValueError(f"invalid WSX {name}")
         self.id = id
         self.method = method
         self.path = path
-        self.data = data
+        self.serialized_data = serialized_data or SerializedWsxPayload(
+            to_tytx(data, "json") if data is not None else None
+        )
         self.page_id = page_id
         self.reply_path = reply_path
         self.status = status
+
+    @property
+    def data(self) -> Any:
+        """Read a value at an explicit consumer; routers use serialized_data."""
+        return self.serialized_data.decode()
 
     def read_text(self, text: str) -> dict[str, Any]:
         """The JSON body of one WSX message.
@@ -181,8 +194,8 @@ class WsxEnvelope:
             value = getattr(self, name)
             if value is not None:
                 body[name] = value
-        if self.data is not None:
-            body["data"] = to_tytx(self.data, "json")
+        if self.serialized_data.text is not None:
+            body["data"] = self.serialized_data.text
         return WSX_PREFIX + json.dumps(body)
 
     def __repr__(self) -> str:
@@ -369,7 +382,13 @@ class WsxConnection:
         except Exception as failure:
             self._logger.exception("Websocket: message %s failed", envelope.path)
             return 500, f"{type(failure).__name__}: {failure}"
-        status, data = self._answer_of(collected)
+        try:
+            status, data = self._answer_of(
+                collected, endpoint=not getattr(app, "forwards_payloads", False)
+            )
+        except (TypeError, ValueError) as failure:
+            self._logger.exception("Websocket: invalid application reply")
+            return 500, f"invalid application reply: {failure}"
         if status == 200 and target.get("path") == OPENCHANNEL_PATH and envelope.page_id:
             # The application said yes: now the page speaks on THIS socket.
             # Bound only after the answer, so a page that was refused — not
@@ -391,7 +410,8 @@ class WsxConnection:
             "type": "http",
             "method": "WSK",
             "path": envelope.path or "/",
-            "headers": list(self.socket.scope.get("headers") or [])
+            "headers": [(n, v) for n, v in self.socket.scope.get("headers", [])
+                        if n.lower() not in (b"content-type", b"content-length", b"x-tytx-transport")]
             + [(b"content-type", b"application/json"), (b"x-tytx-transport", b"json")],
             "auth": self.avatar,
             "session": self.session,
@@ -404,8 +424,7 @@ class WsxConnection:
 
     def _request_body(self, envelope: WsxEnvelope) -> Receive:
         """A ``receive`` that hands the message's data over as the request body."""
-        encoded = to_tytx(envelope.data, "json") if envelope.data is not None else b""
-        body = encoded if isinstance(encoded, bytes) else encoded.encode("utf-8")
+        body = (envelope.serialized_data.text or "").encode("utf-8")
 
         async def receive() -> Any:
             return {"type": "http.request", "body": body, "more_body": False}
@@ -422,7 +441,7 @@ class WsxConnection:
 
         return send
 
-    def _answer_of(self, collected: list[Any]) -> tuple[int, Any]:
+    def _answer_of(self, collected: list[Any], *, endpoint: bool = True) -> tuple[int, Any]:
         """The status and the data an application's answer carried.
 
         Returns:
@@ -442,22 +461,20 @@ class WsxConnection:
                 status = message["status"]
                 content_type = dict(message.get("headers") or {}).get(b"content-type", b"").decode()
         body = b"".join(m.get("body", b"") for m in collected if m["type"] == "http.response.body")
+        if endpoint:
+            return status, WsxResponseEncoder().encode(body, content_type)
         if not body:
-            return status, None
-        transport = next((name for name in TRANSPORT_MIME if name in content_type), None)
-        if transport == "msgpack":
-            return status, from_tytx(body, transport="msgpack")
-        if transport is not None:
-            return status, from_tytx(body.decode("utf-8"), transport=transport)
-        try:
-            return status, body.decode("utf-8")
-        except UnicodeDecodeError:
-            return status, body
+            return status, SerializedWsxPayload(None)
+        if "json" not in content_type:
+            raise ValueError("forwarded WSK reply was not adapted at its application endpoint")
+        return status, SerializedWsxPayload(body.decode("utf-8"))
 
     async def _answer(self, envelope: WsxEnvelope, status: int, data: Any) -> None:
         """Write the answer to one message back onto the socket."""
         if not self.socket.connected:
             return
         await self.socket.send_text(
-            WsxEnvelope(id=envelope.id, status=status, data=data).encode()
+            WsxEnvelope(id=envelope.id, status=status,
+                        **({"serialized_data": data} if isinstance(data, SerializedWsxPayload)
+                           else {"data": data})).encode()
         )

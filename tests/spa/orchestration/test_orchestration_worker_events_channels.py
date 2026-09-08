@@ -34,6 +34,8 @@ from typing import Any
 
 import pytest
 
+from tests.spa.orchestration.frame_helpers import control_frame, read_control
+
 from genro_asgi.channel.frame import Frame
 from genro_asgi_multiworker_spa.orchestration import FreezeHandler, SpaWorker
 from genro_asgi_multiworker_spa.orchestration.worker_connector import (
@@ -89,7 +91,7 @@ def http_call(path: str) -> dict[str, Any]:
 
 
 def events_of(frame: Frame) -> list[str]:
-    return [event["op"] for event in (frame.data or {}).get(ENVELOPE_SLOT_WORKER_EVENTS) or ()]
+    return [event["op"] for event in (read_control(frame) or {}).get(ENVELOPE_SLOT_WORKER_EVENTS) or ()]
 
 
 @pytest.fixture
@@ -108,7 +110,7 @@ async def worker(deposit):
 
 async def serve(worker: SpaWorker, path: str, data: Any) -> Frame:
     """Hand the worker one CALL the way the wire does; return the frame, not the answer."""
-    frame = Frame(method=CALL_METHOD, path=path, data=data)
+    frame = control_frame(method=CALL_METHOD, path=path, data=data)
     worker.handle_frame(frame)
     return frame
 
@@ -179,7 +181,7 @@ async def test_the_transfer_cycle_announces_each_freeze_with_a_call_of_its_own(w
 
     announced = wire.calls(ANNOUNCE_OP_PATH)
     assert [events_of(frame) for frame in announced] == [["user_frozen"]]
-    assert ENVELOPE_SLOT_WORKER_SNAPSHOT in announced[0].data
+    assert ENVELOPE_SLOT_WORKER_SNAPSHOT in read_control(announced[0])
     assert wire.replies() == []
     assert deposit.read_user_register_item("mario") is not None
 
@@ -201,3 +203,18 @@ async def test_the_vertex_folds_an_announcement_like_a_reply(worker_commander_la
     await wait_for(lambda: vertex.user_map["mario"]["frozen"] is True)
     assert lane.worker_handler.group_handler.user_worker_map["mario"] is None
     assert "mario" not in lane.worker_handler.hosted_users
+
+
+async def test_reply_encoding_failure_answers_and_keeps_its_events(worker):
+    """An invalid endpoint result must not consume the slot and strand the caller."""
+    async def answer(frame):
+        worker.add_connection(CID)
+        await worker.send_reply(frame, result=object())
+
+    worker.answer_call = answer
+    frame = control_frame(method=CALL_METHOD, path="/invalid-result", data={})
+    await worker._guarded_call(frame)
+    reply = worker.stream.reply_to(frame.id)
+    assert "invalid control payload" in reply.info["error"]
+    assert events_of(reply) == ["new_user", "new_connection"]
+    assert worker._request_slot_var.get() is None

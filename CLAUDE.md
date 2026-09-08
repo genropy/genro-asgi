@@ -124,7 +124,7 @@ connection reads what is its own to read. The way back is
 `SpaWorker.send_message(page_id, path, data)`, callable from a pool thread:
 the CALL climbs to the `websocket` branch the front attached under
 `CommanderOperations`, which validates the page against the same map and writes
-through `BaseServer.send_message`. A handler that needs the request itself
+through `BaseServer.send_serialized_message`, after serializing at the worker. A handler that needs the request itself
 declares `_request`, and the injection now lives in
 `RoutedApplication.bind_kwargs` for every routed application, not in the
 `_server` app alone.
@@ -134,8 +134,9 @@ core (landed 2026-09-07, #68 phase 4a).** There is ONE seam, `SpaWorker.asgi_app
 and one road out of `_serve_request`: the property `hosted_app_seam`, which
 returns `AsgiSeam` on the assigned application, or `AsgiSeam(WsgiSeam(wsgi_app,
 worker))` when a consumer took the WSGI shortcut — so `_serve_request` does not
-know which of the two is filled. `AsgiSeam` builds the ASGI scope from the same
-`http` dict the CALL always carried (`genro.identity` always, `genro.page_id`
+know which of the two is filled. The channel CALL carries an opaque `HttpRecord` plus trusted routing info.
+Only the worker opens the record into the endpoint's `http` dict; `AsgiSeam`
+builds the ASGI scope from that dict (`genro.identity` always, `genro.page_id`
 and `genro.reply_path` only when the message brought them), hands the body over
 whole in one `http.request` and then `http.disconnect`, and shapes the answer
 back into `{"status", "headers", "body"}` — the shape the WSGI road produced
@@ -183,6 +184,66 @@ synchronous (`StorageMixin` calls `set_sync()`, tests pin the same) — never
 `await` a storage node call here. Config comes from the config builder + CLI;
 `OpenApiApplication`, `McpApplication` and the tasks subsystem (scheduler,
 spool, executor) mount like any other app.
+
+### Opaque internal transport (issue #72)
+
+`Frame` is routing `info` plus opaque `payload: bytes`. The `GNRF` v1 header
+(`!4sBII`) bounds JSON info plus payload to a configurable 256 MiB before
+reading them, with throttled attention warnings above 1 MiB. `FrameCodec` is shared by socket and local queues and imports no
+application codec. Control endpoints explicitly use `ControlPayload`; HTTP
+endpoints use `HttpRecord` (bounded metadata, ordered duplicate headers,
+reversible path/query bytes and an unencoded body). The SPA commander routes
+without opening HTTP bytes, and stamps authoritative identity/freeze metadata.
+Worker events and snapshots travel in reply info and are folded before resolving
+the caller. The worker page gate checks channel readiness and sequential ordering;
+it does not compare the inbound cookie with the connection name owned by the site.
+
+Browser WSX remains `WSX://` JSON with a serialized JSON TYTX data field.
+`WsxEnvelope.serialized_data` is the forwarding view; `.data` explicitly decodes
+for consumers. The actual application endpoint converts XML/msgpack replies
+when necessary; SPA and remote fronts wrap already serialized JSON. Worker
+push serializes before the channel, and `send_serialized_message` forwards it
+without hydration. Value-oriented `send_message` remains available.
+
+`RemoteApplication` is a normal mount pointing to a generic application runner
+over private UDS or loopback TCP. A factory spawns an owned fresh interpreter;
+connect-only mode neither starts nor stops the peer.
+The runner's explicit `--allow-network-listener` option permits a container's
+`0.0.0.0` bind; clients retain loopback-only destinations. The Docker PoC publishes
+the container port onto host loopback and uses the unchanged connect-only front.
+Its image carries installed core code and the same OpenAPI app, runs as UID 10001,
+and probes readiness through GNRF; Compose owns stop/restart. An optional ARM VM
+override masks OpenSSL CPU features only inside this example's container.
+ `RemoteConnection` bounds
+calls, scopes pending replies to a connection, and never replays after loss,
+timeout or cancellation. Buffered HTTP/WSK is supported with bounded bodies;
+streaming/SSE, raw websocket and remote SPA group orchestration are separate
+work. See `docs/internal/opaque_transport.md` and `examples/remote_openapi/` for
+configuration, acceptance evidence and coordinated upgrade/rollback.
+
+### Buffered transport capacity (issue 72 follow-up, 2026-09-08)
+
+Channel metadata and payload share one configurable ceiling, 256 MiB by default;
+there is no separate 64 KiB metadata cap. `GNR_ASGI_FRAME_MAX_BYTES`,
+`GNR_ASGI_FRAME_WARN_BYTES` (1 MiB), and
+`GNR_ASGI_FRAME_WARN_INTERVAL_SECONDS` (60) configure bounded transport and
+throttled size warnings. HTTP body limits follow the frame policy unless
+`GNR_ASGI_HTTP_MAX_BODY_BYTES` sets a separate cap. All peers need matching
+settings before startup. A locally oversized SPA result keeps its slot until
+the correlated error reply delivers its events and snapshot; the channel stays
+alive if that essential envelope fits. Incoming over-limit frames and uncertain
+writes still fail the connection. See `docs/internal/opaque_transport.md`.
+
+### Remote runner ownership repair (issue 72 review C1/C2)
+
+An owned mount verifies a fresh launch identifier on every connection before
+sending application traffic. The runner consumes the private launch environment
+identifier before creating the application. Readiness from an unrelated runner
+fails startup; only the spawned child is stopped. Connect-only mode stays
+operator-directed. UDS listeners refuse all preexisting entries, bind an explicit
+socket without asyncio's unlink/rebind behavior, and remove only the recorded
+socket device/inode on cleanup. No stale-path reclamation or parent-SIGKILL
+supervision is introduced. See `docs/internal/opaque_transport.md`.
 
 ### The SPA machine (`genro_asgi_multiworker_spa/`)
 
@@ -531,8 +592,8 @@ hosts `worker_dispatcher` (`WorkerDispatcher`) with the branch `group` =
 `GroupOrders` — who ISSUES the order: `ping`, `quit`, `drop_user`,
 `drop_connection`, `freeze_user` — and the branch `commander` = `CommanderOrders`
 (`observe`, `census`, `eval`); `answer_call` resolves the
-path, awaits a coroutine, and sends the one REPLY, result or error; the http
-form is told by its payload and stays out of the tree. `quit` flags everybody
+path, awaits a coroutine, and sends the one REPLY, result or error; HTTP
+is selected by the info format and stays out of the control tree. `quit` flags everybody
 and puts the departure on a task of its own, so the REPLY is on the wire first
 (`SpaWorker.begin_quit`). `child_stub` resolves on a tree of its own and is no
 longer taught op by op.
@@ -570,4 +631,5 @@ commits, still to be entered in the register). Decision registers:
 
 **All general policies are inherited from the parent document: [meta-genro-modules CLAUDE.md](https://github.com/softwellsrl/meta-genro-modules/blob/main/CLAUDE.md)**
 
-**Last Updated**: 2026-09-07
+**Last Updated**: 2026-09-08
+

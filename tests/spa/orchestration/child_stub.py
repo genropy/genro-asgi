@@ -55,6 +55,8 @@ from typing import Any
 
 from genro_routes import RoutingClass, route
 
+from tests.spa.orchestration.frame_helpers import control_frame, read_control
+
 from genro_asgi.channel.frame import REGISTER_METHOD, REGISTER_PATH, Frame, FrameStream
 from genro_asgi_multiworker_spa.orchestration import FreezeHandler
 from genro_asgi_multiworker_spa.orchestration.worker_connector import (
@@ -148,7 +150,7 @@ class ChildStub(RoutingClass):
     async def present(self) -> None:
         """Say pid and configuration, and wait for the parent's answer."""
         await self.stream.write(
-            Frame(
+            control_frame(
                 method=REGISTER_METHOD,
                 path=REGISTER_PATH,
                 data={
@@ -174,10 +176,10 @@ class ChildStub(RoutingClass):
         Empties ``worker_events``: they are delivered once.
         """
         if frame.method == CALL_METHOD and self.answering:
-            result = self.route.node(frame.path)(**(frame.data or {}))
+            result = self.route.node(frame.path)(**(read_control(frame) or {}))
             worker_events, self.worker_events = self.worker_events, []
             await self.stream.write(
-                Frame(
+                control_frame(
                     id=frame.id,
                     method=REPLY_METHOD,
                     path=frame.path,
