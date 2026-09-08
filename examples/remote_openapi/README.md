@@ -58,3 +58,12 @@ Open `http://127.0.0.1:8764/demo/_meta/docs` for Swagger. The schema's server UR
 is `/demo`, so its operations use the same external mount as ordinary requests.
 `/_meta/` remains the public metadata subtree; its explicit landing page is
 `/demo/_meta/index`. Stop the frontend with Ctrl-C; an owned child stops with it.
+
+
+## Docker
+
+The same application can run in a container while this frontend stays on the
+host. See [DOCKER.md](DOCKER.md) for build/start commands, the automated live
+HTTP/WSX/restart proof, the optional ARM VM compatibility override, and cleanup.
+The Docker example defaults to frontend port 18764 and published app port 18765,
+so it can run beside the ordinary TCP example above.

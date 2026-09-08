@@ -46,8 +46,10 @@ links; no session, Avatar object, Bag data or pickle. Endpoint restores an Avata
 Generic remote hosting initially buffers bounded messages, rejects SSE, raw
 websocket and streaming response modes explicitly, and has bounded request,
 startup and shutdown times. Existing local streaming/raw websocket is unchanged.
-TCP listener is loopback-only; public authenticated/protected links need a later
-explicit design. Spawn ownership is separate from connect-only lifecycle.
+TCP defaults to loopback-only. The runner may explicitly opt into a network
+listener with `--allow-network-listener` for a private container network; the
+client still accepts only loopback destinations. Docker publishes the container
+port to host loopback. Public authenticated/protected links need a later design. Spawn ownership is separate from connect-only lifecycle.
 
 ## Browser WSX
 
@@ -156,3 +158,15 @@ uses its configured pending-call bound for the same purpose. Cancellation while
 a write is draining is conservatively treated as possibly sent. Ordinary SPA
 cancellation does not kill its worker; only protocol failure, link loss or the
 explicit bounded-capacity failure closes the wire.
+
+
+## Docker process placement
+
+`examples/remote_openapi/DOCKER.md` demonstrates the same app code inside a
+non-root Linux container and the ordinary frontend outside it. Compose builds
+from an explicit source allowlist and health-checks the GNRF readiness route.
+The opt-in network listener is a bind option only; it grants no remote process
+ownership or peer authentication. The proof script checks real HTTP and WSX,
+1MiB raw bytes, failure isolation and reconnect after Docker stops/starts the
+app. An optional ARM compatibility override is documented separately from the
+portable base configuration.

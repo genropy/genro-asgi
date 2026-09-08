@@ -202,7 +202,14 @@ without hydration. Value-oriented `send_message` remains available.
 
 `RemoteApplication` is a normal mount pointing to a generic application runner
 over private UDS or loopback TCP. A factory spawns an owned fresh interpreter;
-connect-only mode neither starts nor stops the peer. `RemoteConnection` bounds
+connect-only mode neither starts nor stops the peer.
+The runner's explicit `--allow-network-listener` option permits a container's
+`0.0.0.0` bind; clients retain loopback-only destinations. The Docker PoC publishes
+the container port onto host loopback and uses the unchanged connect-only front.
+Its image carries installed core code and the same OpenAPI app, runs as UID 10001,
+and probes readiness through GNRF; Compose owns stop/restart. An optional ARM VM
+override masks OpenSSL CPU features only inside this example's container.
+ `RemoteConnection` bounds
 calls, scopes pending replies to a connection, and never replays after loss,
 timeout or cancellation. Buffered HTTP/WSK is supported with bounded bodies;
 streaming/SSE, raw websocket and remote SPA group orchestration are separate

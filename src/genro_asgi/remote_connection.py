@@ -33,9 +33,9 @@ class RemoteCallCancelled(asyncio.CancelledError):
 
 
 class RemoteAddress:
-    """A configured socket address; this initial TCP mode permits loopback only."""
+    """A configured address; non-loopback binding requires explicit listener opt-in."""
 
-    def __init__(self, address: str) -> None:
+    def __init__(self, address: str, *, allow_network_listener: bool = False) -> None:
         self.address = address
         transport, _, location = address.partition(":")
         self.path = None
@@ -50,7 +50,7 @@ class RemoteAddress:
                 port_number = int(port)
             except ValueError:
                 raise ValueError("TCP address must name a loopback IP and port") from None
-            if not valid or not 0 <= port_number <= 65535:
+            if (not valid and not allow_network_listener) or not 0 <= port_number <= 65535:
                 raise ValueError("remote TCP proof requires a loopback IP and valid port")
             self.host, self.port = host, port_number
         else:
@@ -59,6 +59,8 @@ class RemoteAddress:
     async def connect(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         if self.path is not None:
             return await asyncio.open_unix_connection(self.path)
+        if not ipaddress.ip_address(self.host).is_loopback:
+            raise ValueError("remote clients require a loopback destination")
         return await asyncio.open_connection(self.host, self.port)
 
     async def listen(self, callback: Any) -> asyncio.Server:

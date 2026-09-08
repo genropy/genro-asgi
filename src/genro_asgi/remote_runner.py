@@ -33,7 +33,7 @@ class RemoteApplicationRunner:
 
     def __init__(self, factory: str, address: str, *, mount: str = "demo",
                  shutdown_timeout: float = 5.0, request_timeout: float = 30.0,
-                 max_calls: int = 16) -> None:
+                 max_calls: int = 16, allow_network_listener: bool = False) -> None:
         if shutdown_timeout <= 0 or request_timeout <= 0 or max_calls < 1:
             raise ValueError("timeouts and max_calls must be positive")
         module, separator, name = factory.partition(":")
@@ -44,7 +44,7 @@ class RemoteApplicationRunner:
         if isinstance(self.application, BaseApplication):
             self.application.mount = mount
             self.server = BaseServer(applications=[self.application])
-        self.address = RemoteAddress(address)
+        self.address = RemoteAddress(address, allow_network_listener=allow_network_listener)
         self.mount = mount
         self.shutdown_timeout = shutdown_timeout
         self.request_timeout = request_timeout
@@ -191,10 +191,15 @@ class RemoteRunnerCommand:
         parser.add_argument("--shutdown-timeout", type=float, default=5)
         parser.add_argument("--request-timeout", type=float, default=30)
         parser.add_argument("--max-calls", type=int, default=16)
+        parser.add_argument(
+            "--allow-network-listener", action="store_true",
+            help="Allow a non-loopback listener, e.g. 0.0.0.0 inside a private container network",
+        )
         options = parser.parse_args()
         asyncio.run(RemoteApplicationRunner(options.factory, options.address,
                     mount=options.mount, shutdown_timeout=options.shutdown_timeout,
-                    request_timeout=options.request_timeout, max_calls=options.max_calls).run())
+                    request_timeout=options.request_timeout, max_calls=options.max_calls,
+                    allow_network_listener=options.allow_network_listener).run())
 
 
 if __name__ == "__main__":
