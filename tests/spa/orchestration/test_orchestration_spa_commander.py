@@ -31,7 +31,6 @@ import pickle
 
 import pytest
 
-from genro_bag import Bag
 
 from genro_asgi_multiworker_spa.orchestration import SpaCommander, UserOnHold
 from genro_asgi_multiworker_spa.orchestration import FreezeHandler
@@ -271,8 +270,7 @@ def test_one_process_has_one_vertex_and_the_log_is_its_own(short_root):
 
 def test_the_machine_starts_running_and_holds_the_master_of_the_store(commander):
     assert commander.state == "running"
-    assert isinstance(commander.global_register, Bag)
-    assert commander.global_register.keys() == []
+    assert commander.global_register == {}
 
 
 def test_the_concession_is_this_servers_share_of_the_whole_machine(commander, monkeypatch):
@@ -460,7 +458,7 @@ def photographed(commander, user="mario", cid="cid-a", ts=None):
             "user_map": {user: dict(commander._new_row(), frozen=True, group="standard")},
             "connection_user_map": {cid: user},
             "page_connection_map": {},
-            "global_register": Bag(),
+            "global_register": {},
             "quit_ts": 0.0,
         },
         writer="vertex",

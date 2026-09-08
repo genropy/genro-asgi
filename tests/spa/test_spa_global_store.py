@@ -14,61 +14,45 @@
 
 """The global store's own classes, tested bare.
 
-The store lives ONLY on the commander — there are no replicas — and the
-whole surface (store_set/store_del/store_get on the lane, the lock grant that
-carries the true master state, the release that applies exactly what was
-drained) is pinned end to end by the orchestration contract tests
-(``tests/spa/orchestration/test_contract_phase10_global_store.py`` and
-``test_orchestration_store_get.py``). What belongs here is the module
-itself: a ``CapturingGlobalStore`` captures what changed, a ``GlobalStore``
-applies a drained batch faithfully.
+The store lives ONLY on the commander — one dictionary behind one FIFO lock —
+and the whole surface (get/set/delete on the lane, the turn whose grant carries
+the selected value and whose release publishes it whole) is pinned end to end by
+the orchestration contract tests (``tests/spa/orchestration/test_contract_global_store_dict.py``,
+``test_contract_phase10_global_store.py``, ``test_orchestration_store_get.py``).
+What belongs here is the lock itself: who holds the turn, and what a release
+for a turn no longer in force must not do.
 """
 
 from __future__ import annotations
 
-from genro_tytx import from_tytx, to_tytx
-
-from genro_asgi_multiworker_spa.global_store import CapturingGlobalStore, GlobalStore
+from genro_asgi_multiworker_spa.global_store import GlobalStoreLock
 
 
-def test_a_store_applies_a_drained_batch_without_the_forwarding_residue() -> None:
-    """The global store has one writer, so there is no second instant to carry."""
-    master = CapturingGlobalStore()
-    master.set("gnr.a", 1)
-    master.bag.set_item("gnr.b", 2, _attributes={"tag": "x"})
+async def test_the_turn_records_its_request_worker_and_key() -> None:
+    lock = GlobalStoreLock()
+    await lock.acquire("standard_0001", "r1", "config")
 
-    applied = GlobalStore()
-    applied.apply_changes(master.drain())
+    assert lock.holds("r1") and lock.held_by("standard_0001") and lock.holder_key == "config"
+    assert not lock.holds("r2") and not lock.held_by("standard_0002")
 
-    assert applied.bag["gnr.a"] == 1
-    assert applied.bag["gnr.b"] == 2
-    assert applied.bag.get_attr("gnr.b") == {"tag": "x"}
-    assert "_original_ts" not in applied.bag.get_attr("gnr.b")
+    lock.release()
+    assert lock.holder is None and lock.holder_worker is None and lock.holder_key is None
+    assert not lock.lock.locked()
 
 
-def test_a_delete_removes_the_node_rather_than_nulling_it() -> None:
-    master = CapturingGlobalStore()
-    master.set("gnr.a", 1)
-    applied = GlobalStore()
-    applied.apply_changes(master.drain())
+async def test_a_whole_store_turn_has_no_key() -> None:
+    lock = GlobalStoreLock()
+    await lock.acquire("standard_0001", "r1")
 
-    master.delete("gnr.a")
-    applied.apply_changes(master.drain())
-
-    assert applied.bag["gnr.a"] is None
-    assert "a" not in applied.bag["gnr"].keys()
+    assert lock.holder_key is None
+    lock.release()
 
 
-def test_a_working_copy_captures_nothing_of_its_own_hydration() -> None:
-    """The grant's order, here too: hydrate the Bag first, attach the collector after."""
-    master = CapturingGlobalStore()
-    master.set("gnr.a", 1)
-    master.drain()
-    hydrated = from_tytx(to_tytx(master.bag, "json"), "json")
+async def test_a_release_for_a_turn_no_longer_in_force_is_told_apart() -> None:
+    """The commander asks ``holds`` before it touches anything: a stale id says no."""
+    lock = GlobalStoreLock()
+    await lock.acquire("standard_0001", "current")
 
-    copy = CapturingGlobalStore(hydrated)
-
-    assert copy.bag["gnr.a"] == 1
-    assert copy.drain() == []
-    copy.bag.set_item("gnr.b", 2)
-    assert [change["key"]["path"] for change in copy.drain()] == ["gnr.b"]
+    assert lock.holds("stale") is False
+    assert lock.holds("current") is True
+    lock.release()

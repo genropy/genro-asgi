@@ -32,7 +32,7 @@ The helpers read the tree by two rules, and the grammar decides which applies:
 
 Section → constructor kwarg:
 
-- ``server`` → ``host``/``port``/``external_url``/``max_threads``, its
+- ``server`` → ``host``/``port``/``external_url``/``max_threads``/``shutdown_timeout_seconds``, its
   ``session`` child → ``session_ttl``, its ``tasks`` child → ``tasks``.
 - ``middleware`` → ``middleware`` ({name: bool | dict} switches).
 - ``authentication`` → ``admin_password``/``users``/``tokens`` (the store
@@ -80,7 +80,9 @@ class ConfigurationHandler(ConfigHandler):
         ``origins`` of a handshake are written as one comma-separated string in
         a recipe and reach the server as the list it reads.
         """
-        kwargs = self.closed_attrs("server", "host", "port", "external_url", "max_threads")
+        kwargs = self.closed_attrs(
+            "server", "host", "port", "external_url", "max_threads", "shutdown_timeout_seconds"
+        )
         if self.node("server.session") is not None:
             kwargs["session_ttl"] = self("server.session.ttl")
         if self.node("server.websocket") is not None:

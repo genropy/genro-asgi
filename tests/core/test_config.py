@@ -299,6 +299,39 @@ class TestSession:
         assert server.session_store.create().meta["ttl"] == 1234
 
 
+class TestShutdownTimeout:
+    async def test_recipe_shutdown_timeout_reaches_uvicorn(self, monkeypatch) -> None:
+        # One endless response (an SSE stream a client never closes) used to hold
+        # uvicorn's shutdown for ever, so the lifespan shutdown never ran and the
+        # applications were never stopped (measured 2026-09-08). The bound is a
+        # server setpoint and travels to uvicorn as timeout_graceful_shutdown.
+        class BoundedConfig(AsgiConfigBuilder):
+            def main(self, root: Any) -> None:
+                cfg = root.configuration()
+                cfg.server(host="127.0.0.1", port=8000, shutdown_timeout_seconds=2)
+                cfg.applications().application(code="shop", mount="", app_class=ShopApp)
+
+        captured: list[Any] = []
+
+        class XT_Server:
+            def __init__(self, config: Any) -> None:
+                captured.append(config)
+
+            def run(self) -> None:
+                pass
+
+        import genro_asgi.server as server_module
+
+        monkeypatch.setattr(server_module.uvicorn, "Server", XT_Server)
+        server = AsgiServer(config=BoundedConfig)
+        assert server.shutdown_timeout_seconds == 2.0
+        server.serve()
+        assert captured[0].timeout_graceful_shutdown == 2.0
+
+    def test_the_default_is_five_seconds(self) -> None:
+        assert AsgiServer(config=TwoAppConfig).shutdown_timeout_seconds == 5.0
+
+
 class TestMaxThreads:
     async def test_recipe_max_threads_reaches_the_pool(self) -> None:
         class SizedPoolConfig(AsgiConfigBuilder):

@@ -25,8 +25,8 @@ announces (``announcement_fields``). A consumer subclasses the row and names it
 on its registry (``page_row_class``); the worker asks the row and knows nothing
 of the fields. Beside the rows: the request slot comes from
 ``SpaWorker.build_request_slot``, the vertex's data from
-``SpaCommander.new_global_store`` and its writes go through
-``apply_global_store_changes``, every served request ends in
+``SpaCommander.new_global_store`` (a dict, whose values are the consumer's own
+types), every served request ends in
 ``SpaWorker.on_request_served``, and a process that has just presented itself
 is told to the vertex through ``SpaCommander.on_worker_presented`` — the seam
 the source filter of a hosted site is pushed from, once per process, on the
@@ -44,7 +44,7 @@ from typing import Any
 
 import pytest
 from genro_bag import Bag
-from genro_tytx import to_tytx
+from genro_tytx import from_tytx, to_tytx
 
 from genro_asgi_multiworker_spa import RegisterRegistry
 from genro_asgi_multiworker_spa.orchestration import FreezeHandler, GroupHandler, SpaCommander, SpaWorker
@@ -142,13 +142,9 @@ class XT_Commander(SpaCommander):
     def envelope_handler(self) -> CommanderEnvelopeHandler:
         return XT_EnvelopeHandler(self)
 
-    def new_global_store(self) -> Any:
+    def new_global_store(self) -> dict[str, Any]:
         self.built.append("xt")
-        return Bag()
-
-    def apply_global_store_changes(self, changes: list[dict[str, Any]]) -> None:
-        self.applied.append(changes)
-        super().apply_global_store_changes(changes)
+        return {"seed": Bag({"a": 0})}
 
     def on_worker_presented(self, worker_handler: Any) -> None:
         self.presented.append(worker_handler.name)
@@ -252,7 +248,9 @@ async def test_on_request_served_runs_after_every_request_failed_ones_included(w
     assert worker.served == ["XT_Slot", "XT_Slot"]
 
 
-async def test_the_vertex_data_and_its_writes_are_the_commanders_seams(short_root, tmp_path):
+async def test_the_vertex_data_is_the_commanders_seam(short_root, tmp_path):
+    # The consumer fills the dictionary at birth with values of its own type; a
+    # turn's release publishes the complete value the worker sent, whatever it is.
     commander = XT_Commander(short_root / "frozen_users")
     assert commander.built == ["xt"]
     group = GroupHandler(
@@ -266,23 +264,19 @@ async def test_the_vertex_data_and_its_writes_are_the_commanders_seams(short_roo
     lane = XT_WorkerCommanderLane(commander, group, FreezeHandler(tmp_path / "frozen_users"))
     await lane.open()
     try:
-        await lane.worker.call(STORE_LOCK, {"worker": lane.worker_name, "request_id": "r1"})
-        changes = [
-            {
-                "key": {"path": "a", "reason": None, "fired": False},
-                "value": 1,
-                "attributes": None,
-                "delete": False,
-            }
-        ]
+        grant = await lane.worker.call(
+            STORE_LOCK, {"worker": lane.worker_name, "request_id": "r1", "key": "seed"}
+        )
+        seed = from_tytx(grant["value"], "json")
+        seed["a"] = 1
         reply = await lane.worker.call(
-            STORE_UNLOCK, {"request_id": "r1", "changes": to_tytx(changes, "json")}
+            STORE_UNLOCK, {"request_id": "r1", "apply": True, "value": to_tytx(seed, "json")}
         )
     finally:
         await lane.close()
     assert reply == {"applied": True}
-    assert commander.applied == [changes]
-    assert commander.global_register["a"] == 1
+    assert isinstance(commander.global_register["seed"], Bag)
+    assert commander.global_register["seed"]["a"] == 1
     await asyncio.sleep(0)
 
 
@@ -300,7 +294,7 @@ async def test_a_newborn_process_is_told_to_the_vertex_once(short_root, tmp_path
     await lane.open()
     try:
         assert commander.presented == [lane.worker_name]
-        await lane.worker.call(STORE_GET, {"path": "a"})
+        await lane.worker.call(STORE_GET, {"key": "a"})
         await lane.announce()
     finally:
         await lane.close()

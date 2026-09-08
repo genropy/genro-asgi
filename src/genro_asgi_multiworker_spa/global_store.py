@@ -12,139 +12,114 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The global store: one master Bag, living ONLY on the commander.
+"""The global store: one dictionary, living ONLY on the commander, behind one lock.
 
-Homogeneity comes from having a SINGLE WRITER — the commander — so there are no
-versions and no gate anywhere in here. There are no replicas either: a worker
-reads with a call on the lane (``store_get``) and writes through the lock.
+The commander owns ``dict[str, Any]``. Keys are literal strings — a dot in a key
+is a character, never a path — and values are opaque: a scalar, a dict, a Bag of
+either kind, anything the TYTX codec knows. There are no replicas: every access
+a worker makes is a CALL on the lane, served under ONE FIFO lock (issue #74,
+owner decision 2026-09-07).
 
-- :class:`GlobalStore` is the applying shape: a Bag written from outside. It
-  applies a drained batch and captures nothing.
-- :class:`CapturingGlobalStore` is the same Bag under a capture-all
-  :class:`~genro_bag.datachange.DataChangeCollector`. Two objects have that
-  shape: the commander's MASTER, whose captures are what propagates, and the
-  WORKING COPY a lock holder mutates, whose captures are what travels back at
-  release.
-- :class:`GlobalStoreLock` is the commander's grant of the master: an
-  ``asyncio.Lock`` (FIFO by construction, so the waiters are served in order)
-  plus who holds it. No lease and no timer — the holder's channel EOF is the
+- :class:`GlobalStoreLock` is the commander's lock: an ``asyncio.Lock`` (FIFO by
+  construction) plus who holds the TURN — request id, worker and the key the
+  turn selected. A simple ``get``/``set``/``delete`` takes the same lock for the
+  length of its own operation and records no holder; a turn holds it from the
+  grant to the release. No lease and no timer: the holder's channel EOF is the
   whole death protocol, and it applies nothing.
-- :class:`GlobalStoreLease` is the worker-side hold: one object usable with
-  ``with`` or ``async with``, because the vehicle follows the handler (a sync op
-  runs on a pool thread, an async one on the loop).
+- :class:`GlobalStoreClient` is what a worker holds as ``global_store``: the
+  three simple operations, synchronous from a pool thread, and ``for_update``.
+- :class:`GlobalStoreLease` is one turn: ``with`` or ``async with``, because the
+  vehicle follows the caller. It yields ITSELF, with ``value`` — the private
+  working copy the grant decoded — and ``exists``, said at grant time. The exit
+  sends the COMPLETE value back (``apply=True``) and the commander replaces the
+  selected key, or the whole dictionary when no key was selected; a body that
+  raises, or a lease that cannot decode its grant or encode its value, releases
+  with ``apply=False`` and the master is exactly as the grant found it.
 
-**The changes land once, at the release.** A holder mutates its working copy
-freely and the world sees nothing; the drained changes travel with the release
-and the commander applies them to the master in one go. That is what makes the
-protocol all-or-nothing without any rollback machinery: a holder that dies —
-or a body that raises — has written nothing anywhere.
+**A turn recognises its own context.** The client keeps a ``ContextVar`` set
+while a lease is in force: a second ``for_update`` or a simple operation from
+the same task or pool thread raises at once instead of parking on the lock it
+already holds. Other threads of the same worker wait normally.
 
-**The grant carries the store.** A lock is granted together with the master's
-current content (``to_tytx``, small by ratification), so the holder never has to
-ask whether its copy is current: what it mounts IS the master at grant time.
-The working copy is hydrated BEFORE its collector attaches — a captured
-hydration would ship the whole store back as changes.
+**The wire is TYTX.** Every value travels ``to_tytx(..., "json")`` and is
+hydrated by its reader, so a Bag stays a Bag and a datetime a datetime; a
+``get`` reply carries ``exists`` beside ``value``, so a stored ``None`` and an
+absent key are two answers.
 
-**The wire is TYTX.** A change dict carries a node value (a Bag when the write
-created an intermediate node) and a ``change_ts`` datetime, so every global-store
-payload — the grant and the change batch — travels ``to_tytx(..., "json")`` and
-is hydrated by its reader.
+**A commit whose answer never came is uncertain, and says so.** The commit is a
+CALL like any other and waits as long as the wire lives; when the wire fails
+after the commit was sent, the commander may already have published the value.
+The lease then raises :class:`GlobalStoreCommitUnconfirmed` — never a retry, and
+no abort attempt on a wire that is gone. A commander that REFUSED the commit is
+not this case: that is ``CommanderCallFailed``, and nothing was published.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import uuid
 from types import TracebackType
 from typing import Any
 
-from genro_bag import Bag
-from genro_bag.datachange import DataChangeCollector
+from genro_tytx import from_tytx, to_tytx
+
+#: The routing keys of the global store on the commander's dispatcher.
+GLOBAL_STORE_SET_OP_PATH = "/commander/store/set"
+GLOBAL_STORE_DEL_OP_PATH = "/commander/store/del"
+GLOBAL_STORE_GET_OP_PATH = "/commander/store/get"
+GLOBAL_STORE_LOCK_OP_PATH = "/commander/store/lock"
+GLOBAL_STORE_UNLOCK_OP_PATH = "/commander/store/unlock"
+
 __all__ = [
-    "CapturingGlobalStore",
-    "GlobalStore",
+    "GLOBAL_STORE_DEL_OP_PATH",
+    "GLOBAL_STORE_GET_OP_PATH",
+    "GLOBAL_STORE_LOCK_OP_PATH",
+    "GLOBAL_STORE_SET_OP_PATH",
+    "GLOBAL_STORE_UNLOCK_OP_PATH",
+    "GlobalStoreClient",
+    "GlobalStoreCommitUnconfirmed",
     "GlobalStoreLease",
     "GlobalStoreLock",
 ]
 
 
-class GlobalStore:
-    """A global-store Bag written from outside: the applying shape."""
+class GlobalStoreCommitUnconfirmed(Exception):
+    """The commit of a turn was sent and its answer never came: the value MAY be published.
 
-    def __init__(self, bag: Bag | None = None) -> None:
-        """Args:
-        bag: the Bag to hold; a fresh empty one when omitted. A caller that
-            passes one has already hydrated it — the working copy of a lock.
-        """
-        self.bag = Bag() if bag is None else bag
+    Args:
+        request_id: the turn whose commit is unconfirmed.
+        key: the key it selected, None for the whole dictionary.
+        cause: what ended the wait — the transport failure, for the log.
 
-    def apply_changes(self, changes: list[dict[str, Any]]) -> None:
-        """Apply a drained batch in the order it was captured."""
-        for change in changes:
-            self.apply_change(change)
+    The caller must not repeat the write on its own: the commander may hold it
+    already. Raised by ``GlobalStoreLease`` on the commit path alone.
+    """
 
-    def apply_change(self, change: dict[str, Any]) -> None:
-        """One change as a plain write, carrying the producer's own attributes.
-
-        No ``_original_ts``: that residue is Q-D's, for a datachange forwarded
-        between two live timelines. The global store has a single writer, so a
-        replica has no second instant to reconcile — what the master wrote is
-        the whole truth. A delete removes the node: setting None would be a
-        different state from *gone*.
-        """
-        key = change["key"]
-        if change["delete"]:
-            self.bag.pop(key["path"], _reason=key["reason"])
-            return
-        self.bag.set_item(
-            key["path"],
-            change["value"],
-            _attributes=change["attributes"],
-            _reason=key["reason"],
-            _fired=key["fired"],
+    def __init__(self, request_id: str, key: str | None, cause: BaseException) -> None:
+        self.request_id = request_id
+        self.key = key
+        self.cause = cause
+        target = "the whole store" if key is None else f"key {key!r}"
+        super().__init__(
+            f"the commit of turn {request_id} on {target} got no answer "
+            f"({type(cause).__name__}: {cause}): the value may have been published"
         )
 
 
-class CapturingGlobalStore(GlobalStore):
-    """A global-store Bag whose every write is captured: the master, or a working copy."""
-
-    def __init__(self, bag: Bag | None = None) -> None:
-        """Args:
-        bag: an already-hydrated Bag, or None for an empty one. The collector
-            attaches AFTER, so nothing that was in the Bag is captured.
-        """
-        super().__init__(bag)
-        self.collector = DataChangeCollector(self.bag)
-
-    def set(self, path: str, value: Any) -> None:
-        """Write one path — the capture is what propagates."""
-        self.bag.set_item(path, value)
-
-    def delete(self, path: str) -> None:
-        """Remove one path — the capture is what propagates."""
-        self.bag.pop(path)
-
-    def drain(self) -> list[dict[str, Any]]:
-        """The changes captured since the last drain, in capture order."""
-        return self.collector.drain()
-
-    def detach(self) -> None:
-        """Stop capturing: a released lock's working copy is thrown away."""
-        self.collector.detach()
-
-
 class GlobalStoreLock:
-    """The commander's grant of the master: FIFO, one holder, no lease and no timer."""
+    """The commander's lock on the dictionary: FIFO, one holder, no lease and no timer."""
 
     def __init__(self) -> None:
         self.lock = asyncio.Lock()
-        # The grant in force: its request id, and the worker whose channel death
-        # releases it.
+        # The turn in force: its request id, the worker whose channel death
+        # releases it, and the key it selected (None = the whole dictionary).
         self.holder: str | None = None
         self.holder_worker: str | None = None
+        self.holder_key: str | None = None
 
-    async def acquire(self, worker: str, request_id: str) -> None:
-        """Park until the master is this request's, then record whose it is.
+    async def acquire(self, worker: str, request_id: str, key: str | None = None) -> None:
+        """Park until the lock is this request's, then record whose turn it is.
 
         ``asyncio.Lock`` wakes its waiters in arrival order, so the FIFO the
         protocol promises is the primitive's own and nothing here queues.
@@ -152,59 +127,171 @@ class GlobalStoreLock:
         await self.lock.acquire()
         self.holder = request_id
         self.holder_worker = worker
+        self.holder_key = key
 
     def holds(self, request_id: str) -> bool:
-        """Whether this request is the grant in force.
+        """Whether this request is the turn in force.
 
-        A release arriving for a grant that is no longer in force is a real
-        case, not a protocol violation: the holder's channel died while its
-        release was already on the wire, and the death released it first. Such
-        a release must apply NOTHING — that is the all-or-nothing rule.
+        A release for a turn no longer in force is a real case, not a protocol
+        violation: the holder's channel died while its release was on the wire,
+        and the death released it first. Such a release must touch NOTHING —
+        neither the master nor a newer turn.
         """
         return self.holder == request_id
 
     def held_by(self, worker: str) -> bool:
-        """Whether this worker is the current holder — the death check."""
+        """Whether this worker holds the turn — the death check."""
         return self.holder_worker == worker
 
     def release(self) -> None:
-        """Let the next waiter in; the caller has established who holds it.
-
-        There is no await between that check and this call, so no grant can slip
-        in between the two.
-        """
+        """Let the next waiter in; the caller has established who holds it."""
         self.holder = None
         self.holder_worker = None
+        self.holder_key = None
         self.lock.release()
 
 
-class GlobalStoreLease:
-    """One worker-side hold of the global-store lock: ``with`` or ``async with``.
+class GlobalStoreClient:
+    """A worker's side of the global store: three simple operations and the turn.
 
-    The two forms are the same protocol on two vehicles, the way the 2a op
-    servicing already splits them: a sync op handler runs on a pool thread and
-    blocks it on the worker's loop, an async one stays on the loop. Either way
-    the body sees the working copy's Bag, the world sees nothing until the exit,
-    and a body that raises applies nothing at all.
+    Args:
+        worker: the ``SpaWorker`` whose lane the CALLs travel on.
 
-    The lease owns its ``request_id``: one lease is one grant, from the request
-    that ascends to the release that carries the changes back.
-
-    NEVER open a lease while holding the worker's ``dispatch_lock``: both the
-    acquire and the release queue their ascending message on a pool thread
-    UNDER that very lock, so a holder would deadlock against itself.
+    The simple operations are synchronous and block a pool thread on the
+    worker's loop; ``for_update`` answers a lease usable with ``with`` from a
+    pool thread or ``async with`` on the loop.
     """
 
     def __init__(self, worker: Any) -> None:
         self.worker = worker
-        self.request_id = uuid.uuid4().hex
-        self.copy: CapturingGlobalStore | None = None
+        self.active_turn: contextvars.ContextVar[GlobalStoreLease | None] = (
+            contextvars.ContextVar(f"global_store_turn:{worker.name}", default=None)
+        )
 
-    async def __aenter__(self) -> Bag:
-        """Acquire on the loop and hand the working copy's Bag to the body."""
-        copy = await self.worker.acquire_global_lock(self.request_id)
-        self.copy = copy
-        return copy.bag
+    def refuse_inside_turn(self) -> None:
+        """Raise when this context already holds a turn: a CALL would wait on itself."""
+        turn = self.active_turn.get()
+        if turn is not None:
+            raise RuntimeError(
+                f"the global store is already held by this context (turn {turn.request_id})"
+            )
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Read one key: the stored value, ``None`` included, or ``default`` when absent."""
+        self.refuse_inside_turn()
+        reply = self.worker.run_on_loop(
+            self.worker.call(GLOBAL_STORE_GET_OP_PATH, {"key": key})
+        )
+        return from_tytx(reply["value"], "json") if reply["exists"] else default
+
+    def set(self, key: str, value: Any = None) -> None:
+        """Write one key; the master holds the value when this returns."""
+        self.refuse_inside_turn()
+        self.worker.run_on_loop(
+            self.worker.call(
+                GLOBAL_STORE_SET_OP_PATH, {"key": key, "value": to_tytx(value, "json")}
+            )
+        )
+
+    def delete(self, key: str) -> None:
+        """Remove one key; an absent key is a no-op."""
+        self.refuse_inside_turn()
+        self.worker.run_on_loop(self.worker.call(GLOBAL_STORE_DEL_OP_PATH, {"key": key}))
+
+    def for_update(self, key: str | None = None) -> GlobalStoreLease:
+        """One read-modify-write turn on ``key``, or on the whole dictionary when None."""
+        return GlobalStoreLease(self, key)
+
+
+class GlobalStoreLease:
+    """One turn on the global store: ``with`` or ``async with``, yielding itself.
+
+    Args:
+        client: the worker's ``GlobalStoreClient``.
+        key: the selected key, or None for the whole dictionary.
+
+    ``value`` is the private working copy the grant decoded — assign it or
+    mutate it, the master sees nothing until the exit; ``exists`` says whether
+    the key was there at grant time (always True for the whole dictionary).
+    A body that raises releases with ``apply=False``; so does a grant that
+    cannot be decoded or a value that cannot be encoded, the original error
+    re-raised; so does a turn on which ``abort`` was called, whatever the body
+    did to ``value`` afterwards — the lock stays held until the exit either way.
+    """
+
+    def __init__(self, client: GlobalStoreClient, key: str | None) -> None:
+        self.client = client
+        self.key = key
+        self.request_id = uuid.uuid4().hex
+        self.value: Any = None
+        self.exists = False
+        self.aborted = False
+        self._token: contextvars.Token[GlobalStoreLease | None] | None = None
+
+    def abort(self) -> None:
+        """Mark this turn as not to be published: the exit sends ``apply=False``.
+
+        The lock stays held until the ``with`` block exits; once called, nothing
+        the body does to ``value`` reaches the master.
+        """
+        self.aborted = True
+
+    async def _acquire(self) -> None:
+        worker = self.client.worker
+        reply = await worker.call(
+            GLOBAL_STORE_LOCK_OP_PATH,
+            {"worker": worker.name, "request_id": self.request_id, "key": self.key},
+        )
+        try:
+            self.value = from_tytx(reply["value"], "json")
+        except Exception:
+            await self._abort()
+            raise
+        self.exists = reply["exists"]
+
+    async def _release(self, exc_type: type[BaseException] | None) -> None:
+        if exc_type is not None or self.aborted:
+            await self._abort()
+            return
+        try:
+            text = to_tytx(self.value, "json")
+        except Exception:
+            await self._abort()
+            raise
+        try:
+            await self.client.worker.call(
+                GLOBAL_STORE_UNLOCK_OP_PATH,
+                {"request_id": self.request_id, "apply": True, "value": text},
+            )
+        except ConnectionError as exc:
+            # The wire ended after the commit left: a parked CALL is failed with
+            # ConnectionError, a write on a dead socket raises one of its
+            # subclasses. Anything else — the commander's own refusal included —
+            # propagates as it is.
+            raise GlobalStoreCommitUnconfirmed(self.request_id, self.key, exc) from exc
+
+    async def _abort(self) -> None:
+        await self.client.worker.call(
+            GLOBAL_STORE_UNLOCK_OP_PATH, {"request_id": self.request_id, "apply": False}
+        )
+
+    def _mark_active(self) -> None:
+        self.client.refuse_inside_turn()
+        self._token = self.client.active_turn.set(self)
+
+    def _mark_closed(self) -> None:
+        if self._token is not None:
+            self.client.active_turn.reset(self._token)
+            self._token = None
+
+    async def __aenter__(self) -> GlobalStoreLease:
+        self._mark_active()
+        try:
+            await self._acquire()
+        except BaseException:
+            self._mark_closed()
+            raise
+        return self
 
     async def __aexit__(
         self,
@@ -212,16 +299,17 @@ class GlobalStoreLease:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        """Release on the loop, applying the changes only if the body succeeded."""
-        await self.worker.release_global_lock(
-            self.request_id, self.copy, apply=exc_type is None
-        )
+        self._mark_closed()
+        await self._release(exc_type)
 
-    def __enter__(self) -> Bag:
-        """Acquire from a pool thread, blocking it until the grant lands."""
-        copy = self.worker.run_on_loop(self.worker.acquire_global_lock(self.request_id))
-        self.copy = copy
-        return copy.bag
+    def __enter__(self) -> GlobalStoreLease:
+        self._mark_active()
+        try:
+            self.client.worker.run_on_loop(self._acquire())
+        except BaseException:
+            self._mark_closed()
+            raise
+        return self
 
     def __exit__(
         self,
@@ -229,7 +317,5 @@ class GlobalStoreLease:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        """Release from a pool thread, applying only if the body succeeded."""
-        self.worker.run_on_loop(
-            self.worker.release_global_lock(self.request_id, self.copy, apply=exc_type is None)
-        )
+        self._mark_closed()
+        self.client.worker.run_on_loop(self._release(exc_type))

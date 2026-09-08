@@ -266,6 +266,10 @@ proxy and answer different questions, which is why the public one is declared
 rather than guessed from an incoming request — it must match what a third party
 was told, and a value derived from a client's own header would be a value that
 party rejects. `max_threads` sizes the pool where blocking work runs.
+`shutdown_timeout_seconds` (5.0) bounds how long uvicorn waits for open
+connections at shutdown before cancelling them: without the bound one endless
+response — an SSE stream a client never closes — holds the process for ever and
+the lifespan shutdown, which stops the applications, never runs.
 
 Two children are server-domain and so live here rather than under an
 application: **`session`**, which carries how long a session lives, and

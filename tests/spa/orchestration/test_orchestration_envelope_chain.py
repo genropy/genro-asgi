@@ -408,7 +408,7 @@ async def test_a_death_reported_for_a_living_process_is_refused(handler):
 async def test_nothing_at_all_travels_back_down_the_chain(handler, commander):
     # The store used to ride the presentation; it lives on the lane now, so the
     # descent carries no payload of its own for any kind of envelope.
-    commander.global_register.set_item("counters.invoices", 3)
+    commander.global_register["counters.invoices"] = 3
 
     assert handler.read_envelope(presentation()) == {}
     assert handler.read_envelope(envelope()) == {}

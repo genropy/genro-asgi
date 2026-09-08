@@ -36,7 +36,7 @@ Authoring conventions inherited from contrib/config:
 Sections:
 
 - ``server`` — the runtime options (``host``, ``port``, ``external_url``,
-  ``max_threads``) plus the server-domain children ``session``
+  ``max_threads``, ``shutdown_timeout_seconds``) plus the server-domain children ``session``
   (the session TTL) and ``tasks`` (declared by ``TaskGrammar``, the class that
   peels ``tasks=``).
 - ``middleware`` — one ``{name: bool | dict}`` switch per middleware.
@@ -110,6 +110,7 @@ class AsgiServerGrammar(TaskGrammar):
         port: int | BagResolver = None,
         external_url: str | BagResolver = None,
         max_threads: int | BagResolver = None,
+        shutdown_timeout_seconds: float | BagResolver = None,
     ) -> None:
         """Server runtime options.
 
@@ -126,6 +127,12 @@ class AsgiServerGrammar(TaskGrammar):
         ``max_threads`` sizes the server's thread pool: ``BaseServer`` peels it
         and hands it to ``WorkPool`` (omitted, the stdlib default
         ``min(32, cpu + 4)`` applies).
+
+        ``shutdown_timeout_seconds`` (5.0) bounds how long uvicorn waits for open
+        connections at shutdown before cancelling them: one endless response —
+        an SSE stream a client never closes — would otherwise hold the process
+        for ever, and the lifespan shutdown that stops the applications would
+        never run.
 
         Children are server-domain: ``session`` (the session TTL), ``tasks``
         (the task backbone, declared by ``TaskGrammar``) and ``websocket``.

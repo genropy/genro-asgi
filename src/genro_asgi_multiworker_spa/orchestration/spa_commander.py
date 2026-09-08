@@ -175,7 +175,6 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
-from genro_bag import Bag
 from genro_routes import RoutingClass, route
 import psutil
 from genro_tytx import from_tytx, to_tytx
@@ -184,7 +183,7 @@ from genro_asgi.orchestration_profile_store import (
     OrchestrationProfileNotFoundError,
     OrchestrationProfileStore,
 )
-from ..global_store import GlobalStore, GlobalStoreLock
+from ..global_store import GlobalStoreLock
 from .beats import every
 from .envelope_handler import CommanderEnvelopeHandler
 from .exceptions import AssignmentRefused, UserOnHold, SiteFailedRequest
@@ -281,11 +280,11 @@ __all__ = [
 class GlobalStoreOperations(RoutingClass):
     """The ``store`` branch of the commander's dispatcher: the global store on the lane.
 
-    The store lives on the commander and nowhere else, so the two blind writes,
-    the read and the two halves of the read-modify-write grant are CALLs a
-    worker places on ``/commander/store/<op>``. There is no replica anywhere to
-    keep aligned. ``delete`` is served under the name ``del`` — the path the
-    workers use, which is not a Python name.
+    The store is one dictionary living on the commander and nowhere else, so the
+    simple read, write and removal and the two halves of a turn are CALLs a
+    worker places on ``/commander/store/<op>``. Every one of them takes the same
+    FIFO lock: while a turn is in force, the others wait. ``delete`` is served
+    under the name ``del`` — the path the workers use, which is not a Python name.
 
     Args:
         spa_commander: the vertex whose ``global_register`` and ``global_lock``
@@ -296,110 +295,144 @@ class GlobalStoreOperations(RoutingClass):
         self.spa_commander = spa_commander
         self._logger = logging.getLogger(__name__)
 
+    def _check_key(self, key: Any) -> None:
+        """Refuse anything but a string: the dictionary's keys are literal strings."""
+        if not isinstance(key, str):
+            raise TypeError(f"a global-store key is a string, not {type(key).__name__}")
+
     @route()
-    def set(self, path: str, value: Any = None) -> dict[str, Any]:
-        """Write one path of the store, and answer once it holds the value.
+    async def get(self, key: str) -> dict[str, Any]:
+        """Read one key under the lock.
 
         Args:
-            path: the path to write.
-            value: what to write there.
+            key: the literal key to read.
 
         Returns:
-            The path written, which is what the site's protocol expects.
+            ``exists`` — whether the key is there — and ``value``, TYTX-encoded,
+            ``None`` encoded when the key is absent: the client tells the two
+            apart by ``exists``, never by the value.
 
-        Acts on ``global_register``. Last writer wins: there is one copy and no
-        version, so two workers writing the same path are ordered by the lane
-        and the second one is the truth.
+        Acts on nothing; waits for a turn in force.
         """
-        self.spa_commander.global_register.set_item(path, value)
-        return {"path": path}
+        self._check_key(key)
+        async with self.spa_commander.global_lock.lock:
+            store = self.spa_commander.global_register
+            return {"key": key, "exists": key in store, "value": to_tytx(store.get(key), "json")}
 
-    @route(name="del")
-    def delete(self, path: str) -> dict[str, Any]:
-        """Remove one path of the store — the node is gone, not set to None.
+    @route()
+    async def set(self, key: str, value: Any = None) -> dict[str, Any]:
+        """Write one key under the lock, and answer once the master holds it.
 
         Args:
-            path: the path to remove.
+            key: the literal key to write.
+            value: what to write, TYTX-encoded; decoded BEFORE the lock is taken,
+                so an undecodable value never holds anybody up.
 
         Returns:
-            The path removed.
+            The key written.
 
         Acts on ``global_register``.
         """
-        self.spa_commander.global_register.pop(path)
-        return {"path": path}
+        self._check_key(key)
+        decoded = from_tytx(value, "json")
+        async with self.spa_commander.global_lock.lock:
+            self.spa_commander.global_register[key] = decoded
+        return {"key": key}
 
-    @route()
-    def get(self, path: str) -> dict[str, Any]:
-        """Read one path of the store, and answer what it holds right now.
+    @route(name="del")
+    async def delete(self, key: str) -> dict[str, Any]:
+        """Remove one key under the lock; an absent key is a no-op.
 
         Args:
-            path: the path to read.
+            key: the literal key to remove.
 
         Returns:
-            The path and its value, TYTX-encoded so datetimes and nested Bags
-            travel whole; a path the store does not hold answers None — the
-            Bag's own read semantics, exactly what the caller would have seen
-            reading the master itself.
+            The key removed.
 
-        Acts on nothing: a read of the only copy there is.
+        Acts on ``global_register``.
         """
-        return {
-            "path": path,
-            "value": to_tytx(self.spa_commander.global_register.get_item(path), "json"),
-        }
+        self._check_key(key)
+        async with self.spa_commander.global_lock.lock:
+            self.spa_commander.global_register.pop(key, None)
+        return {"key": key}
 
     @route()
     async def lock(
-        self, worker: str, request_id: str
+        self, worker: str, request_id: str, key: str | None = None
     ) -> dict[str, Any]:
-        """Park on the FIFO grant, then hand the store itself to the winner.
+        """Park on the FIFO lock, then hand the selected value to the winner.
 
         Args:
-            worker: the process asking — whose death releases the grant.
-            request_id: the hold's own id, which the release quotes back.
+            worker: the process asking — whose death releases the turn.
+            request_id: the turn's own id, which the release quotes back.
+            key: the key selected, or None for the whole dictionary.
 
         Returns:
-            The store as it stands at grant time, TYTX-encoded: the holder never
-            has to ask whether what it reads is current, because what it mounts
-            IS the only copy.
+            ``exists`` and ``value`` (TYTX-encoded) as they stand at grant time:
+            the key's value, or a snapshot of the whole dictionary. The answer IS
+            the grant, so a worker whose call is still parked here has simply
+            not been answered yet.
 
-        Acts on ``global_lock``. The answer is the grant, so a worker whose call
-        is still parked here simply has not been answered yet.
+        Acts on ``global_lock``. A grant that cannot be encoded releases the
+        turn and raises, so nothing stays held for an answer that never left.
         """
-        await self.spa_commander.global_lock.acquire(worker, request_id)
-        return {
-            "request_id": request_id,
-            "store": to_tytx(self.spa_commander.global_register, "json"),
-        }
+        if key is not None:
+            self._check_key(key)
+        global_lock = self.spa_commander.global_lock
+        await global_lock.acquire(worker, request_id, key)
+        try:
+            store = self.spa_commander.global_register
+            exists = True if key is None else key in store
+            value = dict(store) if key is None else store.get(key)
+            return {
+                "request_id": request_id,
+                "key": key,
+                "exists": exists,
+                "value": to_tytx(value, "json"),
+            }
+        except Exception:
+            global_lock.release()
+            raise
 
     @route()
     def unlock(
-        self, request_id: str, changes: Any = None
+        self, request_id: str, apply: bool = True, value: Any = None
     ) -> dict[str, Any]:
-        """Apply a holder's drained changes and let the next waiter in.
+        """Publish a holder's complete value and let the next waiter in — or just let it in.
 
         Args:
-            request_id: the grant being given back.
-            changes: what the body captured on its working copy, TYTX-encoded —
-                attributes, reason and fired included, so nothing of the write's
-                shape is lost on the way up. Empty when the body raised.
+            request_id: the turn being given back.
+            apply: True publishes ``value``; False aborts, the master untouched.
+            value: the COMPLETE replacement, TYTX-encoded — the selected key's
+                new value, or the whole dictionary for a turn with no key.
 
         Returns:
-            Whether anything was applied — a release for a grant no longer in
-            force applies nothing, which is the all-or-nothing rule.
+            ``applied``: whether the value was published. A release for a turn
+            no longer in force publishes nothing and releases nothing — it must
+            never free a newer turn.
 
-        Acts on ``global_register`` and on ``global_lock``, the store written
-        BEFORE the release so the next waiter's grant carries these changes.
+        Acts on ``global_register`` and on ``global_lock``: the value is
+        decoded and checked BEFORE anything is written, then published in one
+        assignment, with no await between the publication and the release.
         """
-        if not self.spa_commander.global_lock.holds(request_id):
-            self._logger.debug(
-                "store: the release of the grant %s is no longer in force", request_id
-            )
+        global_lock = self.spa_commander.global_lock
+        if not global_lock.holds(request_id):
+            self._logger.debug("store: the release of the turn %s is no longer in force", request_id)
             return {"applied": False}
-        self.spa_commander.apply_global_store_changes(from_tytx(changes, "json"))
-        self.spa_commander.global_lock.release()
-        return {"applied": True}
+        try:
+            if apply:
+                decoded = from_tytx(value, "json")
+                store = self.spa_commander.global_register
+                if global_lock.holder_key is None:
+                    if not isinstance(decoded, dict):
+                        raise TypeError("a whole-store turn must publish a dict")
+                    store.clear()
+                    store.update(decoded)
+                else:
+                    store[global_lock.holder_key] = decoded
+        finally:
+            global_lock.release()
+        return {"applied": apply}
 
     def release_worker_lock(self, worker: str) -> None:
         """Give the grant back for a worker that died holding it, applying nothing.
@@ -941,24 +974,14 @@ class SpaCommander:
         up the envelope.
         """
 
-    def new_global_store(self) -> Any:
-        """The vertex's data at birth: the seam a consumer overrides with its own type.
+    def new_global_store(self) -> dict[str, Any]:
+        """The vertex's data at birth: one empty dictionary.
 
         Returns:
-            A new Bag — the fourth opaque datum, beside the three rows'.
+            ``dict[str, Any]``, the type the store protocol fixes: literal string
+            keys, opaque values. A consumer may fill it, never change its type.
         """
-        return Bag()
-
-    def apply_global_store_changes(self, changes: list[dict[str, Any]]) -> None:
-        """Apply a holder's drained changes to the vertex's data.
-
-        Args:
-            changes: what the body captured on its working copy, decoded.
-
-        Acts on ``global_register``. The seam a consumer overrides together
-        with ``new_global_store``, so the writes speak its own type's API.
-        """
-        GlobalStore(self.global_register).apply_changes(changes)
+        return {}
 
     def publish_observation(self, kind: str, source: str, data: dict[str, Any]) -> None:
         """Put one observation on every watching queue, and never raise.
