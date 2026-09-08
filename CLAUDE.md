@@ -48,7 +48,10 @@ declared default; else the site index on `/` (ratified 2026-08-24, not yet
 built — today 404); else 404). It owns one thread pool (`run_sync`), a
 `RequestRegistry` holding the in-flight picture, ordered lifespan, and boots
 uvicorn programmatically (`serve()`, CLI `genro-asgi serve/apps/stop/remove`,
-`--debug` = a declared usage mode the core never branches on). The server
+`--debug` = a declared usage mode the core never branches on; `shutdown_timeout_seconds`
+on the `server` element, 5.0, is uvicorn's `timeout_graceful_shutdown` — without
+it one endless SSE response held the process for ever and the lifespan shutdown
+never ran, measured 2026-09-08). The server
 carries a lifecycle `state` (`lifespan.py`: `RUNNING`/`QUITTING`/`STOPPING`):
 anything but RUNNING answers 503 + `Retry-After` and registers nothing, while
 what the middleware chain serves itself passes. `Lifespan.shutdown` turns the

@@ -65,6 +65,8 @@ REFUSED_RETRY_AFTER_SECONDS = 5
 """The seconds a refused request is told to come back in."""
 
 WEBSOCKET_MAX_CONCURRENT = 16
+#: How long uvicorn waits for open connections at shutdown before cancelling them.
+SHUTDOWN_TIMEOUT_SECONDS = 5.0
 """How many messages of ONE websocket connection may be served at once.
 
 A setpoint (owner, 2026-09-06: «configurabile default 16»): the ceiling is what
@@ -88,8 +90,12 @@ class BaseServer:
     server serves — ``default`` — the ``code`` of the application ``/``
     redirects to when nothing answers the root (an unknown code raises
     ``ValueError``) — ``max_threads`` — the pool's worker count, handed to
-    ``WorkPool`` (``None`` keeps the stdlib default) — and ``websocket`` — the
-    websocket options, ``{"origins": [...], "max_concurrent": 16}``.
+    ``WorkPool`` (``None`` keeps the stdlib default) — ``websocket`` — the
+    websocket options, ``{"origins": [...], "max_concurrent": 16}`` — and
+    ``shutdown_timeout_seconds`` — how long uvicorn waits for open connections
+    to finish before it cancels them at shutdown (5.0). Without a bound, one
+    endless response — an SSE stream a client never closes — holds the server
+    for ever and the lifespan shutdown never runs (measured 2026-09-08).
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -98,6 +104,9 @@ class BaseServer:
         max_threads: int | None = kwargs.pop("max_threads", None)
         debug: bool | str = kwargs.pop("debug", False)
         websocket: dict[str, Any] = kwargs.pop("websocket", None) or {}
+        shutdown_timeout: float = float(
+            kwargs.pop("shutdown_timeout_seconds", None) or SHUTDOWN_TIMEOUT_SECONDS
+        )
         if kwargs:
             unexpected = ", ".join(sorted(kwargs))
             raise TypeError(
@@ -116,6 +125,7 @@ class BaseServer:
         self._websocket_max_concurrent: int = int(
             websocket.get("max_concurrent") or WEBSOCKET_MAX_CONCURRENT
         )
+        self._shutdown_timeout_seconds = shutdown_timeout
         self.state = RUNNING
         """``RUNNING``, ``QUITTING`` or ``STOPPING`` — read by the entry point."""
         self.shutdown_mode = STOPPING
@@ -389,6 +399,11 @@ class BaseServer:
         await WsxConnection(self, scope, receive, send).serve()
 
     @property
+    def shutdown_timeout_seconds(self) -> float:
+        """How long uvicorn waits for open connections at shutdown before cancelling them."""
+        return self._shutdown_timeout_seconds
+
+    @property
     def uvicorn_server(self) -> uvicorn.Server | None:
         """The uvicorn ``Server`` once ``serve()`` has built it (else ``None``).
 
@@ -403,7 +418,17 @@ class BaseServer:
 
         Builds ``uvicorn.Config``/``uvicorn.Server`` and runs it. ``port=0``
         lets the OS assign an ephemeral port, discoverable via
-        ``uvicorn_server`` once started.
+        ``uvicorn_server`` once started. ``shutdown_timeout_seconds`` bounds
+        uvicorn's wait for open connections, so a response that never ends
+        cannot keep the lifespan shutdown — and the applications' own stop —
+        from running.
         """
-        self._uvicorn = uvicorn.Server(uvicorn.Config(self, host=host, port=port))
+        self._uvicorn = uvicorn.Server(
+            uvicorn.Config(
+                self,
+                host=host,
+                port=port,
+                timeout_graceful_shutdown=self.shutdown_timeout_seconds,
+            )
+        )
         self._uvicorn.run()
