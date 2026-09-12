@@ -103,7 +103,6 @@ for session-based clients:
 
 - `POST /_server/login` with body `{"identity", "password"}` → `200` with
   `{identity, tags, session_id}` on success.
-- `GET /_server/login_page` — an HTML login page.
 - `GET /_server/login_methods` — a public JSON descriptor of available methods.
 - `POST /_server/logout`.
 

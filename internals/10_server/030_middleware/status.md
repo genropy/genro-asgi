@@ -37,9 +37,9 @@ retains its Location, and other exceptions become a generic logged 500.
 
 A 401 is answered like any other error, the same one to a browser and to an
 API caller: the bare status with the exception's `WWW-Authenticate` forwarded
-onto it (D-SA-4). The negotiation that turned a browser 401 into a 302 to
-`/_server/login_page`, and an API one into a `login_url` body, is gone with the
-server application. Error bodies follow Accept negotiation.
+onto it (D-SA-4). The negotiation that turned a browser 401 into a 302 to a
+login page, and an API one into a `login_url` body, is gone, and so is the page
+it pointed at (D-SA-3). Error bodies follow Accept negotiation.
 `Response.ERROR_MAP` is a standalone helper table, not the middleware policy.
 
 The error middleware writes through its own outer `send`. Thus an error

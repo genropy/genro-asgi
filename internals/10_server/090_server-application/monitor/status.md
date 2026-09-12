@@ -7,8 +7,9 @@ below identify the executable contracts; they are not a new coverage percentage.
 
 ## Application contributions and admin gate
 
-`MonitorSection` supplies the monitor page and snapshot through the
-`SERVER_ADMIN`-guarded core surface. It asks each application for
+`MonitorSection` supplies the monitor snapshot and the panel descriptors
+through the `SERVER_ADMIN`-guarded core surface. It serves no page: the
+management pages are gramlot's (D-SA-3), and the section root is a 404. It asks each application for
 `app_snapshot` and `app_panel`; an optional `panel_source` provides its client
 panel code. `BaseApplication` supplies a generic snapshot and panel fallback.
 The section uses this contribution contract rather than importing SPA classes.
@@ -18,7 +19,7 @@ Historical monitor/workbench branches, full pre-refactoring panel parity and
 Prometheus export are not established by this implementation. The local MkDocs
 internals reader is a separate developer documentation tool.
 
-Claim anchors: [`MonitorSection`](../../../../src/genro_asgi_server_app/server_sections/monitor_section.py#L75), [`app_snapshot`](../../../../src/genro_asgi/application.py#L170), [`app_panel`](../../../../src/genro_asgi/application.py#L180), [`BaseApplication`](../../../../src/genro_asgi/application.py#L86).
+Claim anchors: [`MonitorSection`](../../../../src/genro_asgi_server_app/server_sections/monitor_section.py#L74), [`app_snapshot`](../../../../src/genro_asgi/application.py#L170), [`app_panel`](../../../../src/genro_asgi/application.py#L180), [`BaseApplication`](../../../../src/genro_asgi/application.py#L86).
 
 ## Source and test evidence
 

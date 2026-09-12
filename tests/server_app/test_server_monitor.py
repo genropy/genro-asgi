@@ -15,15 +15,14 @@
 """The ``_server/monitor`` section: the page, the snapshot, the panels.
 
 Requests drive a REAL ``AsgiServer`` at the ASGI level: the ``_server`` app is
-auto-mounted, so the monitor lives at ``/_server/monitor/...``. A test
+declared like any other, and the monitor lives at ``/_server/monitor/...``. A test
 middleware (order 500, after the real AuthMiddleware) stamps a fixed identity
 on the scope, so the ``SERVER_ADMIN`` gate is exercised with a real avatar.
 
 What the suite pins:
 
-- the gate — an anonymous request is challenged (401, which the error
-  middleware turns into a login) and a wrong-tag one refused (403), on every
-  route of the section;
+- the gate — an anonymous request is challenged (401) and a wrong-tag one
+  refused (403), on every route of the section;
 - the aggregate — one entry per mounted application, keyed by mount, the
   ``_server`` app itself absent (the monitor is its face, not a tab);
 - the contract — an application that overrides ``app_snapshot``/``app_panel``
@@ -31,7 +30,6 @@ What the suite pins:
   its identity facts and the generic panel;
 - the shipped panel — an app declaring ``panel_source`` gets its ``src`` filled
   in and its module served, while an explicit ``src`` is left alone;
-- the page — served as HTML at the section root;
 - the bootstrap admin — it carries ``SERVER_ADMIN``, so a freshly installed
   server is observable by the identity that configures it.
 """
@@ -111,7 +109,7 @@ class ShippingApplication(BaseApplication):
 
 
 SERVER_ADMIN = Avatar("ops", ["SERVER_ADMIN"])
-MONITOR_ROUTES = ("/_server/monitor/", "/_server/monitor/snapshot", "/_server/monitor/panels")
+MONITOR_ROUTES = ("/_server/monitor/snapshot", "/_server/monitor/panels")
 
 
 def make_server(avatar: Avatar | None, *applications: BaseApplication) -> AsgiServer:
@@ -184,19 +182,18 @@ class TestMonitorGate:
         a browser at a login surface is the business of whoever owns one.
         """
         sent = await http_request(
-            make_server(None), "/_server/monitor/", headers=[(b"accept", b"text/html")]
+            make_server(None), "/_server/monitor/snapshot", headers=[(b"accept", b"text/html")]
         )
         assert response_status(sent) == 401
         assert b"location" not in response_headers(sent)
 
 
-class TestMonitorPage:
-    """The shell itself, served at the section root."""
+class TestNoMonitorPage:
+    """D-SA-3: the monitor page is gramlot's; the section serves its data."""
 
-    async def test_page_is_html(self, http_request, response_headers, response_body) -> None:
+    async def test_the_section_root_is_gone(self, http_request, response_status) -> None:
         sent = await http_request(make_server(SERVER_ADMIN), "/_server/monitor/")
-        assert response_headers(sent)[b"content-type"].startswith(b"text/html")
-        assert b"genro" in response_body(sent)
+        assert response_status(sent) == 404
 
 
 class TestSnapshot:

@@ -17,7 +17,6 @@
 ``MonitorSection`` is a ``RoutingClass`` the ``ServerApplication`` attaches
 under ``monitor``, so the whole monitor lives at one address:
 
-    ``/_server/monitor/``           the page (``index``, the shell)
     ``/_server/monitor/snapshot``   the polled data
     ``/_server/monitor/panels``     the panel descriptors, fetched once
     ``/_server/monitor/panel``      one contributor's own panel module
@@ -25,14 +24,15 @@ under ``monitor``, so the whole monitor lives at one address:
 Every route is gated ``auth_rule="SERVER_ADMIN"``: the monitor exposes the
 whole server, so it is closed to anyone the operator has not admitted.
 
-The shell composes ONE panel per mounted application. What an app IS at this
-instant comes from its ``app_snapshot`` (polled, aggregated here under
+The page that composes ONE panel per mounted application is gramlot's, not
+this section's (D-SA-3): what is served here is the data it reads. What an app
+IS at this instant comes from its ``app_snapshot`` (polled, aggregated here under
 ``apps``); WHO draws it comes from its ``app_panel`` (a class constant, so it
 is fetched once at load). Both are inherited from ``BaseApplication``, so an
 app that declares nothing still shows up — rendered by the generic panel, its
 raw snapshot as key/value rows and tables.
 
-An app whose panel the shell does not know SHIPS it: the optional
+An app whose panel the page does not know SHIPS it: the optional
 ``panel_source`` hands over the ES module as text, and ``panels`` fills the
 descriptor's ``src`` with this section's ``panel`` route. So a panel travels
 with the app that needs it — an application installed from another
@@ -56,7 +56,6 @@ Parent (dual relationship): the ServerApplication, stored as
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
@@ -129,15 +128,6 @@ class MonitorSection(RoutingClass):
             "applications": sorted(self.monitored_apps),
             "sections": sorted(self.application.sections),
         }
-
-    @route(media_type="text/html", auth_rule=MONITOR_RULE)
-    def index(self) -> str:
-        """The monitor page: the shell that composes one panel per app.
-
-        Note:
-            Route: GET /_server/monitor/
-        """
-        return (Path(__file__).parent / "resources" / "monitor.html").read_text()
 
     @property
     def monitor_contributors(self) -> dict[str, Any]:

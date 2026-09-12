@@ -448,20 +448,13 @@ class TestLoginLockout:
         assert payload["identity"] == "alice"
 
 
-class TestLoginPage:
-    async def test_login_page_serves_the_descriptor_driven_html(self) -> None:
+class TestNoLoginPage:
+    """D-SA-3: the HTML login page is gramlot's, not this app's."""
+
+    async def test_login_page_is_gone(self) -> None:
         server = make_server()
         _, sent = await drive(server, "/_server/login_page")
-        assert response_status(sent) == 200
-        assert response_headers(sent)[b"content-type"].startswith(b"text/html")
-        page = response_body(sent).decode()
-        assert "<title>Sign in</title>" in page
-        assert "/_server/login_methods" in page
-
-    async def test_login_page_binds_the_next_query_param(self) -> None:
-        server = make_server()
-        _, sent = await drive(server, "/_server/login_page?next=/app/page")
-        assert response_status(sent) == 200
+        assert response_status(sent) == 404
 
 
 class TestLoginMethods:

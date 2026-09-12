@@ -34,9 +34,9 @@ schema/docs/index endpoints, and adds:
   surfaces (the index today, monitors later) can enumerate them;
 - the PASSWORD login surface (core 1d wave 1): ``login`` (JSON POST →
   ``UserStore.verify`` → ``Avatar`` → ``request.session.attach_avatar``),
-  ``login_page`` (HTML GET, the descriptor-driven ``resources/login.html``
-  read at USE time), ``logout`` and the public ``login_methods`` — dual-mode
-  by TWO routes, never in-handler ``Accept`` sniffing. The methods live in an
+  ``logout`` and the public ``login_methods``. There is no login PAGE here:
+  the management pages are gramlot's (D-SA-3), and what this app serves is the
+  JSON a page drives. The methods live in an
   ``AuthSection`` attached under ``auth`` (``ensure_auth_section`` /
   ``register_auth_method``); ``PasswordMethod`` is registered at construction.
   ``login`` enforces the store-backed lockout (REVIEW #9): the per-identity
@@ -65,10 +65,8 @@ overrides what it needs — not a profile flag on this class: no code exists for
 a consumer that does not exist yet.
 
 Identity: ``code`` and ``mount`` are both declared ``"_server"`` as class
-attributes — the system mount is a D4 invariant, and three cross-file
-references hardcode ``/_server/...`` (``PasswordMethod``'s ``action``,
-``LOGIN_PAGE_URL``, ``login.html``'s fetch), so moving this app elsewhere
-404s them.
+attributes — the system mount is a D4 invariant, and ``PasswordMethod``'s
+``action`` hardcodes ``/_server/login``, so moving this app elsewhere 404s it.
 
 Kwargs peeled by the cooperative ``__init__`` (D16): ``login`` and ``oidc`` are
 the login-surface values of the configuration's ``authentication`` section (the
@@ -83,7 +81,6 @@ keep today's bare app.
 from __future__ import annotations
 
 import time
-from pathlib import Path
 from typing import Any, ClassVar
 
 from genro_bag import BagResolver
@@ -105,8 +102,6 @@ from .server_sections import (
 )
 
 __all__ = ["ServerApplication", "ServerApplicationGrammar"]
-
-RESOURCES_DIR = Path(__file__).parent / "resources"
 
 LOCKOUT_MAX_ATTEMPTS = 5
 LOCKOUT_BACKOFF_SECONDS = 30.0
@@ -330,10 +325,9 @@ class ServerApplication(OpenApiApplication):
         involved. The server's ``user_store`` is wired in the next wave (Macro
         5b): until then a server without one answers the error shape.
 
-        The ``next`` return path is NOT a login parameter: the challenge
-        redirects to ``login_page?next=...`` and the page script owns the
-        post-success redirect — ``login`` itself never sees it and posts carry
-        only the credentials.
+        The ``next`` return path is NOT a login parameter: whoever drives the
+        login owns the post-success redirect — ``login`` itself never sees it
+        and posts carry only the credentials.
 
         Enforces the server-side lockout (REVIEW #9): the failure counter
         lives ON the user's store record (``failed_attempts`` /
@@ -394,20 +388,6 @@ class ServerApplication(OpenApiApplication):
         session = _request.session
         session.attach_avatar(avatar)
         return {"session_id": session.id, "identity": avatar.identity, "tags": avatar.tags}
-
-    @route(media_type="text/html")
-    def login_page(self, next: str = "") -> str:
-        """Serve the descriptor-driven HTML login page (GET, dual-mode twin of ``login``).
-
-        The page builds itself from ``login_methods`` and posts credentials to
-        the method's ``action`` (``/_server/login``). Read at USE time so a
-        template swap needs no re-import. ``next`` is accepted so the challenge
-        redirect's query binds; the page script consumes it client-side.
-
-        Note:
-            Route: GET /_server/login_page
-        """
-        return (RESOURCES_DIR / "login.html").read_text()
 
     @route(media_type="application/json")
     def logout(self, session_id: str = "") -> dict[str, Any]:
