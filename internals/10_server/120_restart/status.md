@@ -1,6 +1,6 @@
 # Soft and hard restart — current state
 
-**Version**: 0.2 · **Last Updated**: 2026-09-08 · **Status**: 🔴 evidence refreshed; design ratification unchanged
+**Version**: 0.3 · **Last Updated**: 2026-09-12 · **Status**: 🔴 evidence refreshed; design ratification unchanged
 
 Verified against source revision `2465fcc` (develop baseline). Test references
 below identify the executable contracts; they are not a new coverage percentage.
@@ -17,7 +17,25 @@ application hooks in reverse order.
 connection shutdown. It prevents an endless connection from indefinitely
 postponing lifespan; it does not bound every application hook or pool thread.
 
-Claim anchors: [`Lifespan`](../../../src/genro_asgi/lifespan.py#L89), [`shutdown_timeout_seconds`](../../../src/genro_asgi/server.py#L402).
+The state no longer waits for that timeout. `serve()` boots `UvicornServer`, a
+subclass owning the SIGINT/SIGTERM handlers: the first signal calls
+`BaseServer.start_leaving` — state to `shutdown_mode` — and only then raises
+uvicorn's exit flag, so uvicorn's three steps all run over a server that already
+refuses new work. Two consequences, both deliberate (owner, 2026-09-12): a
+request arriving on an already open connection during the graceful window reads
+503 + `Retry-After` instead of being served, and under uvicorn's own `--reload`
+the child process builds no `UvicornServer`, so there the ordered shutdown is
+not guaranteed.
+
+`BaseServer.leaving` is the awaitable half of that turn, set by the `state`
+setter and never cleared. A source of an endless response reads its queue
+through `BaseServer.get_until_leaving`, which answers `None` as soon as the
+server starts leaving: the MCP push channel and the SPA inspector stream both
+end by themselves, unsubscribing on their own `finally`, instead of being
+cancelled when the grace runs out. Measured 2026-09-12 on a real
+`genro-asgi serve` with an SSE stream open: SIGTERM to process exit, 0.36 s.
+
+Claim anchors: [`Lifespan`](../../../src/genro_asgi/lifespan.py#L89), [`shutdown_timeout_seconds`](../../../src/genro_asgi/server.py#L402), [`UvicornServer`](../../../src/genro_asgi/server.py#L104).
 
 ## SPA save and lazy restoration
 
@@ -54,5 +72,9 @@ design distance, not an executable contract.
 - [src/genro_asgi_multiworker_spa/orchestration/spa_commander.py](../../../src/genro_asgi_multiworker_spa/orchestration/spa_commander.py)
 - [tests/core/test_reloading.py](../../../tests/core/test_reloading.py)
 - [tests/core/test_lifespan.py](../../../tests/core/test_lifespan.py)
+- [tests/core/test_sse.py](../../../tests/core/test_sse.py)
+- [tests/core/test_mcp_push.py](../../../tests/core/test_mcp_push.py)
+- [tests/spa/test_inspector_section.py](../../../tests/spa/test_inspector_section.py)
+- [tests/spa/orchestration/test_orchestration_no_speculative_birth.py](../../../tests/spa/orchestration/test_orchestration_no_speculative_birth.py)
 - [tests/spa/orchestration/test_orchestration_foundations_e2e.py](../../../tests/spa/orchestration/test_orchestration_foundations_e2e.py)
 - [tests/spa/orchestration/test_orchestration_spa_commander.py](../../../tests/spa/orchestration/test_orchestration_spa_commander.py)

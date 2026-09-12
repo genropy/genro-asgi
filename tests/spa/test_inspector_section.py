@@ -25,6 +25,7 @@ lifespan — the section does not exist before the pool does.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -32,7 +33,7 @@ import pytest
 
 from genro_asgi import AsgiServer
 from genro_asgi.config.builder import AsgiConfigBuilder
-from genro_asgi.lifespan import FatalBootError
+from genro_asgi.lifespan import STOPPING, FatalBootError
 from genro_asgi_server_app import ServerApplication
 from genro_asgi_multiworker_spa.inspector_section import INSPECTOR_ENV_VAR
 from genro_asgi_multiworker_spa.orchestration import SpaCommander
@@ -151,6 +152,18 @@ async def test_the_stream_opens_with_the_census(inspector_server, sse_request):
 
     assert b"retry: 2000" in frames[0]
     assert b"event: census" in frames[1]
+
+
+async def test_the_stream_ends_when_the_server_leaves(inspector_server, sse_request):
+    """The observation stream watches the server and ends without being cancelled."""
+    connection = await sse_request(inspector_server, "/_server/inspector/stream")
+    await connection.wait_frames(2)
+    commander = inspector_server.applications["site"].commander
+
+    inspector_server.state = STOPPING
+    await asyncio.wait_for(connection.task, timeout=2.0)
+
+    assert commander._observation_queues == set()
 
 
 async def test_the_page_carries_its_containers_and_its_endpoints(

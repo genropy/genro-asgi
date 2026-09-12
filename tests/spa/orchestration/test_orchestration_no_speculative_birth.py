@@ -21,11 +21,16 @@ placement that was refused, and lifted by the check once the group may grow.
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
+from genro_asgi import BaseApplication, BaseServer
+from genro_asgi.lifespan import STOPPING
 from genro_asgi_multiworker_spa.orchestration import AssignmentRefused
 from genro_asgi_multiworker_spa.orchestration.group_handler import GroupHandler
 from genro_asgi_multiworker_spa.orchestration.group_policy import GroupPolicy, GroupPolicyError
+from genro_asgi_multiworker_spa.orchestration.spa_commander import ORDERS_LOGGER_NAME
 
 from .test_orchestration_cpu_growth import arrival, declare_cpu
 from .test_orchestration_group_handler import commander  # noqa: F401
@@ -100,3 +105,56 @@ async def test_a_refused_placement_saturates_and_the_check_lifts_it(make_group, 
     await group.check_occupancy(now=True)
     assert group.state == "running"
     assert len(group.worker_handler_map) == 1
+
+
+def leaving_server() -> BaseServer:
+    """A server that has already left RUNNING, the way the signal leaves it."""
+    server = BaseServer(applications=[BaseApplication(mount="")])
+    server.state = STOPPING
+    return server
+
+
+async def test_no_worker_is_born_while_the_server_is_leaving(make_group, commander):
+    commander.server = leaving_server()
+    group = make_group()
+
+    assert await group.start_worker() is None
+    assert group.worker_handler_map == {}
+
+
+async def test_the_periodic_check_births_no_reception_while_the_server_is_leaving(
+    make_group, commander
+):
+    # The road of a wild death: on_child_lost -> ping_now -> check_occupancy.
+    group = make_group()
+    await group.start_worker()
+    group.reception.state = "quitted"
+    commander.server = leaving_server()
+
+    await group.check_occupancy(now=True)
+
+    assert group.living_workers == []
+
+
+async def test_the_refused_birth_is_journaled_once(make_group, commander, caplog):
+    commander.server = leaving_server()
+    group = make_group()
+
+    with caplog.at_level(logging.INFO, logger=ORDERS_LOGGER_NAME):
+        await group.start_worker()
+        await group.start_worker()
+
+    refusals = [
+        record
+        for record in caplog.records
+        if record.name == ORDERS_LOGGER_NAME and "order=start_worker" in record.getMessage()
+    ]
+    assert len(refusals) == 1
+    assert "leaving" in refusals[0].getMessage()
+
+
+async def test_a_pool_with_no_server_births_as_before(make_group, commander):
+    assert commander.server is None
+    group = make_group()
+
+    assert await group.start_worker() is not None

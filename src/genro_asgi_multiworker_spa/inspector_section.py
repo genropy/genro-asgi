@@ -101,14 +101,20 @@ class InspectorSection(RoutingClass):
 
         Subscribes the front's commander on open and unsubscribes it when the
         reader goes away — which is what switches the workers' reporting off
-        again.
+        again. The queue is read against the server's ``leaving``: a server that
+        starts leaving ends the feed here, so the stream closes by itself
+        instead of being cancelled when the graceful wait runs out.
         """
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         commander = self.application.commander
+        server = self.application.server
         await commander.subscribe_observation(queue)
         try:
             yield {"event": "census", "data": await self.census()}
             while True:
-                yield {"event": "observation", "data": await queue.get()}
+                observation = await server.get_until_leaving(queue)
+                if observation is None:
+                    return
+                yield {"event": "observation", "data": observation}
         finally:
             await commander.unsubscribe_observation(queue)

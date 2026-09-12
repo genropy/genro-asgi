@@ -97,10 +97,11 @@ class SseStream:
 
         The source is consumed one event at a time; while it stays silent past
         ``keepalive_seconds`` a ``: keepalive`` comment is emitted so the
-        connection is not reaped (the pending read is shielded across the
-        timeout). The loop ends when the source is exhausted; when the CONSUMER
-        goes away instead (cancellation / close), the shielded read is cancelled
-        and awaited so the source's ``finally`` runs before the stream unwinds
+        connection is not reaped (the pending read is waited on, never
+        cancelled, so the same read is still there at the next interval). The
+        loop ends when the source is exhausted; when the CONSUMER goes away
+        instead (cancellation / close), the pending read is cancelled and
+        awaited so the source's ``finally`` runs before the stream unwinds
         (a subscription source must get to unsubscribe).
         """
         if self.retry_ms is not None:
@@ -110,18 +111,16 @@ class SseStream:
         try:
             while True:
                 nxt = asyncio.ensure_future(iterator.__anext__())
-                while True:
-                    try:
-                        event = await asyncio.wait_for(
-                            asyncio.shield(nxt), self.keepalive_seconds
-                        )
-                    except asyncio.TimeoutError:
+                while not nxt.done():
+                    await asyncio.wait({nxt}, timeout=self.keepalive_seconds)
+                    if not nxt.done():
                         yield _KEEPALIVE_FRAME     # source silent: hold the connection
-                        continue
-                    except StopAsyncIteration:
-                        return                     # source exhausted: end the stream
-                    break
-                nxt = None
+                try:
+                    event = nxt.result()
+                except StopAsyncIteration:
+                    return                         # source exhausted: end the stream
+                finally:
+                    nxt = None
                 yield self.frame(event)
         finally:
             if nxt is not None and not nxt.done():

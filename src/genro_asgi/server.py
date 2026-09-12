@@ -42,10 +42,24 @@ leftover kwargs. Mixins go BEFORE ``BaseServer`` in the MRO.
 
 Ownership channel (one direction): registering an application assigns
 ``app.server = self``; the app-side setter enforces exactly-once.
+
+**The server learns it is leaving at the signal.** ``serve()`` boots
+``UvicornServer``, which owns the SIGINT/SIGTERM handlers: the first signal
+turns ``state`` to ``shutdown_mode`` and only then raises uvicorn's own exit
+flag, so uvicorn's three steps — close the listeners, wait
+``shutdown_timeout_seconds``, send ``lifespan.shutdown`` — all run over a
+server that already refuses new work. Whatever the state turn makes true,
+``leaving`` (an ``asyncio.Event``) makes awaitable: an endless response races
+its source against it through ``get_until_leaving`` and ends by itself instead
+of being cancelled when the grace runs out. Under uvicorn's own ``--reload``
+the child process builds no ``UvicornServer``, so there the ordered shutdown is
+not guaranteed (owner, 2026-09-12: accepted for the stateless single-process
+mode).
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 import uvicorn
@@ -61,6 +75,8 @@ from .wsx_payload import SerializedWsxPayload
 from .wsx import WsxConnection, WsxEnvelope
 
 if TYPE_CHECKING:
+    from types import FrameType
+
     from .types import ASGIApp, Receive, Scope, Send
 
 REFUSED_RETRY_AFTER_SECONDS = 5
@@ -82,7 +98,29 @@ __all__ = [
     "STOPPING",
     "WEBSOCKET_MAX_CONCURRENT",
     "BaseServer",
+    "UvicornServer",
 ]
+
+
+class UvicornServer(uvicorn.Server):
+    """uvicorn's server, with the signal handlers owned by the server it serves.
+
+    Bound to the ``BaseServer`` it runs (dual relationship:
+    ``self.base_server``). ``handle_exit`` is what the C-level signal handler
+    calls: the state turns FIRST — which is the whole point, uvicorn sends the
+    lifespan shutdown only after the graceful wait — and uvicorn's own
+    ``handle_exit`` then raises the exit flag (or, on a second SIGINT, the
+    force flag) exactly as it would have.
+    """
+
+    def __init__(self, base_server: BaseServer, config: uvicorn.Config) -> None:
+        super().__init__(config)
+        self.base_server = base_server
+
+    def handle_exit(self, sig: int, frame: FrameType | None) -> None:
+        """Turn the served server's state, then let uvicorn start its shutdown."""
+        self.base_server.start_leaving()
+        super().handle_exit(sig, frame)
 
 
 class BaseServer:
@@ -119,7 +157,7 @@ class BaseServer:
         self._by_mount: dict[str, BaseApplication] = {}
         self._well_known: dict[str, BaseApplication] = {}
         self._databases: dict[str, Any] = {}
-        self._uvicorn: uvicorn.Server | None = None
+        self._uvicorn: UvicornServer | None = None
         self._pool = WorkPool(self, max_threads=max_threads)
         self._lifespan = Lifespan(self)
         self._registry = RequestRegistry(self)
@@ -129,8 +167,8 @@ class BaseServer:
             websocket.get("max_concurrent") or WEBSOCKET_MAX_CONCURRENT
         )
         self._shutdown_timeout_seconds = shutdown_timeout
-        self.state = RUNNING
-        """``RUNNING``, ``QUITTING`` or ``STOPPING`` — read by the entry point."""
+        self._state = RUNNING
+        self._leaving = asyncio.Event()
         self.shutdown_mode = STOPPING
         """What ``state`` becomes at the lifespan shutdown when nobody chose first.
 
@@ -447,13 +485,56 @@ class BaseServer:
         await WsxConnection(self, scope, receive, send).serve()
 
     @property
+    def state(self) -> str:
+        """``RUNNING``, ``QUITTING`` or ``STOPPING`` — read by the entry point."""
+        return self._state
+
+    @state.setter
+    def state(self, state: str) -> None:
+        """Write the state, and set ``leaving`` the moment it is no longer RUNNING."""
+        self._state = state
+        if state != RUNNING:
+            self._leaving.set()
+
+    @property
+    def leaving(self) -> asyncio.Event:
+        """Set once the state has left RUNNING, and never cleared again.
+
+        What an endless response watches: the state alone says nothing to
+        somebody parked on a queue, and at the signal there are seconds, not
+        minutes, before uvicorn cancels whoever is still there.
+        """
+        return self._leaving
+
+    def start_leaving(self) -> None:
+        """Turn the state to ``shutdown_mode``; a state somebody chose is left alone."""
+        if self.state == RUNNING:
+            self.state = self.shutdown_mode
+
+    async def get_until_leaving(self, queue: asyncio.Queue[Any]) -> Any | None:
+        """The queue's next item, or ``None`` as soon as the server starts leaving.
+
+        The way a source of an endless response reads its feed: whichever of the
+        two comes first wins and the other is cancelled, so nothing is left
+        pending behind the caller.
+        """
+        item = asyncio.ensure_future(queue.get())
+        leaving = asyncio.ensure_future(self._leaving.wait())
+        try:
+            await asyncio.wait({item, leaving}, return_when=asyncio.FIRST_COMPLETED)
+            return item.result() if item.done() else None
+        finally:
+            for pending in (item, leaving):
+                pending.cancel()
+
+    @property
     def shutdown_timeout_seconds(self) -> float:
         """How long uvicorn waits for open connections at shutdown before cancelling them."""
         return self._shutdown_timeout_seconds
 
     @property
-    def uvicorn_server(self) -> uvicorn.Server | None:
-        """The uvicorn ``Server`` once ``serve()`` has built it (else ``None``).
+    def uvicorn_server(self) -> UvicornServer | None:
+        """The ``UvicornServer`` once ``serve()`` has built it (else ``None``).
 
         Callers that boot the server in a background thread read the bound port
         from ``uvicorn_server.servers[0].sockets[0].getsockname()`` after
@@ -464,19 +545,22 @@ class BaseServer:
     def serve(self, host: str = "127.0.0.1", port: int = 0) -> None:
         """Boot uvicorn programmatically, serving this server (blocking).
 
-        Builds ``uvicorn.Config``/``uvicorn.Server`` and runs it. ``port=0``
+        Builds ``uvicorn.Config``/``UvicornServer`` — the subclass owning the
+        signal handlers, so the state leaves RUNNING at the signal and not at
+        the end of the graceful wait — and runs it. ``port=0``
         lets the OS assign an ephemeral port, discoverable via
         ``uvicorn_server`` once started. ``shutdown_timeout_seconds`` bounds
         uvicorn's wait for open connections, so a response that never ends
         cannot keep the lifespan shutdown — and the applications' own stop —
         from running.
         """
-        self._uvicorn = uvicorn.Server(
+        self._uvicorn = UvicornServer(
+            self,
             uvicorn.Config(
                 self,
                 host=host,
                 port=port,
                 timeout_graceful_shutdown=self.shutdown_timeout_seconds,
-            )
+            ),
         )
         self._uvicorn.run()

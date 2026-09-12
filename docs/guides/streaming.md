@@ -110,4 +110,6 @@ response and rejects a response with `more_body=True`.
 The server's default `shutdown_timeout_seconds=5.0` limits uvicorn's wait for
 open streams during shutdown before cancellation. Application shutdown hooks
 then run; this is not a five-second bound on the entire shutdown sequence.
-See [Lifecycle](lifecycle.md).
+A stream that should not wait to be cancelled reads its source through
+`await server.get_until_leaving(queue)`, which answers `None` as soon as the
+server starts leaving, and ends on it. See [Lifecycle](lifecycle.md).

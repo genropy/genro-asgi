@@ -716,6 +716,7 @@ class SpaApplication(RoutedApplication):
             env_settings=self.env_settings,
             active_profile=self.profile_name,
         )
+        commander.server = self.server
         self._commander = commander
         try:
             await commander.start()

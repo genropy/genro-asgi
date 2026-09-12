@@ -224,8 +224,11 @@ class McpTransport:
         The baseline (only when the client presented ``Last-Event-ID``) replays
         the current ``progress.json`` of the session's pending/active tasks —
         spool reads off the loop via ``run_sync``. The live half follows a hub
-        subscription; the queue is unsubscribed when the stream closes (client
-        gone / task cancelled).
+        subscription, read against the server's ``leaving``: a server that
+        starts leaving ends the feed here, so the stream closes by itself
+        instead of being cancelled when the graceful wait runs out. The queue is
+        unsubscribed on every road out (client gone, task cancelled, server
+        leaving).
         """
         manager = server.tasks
         if last_event_id is not None:
@@ -234,7 +237,10 @@ class McpTransport:
         queue = manager.hub.subscribe(session_id)
         try:
             while True:
-                yield self._sse_event(await queue.get())
+                event = await server.get_until_leaving(queue)
+                if event is None:
+                    return
+                yield self._sse_event(event)
         finally:
             manager.hub.unsubscribe(session_id, queue)
 
