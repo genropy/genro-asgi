@@ -194,8 +194,8 @@ cookies off the scope, the query, the body drained ALWAYS from `receive` and
 joined once. **Decoding the body is an option of the application, and the codes
 are the strict HTTP reading (landed 2026-09-12, #87).** The two words live in
 the application's own grammar — `request(body=..., error_codes=...)` under
-`applications.<code>`, declarable on the class as `request_body` /
-`request_error_codes` when the composition carries no recipe. Decoded (the
+`applications.<code>` — and are read from there and nowhere else (#91 removed
+the class attributes `request_body` / `request_error_codes`). Decoded (the
 default), the body is decoded by content-type — json/xml/msgpack hydrated,
 urlencoded via `from_qs`, `multipart/form-data` via the stdlib `email` parser
 into fields (text hydrated, files as `UploadedFile` with `name`/`filename`/
@@ -235,7 +235,22 @@ front for `_server`-like pages is later work. Sessions: `MemoryStore`, cookie
 `Max-Age = ttl x 24`. Filesystem access goes **only through storage nodes**
 (logical volumes, e.g. `GENROASGI:frozen_users`); storage is pinned
 synchronous (`StorageMixin` calls `set_sync()`, tests pin the same) — never
-`await` a storage node call here. Config comes from the config builder + CLI;
+`await` a storage node call here. **The configuration always exists (landed 2026-09-12, #91).** `server.config` is
+a `ConfigurationHandler` for every server: `AsgiServer(applications=[...], ...)`
+without a source is a SHORTCUT, not a second way to be born — it takes the
+ready-made `default` template (`DefaultConfiguration` in
+`config/templates.py`, named in `CONFIGURATION_TEMPLATES`) and layers a
+`ShortcutConfiguration` on top of it, whose `main` writes the kwargs it received:
+the `server` scalars, the session ttl, one `application` node per instance (class
++ code + mount) and the `applications` default. Those kwargs are POPPED, so the
+value is read back off the tree; what the grammar cannot hold — a live
+`session_store` or `storage`, a `middleware` / `plugins` switch naming a class
+registered through `middleware_registry` / `plugin_registry` — stays a
+constructor kwarg and reaches the mixin that peels it, and `applications` stays
+too because the recipe holds a CLASS while the caller handed instances (the
+server mounts the instances). A template NAME is a configuration source like a
+`config.py` path, on the constructor (`AsgiServer(config="default")`) and on the
+CLI (`genro-asgi serve template=default`). Config comes from the config builder + CLI;
 `OpenApiApplication`, `McpApplication` and the tasks subsystem (scheduler,
 spool, executor) mount like any other app.
 

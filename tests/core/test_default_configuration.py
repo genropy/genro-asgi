@@ -35,7 +35,7 @@ from genro_asgi.config.templates import (
     DefaultConfiguration,
     ShortcutConfiguration,
 )
-from genro_asgi.middleware.cors import CorsMiddleware
+from genro_asgi.middleware.cors import CORSMiddleware
 from genro_asgi.types import Receive, Scope, Send
 
 
@@ -91,7 +91,7 @@ class TestTheConfigurationAlwaysExists:
         server = AsgiServer(
             applications=[ShopApp(mount="")], external_url="https://shop.example.com/"
         )
-        assert server.config("server.external_url") == "https://shop.example.com"
+        assert server.config("server.external_url") == "https://shop.example.com/"
         assert server.external_url == "https://shop.example.com"
 
     def test_the_session_ttl_reaches_the_tree(self) -> None:
@@ -106,7 +106,7 @@ class TestTheConfigurationAlwaysExists:
 
     def test_a_kwarg_the_grammar_cannot_hold_still_reaches_the_server(self) -> None:
         server = AsgiServer(applications=[ShopApp(mount="")], middleware={"cors": True})
-        assert server.get_middleware(CorsMiddleware) is not None
+        assert server.get_middleware(CORSMiddleware) is not None
 
 
 class TestTheShortcutTreeMatchesARecipe:

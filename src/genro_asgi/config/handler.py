@@ -232,7 +232,7 @@ class ConfigurationHandler(ConfigHandler):
         if node is None:
             return [], None
         entries: list[tuple[type, dict[str, Any]]] = []
-        for child in node.value:
+        for child in node.value or ():
             if not child.label:
                 raise ConfigError(
                     "applications: 'code' must be a non-empty string — an empty "

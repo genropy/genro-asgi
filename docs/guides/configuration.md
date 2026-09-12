@@ -107,13 +107,38 @@ passwordless SUPERADMIN.
 
 ## Handing it to the server
 
-`AsgiServer(config=...)` accepts four sources: a recipe **class**, a recipe
-**instance**, a **path** to a `config.py`, or a ready `ConfigurationHandler`.
+`AsgiServer(config=...)` accepts five sources: a recipe **class**, a recipe
+**instance**, a **path** to a `config.py`, the **name of a ready-made
+configuration**, or a ready `ConfigurationHandler`.
 
 ```python
 server = AsgiServer(config=ServerConfiguration)          # class
 server = AsgiServer(config="/srv/shop/config.py")        # path
+server = AsgiServer(config="default")                    # template name
 ```
+
+## The configuration always exists
+
+A server built with kwargs alone has one too. `AsgiServer(applications=[Shop()],
+port=8000)` is a **shortcut**: it takes the ready-made `default` configuration
+(`DefaultConfiguration`, named in `CONFIGURATION_TEMPLATES`), writes the kwargs
+it received into a top layer of its own and runs the same road as a recipe.
+`server.config` is a `ConfigurationHandler` here as everywhere, and the tree
+carries what a recipe would have written — the `server` section, and one
+`application` node per instance, so every application reads its own options
+(`applications.<code>.request`, and whatever its grammar declares) through the
+same door.
+
+```python
+server = AsgiServer(applications=[Shop(mount="")], host="0.0.0.0", port=9000)
+server.config("server.port")             # 9000 — written into the tree
+server.config("applications.shop.mount") # "" — the instance's own placement
+```
+
+What the grammar cannot hold stays a constructor kwarg and reaches the mixin
+that peels it: a live `session_store` or `storage` manager, and the
+`middleware=` / `plugins=` switches, whose names may be classes registered in
+code through `middleware_registry=` / `plugin_registry=`.
 
 An explicit constructor kwarg **wins over the configured value, wholesale per
 kwarg** — the server computes nothing, it just prefers what you passed:

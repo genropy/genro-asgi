@@ -156,8 +156,11 @@ class TestSelfConfiguringServer:
         assert set(server.applications) == {"shop", "api"}
         assert isinstance(server.applications["api"], ApiApp)
 
-    def test_a_bare_server_has_no_configuration(self) -> None:
-        assert AsgiServer(applications=[ShopApp(mount="")]).config is None
+    def test_a_server_composed_in_code_has_one_too(self) -> None:
+        """#91: the configuration always exists — the kwargs build it."""
+        server = AsgiServer(applications=[ShopApp(mount="")])
+        assert isinstance(server.config, ConfigurationHandler)
+        assert server.config("applications.shopapp.mount") == ""
 
     def test_the_handler_stays_reachable_as_the_read_door(self) -> None:
         server = AsgiServer(config=TwoAppConfig)

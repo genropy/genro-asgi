@@ -177,6 +177,27 @@ class TestServeSourceResolution:
         server = ServerLauncher(options, cli.registry).build_server()
         assert "Hello" in {type(app).__name__ for app in server.applications.values()}
 
+    def test_a_template_name_builds_the_ready_made_configuration(self, tmp_path: Path) -> None:
+        cli = Cli(registry=AppsRegistry(base_dir=tmp_path))
+        options = parse(cli, ["serve", "template=default", "--port", "7100"])
+        server = ServerLauncher(options, cli.registry).build_server()
+        assert server.config.node("storage") is not None
+        assert server.config_port == 7100
+
+    def test_an_unknown_template_names_the_known_ones(self, tmp_path: Path) -> None:
+        cli = Cli(registry=AppsRegistry(base_dir=tmp_path))
+        launcher = ServerLauncher(parse(cli, ["serve", "template=ghost"]), cli.registry)
+        with pytest.raises(CliError, match="unknown configuration template 'ghost'"):
+            launcher.build_server()
+
+    def test_a_template_travels_by_name_through_the_reload_payload(
+        self, tmp_path: Path
+    ) -> None:
+        cli = Cli(registry=AppsRegistry(base_dir=tmp_path))
+        launcher = ServerLauncher(parse(cli, ["serve", "template=default"]), cli.registry)
+        assert launcher.launcher_payload["config"] == "default"
+        assert launcher.reload_dir == str(Path.cwd())
+
     def test_an_unknown_name_lists_the_registered_ones(self, tmp_path: Path) -> None:
         cli = Cli(registry=AppsRegistry(base_dir=tmp_path))
         cli.registry.save("demo", {"source": "./a.py"})

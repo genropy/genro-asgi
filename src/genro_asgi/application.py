@@ -67,6 +67,12 @@ __all__ = ["ApplicationGrammar", "BaseApplication"]
 
 _MISSING = object()
 
+BODY_MODES: dict[str, bool] = {"decoded": False, "raw": True}
+"""The ``request(body=...)`` words, as what they decide: raw bytes or decoded."""
+
+ERROR_CODES: dict[str, int] = {"strict": 400, "fastapi": 422}
+"""The ``request(error_codes=...)`` words, as the status a rejected value answers."""
+
 
 class ApplicationGrammar:
     """The configuration grammar every application inherits.
@@ -111,17 +117,6 @@ class BaseApplication:
     code: str = ""
     mount: str | None = None
     grammar: type = ApplicationGrammar
-
-    # The two words of the ``request`` element, declarable on the class the way
-    # ``code`` and ``mount`` are and overridden by the recipe that writes
-    # ``request(...)`` under this application. The maps read them as what they
-    # decide: whether the body arrives raw, and which status a value rejected by
-    # validation answers. A word neither map knows raises a noisy KeyError at
-    # the first request, naming what was written.
-    request_body: str = "decoded"
-    request_error_codes: str = "strict"
-    BODY_MODES: dict[str, bool] = {"decoded": False, "raw": True}
-    ERROR_CODES: dict[str, int] = {"strict": 400, "fastapi": 422}
 
     def __init__(self, **kwargs: Any) -> None:
         cls = type(self)
@@ -180,24 +175,25 @@ class BaseApplication:
     def raw_body(self) -> bool:
         """True when this application takes the request body bytes untouched.
 
-        Written in the application's own grammar as ``request(body="raw")``, or
-        on the class as ``request_body`` when the composition carries no recipe;
-        the default, ``"decoded"``, leaves the decoding to the core.
+        Read from the configuration and nowhere else: the word is
+        ``request(body="raw")`` under ``applications.<code>``, written by the
+        site recipe or by the shortcut that builds one. The default,
+        ``"decoded"``, is the grammar element's own and leaves the decoding to
+        the core; a word the map does not know raises a noisy ``KeyError`` at
+        the first request, naming what was written.
         """
-        return self.BODY_MODES[self.config("request.body", default=self.request_body)]
+        return BODY_MODES[self.config("request.body", default="decoded")]
 
     @property
     def validation_error_status(self) -> int:
         """The status a value rejected by validation answers: 400, or 422.
 
-        Written in the application's own grammar as
-        ``request(error_codes="fastapi")``, or on the class as
-        ``request_error_codes``; the default, ``"strict"``, answers 400 like
-        every other failure the core judges.
+        Read from the configuration and nowhere else: the word is
+        ``request(error_codes="fastapi")`` under ``applications.<code>``. The
+        default, ``"strict"``, answers 400 like every other failure the core
+        judges.
         """
-        return self.ERROR_CODES[
-            self.config("request.error_codes", default=self.request_error_codes)
-        ]
+        return ERROR_CODES[self.config("request.error_codes", default="strict")]
 
     @property
     def handshake_cookie(self) -> str | None:

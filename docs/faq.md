@@ -61,9 +61,9 @@ that fit the signature but fail pydantic validation. A content type the core
 cannot decode produces 415. An exception inside the handler produces 500 unless
 it is an HTTP exception with its own status.
 
-422 is the handler's, for a domain rule, unless the application declares the
-FastAPI convention (`request_error_codes = "fastapi"`), which answers 422 to a
-rejected value.
+422 is the handler's, for a domain rule, unless the recipe declares the FastAPI
+convention for that application (`app.request(error_codes="fastapi")`), which
+answers 422 to a rejected value.
 
 See [Requests and errors](guides/requests.md#validation-and-status-codes).
 
@@ -71,8 +71,9 @@ See [Requests and errors](guides/requests.md#validation-and-status-codes).
 
 Declare a `body_data` parameter to receive the hydrated document without
 spreading its fields over individual parameters. A handler accepting
-`**kwargs` also receives the document under `body_data`. An application
-declaring `request_body = "raw"` receives every body as bytes in `body_raw`.
+`**kwargs` also receives the document under `body_data`. An application whose
+recipe declares `request(body="raw")` receives every body as bytes in
+`body_raw`.
 Extra JSON fields are dropped when the document is spread over declared scalar
 parameters.
 
