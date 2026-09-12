@@ -102,7 +102,7 @@ class ConfigurationHandler(ConfigHandler):
         if self.node("middleware") is None:
             return None
         return self.closed_attrs(
-            "middleware", "errors", "wellknown", "logging", "cors", "auth", "session"
+            "middleware", "errors", "logging", "cors", "auth", "session"
         )
 
     def identity_kwargs(self) -> dict[str, Any]:

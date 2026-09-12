@@ -166,7 +166,6 @@ class AsgiServerGrammar(TaskGrammar):
     def middleware(
         self,
         errors: bool | dict = None,
-        wellknown: bool | dict = None,
         logging: bool | dict = None,
         cors: bool | dict = None,
         auth: bool | dict = None,

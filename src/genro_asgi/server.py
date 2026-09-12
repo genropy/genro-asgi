@@ -26,9 +26,11 @@ on the loop; the pool is provisioned lazily on first use and torn down at
 shutdown.
 
 As an ASGI callable, ``__call__`` dispatches on the scope type: ``http`` runs
-the D3 demux — first path segment → the app mounted there with that segment
-stripped; else the app on the site root with the full path; else a 307 from
-``/`` to the declared ``default``; else 404 — ``websocket`` runs
+the D3 demux — a first path segment starting with a dot is hidden and answers
+404 on the spot, ``/.well-known/<declared name>`` excepted; else the app
+mounted on that segment, with the segment stripped; else the app on the site
+root with the full path; else a 307 from ``/`` to the declared ``default``;
+else 404 — ``websocket`` runs
 ``on_websocket``,
 whose DEFAULT is the empty socket of D7 (accepts nothing, closes cleanly with
 code 1000); ``lifespan`` runs the ``Lifespan`` handler (ordered startup,
@@ -70,7 +72,7 @@ from .pool import WorkPool
 from .request_registry import RequestRegistry
 from .response import Response
 from .websocket import WebSocket, WebSocketRegistry
-from .well_known import WELL_KNOWN_ROOT, WELL_KNOWN_SEGMENT
+from .well_known import HIDDEN_SEGMENT_PREFIX, WELL_KNOWN_ROOT, WELL_KNOWN_SEGMENT
 from .wsx_payload import SerializedWsxPayload
 from .wsx import WsxConnection, WsxEnvelope
 
@@ -395,19 +397,17 @@ class BaseServer:
         else **404**. ``/`` on a server WITH a root application matches its
         empty mount in the first branch, which forwards the same ``/``.
 
-        The exception of the hidden paths comes first (#88):
-        ``/.well-known/<name>`` naming a declared discovery document resolves
-        on the application that declared it. Every other hidden path takes the
-        four branches like any other — it is ``WellKnownMiddleware``, above
-        this dispatch, that answers 404 and keeps it from an application.
+        The hidden paths come first (#88): a first segment starting with a dot
+        never takes those branches, and the rule is the server's own — always
+        on, no middleware, no switch. A path without a dot is ordinary, the
+        conventional probes included (``/favicon.ico``, ``/robots.txt``): the
+        server silences none of them.
         """
         path = scope["path"]
         rest = path.lstrip("/")
         segment, _, remainder = rest.partition("/")
-        if segment == WELL_KNOWN_SEGMENT:
-            served = self.demux_well_known(remainder, scope)
-            if served is not None:
-                return served
+        if segment.startswith(HIDDEN_SEGMENT_PREFIX):
+            return self.demux_hidden(segment, remainder, scope)
         app = self.application_at(segment)
         if app is not None:
             sub_scope = dict(scope)
@@ -421,20 +421,25 @@ class BaseServer:
             return self.redirect_to_default(default, scope), scope
         return Response(content="Not Found", status_code=404, media_type="text/plain"), scope
 
-    def demux_well_known(self, remainder: str, scope: Scope) -> tuple[ASGIApp, Scope] | None:
-        """What serves ``.well-known/<remainder>``, or ``None`` when nobody declared it.
+    def demux_hidden(self, segment: str, remainder: str, scope: Scope) -> tuple[ASGIApp, Scope]:
+        """What serves a hidden first segment: a declared document, else **404**.
 
-        ``<name>`` — the first segment of ``remainder`` — is looked up among
-        the names read at mount time; the request goes to the application that
-        declared it, rebuilt as ``/_well_known/<name>/<rest>``, the path its
-        own router already resolves. No translation is invented.
+        Nothing of a site lives under a dotted segment — ``/.git/config``,
+        ``/.env`` — so the answer is 404 and no application is reached: not a
+        mount, not the root application, not the ``default`` redirect. The one
+        exception is RFC 8615: when ``segment`` is ``.well-known`` and the
+        first segment of ``remainder`` is a name some application declared at
+        mount time, the request goes to that application rebuilt as
+        ``/_well_known/<name>/<rest>``, the path its own router already
+        resolves. No translation is invented.
         """
-        app = self.well_known_applications.get(remainder.partition("/")[0])
-        if app is None:
-            return None
-        sub_scope = dict(scope)
-        sub_scope["path"] = f"/{WELL_KNOWN_ROOT}/{remainder}"
-        return app, sub_scope
+        if segment == WELL_KNOWN_SEGMENT:
+            app = self.well_known_applications.get(remainder.partition("/")[0])
+            if app is not None:
+                sub_scope = dict(scope)
+                sub_scope["path"] = f"/{WELL_KNOWN_ROOT}/{remainder}"
+                return app, sub_scope
+        return Response(content="Not Found", status_code=404, media_type="text/plain"), scope
 
     def redirect_to_default(self, app: BaseApplication, scope: Scope) -> Response:
         """A 307 to ``app``'s mount, preserving the query string.

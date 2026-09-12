@@ -47,21 +47,26 @@ that app with the segment stripped; else the root app; else 307 to the
 declared default; else the site index on `/` (ratified 2026-08-24, not yet
 built — today 404); else 404).
 **A path whose first segment starts with a dot is hidden or of service
-(landed 2026-09-12, #88).** `WellKnownMiddleware` — order 150, now ON by
-default — answers it 404 before the dispatch: no mount, no root application,
-no default redirect. Its one exception is RFC 8615: `/.well-known/<name>`
+(landed 2026-09-12, #88).** The rule is the SERVER's own and lives in the
+demux: `BaseServer.demux_hidden` answers it 404 before any branch is taken —
+no mount, no root application, no default redirect — always on, with no
+middleware and no switch (owner, 2026-09-12: nobody has a reason to turn it
+off). There is no `WellKnownMiddleware` and no `wellknown` word in the
+`middleware` grammar. Its one exception is RFC 8615: `/.well-known/<name>`
 passes when `<name>` is one of the names the server read at mount time into
-`well_known_applications`, and `BaseServer.demux_well_known` hands it to the
-application that declared it as `/_well_known/<name>/<rest>` — no translation
-invented, and that application's own `auth_rule` answers 401/403 there like
-anywhere else. WHO declares a name is the application: `well_known_names` is
-`()` on `BaseApplication` and, on `RoutedApplication`, the children of its
+`well_known_applications`, and the same method hands it to the application
+that declared it as `/_well_known/<name>/<rest>` — no translation invented,
+and that application's own `auth_rule` answers 401/403 there like anywhere
+else. WHO declares a name is the application: `well_known_names` is `()` on
+`BaseApplication` and, on `RoutedApplication`, the children of its
 `_well_known` branch (a routing class attached like the other reserved
 branches), read through `super().route` because the configured plugins are
 armed later, on the first access a request makes. Duplicates go to the LAST
-registered application, a fixed rule with no option. The fixed probes without
-a dot (`/robots.txt`, `/sitemap.xml`) answer 404 as before; the middleware
-switched off filters nothing and every path goes to the demux.
+registered application, a fixed rule with no option. A path WITHOUT a dot is
+ordinary, the conventional probes included: `/favicon.ico`, `/robots.txt`,
+`/sitemap.xml` and `/apple-touch-icon*` are demuxed like any other path and
+the server silences none of them (the site home will serve them from its
+static folder — later work).
 It owns one thread pool (`run_sync`), a
 `RequestRegistry` holding the in-flight picture, ordered lifespan, and boots
 uvicorn programmatically (`serve()`, CLI `genro-asgi serve/apps/stop/remove`,
@@ -214,7 +219,7 @@ a list). genro-tytx is used ONLY as a serializer (`from_tytx`, `from_qs`,
 `to_tytx`, `json_dumps`): nothing is imported from `genro_tytx.http`, and the
 transport → media type map lives in `media_types.py`.
 Middleware wraps the dispatch (errors, authentication, session, cors,
-logging, wellknown). Auth answers **401 to the anonymous, 403 to the known**,
+logging). Auth answers **401 to the anonymous, 403 to the known**,
 and a 401 is answered like any other error — the bare status with the
 exception's `WWW-Authenticate` (D-SA-4, 2026-09-12): the core owns no login
 page and points nobody at one. Admin surfaces live under the `_server` app as
