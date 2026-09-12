@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Error middleware: the outermost try/except of the chain and the login seam.
+"""Error middleware: the outermost try/except of the chain.
 
 ``ErrorMiddleware`` (order 100, the only middleware enabled by default —
 ``errors=False`` disables it) maps control-flow exceptions to responses:
@@ -29,15 +29,11 @@ never ``text/html``) gets the ``{"error": ...}`` document built by
 historical ``text/plain`` body. A missing ``Accept`` stays ``text/plain`` (the
 pre-existing default).
 
-Challenge negotiation (only when the server carries an active login surface —
-``server.login_enabled``): a 401 is where the server asks the caller to
-authenticate. A browser NAVIGATION (an http GET whose ``Accept`` includes
-``text/html``) gets a 302 to ``/_server/login_page`` carrying the original
-path+query as a ``safe_next_path``-validated ``next``; any other caller keeps
-the bare 401 (with its ``WWW-Authenticate``) and gains a ``{"login_url": ...}``
-JSON body so an SPA can drive the login. With the login surface off the 401 is
-answered exactly like any other error. The request shape is read from the scope
-headers (``headers_dict``) — never an ambient request.
+A 401 is answered exactly like any other error: the bare status with the
+exception's ``WWW-Authenticate`` challenge forwarded onto it (D-SA-4). The core
+never points a caller at a login page — it does not own one; an application
+that wants to redirect a browser to its own login surface does it in its own
+routes, not here.
 
 The middleware wraps ``send`` to track whether ``http.response.start`` has
 already passed downstream: an exception raised AFTER the response started
@@ -50,9 +46,7 @@ filtering happens here.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from urllib.parse import quote
 
-from ..auth import safe_next_path
 from ..exceptions import HTTPException, Redirect
 from ..response import Response
 from .base import BaseMiddleware, headers_dict
@@ -61,8 +55,6 @@ if TYPE_CHECKING:
     from ..types import Message, Receive, Scope, Send
 
 __all__ = ["ErrorMiddleware"]
-
-LOGIN_PAGE_URL = "/_server/login_page"
 
 
 class ErrorMiddleware(BaseMiddleware):
@@ -89,53 +81,8 @@ class ErrorMiddleware(BaseMiddleware):
                     "error after response started serving %s", scope.get("path", "?")
                 )
                 raise
-            response = self._response_for(exc, scope)
+            response = self._error_response(exc, scope)
             await response(scope, receive, send)
-
-    def _response_for(self, exc: Exception, scope: Scope) -> Response:
-        """The challenge response for an active-login 401, otherwise the error response."""
-        if isinstance(exc, HTTPException) and exc.status == 401 and self._login_active():
-            return self._challenge_response(exc, scope)
-        return self._error_response(exc, scope)
-
-    def _login_active(self) -> bool:
-        """True when the server carries an active login surface (``login_enabled``).
-
-        Used standalone (no server, or one without a login surface) the
-        middleware answers the 401 unchanged.
-        """
-        return bool(getattr(self.server, "login_enabled", False))
-
-    def _challenge_response(self, exc: HTTPException, scope: Scope) -> Response:
-        """Negotiate a 401 into a browser redirect or an API-friendly 401.
-
-        A browser navigation gets a 302 to the login page with the original
-        path+query as a validated ``next``; any other caller keeps the bare 401
-        (with its ``WWW-Authenticate``) and gains a ``{"login_url": ...}`` body.
-        """
-        headers = headers_dict(scope)
-        if self._is_browser_navigation(scope, headers):
-            target = safe_next_path(self._original_target(scope))
-            response = Response(status_code=302, media_type="text/plain")
-            response.set_header("location", f"{LOGIN_PAGE_URL}?next={quote(target, safe='')}")
-            return response
-        response = Response(status_code=401)
-        response.set_result({"login_url": LOGIN_PAGE_URL})
-        self._forward_headers(response, exc)
-        return response
-
-    def _is_browser_navigation(self, scope: Scope, headers: dict[str, str]) -> bool:
-        """True for an http GET whose ``Accept`` asks for HTML (a navigation)."""
-        if str(scope.get("method", "")).upper() != "GET":
-            return False
-        return "text/html" in headers.get("accept", "")
-
-    def _original_target(self, scope: Scope) -> str:
-        """Rebuild the request's original path (+query) for the ``next`` value."""
-        path = str(scope.get("path", "/"))
-        query = scope.get("query_string", b"")
-        query_str = query.decode("latin-1") if isinstance(query, bytes) else str(query)
-        return f"{path}?{query_str}" if query_str else path
 
     def _error_response(self, exc: Exception, scope: Scope) -> Response:
         """Build the ``Response`` for a raised exception, negotiating the body format."""

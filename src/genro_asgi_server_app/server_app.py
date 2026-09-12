@@ -34,9 +34,9 @@ schema/docs/index endpoints, and adds:
   surfaces (the index today, monitors later) can enumerate them;
 - the PASSWORD login surface (core 1d wave 1): ``login`` (JSON POST →
   ``UserStore.verify`` → ``Avatar`` → ``request.session.attach_avatar``),
-  ``login_page`` (HTML GET, the descriptor-driven ``resources/login.html``
-  read at USE time), ``logout`` and the public ``login_methods`` — dual-mode
-  by TWO routes, never in-handler ``Accept`` sniffing. The methods live in an
+  ``logout`` and the public ``login_methods``. There is no login PAGE here:
+  the management pages are gramlot's (D-SA-3), and what this app serves is the
+  JSON a page drives. The methods live in an
   ``AuthSection`` attached under ``auth`` (``ensure_auth_section`` /
   ``register_auth_method``); ``PasswordMethod`` is registered at construction.
   ``login`` enforces the store-backed lockout (REVIEW #9): the per-identity
@@ -65,10 +65,8 @@ overrides what it needs — not a profile flag on this class: no code exists for
 a consumer that does not exist yet.
 
 Identity: ``code`` and ``mount`` are both declared ``"_server"`` as class
-attributes — the system mount is a D4 invariant, and three cross-file
-references hardcode ``/_server/...`` (``PasswordMethod``'s ``action``,
-``LOGIN_PAGE_URL``, ``login.html``'s fetch), so moving this app elsewhere
-404s them.
+attributes — the system mount is a D4 invariant, and ``PasswordMethod``'s
+``action`` hardcodes ``/_server/login``, so moving this app elsewhere 404s it.
 
 Kwargs peeled by the cooperative ``__init__`` (D16): ``login`` and ``oidc`` are
 the login-surface values of the configuration's ``authentication`` section (the
@@ -83,13 +81,18 @@ keep today's bare app.
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import Any, ClassVar
 
+from genro_bag import BagResolver
+from genro_builders.builder import element
 from genro_routes import RoutingClass, route
 
-from ..auth import AuthMethod, OidcMethod, PasswordMethod
-from ..session import Avatar
-from .openapi import RESOURCES_DIR, OpenApiApplication
+from genro_asgi.application import ApplicationGrammar, BaseApplication
+from genro_asgi.applications.openapi import OpenApiApplication
+from genro_asgi.session import Avatar
+
+from .auth_method import AuthMethod, PasswordMethod
+from .oidc_method import OidcMethod
 from .server_sections import (
     AuthSection,
     MonitorSection,
@@ -98,14 +101,59 @@ from .server_sections import (
     UsersSection,
 )
 
-if TYPE_CHECKING:
-
-    pass
-
-__all__ = ["ServerApplication"]
+__all__ = ["ServerApplication", "ServerApplicationGrammar"]
 
 LOCKOUT_MAX_ATTEMPTS = 5
 LOCKOUT_BACKOFF_SECONDS = 30.0
+
+
+class ServerApplicationGrammar(ApplicationGrammar):
+    """The words this application adds to a recipe: its own login surface.
+
+    They live HERE and not in the site dialect because what asks a human for a
+    user and a password belongs to the application that owns the login surface
+    (D-SA-10). The recipe writes them under the application element::
+
+        server_app = applications.application(app_class=ServerApplication,
+                                              code="_server")
+        server_app.login(max_attempts=3, backoff=10)
+        server_app.oidc().provider(
+            code="google",
+            issuer="https://accounts.example.com",
+            client_id="client-123",
+            client_secret=EnvResolver("GOOGLE_CLIENT_SECRET"),
+        )
+
+    They are elements and not attributes of the application envelope because a
+    provider is a keyed collection with a secret in it: an element's attributes
+    go through the read stack, so ``client_secret`` is a resolver read at read
+    time and the secret never sits in the recipe (D-SA-11).
+    """
+
+    @element(sub_tags="", node_label="login")
+    def login(self, max_attempts: int = None, backoff: float = None) -> None:
+        """Login-surface policy: lockout tuning (``max_attempts``, ``backoff``)."""
+
+    @element(sub_tags="provider", collection_key="code", node_label="oidc")
+    def oidc(self) -> None:
+        """Collection of OIDC providers, each labelled by its ``code`` — stable
+        paths ``applications.<code>.oidc.<provider code>``."""
+
+    @element(parent_tags="oidc", sub_tags="")
+    def provider(
+        self,
+        code: str,
+        issuer: str = None,
+        client_id: str = None,
+        client_secret: str | BagResolver = None,
+        scopes: str = "openid email profile",
+        identity_claim: str = "email",
+        tags: str | list = None,
+    ) -> None:
+        """One OIDC provider: ``code`` (the collection key, REQUIRED),
+        ``issuer``, ``client_id``, ``client_secret`` (optional — a public client
+        has none; give it a resolver), plus the defaulted ``scopes``,
+        ``identity_claim`` and ``tags``."""
 
 
 class ServerApplication(OpenApiApplication):
@@ -123,6 +171,7 @@ class ServerApplication(OpenApiApplication):
     }
     code = "_server"
     mount = "_server"
+    grammar: type = ServerApplicationGrammar
 
     def __init__(self, **kwargs: Any) -> None:
         self._login_policy: dict[str, Any] = kwargs.pop("login", {})
@@ -138,6 +187,54 @@ class ServerApplication(OpenApiApplication):
         self.attach_section(TokensSection(self), name="tokens")
         self.attach_section(TasksSection(self), name="tasks")
         self.attach_section(MonitorSection(self), name="monitor")
+
+    @BaseApplication.server.setter
+    def server(self, value: Any) -> None:
+        """Take ownership, then read the login surface this recipe declared.
+
+        Attachment is the first moment there is a read door to ask: the
+        ``login`` and ``oidc`` nodes hang under this application's own node and
+        are read through the handler, so a ``client_secret`` written as a
+        resolver is resolved there like every other configured value. A
+        hand-built server names the same values as constructor kwargs and has
+        no recipe to read.
+        """
+        BaseApplication.server.fset(self, value)
+        self.read_declared_login_surface()
+
+    def read_declared_login_surface(self) -> None:
+        """Fold the recipe's ``login`` and ``oidc`` nodes into this app's surface.
+
+        Reads nothing when the owning server carries no configuration. Each
+        provider it finds is added to ``oidc_providers`` and registered as its
+        own auth method, exactly as a constructor-given one is.
+        """
+        handler = getattr(self.server, "config", None)
+        if handler is None:
+            return
+        section = f"applications.{self.code}"
+        if handler.node(f"{section}.login") is not None:
+            self._login_policy = handler.closed_attrs(
+                f"{section}.login", "max_attempts", "backoff"
+            )
+        node = handler.node(f"{section}.oidc")
+        if node is None:
+            return
+        for child in node.value:
+            provider = handler.closed_attrs(
+                f"{section}.oidc.{child.label}",
+                "issuer",
+                "client_id",
+                "client_secret",
+                "scopes",
+                "identity_claim",
+                "tags",
+            )
+            provider.setdefault("tags", [])
+            self._oidc_providers[child.label] = provider
+            self.register_auth_method(
+                OidcMethod(self, self._oidc_method_id(child.label), child.label, provider)
+            )
 
     @staticmethod
     def _oidc_method_id(code: str) -> str:
@@ -228,10 +325,9 @@ class ServerApplication(OpenApiApplication):
         involved. The server's ``user_store`` is wired in the next wave (Macro
         5b): until then a server without one answers the error shape.
 
-        The ``next`` return path is NOT a login parameter: the challenge
-        redirects to ``login_page?next=...`` and the page script owns the
-        post-success redirect — ``login`` itself never sees it and posts carry
-        only the credentials.
+        The ``next`` return path is NOT a login parameter: whoever drives the
+        login owns the post-success redirect — ``login`` itself never sees it
+        and posts carry only the credentials.
 
         Enforces the server-side lockout (REVIEW #9): the failure counter
         lives ON the user's store record (``failed_attempts`` /
@@ -292,20 +388,6 @@ class ServerApplication(OpenApiApplication):
         session = _request.session
         session.attach_avatar(avatar)
         return {"session_id": session.id, "identity": avatar.identity, "tags": avatar.tags}
-
-    @route(media_type="text/html")
-    def login_page(self, next: str = "") -> str:
-        """Serve the descriptor-driven HTML login page (GET, dual-mode twin of ``login``).
-
-        The page builds itself from ``login_methods`` and posts credentials to
-        the method's ``action`` (``/_server/login``). Read at USE time so a
-        template swap needs no re-import. ``next`` is accepted so the challenge
-        redirect's query binds; the page script consumes it client-side.
-
-        Note:
-            Route: GET /_server/login_page
-        """
-        return (RESOURCES_DIR / "login.html").read_text()
 
     @route(media_type="application/json")
     def logout(self, session_id: str = "") -> dict[str, Any]:

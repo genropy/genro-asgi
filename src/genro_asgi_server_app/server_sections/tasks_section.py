@@ -41,11 +41,11 @@ from typing import TYPE_CHECKING, Any
 
 from genro_routes import RoutingClass, route
 
-from ...tasks.schedule import TaskCadence
-from ...tasks.spool import STATUSES
+from genro_asgi.tasks.schedule import TaskCadence
+from genro_asgi.tasks.spool import STATUSES
 
 if TYPE_CHECKING:
-    from ...tasks.manager import TaskManager
+    from genro_asgi.tasks.manager import TaskManager
     from ..server_app import ServerApplication
 
 __all__ = ["TasksSection"]

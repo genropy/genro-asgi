@@ -80,7 +80,7 @@ Repository = "https://github.com/genropy/genro-asgi"
 "Bug Tracker" = "https://github.com/genropy/genro-asgi/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/genro_asgi", "src/genro_asgi_multiworker_spa"]
+packages = ["src/genro_asgi", "src/genro_asgi_multiworker_spa", "src/genro_asgi_server_app"]
 exclude = ["**/tests/"]
 
 [tool.pytest.ini_options]
@@ -88,7 +88,7 @@ testpaths = ["tests"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
-addopts = "-v --cov=genro_asgi --cov=genro_asgi_multiworker_spa --cov-report=term-missing"
+addopts = "-v --cov=genro_asgi --cov=genro_asgi_multiworker_spa --cov=genro_asgi_server_app --cov-report=term-missing"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
@@ -180,7 +180,7 @@ disable_error_code = ["misc", "attr-defined"]
 # dynamic-mixin category as AuthMixin above: the attributes exist on every
 # runtime composition but not on the static base.
 [[tool.mypy.overrides]]
-module = "genro_asgi.applications.server_app"
+module = "genro_asgi_server_app.server_app"
 disable_error_code = ["attr-defined", "union-attr"]
 
 # LocalTaskExecutor reaches server.storage (supplied by StorageMixin) and
@@ -225,5 +225,5 @@ disable_error_code = ["attr-defined"]
 # (present only when TaskMixin is composed and a request is in flight) — the
 # same dynamic-composition category as server_app.
 [[tool.mypy.overrides]]
-module = "genro_asgi.applications.server_sections.tasks_section"
+module = "genro_asgi_server_app.server_sections.tasks_section"
 disable_error_code = ["union-attr", "no-any-return"]

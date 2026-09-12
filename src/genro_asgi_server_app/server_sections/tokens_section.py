@@ -44,8 +44,8 @@ import jwt
 from genro_routes import RoutingClass, route
 
 if TYPE_CHECKING:
-    from ...auth.api_key_store import ApiKeyStore
-    from ...auth.core import AuthCore
+    from genro_asgi.auth.api_key_store import ApiKeyStore
+    from genro_asgi.auth.core import AuthCore
     from ..server_app import ServerApplication
 
 __all__ = ["TokensSection"]

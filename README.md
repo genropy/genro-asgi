@@ -174,7 +174,8 @@ mypy src/                 # type check (advisory)
 
 Install the git hooks once per clone (pre-commit runs ruff; pre-push runs the
 tests only when the pushed range changes Python, and only the suite the change
-belongs to — `tests/core`, `tests/spa`, or both):
+belongs to — `tests/core`, `tests/spa`, `tests/server_app`, or everything
+when more than one of them changed):
 
 ```bash
 cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit

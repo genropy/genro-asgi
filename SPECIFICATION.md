@@ -1,6 +1,6 @@
 # New Design Specification — the genro-asgi-* family (core + orchestration)
 
-**Version**: 0.6.0 · **Last Updated**: 2026-07-24 · **Status**: 🔴 DA REVISIONARE
+**Version**: 0.6.1 · **Last Updated**: 2026-09-12 · **Status**: 🔴 DA REVISIONARE
 
 > Founding specification of the redesign. Decided in the design sessions of
 > 2026-07-17→19; the critical survey of the current codebase that motivates it
@@ -930,3 +930,19 @@ it is accepted, the reason is written down where the limit is accepted. A
 design may not celebrate a fixed set, a boot-time-only decision or a
 restart-to-change behaviour as if immobility were a virtue. The principle
 governs every design in this repository, the technical dossier included.
+
+**D33 — The `_server` app is declared, not automatic; the core never asks for
+user and password (supersedes the "automatic, not configured" half of D4).**
+Ratified 2026-09-12, release 0.46.1. The management application lives in its
+own top-level package of the distribution, `genro_asgi_server_app`, and the
+core imports nothing from it: it is declared in the configuration like any
+other application (code `_server`), with its own grammar elements `login`,
+`oidc`, `provider` under the `application` element. The core authenticates by
+header credentials and session avatar only; the interactive methods (password,
+OIDC) belong to the package, and a hosted application may keep its own login,
+as genropy does. The fixed 401 → `/_server/...` redirect leaves the core: a 401
+is bare, with `WWW-Authenticate`. Which application authenticates for which
+path, and how shared users link by a unique code, is a later decision
+(issue #83). The table row of `_server` above and the D4 mention in the wave
+record are read through this decision. Register:
+`temp/decisioni_serverapp_identita_2026-09-12.md` (D-SA-1..11).

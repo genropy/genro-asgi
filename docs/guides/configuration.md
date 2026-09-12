@@ -69,7 +69,7 @@ explains itself**: the grammar documents what CAN be written, a recipe docstring
 documents what THIS instance chose and why. `main` reads as a table of contents.
 
 Every section is a singleton, so its label is its tag and every path below it is
-stable and hand-writable: `server.host`, `authentication.oidc.<code>`,
+stable and hand-writable: `server.host`, `authentication.credentials`,
 `applications.<code>.parameters.<name>`.
 
 ## Values that come from outside: resolvers in place

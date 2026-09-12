@@ -36,17 +36,14 @@ from cryptography.fernet import Fernet
 
 from tests.storage_support import site_storage
 
-from genro_asgi import (
-    AsgiServer,
+from genro_asgi import AsgiServer, BaseApplication, FileUserStore, UserStore
+from genro_asgi_server_app import (
     AuthMethod,
     AuthSection,
-    BaseApplication,
-    FileUserStore,
     PasswordMethod,
     ServerApplication,
-    UserStore,
+    safe_next_path,
 )
-from genro_asgi.auth.auth_method import safe_next_path
 from genro_asgi.types import Message, Scope
 
 
@@ -74,7 +71,7 @@ class MemoryUserStore(UserStore):
 def make_server(with_users: bool = True) -> AsgiServer:
     """A full hand-built server; ``with_users`` seeds alice/wonder on a user store."""
     if not with_users:
-        return AsgiServer(applications=[BaseApplication(mount="")])
+        return AsgiServer(applications=[ServerApplication(), BaseApplication(mount="")])
     store = MemoryUserStore()
     store.save(
         {
@@ -92,7 +89,9 @@ def make_server(with_users: bool = True) -> AsgiServer:
             "enabled": False,
         }
     )
-    return AsgiServer(applications=[BaseApplication(mount="")], users=store)
+    return AsgiServer(
+        applications=[ServerApplication(), BaseApplication(mount="")], users=store
+    )
 
 
 async def drive(
@@ -187,8 +186,8 @@ def make_lockout_server(
             "enabled": True,
         }
     )
-    kwargs: dict[str, Any] = {"server_app": {"login": policy}} if policy else {}
-    return AsgiServer(applications=[BaseApplication(mount="")], users=store, **kwargs), store
+    server_app = ServerApplication(login=policy) if policy else ServerApplication()
+    return AsgiServer(applications=[server_app, BaseApplication(mount="")], users=store), store
 
 
 async def login_attempt(
@@ -242,7 +241,9 @@ class TestLoginHappyPath:
                 "enabled": True,
             }
         )
-        server = AsgiServer(applications=[BaseApplication(mount="")], users=store)
+        server = AsgiServer(
+            applications=[ServerApplication(), BaseApplication(mount="")], users=store
+        )
         anonymous = server.session_store.create()
         _, sent = await drive(
             server,
@@ -447,20 +448,13 @@ class TestLoginLockout:
         assert payload["identity"] == "alice"
 
 
-class TestLoginPage:
-    async def test_login_page_serves_the_descriptor_driven_html(self) -> None:
+class TestNoLoginPage:
+    """D-SA-3: the HTML login page is gramlot's, not this app's."""
+
+    async def test_login_page_is_gone(self) -> None:
         server = make_server()
         _, sent = await drive(server, "/_server/login_page")
-        assert response_status(sent) == 200
-        assert response_headers(sent)[b"content-type"].startswith(b"text/html")
-        page = response_body(sent).decode()
-        assert "<title>Sign in</title>" in page
-        assert "/_server/login_methods" in page
-
-    async def test_login_page_binds_the_next_query_param(self) -> None:
-        server = make_server()
-        _, sent = await drive(server, "/_server/login_page?next=/app/page")
-        assert response_status(sent) == 200
+        assert response_status(sent) == 404
 
 
 class TestLoginMethods:

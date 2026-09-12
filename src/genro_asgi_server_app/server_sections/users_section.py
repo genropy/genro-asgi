@@ -50,7 +50,7 @@ from typing import TYPE_CHECKING, Any
 from genro_routes import RoutingClass, route
 
 if TYPE_CHECKING:
-    from ...auth.user_store import UserStore
+    from genro_asgi.auth.user_store import UserStore
     from ..server_app import ServerApplication
 
 __all__ = ["UsersSection"]

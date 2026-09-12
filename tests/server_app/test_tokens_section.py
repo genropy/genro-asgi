@@ -29,6 +29,7 @@ import json
 from typing import Any
 
 from genro_asgi import ApiKeyStore, AsgiServer, Avatar, BaseApplication
+from genro_asgi_server_app import ServerApplication
 from genro_asgi.middleware.base import BaseMiddleware
 from genro_asgi.types import Message, Scope
 
@@ -81,7 +82,7 @@ def make_server(
     if store is _DEFAULT:
         store = MemoryApiKeyStore()
     kwargs: dict[str, Any] = {
-        "applications": [BaseApplication(mount="")],
+        "applications": [ServerApplication(), BaseApplication(mount="")],
         "middleware": {"stamp": {"avatar": avatar}},
         "middleware_registry": {"stamp": StampAuthMiddleware},
     }

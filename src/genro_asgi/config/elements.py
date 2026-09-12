@@ -19,7 +19,7 @@ The grammar the server class exposes as ``AsgiServer.grammar``: one
 with the full closed section list) whose sections describe the whole site.
 Every section is a singleton (``[0:1]``), so labels are clean and every path is
 stable and hand-writable: ``configuration.server``,
-``configuration.authentication.oidc.<code>``,
+``configuration.authentication.credentials``,
 ``configuration.applications.<code>``.
 
 Authoring conventions inherited from contrib/config:
@@ -40,10 +40,9 @@ Sections:
   (the session TTL) and ``tasks`` (declared by ``TaskGrammar``, the class that
   peels ``tasks=``).
 - ``middleware`` — one ``{name: bool | dict}`` switch per middleware.
-- ``authentication`` — the whole identity surface: the bootstrap
-  ``admin_password``, the ``users``/``tokens`` store descriptors, the ``login``
-  lockout policy, the ``oidc`` provider collection and the ``credentials``
-  handed to ``AuthCore``.
+- ``authentication`` — the identity surface the core owns: the bootstrap
+  ``admin_password``, the ``users``/``tokens`` store descriptors and the
+  ``credentials`` handed to ``AuthCore``.
 - ``storage`` — the mount point of genro-storage's own grammar: the mounts of
   the server's ``StorageManager``, plus the section's ``storage_key``.
 - ``applications`` — the app collection keyed by ``code``; each entry MOUNTS
@@ -121,7 +120,7 @@ class AsgiServerGrammar(TaskGrammar):
         (``https://shop.example.com``; a trailing slash is stripped). It is not
         the listener: behind a proxy the bind address and the public address
         differ, and only the latter is meaningful to an outside caller. Required
-        when an ``oidc`` provider is configured — the provider is given an
+        when an application declares OIDC providers — the provider is given an
         absolute ``redirect_uri`` — and a boot error when missing there.
 
         ``max_threads`` sizes the server's thread pool: ``BaseServer`` peels it
@@ -181,19 +180,18 @@ class AsgiServerGrammar(TaskGrammar):
 
     @element(
         parent_tags="configuration",
-        sub_tags=(
-            "admin_password[0:1],users[0:1],tokens[0:1],"
-            "login[0:1],oidc[0:1],credentials[0:1]"
-        ),
+        sub_tags="admin_password[0:1],users[0:1],tokens[0:1],credentials[0:1]",
         node_label="authentication",
     )
     def authentication(self) -> None:
-        """The server's whole identity surface.
+        """The server's identity surface: the STORES and the header credentials.
 
-        Both the identity STORES (``admin_password``, ``users``, ``tokens`` →
-        the kwargs ``AuthMixin`` peels) and the LOGIN surface (``login``,
-        ``oidc`` → forwarded to the ``_server`` application) are configured
-        here: one section for one subject, whichever object consumes the value.
+        ``admin_password``, ``users``, ``tokens`` are the kwargs ``AuthMixin``
+        peels and ``credentials`` the entries ``AuthCore`` verifies. What asks a
+        human for a user and a password is NOT here (D-SA-10): the login policy
+        and the OIDC providers are words of the grammar the application owning
+        the login surface declares, written under its own ``application``
+        element.
         """
 
     @element(parent_tags="authentication", sub_tags="")
@@ -212,37 +210,6 @@ class AsgiServerGrammar(TaskGrammar):
     def tokens(self, mount: str = None, prefix: str = None) -> None:
         """Api-key store descriptor: ``{mount, prefix}`` — the ``tokens=`` kwarg
         ``AuthMixin`` peels."""
-
-    @element(parent_tags="authentication", sub_tags="")
-    def login(self, max_attempts: int = None, backoff: float = None) -> None:
-        """Login-surface policy: lockout tuning (``max_attempts``, ``backoff``)
-        — forwarded to ``ServerApplication``, which peels ``login=``."""
-
-    @element(
-        parent_tags="authentication",
-        sub_tags="provider",
-        collection_key="code",
-        node_label="oidc",
-    )
-    def oidc(self) -> None:
-        """Collection of OIDC providers, each labelled by its ``code`` — stable
-        paths ``authentication.oidc.<code>``."""
-
-    @element(parent_tags="oidc", sub_tags="")
-    def provider(
-        self,
-        code: str,
-        issuer: str = None,
-        client_id: str = None,
-        client_secret: str | BagResolver = None,
-        scopes: str = "openid email profile",
-        identity_claim: str = "email",
-        tags: str | list = None,
-    ) -> None:
-        """One OIDC provider: ``code`` (the collection key, REQUIRED),
-        ``issuer``, ``client_id``, ``client_secret`` (optional — a public client
-        has none; give it a resolver), plus the defaulted ``scopes``,
-        ``identity_claim`` and ``tags``."""
 
     @element(
         parent_tags="authentication",

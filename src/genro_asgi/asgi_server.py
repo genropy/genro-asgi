@@ -35,8 +35,7 @@ read door applications delegate to. A bare ``AsgiServer(...)`` has
 ``config is None`` and behaves exactly as before.
 
 Its cooperative ``__init__`` peels the kwargs the frozen Macro 1 ``BaseServer``
-does not accept — ``host``/``port``/``external_url`` plus ``server_app`` (the
-login-surface values of the ``authentication`` section) — and forwards
+does not accept — ``host``/``port``/``external_url`` — and forwards
 everything else (``applications``, ``auth``, ``session_store``/``session_ttl``,
 ``middleware``/``middleware_registry``, ``plugins``/``plugin_registry``,
 ``storage``/``storage_key``, ``parent``) down the D16 chain. The peeled
@@ -55,11 +54,12 @@ build a value the provider then rejects. Missing it with a provider
 configured is a boot error (``_check_oidc_external_url``), not an opaque
 provider error at the first login.
 
-Once the chain has run, ``__init__`` registers the automatic ``_server`` app
-(``_register_server_app``, D4 "automatic, not configured"): a hand-built
-``AsgiServer(applications=[...])`` exposes ``/_server/...`` exactly like a
-configured one, and no configuration path special-cases it. The configured
-databases are registered right after, over the live server.
+No application is registered behind the caller's back (D-SA-10, superseding the
+"automatic, not configured" half of SPEC D4): the server application is declared
+like any other, with its ``app_class`` from ``genro_asgi_server_app`` and the
+code ``_server``. A server that declares none exposes no ``/_server/...`` and
+the core imports nothing of that package. The configured databases are
+registered at the end of ``__init__``, over the live server.
 """
 
 from __future__ import annotations
@@ -69,7 +69,6 @@ from typing import Any
 
 from genro_builders.builder import BuilderBase
 
-from .applications.server_app import ServerApplication
 from .auth import AuthMixin
 from .communication import CommunicationMixin
 from .config.elements import AsgiServerGrammar
@@ -101,11 +100,10 @@ class AsgiServer(
     """The shipped composition: communication + auth + sessions + chain + plugins + storage + base.
 
     Constructor kwargs peeled here: ``config`` — the configuration source this
-    server reads itself from — ``host`` and ``port`` (the ``serve`` defaults),
-    ``external_url`` (the public base address, trailing slash stripped) and
-    ``server_app`` (the login-surface values forwarded to the automatically
-    registered ``_server`` app). Every other kwarg flows to the capability
-    mixins and the base (D16 cooperative init).
+    server reads itself from — ``host`` and ``port`` (the ``serve`` defaults)
+    and ``external_url`` (the public base address, trailing slash stripped).
+    Every other kwarg flows to the capability mixins and the base (D16
+    cooperative init).
     """
 
     grammar: type = AsgiServerGrammar
@@ -118,9 +116,7 @@ class AsgiServer(
         self._config_port: int | None = kwargs.pop("port", None)
         external_url: str | None = kwargs.pop("external_url", None)
         self._external_url: str | None = external_url.rstrip("/") if external_url else None
-        self._server_app_kwargs: dict[str, Any] = kwargs.pop("server_app", {})
         super().__init__(**kwargs)
-        self._register_server_app()
         self._check_oidc_external_url()
         if self.config is not None:
             self._register_configured_databases(self.config)
@@ -168,9 +164,6 @@ class AsgiServer(
         storage = config.storage_config()
         if storage is not None:
             kwargs["storage"], kwargs["storage_key"] = storage
-        server_app = config.server_app_kwargs()
-        if server_app:
-            kwargs["server_app"] = server_app
         entries, default = config.applications()
         kwargs["applications"] = [app_class(**app_kwargs) for app_class, app_kwargs in entries]
         if default is not None:
@@ -202,25 +195,15 @@ class AsgiServer(
         """
         return self._config
 
-    def _register_server_app(self) -> None:
-        """Register the automatic ``_server`` app (D4) unless one is already there.
-
-        Runs at the end of ``__init__``, after the composed applications are
-        registered, so the guard only matters when the composition already
-        carries a ``_server`` app (idempotent). The peeled ``server_app``
-        kwargs (the ``authentication`` login surface: ``login`` policy, ``oidc``
-        providers) are forwarded here — the app peels them.
-        """
-        if "_server" not in self.applications:
-            self.register_application(ServerApplication(**self._server_app_kwargs))
-
     def _check_oidc_external_url(self) -> None:
         """Refuse to boot when a provider is configured without ``external_url``.
 
-        Runs right after the ``_server`` registration, the first moment both facts are
-        known — the app carries the configured providers, the server carries its
-        public address — and covers the configured and the hand-built server with
-        one check. An OIDC provider is handed the ABSOLUTE ``redirect_uri`` it
+        Runs once the applications are registered, the first moment both facts
+        are known — the app carries the configured providers, the server carries
+        its public address — and covers the configured and the hand-built server
+        with one check. The check reads an attribute (``oidc_providers``) off
+        whatever application answers to ``_server``: the core imports no class
+        to ask the question. An OIDC provider is handed the ABSOLUTE ``redirect_uri`` it
         must send the browser back to; without a public base address that URI
         cannot be built, so the configuration is incomplete and the server says
         so loudly instead of failing at the first login attempt with a
@@ -234,19 +217,6 @@ class AsgiServer(
                 "external_url: OIDC needs the public base URL to build the "
                 "absolute redirect_uri (set server(external_url=...))"
             )
-
-    @property
-    def login_enabled(self) -> bool:
-        """True when the ``_server`` app carries a registered auth method.
-
-        The challenge negotiation (``ErrorMiddleware``) reads this to decide
-        whether a 401 becomes a login redirect (browser) or a ``login_url``
-        body (API). It reflects live state: ``ServerApplication`` registers the
-        password method at construction, so its server has a login surface.
-        """
-        server_app = self.applications.get("_server")
-        section = getattr(server_app, "auth_section", None)
-        return bool(section is not None and section.methods)
 
     @property
     def config_host(self) -> str | None:

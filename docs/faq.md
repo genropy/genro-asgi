@@ -5,8 +5,8 @@
 ### Which package should I install?
 
 Install `genro-asgi` in a virtual environment with Python 3.11 or newer. The
-same distribution supplies `genro_asgi` and `genro_asgi_multiworker_spa`; there
-is no separate `[spa]` extra. These pages describe the development checkout,
+same distribution supplies `genro_asgi`, `genro_asgi_multiworker_spa` and
+`genro_asgi_server_app`; there is no separate `[spa]` extra. These pages describe the development checkout,
 so check your installed version when an API differs.
 
 See [Getting started](getting-started.md#installation).
@@ -150,6 +150,23 @@ compatibility re-exports. Update import statements and module-path strings in
 configuration and process commands.
 
 See [Multiworker SPA integration](guides/multiworker-spa.md).
+
+### Why is `/_server/...` a 404 after upgrading?
+
+Since 0.46.1 the server application is declared like any other, and its code
+lives in `genro_asgi_server_app`. Nothing mounts it for you: pass
+`ServerApplication()` in `applications=`, or write it on the `applications`
+section with the code `_server`. `genro_asgi` no longer exports
+`ServerApplication`, `AuthSection`, `AuthMethod`, `PasswordMethod` or
+`OidcMethod`, and there are no compatibility re-exports.
+
+The login policy and the OIDC providers moved with it: they are no longer
+`authentication.login` and `authentication.oidc` in a recipe, but the same
+three words written under the application's own element. The HTML login page
+and the HTML monitor page are gone entirely — those endpoints served pages
+that gramlot renders now, and the JSON routes beside them are unchanged.
+
+See the `Server application` page of the API reference.
 
 ### Can one named orchestration profile configure two groups?
 

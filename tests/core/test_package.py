@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from importlib.metadata import version
 
 import genro_asgi
@@ -19,9 +21,7 @@ def test_root_exports_public_api():
         "AsgiServer",
         "AsgiServerGrammar",
         "AuthCore",
-        "AuthMethod",
         "AuthMixin",
-        "AuthSection",
         "Avatar",
         "BaseApplication",
         "BaseConfiguration",
@@ -51,11 +51,9 @@ def test_root_exports_public_api():
         "Message",
         "MemorySessionStore",
         "MiddlewareMixin",
-        "OidcMethod",
         "OpenAPIPlugin",
         "OpenAPITranslator",
         "OpenApiApplication",
-        "PasswordMethod",
         "PluginMixin",
         "Receive",
         "Redirect",
@@ -66,7 +64,6 @@ def test_root_exports_public_api():
         "RoutedApplication",
         "Scope",
         "Send",
-        "ServerApplication",
         "Session",
         "SessionMixin",
         "SessionStore",
@@ -80,3 +77,21 @@ def test_root_exports_public_api():
     assert genro_asgi.__all__ == expected
     for name in expected:
         assert hasattr(genro_asgi, name)
+
+
+def test_importing_the_core_loads_no_module_of_the_server_app_package():
+    # D-SA-2: the core imports nothing of genro_asgi_server_app. Asked in a
+    # fresh interpreter, because this one has already imported the package
+    # through the tests that exercise it.
+    loaded = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import genro_asgi, sys; "
+            "print([m for m in sys.modules if m.startswith('genro_asgi_server_app')])",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert loaded == "[]"

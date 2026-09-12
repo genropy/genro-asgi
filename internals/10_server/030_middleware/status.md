@@ -28,16 +28,18 @@ constructor options; the recipe middleware element names only the six built-ins.
 
 Claim anchors: [`MiddlewareMixin`](../../../src/genro_asgi/middleware/__init__.py#L80), [`get_middleware`](../../../src/genro_asgi/middleware/__init__.py#L103).
 
-## HTTP errors and challenges
+## HTTP errors
 
 Only HTTP enters the middleware chain. `ErrorMiddleware` records whether a
 response started; an error after start is re-raised rather than answered twice.
 Before start, an `HTTPException` retains its status and headers, a `Redirect`
 retains its Location, and other exceptions become a generic logged 500.
 
-With login enabled, a 401 from browser navigation becomes a 302 to
-`/_server/login_page` with a validated `next` path; an API request receives a
-401 with `login_url`. Error bodies otherwise follow Accept negotiation.
+A 401 is answered like any other error, the same one to a browser and to an
+API caller: the bare status with the exception's `WWW-Authenticate` forwarded
+onto it (D-SA-4). The negotiation that turned a browser 401 into a 302 to a
+login page, and an API one into a `login_url` body, is gone, and so is the page
+it pointed at (D-SA-3). Error bodies follow Accept negotiation.
 `Response.ERROR_MAP` is a standalone helper table, not the middleware policy.
 
 The error middleware writes through its own outer `send`. Thus an error
@@ -45,9 +47,9 @@ response bypasses inner CORS/session response wrappers and may lack their
 headers. Disabling errors is accepted and allows exceptions to escape the
 composition. Those limitations are not resolved by this documentation update.
 
-Claim anchors: [`ErrorMiddleware`](../../../src/genro_asgi/middleware/errors.py#L68).
+Claim anchors: [`ErrorMiddleware`](../../../src/genro_asgi/middleware/errors.py#L60).
 
-Behavior evidence: [`_challenge_response`](../../../src/genro_asgi/middleware/errors.py#L109), [`_error_response`](../../../src/genro_asgi/middleware/errors.py#L140).
+Behavior evidence: [`_error_response`](../../../src/genro_asgi/middleware/errors.py#L87).
 
 ## Sessions, authentication, CORS and logging
 
@@ -87,5 +89,5 @@ Claim anchors: [`WsxConnection`](../../../src/genro_asgi/wsx.py#L193), [`get_mid
 - [src/genro_asgi/wsx.py](../../../src/genro_asgi/wsx.py)
 - [tests/core/test_middleware.py](../../../tests/core/test_middleware.py)
 - [tests/core/test_middleware_std.py](../../../tests/core/test_middleware_std.py)
-- [tests/core/test_login_flow.py](../../../tests/core/test_login_flow.py)
+- [tests/server_app/test_login_flow.py](../../../tests/server_app/test_login_flow.py)
 - [tests/core/test_wsx_connection.py](../../../tests/core/test_wsx_connection.py)

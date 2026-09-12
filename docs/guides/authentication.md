@@ -98,19 +98,20 @@ the [sessions guide](sessions.md)).
 
 ## Server-side login flow
 
-The always-mounted `_server` app exposes a login flow for session-based clients:
+The `_server` app — declared like any other application — exposes a login flow
+for session-based clients:
 
 - `POST /_server/login` with body `{"identity", "password"}` → `200` with
   `{identity, tags, session_id}` on success.
-- `GET /_server/login_page` — an HTML login page.
 - `GET /_server/login_methods` — a public JSON descriptor of available methods.
 - `POST /_server/logout`.
 
-Login lockout with backoff is configurable via `server_app={"login": {...}}`.
+Login lockout with backoff is the app's own `login=` kwarg:
+`ServerApplication(login={"max_attempts": 5, "backoff": 30})`.
 
 ## OIDC
 
-An OIDC provider is configured under `server_app`, and the server must know its
+OIDC providers are the app's own `oidc=` kwarg, and the server must know its
 own **public base address** — `external_url`:
 
 ```python
@@ -122,9 +123,8 @@ PROVIDER = {
     "tags": [],
 }
 server = AsgiServer(
-    applications=[App()],
+    applications=[ServerApplication(oidc={"google": PROVIDER}), App()],
     external_url="https://shop.example.com",
-    server_app={"oidc": {"google": PROVIDER}},
 )
 ```
 
@@ -138,22 +138,23 @@ and mean nothing to an outside caller. Configuring a provider **without**
 the first login attempt with a provider-side error.
 
 In a config recipe, `external_url` lives on the `server` section and the
-providers are a keyed collection under `authentication`:
+providers are a keyed collection under the application that owns them — the
+words are the package's own grammar, mounted on its `application` element:
 
 ```python
 from genro_asgi.config import AsgiConfigBuilder
+from genro_asgi_server_app import ServerApplication
 from genro_bag.resolvers import EnvResolver
 
 class ServerConfiguration(AsgiConfigBuilder):
     def main(self, root):
         cfg = root.configuration()
         cfg.server(host="127.0.0.1", port=8000, external_url="https://shop.example.com")
-        self.authentication_section(cfg)
-
-    def authentication_section(self, cfg):
-        """The login surface: one OIDC provider, its secret from the environment."""
-        auth = cfg.authentication()
-        auth.oidc().provider(
+        server_app = cfg.applications().application(
+            code="_server", app_class=ServerApplication
+        )
+        server_app.login(max_attempts=3, backoff=10)
+        server_app.oidc().provider(
             code="google",
             issuer="https://accounts.example.com",
             client_id="client-123",
@@ -162,12 +163,12 @@ class ServerConfiguration(AsgiConfigBuilder):
         )
 ```
 
-Each provider is addressed by its `code` — `authentication.oidc.google` — and
-the `client_secret` is an `EnvResolver` (from `genro_bag.resolvers`) read at read
-time, so the secret never sits in the recipe. The same section carries
-`admin_password` (a resolver, never a literal — a literal is a boot error),
-`login(max_attempts=…, backoff=…)` and the `credentials` block that replaces the
-`auth=` dict when the server is configured rather than hand-built.
+Each provider is addressed by its `code` — `applications._server.oidc.google` —
+and the `client_secret` is an `EnvResolver` (from `genro_bag.resolvers`) read at
+read time, so the secret never sits in the recipe. The `authentication` section
+still carries `admin_password` (a resolver, never a literal — a literal is a
+boot error) and the `credentials` block that replaces the `auth=` dict when the
+server is configured rather than hand-built.
 
 - `GET /_server/auth/oidc:google/start?next=...` → `302` (PKCE S256).
 - `GET /_server/auth/oidc:google/callback?...` → token exchange, avatar attach,

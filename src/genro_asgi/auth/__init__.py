@@ -12,34 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Auth capability package: the credential core, the mixin, and the login surface.
+"""Auth capability package: the credential core and the mixin.
 
 ``AuthCore`` (basic/bearer/jwt verification) and ``AuthMixin`` (the §5.5
 identity precedence over sessions). ``AuthMiddleware`` — the chain entry point
-armed by the mixin — lives in ``middleware/authentication.py``. The login
-surface — the self-describing ``AuthMethod``/``PasswordMethod`` (core 1d) and
-the ``safe_next_path`` open-redirect guard — is re-exported here too, so every
-consumer imports auth symbols from the package, never from its modules.
+armed by the mixin — lives in ``middleware/authentication.py``. The core
+authenticates by header credentials and by the session avatar, and never asks
+for a user and a password: the login surface — the self-describing
+``AuthMethod``/``PasswordMethod``, ``OidcMethod`` and the ``safe_next_path``
+open-redirect guard — belongs to the ``genro_asgi_server_app`` package.
 """
 
 from __future__ import annotations
 
 from .api_key_store import ApiKeyStore, FileApiKeyStore
-from .auth_method import AuthMethod, PasswordMethod, safe_next_path
 from .core import AuthCore
 from .mixin import AuthMixin
-from .oidc_method import OidcMethod
 from .user_store import FileUserStore, UserStore
 
 __all__ = [
     "ApiKeyStore",
     "AuthCore",
-    "AuthMethod",
     "AuthMixin",
     "FileApiKeyStore",
     "FileUserStore",
-    "OidcMethod",
-    "PasswordMethod",
     "UserStore",
-    "safe_next_path",
 ]

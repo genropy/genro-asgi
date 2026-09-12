@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for ``ServerApplication`` and the automatic ``_server`` mount (D4)."""
+"""Tests for ``ServerApplication`` and its declaration in the configuration."""
 
 from __future__ import annotations
 
@@ -20,7 +20,8 @@ import json
 
 from genro_routes import RoutingClass, route
 
-from genro_asgi import AsgiServer, BaseApplication, ServerApplication
+from genro_asgi import AsgiServer, BaseApplication
+from genro_asgi_server_app import ServerApplication
 
 
 class DemoSection(RoutingClass):
@@ -34,20 +35,25 @@ class DemoSection(RoutingClass):
         return {"pong": True}
 
 
-class TestAutoMount:
-    def test_hand_built_server_registers_the_server_app(self) -> None:
-        server = AsgiServer(applications=[BaseApplication(mount="")])
-        assert "_server" in server.applications
+class TestDeclaredMount:
+    """D-SA-10: the app is declared like any other, never registered behind the caller."""
+
+    def test_a_declared_server_app_mounts_under_its_own_code(self) -> None:
+        server = AsgiServer(applications=[ServerApplication(), BaseApplication(mount="")])
         app = server.applications["_server"]
         assert isinstance(app, ServerApplication)
         assert app.mount == "_server"
         assert app.server is server
 
-    def test_registration_hook_is_idempotent(self) -> None:
-        server = AsgiServer(applications=[BaseApplication(mount="")])
-        app = server.applications["_server"]
-        server._register_server_app()
-        assert server.applications["_server"] is app
+    async def test_a_server_declaring_none_has_none(
+        self, http_request, response_status
+    ) -> None:
+        # The automatic registration (SPEC D4 "automatic, not configured") is
+        # gone: what is not declared does not exist, and /_server/ is a segment
+        # like any other nobody serves.
+        server = AsgiServer()
+        assert "_server" not in server.applications
+        assert response_status(await http_request(server, "/_server/")) == 404
 
     def test_identity_is_declared_on_the_class(self) -> None:
         # D4: the system code and mount are declared, not configured — three
@@ -61,7 +67,7 @@ class TestServerEndpoints:
     async def test_index_answers_at_server_root(
         self, http_request, response_status, response_body
     ) -> None:
-        server = AsgiServer(applications=[BaseApplication(mount="")])
+        server = AsgiServer(applications=[ServerApplication(), BaseApplication(mount="")])
         sent = await http_request(server, "/_server/")
         assert response_status(sent) == 200
         data = json.loads(response_body(sent))
@@ -70,7 +76,7 @@ class TestServerEndpoints:
     async def test_meta_schema_json_is_exposed(
         self, http_request, response_status, response_body
     ) -> None:
-        server = AsgiServer(applications=[BaseApplication(mount="")])
+        server = AsgiServer(applications=[ServerApplication(), BaseApplication(mount="")])
         sent = await http_request(server, "/_server/_meta/schema_json")
         assert response_status(sent) == 200
         doc = json.loads(response_body(sent))
@@ -82,7 +88,7 @@ class TestServerEndpoints:
     ) -> None:
         # REVIEW #6: the injected ``_request`` must NOT surface in the public
         # request body, and the route is POST by declaration (openapi_method).
-        server = AsgiServer(applications=[BaseApplication(mount="")])
+        server = AsgiServer(applications=[ServerApplication(), BaseApplication(mount="")])
         sent = await http_request(server, "/_server/_meta/schema_json")
         doc = json.loads(response_body(sent))
         login = doc["paths"]["/login"]
@@ -96,7 +102,7 @@ class TestServerEndpoints:
 
 class TestDocs:
     async def test_server_serves_the_docs_page(self, http_request, response_status) -> None:
-        server = AsgiServer(applications=[BaseApplication(mount="")])
+        server = AsgiServer(applications=[ServerApplication(), BaseApplication(mount="")])
         sent = await http_request(server, "/_server/_meta/docs")
         assert response_status(sent) == 200
 
@@ -105,7 +111,7 @@ class TestSections:
     async def test_attach_section_registers_and_routes(
         self, http_request, response_status, response_body
     ) -> None:
-        server = AsgiServer(applications=[BaseApplication(mount="")])
+        server = AsgiServer(applications=[ServerApplication(), BaseApplication(mount="")])
         app = server.applications["_server"]
         assert isinstance(app, ServerApplication)
         app.attach_section(DemoSection(app), name="demo")
