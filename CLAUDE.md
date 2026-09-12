@@ -55,9 +55,29 @@ never ran, measured 2026-09-08). The server
 carries a lifecycle `state` (`lifespan.py`: `RUNNING`/`QUITTING`/`STOPPING`):
 anything but RUNNING answers 503 + `Retry-After` and registers nothing, while
 what the middleware chain serves itself passes. `Lifespan.shutdown` turns the
-state first (to `shutdown_mode` — STOPPING by default, QUITTING set by the
-reload child in `factory()`), drains the in-flight requests (bounded), THEN
-runs the hooks in reverse.
+state first (`start_leaving`: to `shutdown_mode` — STOPPING by default, QUITTING
+set by the reload child in `factory()`), drains the in-flight requests
+(bounded), THEN runs the hooks in reverse.
+**The server learns it is leaving at the signal, not at the hooks (landed
+2026-09-12, #89).** `serve()` boots `UvicornServer`, the subclass that OWNS the
+SIGINT/SIGTERM handlers: the first signal calls `start_leaving` and only then
+raises uvicorn's exit flag, so uvicorn's three steps — close the listeners, wait
+`shutdown_timeout_seconds`, send `lifespan.shutdown` — all run over a server
+that already refuses new work. Before this, `Lifespan.shutdown` was the only
+writer of `state` and it runs AFTER the grace is spent. Declared contract
+change: during the graceful window a request on an already open connection
+reads 503 + `Retry-After` instead of being served; and under uvicorn's own
+`--reload` the child builds no `UvicornServer`, so there the ordered shutdown
+is not guaranteed (owner, 2026-09-12: accepted for the stateless
+single-process mode). `BaseServer.leaving` is the awaitable half of the turn —
+an `asyncio.Event` set by the `state` setter, never cleared — and
+`BaseServer.get_until_leaving(queue)` is how an endless response reads its
+feed: the queue's next item, or `None` the moment the server starts leaving.
+The two SSE sources (`applications/mcp.py`, `inspector_section.py`) use it and
+end by themselves, unsubscribing on their own `finally`; `SseStream` stays
+self-contained and now waits on its pending read instead of shielding it, so a
+source that ends past a keepalive leaves no unretrieved exception behind.
+Measured: SIGTERM to exit 0.36 s with an SSE stream open, grace 5.0 s.
 **The websocket is a live connection whose every message is a request (landed
 2026-09-06, #68 phases 1-2).** `BaseServer.on_websocket` — the empty socket of
 D7 until now — gives each socket one `WsxConnection`, whose `serve()` is its
@@ -402,6 +422,15 @@ eliminated, not left behind. A request meeting a user between two homes
 parks on the per-user barrier up to `REQUEST_HOLD_MAX_SECONDS`. A sudden
 worker death restarts the small set of users involved: an accepted,
 observable risk, not a gap.
+
+**No worker is born while the server is leaving (landed 2026-09-12, #89).**
+`GroupHandler.start_worker` — the ONE door of every birth, the wild death's
+(`on_child_lost` → `ping_now` → `check_occupancy`) included — refuses and
+answers None while `SpaCommander.server_leaving`, journaled once
+(`reason="server_leaving"`: the state never returns to RUNNING). The commander
+reads the lifecycle off `self.server`, which the front writes at its startup
+(`commander.server = self.server`) and which is None in a pool built without a
+server, where nothing of the lifecycle is read.
 
 **Putting ONE user to sleep is one ordered operation, and the group owns it**
 (wf/41, landing): `GroupHandler.freeze_hosted_user` blocks him at the vertex
