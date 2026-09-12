@@ -45,7 +45,24 @@ describes: a stale overview misleads more than no overview.)*
 keyed by `code`, mounted by first path segment — D29 demux: segment match →
 that app with the segment stripped; else the root app; else 307 to the
 declared default; else the site index on `/` (ratified 2026-08-24, not yet
-built — today 404); else 404). It owns one thread pool (`run_sync`), a
+built — today 404); else 404).
+**A path whose first segment starts with a dot is hidden or of service
+(landed 2026-09-12, #88).** `WellKnownMiddleware` — order 150, now ON by
+default — answers it 404 before the dispatch: no mount, no root application,
+no default redirect. Its one exception is RFC 8615: `/.well-known/<name>`
+passes when `<name>` is one of the names the server read at mount time into
+`well_known_applications`, and `BaseServer.demux_well_known` hands it to the
+application that declared it as `/_well_known/<name>/<rest>` — no translation
+invented, and that application's own `auth_rule` answers 401/403 there like
+anywhere else. WHO declares a name is the application: `well_known_names` is
+`()` on `BaseApplication` and, on `RoutedApplication`, the children of its
+`_well_known` branch (a routing class attached like the other reserved
+branches), read through `super().route` because the configured plugins are
+armed later, on the first access a request makes. Duplicates go to the LAST
+registered application, a fixed rule with no option. The fixed probes without
+a dot (`/robots.txt`, `/sitemap.xml`) answer 404 as before; the middleware
+switched off filters nothing and every path goes to the demux.
+It owns one thread pool (`run_sync`), a
 `RequestRegistry` holding the in-flight picture, ordered lifespan, and boots
 uvicorn programmatically (`serve()`, CLI `genro-asgi serve/apps/stop/remove`,
 `--debug` = a declared usage mode the core never branches on; `shutdown_timeout_seconds`

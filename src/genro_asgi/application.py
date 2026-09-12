@@ -167,6 +167,20 @@ class BaseApplication:
         return None
 
     @property
+    def well_known_names(self) -> tuple[str, ...]:
+        """The discovery documents this application answers under ``/.well-known/``.
+
+        Returns:
+            The names, empty here — an application that serves none, which is
+            the base answer.
+
+        The server reads this at mount time and keeps one name → application
+        index; a routed application answers with the children of its
+        ``_well_known`` branch.
+        """
+        return ()
+
+    @property
     def app_snapshot(self) -> dict[str, Any]:
         """This app as the monitor sees it, at the instant it is read.
 

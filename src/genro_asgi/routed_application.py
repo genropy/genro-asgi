@@ -80,6 +80,7 @@ from .exceptions import (
 )
 from .request import Request
 from .streaming import StreamingResponse
+from .well_known import WELL_KNOWN_ROOT
 
 if TYPE_CHECKING:
     from genro_routes import Router, RouterNode
@@ -169,6 +170,26 @@ class RoutedApplication(BaseApplication, RoutingClass):
             self._armed = True
             arm_router(router)
         return router
+
+    @property
+    def well_known_names(self) -> tuple[str, ...]:
+        """The children of this app's ``_well_known`` branch — its discovery documents.
+
+        Every child is one name served under ``/.well-known/``: an entry, or a
+        sub-branch with a path of its own under it. A ruled entry is a name
+        like any other (``forbidden=True``), because the answer to an identity
+        that does not match is the application's own 401/403, never a 404 from
+        the demux.
+
+        The router is read through ``super().route``, NOT through the ``route``
+        property: the server asks this at mount time, and the configured
+        plugins are armed later, on the first access a request makes.
+        """
+        branch = super().route.router_at_path(WELL_KNOWN_ROOT)
+        if branch is None:
+            return ()
+        children = branch.nodes(lazy=True, forbidden=True)
+        return (*children.get("entries", ()), *children.get("routers", ()))
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Resolve the request in the app router, execute, respond.
