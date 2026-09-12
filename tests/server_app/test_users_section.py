@@ -29,7 +29,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from genro_asgi import AsgiServer, Avatar, BaseApplication, ServerApplication, UserStore
+from genro_asgi import AsgiServer, Avatar, BaseApplication, UserStore
+from genro_asgi_server_app import ServerApplication
 from genro_asgi.middleware.base import BaseMiddleware
 from genro_asgi.types import Message, Scope
 

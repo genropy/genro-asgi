@@ -83,13 +83,19 @@ keep today's bare app.
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any, ClassVar
+from pathlib import Path
+from typing import Any, ClassVar
 
+from genro_bag import BagResolver
+from genro_builders.builder import element
 from genro_routes import RoutingClass, route
 
-from ..auth import AuthMethod, OidcMethod, PasswordMethod
-from ..session import Avatar
-from .openapi import RESOURCES_DIR, OpenApiApplication
+from genro_asgi.application import ApplicationGrammar, BaseApplication
+from genro_asgi.applications.openapi import OpenApiApplication
+from genro_asgi.session import Avatar
+
+from .auth_method import AuthMethod, PasswordMethod
+from .oidc_method import OidcMethod
 from .server_sections import (
     AuthSection,
     MonitorSection,
@@ -98,14 +104,61 @@ from .server_sections import (
     UsersSection,
 )
 
-if TYPE_CHECKING:
+__all__ = ["ServerApplication", "ServerApplicationGrammar"]
 
-    pass
-
-__all__ = ["ServerApplication"]
+RESOURCES_DIR = Path(__file__).parent / "resources"
 
 LOCKOUT_MAX_ATTEMPTS = 5
 LOCKOUT_BACKOFF_SECONDS = 30.0
+
+
+class ServerApplicationGrammar(ApplicationGrammar):
+    """The words this application adds to a recipe: its own login surface.
+
+    They live HERE and not in the site dialect because what asks a human for a
+    user and a password belongs to the application that owns the login surface
+    (D-SA-10). The recipe writes them under the application element::
+
+        server_app = applications.application(app_class=ServerApplication,
+                                              code="_server")
+        server_app.login(max_attempts=3, backoff=10)
+        server_app.oidc().provider(
+            code="google",
+            issuer="https://accounts.example.com",
+            client_id="client-123",
+            client_secret=EnvResolver("GOOGLE_CLIENT_SECRET"),
+        )
+
+    They are elements and not attributes of the application envelope because a
+    provider is a keyed collection with a secret in it: an element's attributes
+    go through the read stack, so ``client_secret`` is a resolver read at read
+    time and the secret never sits in the recipe (D-SA-11).
+    """
+
+    @element(sub_tags="", node_label="login")
+    def login(self, max_attempts: int = None, backoff: float = None) -> None:
+        """Login-surface policy: lockout tuning (``max_attempts``, ``backoff``)."""
+
+    @element(sub_tags="provider", collection_key="code", node_label="oidc")
+    def oidc(self) -> None:
+        """Collection of OIDC providers, each labelled by its ``code`` — stable
+        paths ``applications.<code>.oidc.<provider code>``."""
+
+    @element(parent_tags="oidc", sub_tags="")
+    def provider(
+        self,
+        code: str,
+        issuer: str = None,
+        client_id: str = None,
+        client_secret: str | BagResolver = None,
+        scopes: str = "openid email profile",
+        identity_claim: str = "email",
+        tags: str | list = None,
+    ) -> None:
+        """One OIDC provider: ``code`` (the collection key, REQUIRED),
+        ``issuer``, ``client_id``, ``client_secret`` (optional — a public client
+        has none; give it a resolver), plus the defaulted ``scopes``,
+        ``identity_claim`` and ``tags``."""
 
 
 class ServerApplication(OpenApiApplication):
@@ -123,6 +176,7 @@ class ServerApplication(OpenApiApplication):
     }
     code = "_server"
     mount = "_server"
+    grammar: type = ServerApplicationGrammar
 
     def __init__(self, **kwargs: Any) -> None:
         self._login_policy: dict[str, Any] = kwargs.pop("login", {})
@@ -138,6 +192,54 @@ class ServerApplication(OpenApiApplication):
         self.attach_section(TokensSection(self), name="tokens")
         self.attach_section(TasksSection(self), name="tasks")
         self.attach_section(MonitorSection(self), name="monitor")
+
+    @BaseApplication.server.setter
+    def server(self, value: Any) -> None:
+        """Take ownership, then read the login surface this recipe declared.
+
+        Attachment is the first moment there is a read door to ask: the
+        ``login`` and ``oidc`` nodes hang under this application's own node and
+        are read through the handler, so a ``client_secret`` written as a
+        resolver is resolved there like every other configured value. A
+        hand-built server names the same values as constructor kwargs and has
+        no recipe to read.
+        """
+        BaseApplication.server.fset(self, value)
+        self.read_declared_login_surface()
+
+    def read_declared_login_surface(self) -> None:
+        """Fold the recipe's ``login`` and ``oidc`` nodes into this app's surface.
+
+        Reads nothing when the owning server carries no configuration. Each
+        provider it finds is added to ``oidc_providers`` and registered as its
+        own auth method, exactly as a constructor-given one is.
+        """
+        handler = getattr(self.server, "config", None)
+        if handler is None:
+            return
+        section = f"applications.{self.code}"
+        if handler.node(f"{section}.login") is not None:
+            self._login_policy = handler.closed_attrs(
+                f"{section}.login", "max_attempts", "backoff"
+            )
+        node = handler.node(f"{section}.oidc")
+        if node is None:
+            return
+        for child in node.value:
+            provider = handler.closed_attrs(
+                f"{section}.oidc.{child.label}",
+                "issuer",
+                "client_id",
+                "client_secret",
+                "scopes",
+                "identity_claim",
+                "tags",
+            )
+            provider.setdefault("tags", [])
+            self._oidc_providers[child.label] = provider
+            self.register_auth_method(
+                OidcMethod(self, self._oidc_method_id(child.label), child.label, provider)
+            )
 
     @staticmethod
     def _oidc_method_id(code: str) -> str:

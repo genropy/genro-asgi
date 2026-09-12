@@ -18,11 +18,11 @@ Historical monitor/workbench branches, full pre-refactoring panel parity and
 Prometheus export are not established by this implementation. The local MkDocs
 internals reader is a separate developer documentation tool.
 
-Claim anchors: [`MonitorSection`](../../../../src/genro_asgi/applications/server_sections/monitor_section.py#L75), [`app_snapshot`](../../../../src/genro_asgi/application.py#L170), [`app_panel`](../../../../src/genro_asgi/application.py#L180), [`BaseApplication`](../../../../src/genro_asgi/application.py#L86).
+Claim anchors: [`MonitorSection`](../../../../src/genro_asgi_server_app/server_sections/monitor_section.py#L75), [`app_snapshot`](../../../../src/genro_asgi/application.py#L170), [`app_panel`](../../../../src/genro_asgi/application.py#L180), [`BaseApplication`](../../../../src/genro_asgi/application.py#L86).
 
 ## Source and test evidence
 
-- [src/genro_asgi/applications/server_sections/monitor_section.py](../../../../src/genro_asgi/applications/server_sections/monitor_section.py)
+- [src/genro_asgi_server_app/server_sections/monitor_section.py](../../../../src/genro_asgi_server_app/server_sections/monitor_section.py)
 - [src/genro_asgi/application.py](../../../../src/genro_asgi/application.py)
 - [src/genro_asgi_multiworker_spa/spa_app.py](../../../../src/genro_asgi_multiworker_spa/spa_app.py)
-- [tests/core/test_server_monitor.py](../../../../tests/core/test_server_monitor.py)
+- [tests/server_app/test_server_monitor.py](../../../../tests/server_app/test_server_monitor.py)

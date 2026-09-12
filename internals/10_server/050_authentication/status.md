@@ -19,7 +19,7 @@ Bootstrap admin configuration upserts that account at boot. Password login and
 OIDC methods live on `ServerApplication` and attach an avatar in place. OIDC
 configuration requires a declared `external_url` at server construction.
 
-Claim anchors: [`AuthCore`](../../../src/genro_asgi/auth/core.py#L79), [`AuthMixin`](../../../src/genro_asgi/auth/mixin.py#L67), [`authenticate`](../../../src/genro_asgi/auth/mixin.py#L151), [`authenticate`](../../../src/genro_asgi/auth/core.py#L160), [`ServerApplication`](../../../src/genro_asgi/applications/server_app.py#L111).
+Claim anchors: [`AuthCore`](../../../src/genro_asgi/auth/core.py#L79), [`AuthMixin`](../../../src/genro_asgi/auth/mixin.py#L67), [`authenticate`](../../../src/genro_asgi/auth/mixin.py#L151), [`authenticate`](../../../src/genro_asgi/auth/core.py#L160), [`ServerApplication`](../../../src/genro_asgi_server_app/server_app.py#L111).
 
 ## Authorization and hosted-site identity
 
@@ -35,16 +35,16 @@ a distinct target.
 
 Claim anchors: [`RoutedApplication`](../../../src/genro_asgi/routed_application.py#L111).
 
-Behavior evidence: [`MonitorSection`](../../../src/genro_asgi/applications/server_sections/monitor_section.py#L75), [`UsersSection`](../../../src/genro_asgi/applications/server_sections/users_section.py#L61), [`TokensSection`](../../../src/genro_asgi/applications/server_sections/tokens_section.py#L57), [`TasksSection`](../../../src/genro_asgi/applications/server_sections/tasks_section.py#L60).
+Behavior evidence: [`MonitorSection`](../../../src/genro_asgi_server_app/server_sections/monitor_section.py#L75), [`UsersSection`](../../../src/genro_asgi_server_app/server_sections/users_section.py#L61), [`TokensSection`](../../../src/genro_asgi_server_app/server_sections/tokens_section.py#L57), [`TasksSection`](../../../src/genro_asgi_server_app/server_sections/tasks_section.py#L60).
 
 ## Source and test evidence
 
 - [src/genro_asgi/auth/core.py](../../../src/genro_asgi/auth/core.py)
 - [src/genro_asgi/auth/mixin.py](../../../src/genro_asgi/auth/mixin.py)
-- [src/genro_asgi/applications/server_app.py](../../../src/genro_asgi/applications/server_app.py)
+- [src/genro_asgi_server_app/server_app.py](../../../src/genro_asgi_server_app/server_app.py)
 - [src/genro_asgi/routed_application.py](../../../src/genro_asgi/routed_application.py)
 - [src/genro_asgi_multiworker_spa/spa_app.py](../../../src/genro_asgi_multiworker_spa/spa_app.py)
 - [tests/core/test_auth.py](../../../tests/core/test_auth.py)
-- [tests/core/test_login_flow.py](../../../tests/core/test_login_flow.py)
-- [tests/core/test_oidc.py](../../../tests/core/test_oidc.py)
+- [tests/server_app/test_login_flow.py](../../../tests/server_app/test_login_flow.py)
+- [tests/server_app/test_oidc.py](../../../tests/server_app/test_oidc.py)
 - [tests/core/test_api_key_store.py](../../../tests/core/test_api_key_store.py)

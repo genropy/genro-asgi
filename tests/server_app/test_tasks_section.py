@@ -32,7 +32,8 @@ from genro_routes import route
 
 from tests.storage_support import site_storage
 
-from genro_asgi import AsgiServer, Avatar, RoutedApplication, ServerApplication
+from genro_asgi import AsgiServer, Avatar, RoutedApplication
+from genro_asgi_server_app import ServerApplication
 from genro_asgi.middleware.base import BaseMiddleware
 from genro_asgi.tasks import new_descriptor
 from genro_asgi.types import Message, Scope

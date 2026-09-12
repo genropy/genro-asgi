@@ -38,7 +38,6 @@ from genro_asgi import (
     BaseApplication,
     ConfigError,
     ConfigurationHandler,
-    ServerApplication,
 )
 from genro_asgi.__main__ import AppsRegistry
 from genro_asgi.config import HOME_ENV, BaseConfiguration, DefaultConfig
@@ -594,77 +593,6 @@ class TestIdentitySection:
 
         with pytest.raises(ValueError):
             ConfigurationHandler(DoubledConfig)
-
-
-class LoginSurfaceConfig(TwoAppConfig):
-    """The two-app site plus the server application, declared like any other."""
-
-    def applications_section(self, cfg: Any) -> None:
-        """The two apps of the base recipe plus ``_server``, carrying its kwargs."""
-        apps = cfg.applications(default="shop")
-        apps.application(code="shop", mount="", app_class=ShopApp)
-        apps.application(code="api", app_class=ApiApp)
-        apps.application(
-            code="_server",
-            app_class=ServerApplication,
-            login={"max_attempts": 3, "backoff": 10},
-            oidc={
-                "corp": {
-                    "issuer": "https://idp.example.com",
-                    "client_id": "corp-client",
-                    # STOP, open for the owner: a resolver nested inside a dict
-                    # kwarg is NOT resolved — only an element's own attributes
-                    # go through the read stack. The old grammar resolved this
-                    # secret because ``provider`` was an element; with the
-                    # providers as one dict kwarg nothing resolves it, so the
-                    # secret is a literal here until the owner says how the
-                    # package declares its providers.
-                    "client_secret": "oidc-s3cret",
-                    "scopes": "openid profile",
-                    "identity_claim": "preferred_username",
-                    "tags": ["staff"],
-                },
-                "public": {
-                    "issuer": "https://accounts.example.org",
-                    "client_id": "pub-client",
-                },
-            },
-        )
-
-
-class TestLoginSurface:
-    """D-SA-10: the login surface is the declared app's own kwargs.
-
-    ``authentication.login``, ``authentication.oidc`` and its ``provider``
-    children are gone from the grammar, and so are the handler's
-    ``server_app_kwargs``/``oidc_providers`` and the ``server_app`` server
-    kwarg that carried their values. What asks a human for a user and a
-    password is declared where it lives: on the ``application`` element of the
-    app that owns it, whose attributes are its constructor kwargs.
-    """
-
-    def test_the_login_surface_reaches_the_server_app(self) -> None:
-        app = AsgiServer(config=LoginSurfaceConfig).applications["_server"]
-        assert app.login_policy == {"max_attempts": 3, "backoff": 10}
-        assert set(app.oidc_providers) == {"corp", "public"}
-        corp = app.oidc_providers["corp"]
-        assert corp["client_secret"] == "oidc-s3cret"
-        assert corp["scopes"] == "openid profile"
-        assert corp["identity_claim"] == "preferred_username"
-        assert corp["tags"] == ["staff"]
-
-    def test_an_undeclared_login_surface_leaves_the_bare_app(self) -> None:
-        app = ServerApplication()
-        assert app.login_policy == {}
-        assert app.oidc_providers == {}
-
-    def test_a_recipe_writing_the_old_words_is_refused(self) -> None:
-        class OldWordsConfig(AsgiConfigBuilder):
-            def main(self, root: Any) -> None:
-                root.configuration().authentication().login(max_attempts=3)
-
-        with pytest.raises(AttributeError, match="login"):
-            ConfigurationHandler(OldWordsConfig)
 
 
 class TestTasksConfig:

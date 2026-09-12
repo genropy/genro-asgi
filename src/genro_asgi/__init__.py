@@ -23,19 +23,14 @@ from .applications import (
     McpApplication,
     McpOpenApiApplication,
     OpenApiApplication,
-    ServerApplication,
 )
-from .applications.server_sections import AuthSection
 from .asgi_server import AsgiServer
 from .auth import (
     ApiKeyStore,
     AuthCore,
-    AuthMethod,
     AuthMixin,
     FileApiKeyStore,
     FileUserStore,
-    OidcMethod,
-    PasswordMethod,
     UserStore,
 )
 from .channel import ChannelClient, Frame, FrameStream
@@ -87,9 +82,7 @@ __all__ = [
     "AsgiServer",
     "AsgiServerGrammar",
     "AuthCore",
-    "AuthMethod",
     "AuthMixin",
-    "AuthSection",
     "Avatar",
     "BaseApplication",
     "BaseConfiguration",
@@ -119,11 +112,9 @@ __all__ = [
     "Message",
     "MemorySessionStore",
     "MiddlewareMixin",
-    "OidcMethod",
     "OpenAPIPlugin",
     "OpenAPITranslator",
     "OpenApiApplication",
-    "PasswordMethod",
     "PluginMixin",
     "Receive",
     "Redirect",
@@ -134,7 +125,6 @@ __all__ = [
     "RoutedApplication",
     "Scope",
     "Send",
-    "ServerApplication",
     "Session",
     "SessionMixin",
     "SessionStore",

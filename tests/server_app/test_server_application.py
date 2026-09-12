@@ -20,7 +20,8 @@ import json
 
 from genro_routes import RoutingClass, route
 
-from genro_asgi import AsgiServer, BaseApplication, ServerApplication
+from genro_asgi import AsgiServer, BaseApplication
+from genro_asgi_server_app import ServerApplication
 
 
 class DemoSection(RoutingClass):

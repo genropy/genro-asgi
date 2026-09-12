@@ -18,9 +18,9 @@ Each application in this package is a ready-to-mount ASGI app for one
 transport dialect. ``OpenApiApplication`` wraps an API surface as REST +
 OpenAPI 3.1 with a Swagger docs page; ``McpApplication`` and
 ``McpOpenApiApplication`` expose a router as MCP tools over stateless
-Streamable HTTP; ``ServerApplication`` is the automatic ``_server``
-system app every server mounts (D4). The SPA front and its worker pool are
-not here: they live in the ``genro_asgi_multiworker_spa`` package.
+Streamable HTTP. Two worlds are not here, each a package of its own beside the
+core: the SPA front and its worker pool (``genro_asgi_multiworker_spa``) and the
+server application with its sections (``genro_asgi_server_app``).
 """
 
 from __future__ import annotations
@@ -28,7 +28,6 @@ from __future__ import annotations
 from .configuration_profiles import ConfigurationProfiles, ConfigurationProfilesApplication
 from .mcp import McpApplication, McpOpenApiApplication
 from .openapi import OpenApiApplication
-from .server_app import ServerApplication
 
 __all__ = [
     "ConfigurationProfiles",
@@ -36,5 +35,4 @@ __all__ = [
     "McpApplication",
     "McpOpenApiApplication",
     "OpenApiApplication",
-    "ServerApplication",
 ]

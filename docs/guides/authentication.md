@@ -138,35 +138,35 @@ and mean nothing to an outside caller. Configuring a provider **without**
 `external_url` is a boot error: the server refuses to start rather than fail at
 the first login attempt with a provider-side error.
 
-In a config recipe, `external_url` lives on the `server` section and `login`
-and `oidc` are written on the application element that carries them, like every
-other constructor kwarg of an application:
+In a config recipe, `external_url` lives on the `server` section and the
+providers are a keyed collection under the application that owns them — the
+words are the package's own grammar, mounted on its `application` element:
 
 ```python
 from genro_asgi.config import AsgiConfigBuilder
-from genro_asgi import ServerApplication
+from genro_asgi_server_app import ServerApplication
+from genro_bag.resolvers import EnvResolver
 
 class ServerConfiguration(AsgiConfigBuilder):
     def main(self, root):
         cfg = root.configuration()
         cfg.server(host="127.0.0.1", port=8000, external_url="https://shop.example.com")
-        cfg.applications().application(
-            code="_server",
-            app_class=ServerApplication,
-            oidc={
-                "google": {
-                    "issuer": "https://accounts.example.com",
-                    "client_id": "client-123",
-                    "client_secret": "…",
-                    "identity_claim": "email",
-                },
-            },
+        server_app = cfg.applications().application(
+            code="_server", app_class=ServerApplication
+        )
+        server_app.login(max_attempts=3, backoff=10)
+        server_app.oidc().provider(
+            code="google",
+            issuer="https://accounts.example.com",
+            client_id="client-123",
+            client_secret=EnvResolver("GOOGLE_CLIENT_SECRET"),
+            identity_claim="email",
         )
 ```
 
-Each provider is addressed by its `code`. A `BagResolver` works on an element's
-own attributes, not inside a dict written as one attribute value, so a
-`client_secret` written here is read verbatim. The `authentication` section
+Each provider is addressed by its `code` — `applications._server.oidc.google` —
+and the `client_secret` is an `EnvResolver` (from `genro_bag.resolvers`) read at
+read time, so the secret never sits in the recipe. The `authentication` section
 still carries `admin_password` (a resolver, never a literal — a literal is a
 boot error) and the `credentials` block that replaces the `auth=` dict when the
 server is configured rather than hand-built.

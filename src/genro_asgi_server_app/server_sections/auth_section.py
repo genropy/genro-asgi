@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any
 from genro_routes import RoutingClass
 
 if TYPE_CHECKING:
-    from ...auth import AuthMethod
+    from ..auth_method import AuthMethod
     from ..server_app import ServerApplication
 
 __all__ = ["AuthSection"]

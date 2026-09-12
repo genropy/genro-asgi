@@ -1,8 +1,9 @@
 Applications
 ============
 
-The mountable application classes: OpenAPI, MCP, and the automatic ``_server``
-application with its sections.
+The mountable application classes: OpenAPI, MCP, and the ``_server``
+application with its sections, which lives in the ``genro_asgi_server_app``
+package beside the core.
 
 OpenAPI
 -------
@@ -25,25 +26,25 @@ MCP
 Server application
 ------------------
 
-.. automodule:: genro_asgi.applications.server_app
+.. automodule:: genro_asgi_server_app.server_app
    :members:
    :show-inheritance:
 
 Server sections
 ---------------
 
-.. automodule:: genro_asgi.applications.server_sections.auth_section
+.. automodule:: genro_asgi_server_app.server_sections.auth_section
    :members:
    :show-inheritance:
 
-.. automodule:: genro_asgi.applications.server_sections.users_section
+.. automodule:: genro_asgi_server_app.server_sections.users_section
    :members:
    :show-inheritance:
 
-.. automodule:: genro_asgi.applications.server_sections.tokens_section
+.. automodule:: genro_asgi_server_app.server_sections.tokens_section
    :members:
    :show-inheritance:
 
-.. automodule:: genro_asgi.applications.server_sections.tasks_section
+.. automodule:: genro_asgi_server_app.server_sections.tasks_section
    :members:
    :show-inheritance:

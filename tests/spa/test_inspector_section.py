@@ -30,9 +30,10 @@ from typing import Any
 
 import pytest
 
-from genro_asgi import AsgiServer, ServerApplication
+from genro_asgi import AsgiServer
 from genro_asgi.config.builder import AsgiConfigBuilder
 from genro_asgi.lifespan import FatalBootError
+from genro_asgi_server_app import ServerApplication
 from genro_asgi_multiworker_spa.inspector_section import INSPECTOR_ENV_VAR
 from genro_asgi_multiworker_spa.orchestration import SpaCommander
 from genro_asgi_multiworker_spa.spa_app import SPA_CONNECTION_ID_COOKIE, SpaApplication

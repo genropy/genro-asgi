@@ -36,17 +36,14 @@ from cryptography.fernet import Fernet
 
 from tests.storage_support import site_storage
 
-from genro_asgi import (
-    AsgiServer,
+from genro_asgi import AsgiServer, BaseApplication, FileUserStore, UserStore
+from genro_asgi_server_app import (
     AuthMethod,
     AuthSection,
-    BaseApplication,
-    FileUserStore,
     PasswordMethod,
     ServerApplication,
-    UserStore,
+    safe_next_path,
 )
-from genro_asgi.auth.auth_method import safe_next_path
 from genro_asgi.types import Message, Scope
 
 

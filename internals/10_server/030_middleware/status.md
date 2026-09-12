@@ -89,5 +89,5 @@ Claim anchors: [`WsxConnection`](../../../src/genro_asgi/wsx.py#L193), [`get_mid
 - [src/genro_asgi/wsx.py](../../../src/genro_asgi/wsx.py)
 - [tests/core/test_middleware.py](../../../tests/core/test_middleware.py)
 - [tests/core/test_middleware_std.py](../../../tests/core/test_middleware_std.py)
-- [tests/core/test_login_flow.py](../../../tests/core/test_login_flow.py)
+- [tests/server_app/test_login_flow.py](../../../tests/server_app/test_login_flow.py)
 - [tests/core/test_wsx_connection.py](../../../tests/core/test_wsx_connection.py)

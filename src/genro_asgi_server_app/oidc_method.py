@@ -62,8 +62,8 @@ import httpx
 import jwt
 from genro_routes import route
 
-from ..exceptions import HTTPBadRequest, Redirect
-from ..session.avatar import Avatar
+from genro_asgi.exceptions import HTTPBadRequest, Redirect
+from genro_asgi.session.avatar import Avatar
 from .auth_method import AuthMethod, safe_next_path
 
 __all__ = ["OidcMethod"]

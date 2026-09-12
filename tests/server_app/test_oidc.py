@@ -39,7 +39,8 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from genro_asgi import AsgiServer, BaseApplication, OidcMethod, ServerApplication
+from genro_asgi import AsgiServer, BaseApplication
+from genro_asgi_server_app import OidcMethod, ServerApplication
 from genro_asgi.types import Message, Scope
 
 DISCOVERY_DOC = {

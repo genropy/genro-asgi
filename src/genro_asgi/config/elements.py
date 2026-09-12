@@ -189,8 +189,9 @@ class AsgiServerGrammar(TaskGrammar):
         ``admin_password``, ``users``, ``tokens`` are the kwargs ``AuthMixin``
         peels and ``credentials`` the entries ``AuthCore`` verifies. What asks a
         human for a user and a password is NOT here (D-SA-10): the login policy
-        and the OIDC providers are constructor kwargs of the application that
-        owns the login surface, written on its own ``application`` element.
+        and the OIDC providers are words of the grammar the application owning
+        the login surface declares, written under its own ``application``
+        element.
         """
 
     @element(parent_tags="authentication", sub_tags="")

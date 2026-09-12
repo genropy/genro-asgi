@@ -12,11 +12,11 @@ identity stores.
    :members:
    :show-inheritance:
 
-.. automodule:: genro_asgi.auth.auth_method
+.. automodule:: genro_asgi_server_app.auth_method
    :members:
    :show-inheritance:
 
-.. automodule:: genro_asgi.auth.oidc_method
+.. automodule:: genro_asgi_server_app.oidc_method
    :members:
    :show-inheritance:
 

@@ -62,7 +62,7 @@ from urllib.parse import quote
 
 from genro_routes import RoutingClass, route
 
-from ...exceptions import HTTPNotFound
+from genro_asgi.exceptions import HTTPNotFound
 
 if TYPE_CHECKING:
     from ..server_app import ServerApplication
