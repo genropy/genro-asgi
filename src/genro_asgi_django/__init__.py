@@ -23,8 +23,16 @@ genropy takes, which is the pool:
   ``django.setup()`` of a group, run in its template process.
 
 Both are named in the recipe, as dotted paths, on the group element — nothing
-here is imported by the core. The example project and the recipe that serves it
-live in ``contrib/django/examples/hello_world/``.
+here is imported by the core. Beside them and imported by neither:
+
+- :class:`~genro_asgi_django.middleware.UserStickyMiddleware`, the line a
+  project adds to its own ``MIDDLEWARE`` so the pool learns who logged in. It
+  is left out of this module on purpose: it imports ``django.contrib.auth``,
+  and the recipe reaches the factory through this package before
+  ``django.setup()`` has run.
+
+The example project and the recipe that serves it live in
+``contrib/django/examples/hello_world/``.
 
 Importing this package imports Django.
 """

@@ -58,6 +58,25 @@ looks for `temp/django_lab/bakerydemo` beside the directory the recipe's own
 four parents lead to — which is the repository when the recipe is served from a
 plain clone, and not the repository when it is served from a git worktree.
 
+## Who logged in
+
+The pool learns the user from one line the project adds to its own `MIDDLEWARE`.
+bakerydemo's is in `bakerydemo/settings/local.py`, the file the checkout step
+copies from its example:
+
+```python
+from .base import MIDDLEWARE
+
+MIDDLEWARE = MIDDLEWARE + ["genro_asgi_django.middleware.UserStickyMiddleware"]
+```
+
+It must come after `django.contrib.auth.middleware.AuthenticationMiddleware`,
+which the base settings already declare. Log in at `/admin/` as `admin` /
+`changeme` and the census answers `"connection_user_map": {"<session>": "admin"}`
+and `"user_worker_map": {"admin": "pool_0001"}` where it answered `guest_…`
+before; log out and the connection leaves, the user with it when it was his
+last. The guide's *Who logged in* section carries the whole transcript.
+
 ## Static and media
 
 Neither is mounted by this server: `bakerydemo.settings.dev` keeps `DEBUG` on,

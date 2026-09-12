@@ -802,9 +802,23 @@ Django's session: `serve_django` calls Django, reads the session key off the
 answer's `Set-Cookie` or the request's `Cookie`, and calls `new_connection` with
 it the first time this process sees it — so the `spa_connection_id` cookie
 carries Django's `sessionid` and the pool sends that session back to the process
-that holds it. No user is declared: that is what Django knows at login, and
-`change_connection_user` is separate work. The examples and their recipes live
-in `contrib/django/examples/` — `hello_world/`, and `bakerydemo/` (#95), Wagtail's
+that holds it. **Who the user is, Django says with one line of `MIDDLEWARE`
+(landed 2026-09-12, #96).** `UserStickyMiddleware` watches `_auth_user_id`
+across the request — the one thing `django.contrib.auth.login` and `logout`
+write in and take out of the session — and calls `DjangoWorker.declare_user`
+(the session key the login cycled to, plus the username: `new_connection` when
+unseen, then `change_connection_user` on this request's own slot, which is where
+the core's login tail reads it) or `DjangoWorker.retire_connection`, which drops
+the row because the core has no way back to nobody. It reaches the worker
+through the environ: `serve_django` puts itself under `WORKER_ENVIRON_KEY`
+(`genro.spa_worker`), beside the core's `genro.identity`, and an environ with no
+worker in it — `manage.py runserver` — makes the middleware do nothing. The
+signals `user_logged_in` / `user_logged_out` were refused: a receiver is armed
+in a module-level registry, not in `MIDDLEWARE`. The examples and their recipes live
+in `contrib/django/examples/` — `hello_world/`, which grew Django's own login
+over two literal users and still has no database (`django.contrib.auth` connects
+`update_last_login`, the only thing a login writes a row for, and the example's
+`AppConfig.ready` disconnects it), and `bakerydemo/` (#95), Wagtail's
 demo site on a checkout outside this tree, whose static and media stay Django's
 own views because its dev settings keep `DEBUG` on; the guide is
 `docs/guides/django.md`.

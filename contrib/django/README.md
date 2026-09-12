@@ -3,8 +3,10 @@
 The adapter is the `genro_asgi_django` package, under `src/`: a Django project
 takes the road genropy takes, which is the pool, and nothing of it lives here.
 
-What lives here are the examples. `examples/hello_world/` is one view, one
-settings module and one recipe. Serve it with
+What lives here are the examples. `examples/hello_world/` is three views, one
+settings module and one recipe — the visit counter, and Django's own login and
+logout over two literal users, which is what the pool reads to learn who is
+here. Serve it with
 
 ```
 cd examples/hello_world

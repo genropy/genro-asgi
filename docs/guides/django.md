@@ -26,6 +26,9 @@ paths:
 | `genro_asgi_django.worker:DjangoWorker` | the worker: it hosts Django and declares the connection |
 | `genro_asgi_django.engine_factory:DjangoEngineFactory` | the group's template: one `django.setup()`, every worker a fork of it |
 
+Beside them, one line the project adds to its own `MIDDLEWARE` when it wants
+the pool to know who logged in — see [Who logged in](#who-logged-in).
+
 Both take the same two words: `settings_module`, the dotted path written into
 `DJANGO_SETTINGS_MODULE`, and `project_path`, the project directory — what
 `manage.py` sits in. The second is needed because the template and the workers
@@ -75,9 +78,12 @@ class ServerConfiguration(AsgiConfigBuilder):
         )
 ```
 
-The example project next to it has one view, no database, and its session in
-the process's own memory (`SESSION_ENGINE` on the `locmem` cache). The view
-counts the visits of its session, which is what makes the stickiness visible.
+The example project next to it has three views, no database, and its session in
+the process's own memory (`SESSION_ENGINE` on the `locmem` cache). `/` counts
+the visits of its session, which is what makes the stickiness visible, and
+`/login/` and `/logout/` run Django's own `login` and `logout` against two
+literal users (`hello_site/auth.py`), so the whole cycle is there without a
+database.
 
 ## How to verify it
 
@@ -111,6 +117,62 @@ with it the first time this process sees it. The core stamps that id on the
 request's slot, the reply carries it back, and the front writes it in the
 `spa_connection_id` cookie — one identity space, the site's own.
 
+## Who logged in
+
+Until the login, the pool knows a connection and calls its owner
+`guest_<session key>`. Who the user IS, is a fact of Django's session, and
+Django says so through one line in the project's `MIDDLEWARE`:
+
+```python
+MIDDLEWARE = [
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "genro_asgi_django.middleware.UserStickyMiddleware",
+]
+```
+
+It goes **below** those two: it reads the session, and the user they put there.
+
+What it watches is `_auth_user_id`, the one thing `django.contrib.auth.login`
+and `logout` write in and take out of the session, read once before the request
+is served and once after. Its appearance is a login and the middleware calls
+`DjangoWorker.declare_user` with the session key and the username; its
+disappearance is a logout and the middleware calls
+`DjangoWorker.retire_connection`, which takes the connection off the worker —
+the core has no way back to nobody, because `change_connection_user` refuses a
+guest as a target. A different value is an avatar switch and reads as a login.
+
+The middleware reaches the worker through the environ: `DjangoWorker` puts
+itself under `genro.spa_worker` while it serves, beside the core's
+`genro.identity`. An environ with no worker in it is the same project under
+`manage.py runserver`, and there the middleware does nothing at all.
+
+From the login on, the user is what the pool places, freezes, transfers and
+shuts down in order: every connection of one user lives in one process.
+
+### What it looks like
+
+Wagtail's bakerydemo, `admin` logging in through its own form. The answer of
+the login POST carries the new session, and the pool's cookie with it:
+
+```
+HTTP/1.1 302 Found
+location: /admin/
+set-cookie: sessionid=ef8el336xz7sn4ntc6lsdsurdlrv76ei; HttpOnly; Path=/
+set-cookie: spa_connection_id=ef8el336xz7sn4ntc6lsdsurdlrv76ei; Max-Age=86400; Path=/
+```
+
+and the census answers with a user where it used to answer with a guest:
+
+```json
+"connection_user_map": {"ef8el336…": "admin"},
+"user_worker_map": {"admin": "pool_0001"}
+```
+
+A second browser logging in as the same `admin` is a second connection on the
+same worker. A logout takes its own connection away, and the last logout takes
+the user with it.
+
 ## A real site
 
 `contrib/django/examples/bakerydemo/` serves Wagtail's demo bakery — the admin,
@@ -124,9 +186,20 @@ hello world was one thing: the working directory, described under Setup.
 - **A request that writes nothing to the session declares no connection.**
   Django mints a session key only when the session is touched, and a request
   with no session has nothing to be sticky to.
-- **No user, for now.** The worker declares the connection and never the user:
-  who the user is, is what Django knows at login, and telling the worker
-  (`change_connection_user`) is separate work.
+- **Without the middleware line there is no user.** The worker declares the
+  connection from the session cookie and nothing else; a project that does not
+  add the line keeps a pool of guests, which is a usable shape — the stickiness
+  is the connection's.
+- **A logout leaves the cookie behind.** The pool's own rule is that a
+  connection id stays in `connection_user_map` (`SpaCommander.drop_connection`:
+  "the cookie is eternal"), so a browser that logged out still presents a
+  `spa_connection_id` the front routes as its old user until that user's LAST
+  connection goes. It costs nothing: Django has deleted its `sessionid` and
+  answers the request as anonymous. Identity is Django's decision; the pool only
+  routes.
+- **The login cycles the session key.** `django.contrib.auth.login` mints a new
+  one, so the connection the pool owns after a login is not the one it owned
+  before, and the old row is left to the idle valve.
 - **A database-backed session works too**, and then the stickiness matters
   less: the point of the pool is the state the process holds.
 - **The worker serves Django on the traffic pool**, so the project must be

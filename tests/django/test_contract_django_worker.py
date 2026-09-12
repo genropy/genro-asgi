@@ -111,7 +111,7 @@ class TestTheWorkerHostsDjango:
     async def test_the_hosted_application_answers(self, worker) -> None:
         served = await worker._serve_request(http_call())
         assert served["status"] == 200
-        assert served["body"] == b"hello world\nvisits: 1\n"
+        assert served["body"] == b"hello world\nuser: nobody\nvisits: 1\n"
 
     def test_a_forked_worker_serves_the_engine_it_was_handed(
         self, worker, django_engine
@@ -158,7 +158,7 @@ class TestTheConnectionIsDeclaredFromTheSession:
         first = await worker._serve_request(http_call())
         cookie = session_cookie(first)
         second = await worker._serve_request(http_call(cookie=cookie))
-        assert second["body"] == b"hello world\nvisits: 2\n"
+        assert second["body"] == b"hello world\nuser: nobody\nvisits: 2\n"
         assert list(worker.connection_register.keys()) == [cookie.partition("=")[2]]
 
     async def test_a_request_with_no_session_declares_nothing(self, worker) -> None:

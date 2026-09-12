@@ -32,8 +32,12 @@ commander; this subclass adds the hosted application and one duty of its own.
   ``spa_connection_id`` cookie: from then on the pool sends that session to this
   worker, which is where the session's own memory is.
 
-No user is declared here. Who the user is, is what Django knows at login, and
-telling the worker is the next child's work (``change_connection_user``).
+- Who the user IS, is what Django knows at login, and Django says so through
+  :class:`~genro_asgi_django.middleware.UserStickyMiddleware`: the worker puts
+  itself in the environ under ``WORKER_ENVIRON_KEY``, the middleware finds it
+  there and calls ``declare_user`` at the login and ``retire_connection`` at
+  the logout. Both run on the traffic-pool thread, inside the CALL and
+  therefore on its slot, which is what the core's login tail reads.
 
 This module imports ``django`` at the top by design: it is loaded through the
 ``worker_class`` dotted path only where Django is installed.
@@ -50,7 +54,13 @@ from genro_asgi_multiworker_spa.orchestration import SpaWorker
 
 from .engine_factory import DjangoEngineFactory
 
-__all__ = ["DjangoWorker"]
+__all__ = ["WORKER_ENVIRON_KEY", "DjangoWorker"]
+
+#: The environ key this worker puts itself under, beside the core's
+#: ``genro.identity``. It is how a Django middleware — code the project owns,
+#: running inside the hosted application — reaches the process it is served by
+#: without a module-level handle.
+WORKER_ENVIRON_KEY = "genro.spa_worker"
 
 
 class DjangoWorker(SpaWorker):
@@ -99,11 +109,14 @@ class DjangoWorker(SpaWorker):
         Returns:
             Django's body iterable, untouched.
 
-        The headers are read on their way out, because a session born in this
-        request has its key only in the ``Set-Cookie`` Django just wrote. The
-        declaration happens on the traffic-pool thread, inside the CALL and
-        therefore on its slot, the way a hosted site declares its own.
+        The worker is put in the environ first, so a middleware of the project
+        can reach it while the request is being served. The headers are read on
+        their way out, because a session born in this request has its key only
+        in the ``Set-Cookie`` Django just wrote. The declaration happens on the
+        traffic-pool thread, inside the CALL and therefore on its slot, the way
+        a hosted site declares its own.
         """
+        environ[WORKER_ENVIRON_KEY] = self
         answered: list[tuple[str, str]] = []
 
         def watching_start_response(
@@ -153,3 +166,37 @@ class DjangoWorker(SpaWorker):
                     return morsel.value
         morsel = SimpleCookie(environ.get("HTTP_COOKIE", "")).get(self.session_cookie_name)
         return morsel.value if morsel is not None else None
+
+    def declare_user(self, cid: str, user_name: str) -> None:
+        """The login: the session Django just minted belongs to this user.
+
+        Args:
+            cid: the session key the login cycled — the connection's identity
+                from now on, and the one the answer's cookie will carry.
+            user_name: the name Django logged in.
+
+        Called by the middleware from inside the request, before
+        ``declare_connection`` sees the answer: the connection is opened here
+        when this process has never seen the key, and ``change_connection_user``
+        turns it over to the user on the slot of this very request, which is
+        where the core's login tail reads it.
+        """
+        if cid not in self.connection_register:
+            self.new_connection(cid)
+        self.change_connection_user(cid, user_name)
+
+    def retire_connection(self, cid: str) -> None:
+        """The logout: the connection leaves this worker, and its user with it.
+
+        Args:
+            cid: the session key the logout is flushing away.
+
+        The core has no way back to nobody — ``change_connection_user`` refuses
+        a guest as a target — so the row goes instead: the cascade announces the
+        connection and, when it was his last, the user. A key this process does
+        not hold is nothing to retire and nothing to complain about: the browser
+        may have been served by another worker before.
+        """
+        item = self.connection_register.get(cid)
+        if item is not None:
+            self.drop_connection(item["user"], cid)
