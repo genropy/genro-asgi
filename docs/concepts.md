@@ -95,13 +95,13 @@ server = AsgiServer(applications=[Api(code="api"), Admin(code="admin")], default
 elects nothing and it is consulted only when the root is unclaimed: 307, so the
 method and the body survive the hop.
 
-### The automatic `_server` app
+### The `_server` app
 
-`AsgiServer` automatically mounts an internal application at `/_server/`. You do
-not configure it into existence — it is always present. On a public server it is
-a management surface (login, monitoring, OpenAPI of system endpoints, task management);
-its endpoints live under `/_server/...` and never leak into your own app's route
-tree.
+The management surface — login, monitoring, OpenAPI of system endpoints, task
+management — is `ServerApplication`, and it is declared like any other
+application, with the code `_server`. A server that does not declare it does not
+have it. Its endpoints live under `/_server/...` and never leak into your own
+app's route tree.
 
 ## Routing with genro-routes
 

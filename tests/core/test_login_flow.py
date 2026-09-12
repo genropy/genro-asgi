@@ -74,7 +74,7 @@ class MemoryUserStore(UserStore):
 def make_server(with_users: bool = True) -> AsgiServer:
     """A full hand-built server; ``with_users`` seeds alice/wonder on a user store."""
     if not with_users:
-        return AsgiServer(applications=[BaseApplication(mount="")])
+        return AsgiServer(applications=[ServerApplication(), BaseApplication(mount="")])
     store = MemoryUserStore()
     store.save(
         {
@@ -92,7 +92,9 @@ def make_server(with_users: bool = True) -> AsgiServer:
             "enabled": False,
         }
     )
-    return AsgiServer(applications=[BaseApplication(mount="")], users=store)
+    return AsgiServer(
+        applications=[ServerApplication(), BaseApplication(mount="")], users=store
+    )
 
 
 async def drive(
@@ -187,8 +189,8 @@ def make_lockout_server(
             "enabled": True,
         }
     )
-    kwargs: dict[str, Any] = {"server_app": {"login": policy}} if policy else {}
-    return AsgiServer(applications=[BaseApplication(mount="")], users=store, **kwargs), store
+    server_app = ServerApplication(login=policy) if policy else ServerApplication()
+    return AsgiServer(applications=[server_app, BaseApplication(mount="")], users=store), store
 
 
 async def login_attempt(
@@ -242,7 +244,9 @@ class TestLoginHappyPath:
                 "enabled": True,
             }
         )
-        server = AsgiServer(applications=[BaseApplication(mount="")], users=store)
+        server = AsgiServer(
+            applications=[ServerApplication(), BaseApplication(mount="")], users=store
+        )
         anonymous = server.session_store.create()
         _, sent = await drive(
             server,

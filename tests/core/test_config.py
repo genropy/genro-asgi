@@ -38,6 +38,7 @@ from genro_asgi import (
     BaseApplication,
     ConfigError,
     ConfigurationHandler,
+    ServerApplication,
 )
 from genro_asgi.__main__ import AppsRegistry
 from genro_asgi.config import HOME_ENV, BaseConfiguration, DefaultConfig
@@ -47,7 +48,6 @@ from genro_asgi.storage_mixin import DEFAULT_SITE_MOUNT
 from genro_asgi.types import Message, Receive, Scope, Send
 
 ADMIN_PW_ENV_VAR = "GENRO_TEST_ADMIN_PW"
-OIDC_SECRET_ENV_VAR = "GENRO_TEST_OIDC_SECRET"
 
 
 class ShopApp(BaseApplication):
@@ -154,7 +154,7 @@ class TestSelfConfiguringServer:
         server = AsgiServer(config=TwoAppConfig)
         assert isinstance(server.root_application, ShopApp)
         assert server.root_application.mount == ""
-        assert set(server.applications) == {"shop", "api", "_server"}
+        assert set(server.applications) == {"shop", "api"}
         assert isinstance(server.applications["api"], ApiApp)
 
     def test_a_bare_server_has_no_configuration(self) -> None:
@@ -192,7 +192,7 @@ class TestSelfConfiguringServer:
         )
         server = AsgiServer(config=module)
         assert server.config_port == 8123
-        assert set(server.applications) == {"_server"}
+        assert server.applications == {}
 
 
 class TestDemux:
@@ -428,7 +428,7 @@ class TestSkippedSections:
 
         server = AsgiServer(config=OrchestrationConfig)
         assert isinstance(server.root_application, ShopApp)
-        assert set(server.applications) == {"shop", "_server"}
+        assert set(server.applications) == {"shop"}
         assert server.config("openapi.title") == "Demo"
 
 
@@ -443,7 +443,7 @@ class TestSingleAppNoDefault:
                 )
 
         server = AsgiServer(config=OneAppConfig)
-        assert set(server.applications) == {"only", "_server"}
+        assert set(server.applications) == {"only"}
         assert server.root_application is None
         assert isinstance(server.application_at("only"), ShopApp)
 
@@ -597,36 +597,53 @@ class TestIdentitySection:
 
 
 class LoginSurfaceConfig(TwoAppConfig):
-    """The two-app site plus a lockout policy and two OIDC providers."""
+    """The two-app site plus the server application, declared like any other."""
 
-    def authentication_section(self, cfg: Any) -> None:
-        """The login surface: policy, one confidential and one public provider."""
-        auth = cfg.authentication()
-        auth.login(max_attempts=3, backoff=10)
-        oidc = auth.oidc()
-        oidc.provider(
-            code="corp",
-            issuer="https://idp.example.com",
-            client_id="corp-client",
-            client_secret=EnvResolver(OIDC_SECRET_ENV_VAR),
-            scopes="openid profile",
-            identity_claim="preferred_username",
-            tags=["staff"],
-        )
-        oidc.provider(
-            code="public",
-            issuer="https://accounts.example.org",
-            client_id="pub-client",
+    def applications_section(self, cfg: Any) -> None:
+        """The two apps of the base recipe plus ``_server``, carrying its kwargs."""
+        apps = cfg.applications(default="shop")
+        apps.application(code="shop", mount="", app_class=ShopApp)
+        apps.application(code="api", app_class=ApiApp)
+        apps.application(
+            code="_server",
+            app_class=ServerApplication,
+            login={"max_attempts": 3, "backoff": 10},
+            oidc={
+                "corp": {
+                    "issuer": "https://idp.example.com",
+                    "client_id": "corp-client",
+                    # STOP, open for the owner: a resolver nested inside a dict
+                    # kwarg is NOT resolved — only an element's own attributes
+                    # go through the read stack. The old grammar resolved this
+                    # secret because ``provider`` was an element; with the
+                    # providers as one dict kwarg nothing resolves it, so the
+                    # secret is a literal here until the owner says how the
+                    # package declares its providers.
+                    "client_secret": "oidc-s3cret",
+                    "scopes": "openid profile",
+                    "identity_claim": "preferred_username",
+                    "tags": ["staff"],
+                },
+                "public": {
+                    "issuer": "https://accounts.example.org",
+                    "client_id": "pub-client",
+                },
+            },
         )
 
 
 class TestLoginSurface:
-    """``authentication.login``/``.oidc`` → ``server_app=`` → the ``_server`` app."""
+    """D-SA-10: the login surface is the declared app's own kwargs.
 
-    def test_the_login_surface_reaches_the_server_app(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv(OIDC_SECRET_ENV_VAR, "oidc-s3cret")
+    ``authentication.login``, ``authentication.oidc`` and its ``provider``
+    children are gone from the grammar, and so are the handler's
+    ``server_app_kwargs``/``oidc_providers`` and the ``server_app`` server
+    kwarg that carried their values. What asks a human for a user and a
+    password is declared where it lives: on the ``application`` element of the
+    app that owns it, whose attributes are its constructor kwargs.
+    """
+
+    def test_the_login_surface_reaches_the_server_app(self) -> None:
         app = AsgiServer(config=LoginSurfaceConfig).applications["_server"]
         assert app.login_policy == {"max_attempts": 3, "backoff": 10}
         assert set(app.oidc_providers) == {"corp", "public"}
@@ -636,43 +653,18 @@ class TestLoginSurface:
         assert corp["identity_claim"] == "preferred_username"
         assert corp["tags"] == ["staff"]
 
-    def test_provider_defaults_apply_per_provider(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv(OIDC_SECRET_ENV_VAR, "oidc-s3cret")
-        app = AsgiServer(config=LoginSurfaceConfig).applications["_server"]
-        assert app.oidc_providers["public"] == {
-            "issuer": "https://accounts.example.org",
-            "client_id": "pub-client",
-            "scopes": "openid email profile",
-            "identity_claim": "email",
-            "tags": [],
-        }
-
-    def test_no_login_section_leaves_the_bare_app(self) -> None:
-        app = AsgiServer(config=TwoAppConfig).applications["_server"]
+    def test_an_undeclared_login_surface_leaves_the_bare_app(self) -> None:
+        app = ServerApplication()
         assert app.login_policy == {}
         assert app.oidc_providers == {}
 
-    def test_a_provider_without_a_code_is_rejected_by_the_collection(self) -> None:
-        class NoCodeConfig(AsgiConfigBuilder):
+    def test_a_recipe_writing_the_old_words_is_refused(self) -> None:
+        class OldWordsConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                root.configuration().authentication().oidc().provider(
-                    issuer="https://idp.example.com", client_id="x"
-                )
+                root.configuration().authentication().login(max_attempts=3)
 
-        with pytest.raises(ValueError, match="code"):
-            ConfigurationHandler(NoCodeConfig)
-
-    def test_a_duplicate_provider_code_is_rejected_by_the_collection(self) -> None:
-        class DoubledCodeConfig(AsgiConfigBuilder):
-            def main(self, root: Any) -> None:
-                oidc = root.configuration().authentication().oidc()
-                oidc.provider(code="corp", issuer="https://a.example.com", client_id="a")
-                oidc.provider(code="corp", issuer="https://b.example.com", client_id="b")
-
-        with pytest.raises(ValueError, match="corp"):
-            ConfigurationHandler(DoubledCodeConfig)
+        with pytest.raises(AttributeError, match="login"):
+            ConfigurationHandler(OldWordsConfig)
 
 
 class TestTasksConfig:
@@ -772,12 +764,12 @@ class TestReadStack:
     def test_signature_default_is_resolved_at_read_time(self) -> None:
         class ProviderConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                root.configuration().authentication().oidc().provider(
-                    code="corp", issuer="https://idp.example.com"
+                root.configuration().authentication().credentials().jwt(
+                    name="main", secret="s3cret"
                 )
 
         handler = ConfigurationHandler(ProviderConfig)
-        assert handler("authentication.oidc.corp.scopes") == "openid email profile"
+        assert handler("authentication.credentials.jwt_0.algorithm") == "HS256"
 
     def test_call_site_default_applies_to_an_unwritten_value(self) -> None:
         handler = ConfigurationHandler(TwoAppConfig)

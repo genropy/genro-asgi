@@ -99,13 +99,15 @@ assigned once by the owning server at attach time (a second assignment raises).
 protocol faces (OpenAPI/Swagger, MCP) over the *same* route tree — which is why
 one decorated method can serve REST and MCP at once.
 
-## The automatic `_server` application
+## The `_server` application
 
-Every `AsgiServer` auto-mounts a `ServerApplication` at `/_server` (D4). It
-exposes the server's own management surface — login, users, tokens, tasks —
-under `/_server/…`, and its OpenAPI schema at `/_server/_meta/schema_json`. It
-is *automatic, not configured*: a hand-built server has it exactly like one
-built from a configuration (`AsgiServer(config=…)`).
+`ServerApplication` exposes the server's own management surface — login, users,
+tokens, tasks — under `/_server/…`, and its OpenAPI schema at
+`/_server/_meta/schema_json`. It is declared like any other application, with
+the code `_server` (D-SA-10): a hand-built server passes it in `applications=`,
+a configured one writes it on the `applications` section. Nothing mounts it
+behind the caller's back, and a server that declares none exposes no
+`/_server/…` at all.
 
 ## Configuration: the server reads its own
 

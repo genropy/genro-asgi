@@ -36,9 +36,8 @@ Section → constructor kwarg:
   ``session`` child → ``session_ttl``, its ``tasks`` child → ``tasks``.
 - ``middleware`` → ``middleware`` ({name: bool | dict} switches).
 - ``authentication`` → ``admin_password``/``users``/``tokens`` (the store
-  kwargs ``AuthMixin`` peels), ``auth`` (the ``AuthCore`` entries folded from
-  ``credentials``) and ``server_app`` (``login`` + ``oidc``, forwarded to the
-  ``_server`` application).
+  kwargs ``AuthMixin`` peels) and ``auth`` (the ``AuthCore`` entries folded
+  from ``credentials``).
 - ``storage`` → ``storage`` (genro-storage's own ``list[dict]`` of mounts) and
   ``storage_key`` (the section's at-rest key material).
 - ``applications`` → ``applications``/``default`` (each entry an
@@ -170,50 +169,6 @@ class ConfigurationHandler(ConfigHandler):
                 )
         entries = {"basic": basic, "bearer": bearer, "jwt": jwt}
         return {name: value for name, value in entries.items() if value} or None
-
-    def server_app_kwargs(self) -> dict[str, Any]:
-        """The LOGIN surface of ``authentication`` → the ``_server`` app's kwargs.
-
-        ``login`` is the lockout policy and ``oidc`` the providers keyed by
-        ``code``. These values belong to the application that peels them, so
-        they travel as ONE server kwarg (``server_app``) forwarded at mount time
-        instead of being lifted onto the server itself.
-        """
-        kwargs: dict[str, Any] = {}
-        if self.node("authentication.login") is not None:
-            kwargs["login"] = self.closed_attrs(
-                "authentication.login", "max_attempts", "backoff"
-            )
-        providers = self.oidc_providers()
-        if providers:
-            kwargs["oidc"] = providers
-        return kwargs
-
-    def oidc_providers(self) -> dict[str, dict[str, Any]]:
-        """The ``oidc`` providers as ``{code: attrs}``, defaults applied.
-
-        ``scopes`` and ``identity_claim`` come from the element's signature, so
-        every provider carries them whether the recipe wrote them or not;
-        ``tags`` defaults to the empty list here (a mutable signature default is
-        never declared).
-        """
-        node = self.node("authentication.oidc")
-        if node is None:
-            return {}
-        providers: dict[str, dict[str, Any]] = {}
-        for child in node.value:
-            attrs = self.closed_attrs(
-                f"authentication.oidc.{child.label}",
-                "issuer",
-                "client_id",
-                "client_secret",
-                "scopes",
-                "identity_claim",
-                "tags",
-            )
-            attrs.setdefault("tags", [])
-            providers[child.label] = attrs
-        return providers
 
     def storage_config(self) -> tuple[list[dict[str, Any]], str | None] | None:
         """The ``storage`` section as ``(mounts, storage_key)``, or ``None`` when it

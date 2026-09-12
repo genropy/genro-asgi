@@ -194,7 +194,7 @@ caller is never guessing:
 
 ```python
 self.server.config("server.host")
-self.server.config("authentication.oidc.google.issuer")
+self.server.config("authentication.credentials.jwt_0.algorithm")
 self.config("parameters.title", default="Shop")   # from inside an application
 ```
 

@@ -57,12 +57,18 @@ class InspectorScriptedFront(SpaApplication):
 
 
 def inspector_recipe_for(root) -> type[AsgiConfigBuilder]:
-    """A recipe with one spa front and its pool, mounted at the root."""
+    """A recipe with the ``_server`` app and one spa front with its pool at the root.
+
+    The server application is declared like any other since D-SA-10; the
+    inspector needs it mounted, because the front attaches its section there.
+    """
 
     class FrontConfig(AsgiConfigBuilder):
         def main(self, configuration_root: Any) -> None:
             cfg = configuration_root.configuration()
-            front = cfg.applications().application(
+            applications = cfg.applications()
+            applications.application(code="_server", app_class=ServerApplication)
+            front = applications.application(
                 code="site", mount="", app_class=InspectorScriptedFront
             )
             commander = front.orchestration().commander(

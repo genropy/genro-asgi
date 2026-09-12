@@ -41,7 +41,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from genro_asgi import AsgiServer, Avatar, BaseApplication, UserStore
+from genro_asgi import AsgiServer, Avatar, BaseApplication, ServerApplication, UserStore
 from genro_asgi.middleware.base import BaseMiddleware
 from genro_asgi.types import Message, Scope
 
@@ -116,7 +116,7 @@ MONITOR_ROUTES = ("/_server/monitor/", "/_server/monitor/snapshot", "/_server/mo
 def make_server(avatar: Avatar | None, *applications: BaseApplication) -> AsgiServer:
     """A server whose chain stamps ``avatar``, mounting ``applications``."""
     return AsgiServer(
-        applications=list(applications) or [BaseApplication(mount="")],
+        applications=[ServerApplication(), *(applications or [BaseApplication(mount="")])],
         middleware={"stamp": {"avatar": avatar}},
         middleware_registry={"stamp": StampAuthMiddleware},
     )
@@ -299,5 +299,5 @@ class TestBootstrapAdmin:
 
     async def test_admin_carries_the_monitor_tag(self) -> None:
         store = MemoryUserStore()
-        AsgiServer(users=store, admin_password="opspassword")
+        AsgiServer(applications=[ServerApplication()], users=store, admin_password="opspassword")
         assert "SERVER_ADMIN" in store.get("admin")["tags"]
