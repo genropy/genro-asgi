@@ -786,6 +786,22 @@ the type fixed by the store protocol; the VALUES are the consumer's own, and mus
 be types the TYTX codec knows because a grant carries them down the lane). The parcel stays a plain dict built from the row:
 no row class reaches the disk.
 
+**A Django project is hosted like any other site (landed 2026-09-12, #85).**
+`genro_asgi_django/` is a fourth top-level package of the same distribution,
+and it adds nothing to the core: `DjangoWorker` is a `SpaWorker` whose
+`wsgi_app` is Django's own WSGI callable, and `DjangoEngineFactory` is the
+group's `engine_factory` — one `django.setup()` in the template process, every
+worker a fork of it. The recipe names both as dotted paths and gives them the
+same two words, `settings_module` and `project_path` (the child is `python -m`:
+it inherits the environment and not the `sys.path`). The connection is
+Django's session: `serve_django` calls Django, reads the session key off the
+answer's `Set-Cookie` or the request's `Cookie`, and calls `new_connection` with
+it the first time this process sees it — so the `spa_connection_id` cookie
+carries Django's `sessionid` and the pool sends that session back to the process
+that holds it. No user is declared: that is what Django knows at login, and
+`change_connection_user` is separate work. The example and its recipe live in
+`contrib/django/examples/hello_world/`; the guide is `docs/guides/django.md`.
+
 **Not yet built (second pass).** The deliberate reboot command on `_server`
 (`reboot now`/`reboot wait N`, notify_user, the consumer service-message
 lane); the single-group reboot (needs no photo — the commander survives) and
