@@ -20,10 +20,11 @@ Usage::
     genro-asgi serve template=default                 # a ready-made configuration
     genro-asgi serve application=./hello.py:Hello     # one app, no config
     genro-asgi serve application=pkg.mod:App --name demo   # serve AND register
-    genro-asgi serve demo                             # relaunch a registered name
-    genro-asgi apps                                   # list the registered apps
-    genro-asgi stop demo                              # stop a running app
-    genro-asgi remove demo                            # drop a registration
+    genro-asgi serve demo                             # run the site named by its card
+    genro-asgi configure demo --home /srv/demo        # write a card and lay out its home
+    genro-asgi sites                                  # list the configured sites
+    genro-asgi stop demo                              # stop a running site
+    genro-asgi remove demo                            # drop a card
 
 The ``serve`` source resolves in this order: an ``application=<target>``
 assignment (quickstart — the target class is instantiated with no arguments and
@@ -38,11 +39,21 @@ Explicit ``--host``/``--port`` are forwarded as ``AsgiServer`` kwargs: the
 server's own "explicit kwarg wins over the configured value" rule does the
 precedence, this command computes nothing.
 
-The registry under ``~/.genroasgi`` stores a pointer per name (``apps/<name>.json``:
-source and saved options), never a copy of the app, so relaunching by name always
-runs the current code. A served name records its pid in ``run/<name>.pid`` so
-``apps`` shows what is running and ``stop`` can end it from another shell. A pid
-whose process is gone is stale and reads as not running.
+The registry under ``~/.genroasgi`` stores ONE CARD per site
+(``sites/<name>.json``: the home folder, the source and the saved options), never
+a copy of the app, so running a name always runs the current code. A site home is
+a folder whose every path is relative and named (``SiteHome``), and a card's
+relative source is read inside it: ``serve demo`` runs ``<home>/config.py``. A
+served name records its pid in ``run/<name>.pid`` so ``sites`` shows what is
+running and ``stop`` can end it from another shell. A pid whose process is gone is
+stale and reads as not running.
+
+``configure <name>`` writes that card: it asks the home folder, the configuration
+template, the applications to mount and the listener, and every answer given as an
+option is not asked — with all of them given it runs without a prompt, which is
+what Docker and Kubernetes need. It lays the home out (``SiteHome.prepare``) and
+writes its ``config.py``. ``serve <path>`` writes no card: the name is the
+intention to have one.
 
 ``--reload`` runs under uvicorn's reload supervisor, which accepts only an import
 string — never a built instance. The source therefore crosses the process
@@ -65,20 +76,23 @@ import signal
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import Callable
 
 
 from .asgi_server import AsgiServer
 from .lifespan import QUITTING
 from .reloading import LAUNCHER_ENV, serve_reloading
+from .site_home import SiteHome
 from .config.default_config import DefaultConfig
-from .config.templates import CONFIGURATION_TEMPLATES
+from .config.templates import CONFIGURATION_TEMPLATES, DEFAULT_TEMPLATE
 
 __all__ = [
     "LAUNCHER_ENV",
-    "AppsRegistry",
+    "SitesRegistry",
     "CliError",
     "Cli",
     "ServerLauncher",
+    "SiteConfigurator",
     "TargetResolver",
     "factory",
     "main",
@@ -88,8 +102,13 @@ class CliError(Exception):
     """A runtime error the command reports as one stderr line and exit code 1."""
 
 
-class AppsRegistry:
-    """The ``~/.genroasgi`` store: registered servers and the pids of the running ones.
+class SitesRegistry:
+    """The ``~/.genroasgi`` store: the site cards and the pids of the running ones.
+
+    ONE card per site, ``sites/<name>.json``: the home folder the site owns, the
+    configuration source it runs (a file inside that home, a ``template=`` name
+    or an ``application=`` target) and the serve options. Resolving a name means
+    reading its card — no search order and no precedence.
 
     The directory is also where a deployment keeps its defaults layer, so
     ``base_dir`` comes from ``DefaultConfig`` — one default for both, one
@@ -100,36 +119,37 @@ class AppsRegistry:
     def __init__(self, base_dir: Path | None = None) -> None:
         self.default_config = DefaultConfig(base_dir)
         self.base_dir = self.default_config.base_dir
-        self.apps_dir = self.base_dir / "apps"
+        self.sites_dir = self.base_dir / "sites"
         self.run_dir = self.base_dir / "run"
+        self.sessions_dir = self.base_dir / "sessions"
 
-    def entry_path(self, name: str) -> Path:
-        return self.apps_dir / f"{name}.json"
+    def card_path(self, name: str) -> Path:
+        return self.sites_dir / f"{name}.json"
 
     def pid_path(self, name: str) -> Path:
         return self.run_dir / f"{name}.pid"
 
     def save(self, name: str, entry: dict) -> None:
         """Register (or update) *name* with its serve options."""
-        self.apps_dir.mkdir(parents=True, exist_ok=True)
-        self.entry_path(name).write_text(json.dumps(entry, indent=2), encoding="utf-8")
+        self.sites_dir.mkdir(parents=True, exist_ok=True)
+        self.card_path(name).write_text(json.dumps(entry, indent=2), encoding="utf-8")
 
     def load(self, name: str) -> dict | None:
         """The registration stored for *name*, ``None`` when there is none."""
-        path = self.entry_path(name)
+        path = self.card_path(name)
         if not path.is_file():
             return None
         return json.loads(path.read_text(encoding="utf-8"))
 
     def names(self) -> list[str]:
         """The registered names, sorted."""
-        if not self.apps_dir.is_dir():
+        if not self.sites_dir.is_dir():
             return []
-        return sorted(path.stem for path in self.apps_dir.glob("*.json"))
+        return sorted(path.stem for path in self.sites_dir.glob("*.json"))
 
     def remove(self, name: str) -> bool:
         """Drop *name*'s registration and any leftover pidfile. ``False`` if absent."""
-        path = self.entry_path(name)
+        path = self.card_path(name)
         if not path.is_file():
             return False
         path.unlink()
@@ -220,16 +240,28 @@ class ServerLauncher:
     replace the ones the command line did not give.
     """
 
-    def __init__(self, options: argparse.Namespace, registry: AppsRegistry) -> None:
+    def __init__(self, options: argparse.Namespace, registry: SitesRegistry) -> None:
         self.registry = registry
         self.source = options.source
         self.name = options.name
+        self.home = SiteHome(options.home) if options.home else None
         self.host = options.host
         self.port = options.port
         self.reload = options.reload
         self.debug = options.debug
         if not (self.is_quickstart or self.is_template or self.is_config_path):
             self.adopt_registered(self.source)
+
+    @property
+    def resolved_source(self) -> str:
+        """The source as a path: a bare file name of a carded site lives in its home.
+
+        An absolute source and the two assignments pass through — ``Path("/a") /
+        "/b"`` is ``/b``, so no branch is needed for the absolute case.
+        """
+        if self.home is None or self.is_quickstart or self.is_template:
+            return self.source
+        return str(self.home.path / self.source)
 
     @property
     def is_quickstart(self) -> bool:
@@ -251,13 +283,18 @@ class ServerLauncher:
 
     @property
     def is_config_path(self) -> bool:
-        return self.source.endswith(".py") and Path(self.source).is_file()
+        return self.resolved_source.endswith(".py") and Path(self.resolved_source).is_file()
 
     @property
     def entry(self) -> dict:
-        """What gets stored under ``--name``: the source and the given options."""
+        """The card stored under ``--name``: the home, the source and the options.
+
+        The source is stored AS GIVEN, so a site whose home moves keeps running
+        the same relative recipe.
+        """
         return {
             "source": self.source,
+            "home": str(self.home) if self.home is not None else None,
             "host": self.host,
             "port": self.port,
             "reload": bool(self.reload),
@@ -279,16 +316,22 @@ class ServerLauncher:
         """The session snapshot file a NAMED serve arms, ``None`` for a nameless one.
 
         Giving the instance a name IS the switch: sessions of ``--name demo``
-        survive a restart through ``<base_dir>/sessions/demo.pickle``.
+        survive a restart through ``<home>/data/sessions/demo.pickle``, or
+        ``<base_dir>/sessions/demo.pickle`` when the site has no home.
         """
         if not self.name:
             return None
-        return str(self.registry.base_dir / "sessions" / f"{self.name}.pickle")
+        folder = self.home.sessions if self.home is not None else self.registry.sessions_dir
+        return str(folder / f"{self.name}.pickle")
 
     @property
     def constructor_kwargs(self) -> dict:
-        """What ``AsgiServer(...)`` receives: host/port plus the armed snapshot."""
+        """What ``AsgiServer(...)`` receives: the site, host/port, the snapshot."""
         kwargs = dict(self.server_kwargs)
+        if self.home is not None:
+            kwargs["site_home"] = str(self.home)
+        if self.name:
+            kwargs["site_name"] = self.name
         if self.save_session_path is not None:
             kwargs["save_session"] = self.save_session_path
         if self.debug is not False:
@@ -317,7 +360,7 @@ class ServerLauncher:
         elif self.is_template:
             payload["config"] = self.template_name
         else:
-            payload["config"] = str(Path(self.source).resolve())
+            payload["config"] = str(Path(self.resolved_source).resolve())
         return payload
 
     @property
@@ -330,7 +373,7 @@ class ServerLauncher:
         if self.is_template:
             return str(Path.cwd())
         module_part = (
-            self.quickstart_target.partition(":")[0] if self.is_quickstart else self.source
+            self.quickstart_target.partition(":")[0] if self.is_quickstart else self.resolved_source
         )
         if module_part.endswith(".py"):
             return str(Path(module_part).resolve().parent)
@@ -344,6 +387,8 @@ class ServerLauncher:
             raise CliError(f"unknown app {name!r} (registered: {known})")
         self.name = self.name or name
         self.source = stored["source"]
+        if self.home is None and stored.get("home"):
+            self.home = SiteHome(stored["home"])
         if self.host is None:
             self.host = stored.get("host")
         if self.port is None:
@@ -365,18 +410,25 @@ class ServerLauncher:
             sys.path.insert(0, str(directory))
 
     def build_server(self) -> AsgiServer:
-        """The server this source describes, host/port forwarded when given."""
+        """The server this source describes, host/port forwarded when given.
+
+        A declared home is laid out FIRST: a container's mounted volume arrives
+        empty, and the ``site:`` mount anchored on it refuses a folder that does
+        not exist.
+        """
+        if self.home is not None:
+            self.home.prepare()
         if self.is_quickstart:
             app_class = TargetResolver(self.source.partition("=")[2]).resolve()
             return AsgiServer(applications=[app_class], **self.constructor_kwargs)
         if self.is_template:
             return AsgiServer(config=self.template_name, **self.constructor_kwargs)
         if self.is_config_path:
-            config_path = Path(self.source).resolve()
+            config_path = Path(self.resolved_source).resolve()
             self.ensure_importable(config_path.parent)
             return AsgiServer(config=str(config_path), **self.constructor_kwargs)
         raise CliError(
-            f"cannot serve {self.source!r}: not an existing config.py path, "
+            f"cannot serve {self.resolved_source!r}: not an existing config.py path, "
             "not a 'template=<name>' assignment, "
             "not an 'application=<target>' assignment"
         )
@@ -407,6 +459,8 @@ class ServerLauncher:
             config=payload.get("config"),
             application=payload.get("application"),
             save_session=payload.get("save_session"),
+            site_name=payload.get("site_name"),
+            site_home=payload.get("site_home"),
             debug=payload.get("debug", False),
         )
 
@@ -433,11 +487,156 @@ class ServerLauncher:
         return 0
 
 
+RECIPE_HEADER = '''"""Configuration of the {name} site, written by ``genro-asgi configure``."""
+
+from genro_asgi.config import {template_class}
+{imports}
+
+class ServerConfiguration({template_class}):
+    """The {name} site: its home, its listener, its applications."""
+
+    site_name = "{name}"
+    site_home = "{home}"
+
+    def server_section(self, cfg):
+        """The listener."""
+        cfg.server(host="{host}", port={port})
+'''
+"""The recipe ``configure`` writes into the home. One class, its home declared."""
+
+RECIPE_APPLICATIONS = '''
+    def applications_section(self, cfg):
+        """The applications this site mounts."""
+        apps = cfg.applications()
+{mounts}
+'''
+"""The applications override, appended only when the operator named some."""
+
+
+class SiteConfigurator:
+    """The ``configure`` command: the questions of a card, asked or given as options.
+
+    Every field has a question and a proposed answer. An option given on the
+    command line answers its field and no question is asked for it, so a fully
+    optioned invocation runs without a prompt — which is what an init container
+    needs. What it writes: the home with its folders and its ``config.py``, and
+    the card ``sites/<name>.json`` pointing at both.
+    """
+
+    questions = (
+        ("home", "site home folder"),
+        ("template", "configuration template to start from"),
+        ("applications", "applications to mount (comma-separated package.module:Class)"),
+        ("host", "bind host"),
+        ("port", "bind port"),
+    )
+
+    def __init__(
+        self,
+        options: argparse.Namespace,
+        registry: SitesRegistry,
+        ask: Callable[[str], str] = input,
+    ) -> None:
+        self.name = options.name
+        self.options = options
+        self.registry = registry
+        self.ask = ask
+
+    @property
+    def proposals(self) -> dict[str, str]:
+        """What each question proposes when the operator just presses enter."""
+        return {
+            "home": str(Path.cwd() / self.name),
+            "template": DEFAULT_TEMPLATE,
+            "applications": "",
+            "host": "127.0.0.1",
+            "port": "8000",
+        }
+
+    def answer(self, field: str, question: str) -> str:
+        """The value of *field*: the given option, else the asked question."""
+        given = getattr(self.options, field)
+        if given is not None:
+            return str(given)
+        proposed = self.proposals[field]
+        return self.ask(f"{question} [{proposed}]: ").strip() or proposed
+
+    @property
+    def answers(self) -> dict[str, str]:
+        """Every field of the card, in the order the questions are asked."""
+        return {field: self.answer(field, question) for field, question in self.questions}
+
+    def application_entries(self, declared: str) -> list[tuple[str, str]]:
+        """The declared targets as ``(module, class)`` pairs.
+
+        Only importable targets: the recipe is a Python file that imports what it
+        mounts, and a single-file target has no import line to write.
+        """
+        entries = [TargetResolver(part.strip()).parts for part in declared.split(",") if part.strip()]
+        for module_part, _ in entries:
+            if module_part.endswith(".py"):
+                raise CliError(
+                    f"configure mounts importable targets only "
+                    f"('package.module:ClassName'), got {module_part!r}"
+                )
+        return entries
+
+    def recipe_source(self, home: SiteHome, answers: dict[str, str]) -> str:
+        """The ``config.py`` this site starts from: the template, narrowed to it."""
+        entries = self.application_entries(answers["applications"])
+        template_class = CONFIGURATION_TEMPLATES[answers["template"]].__name__
+        source = RECIPE_HEADER.format(
+            name=self.name,
+            template_class=template_class,
+            imports="".join(f"from {module} import {klass}\n" for module, klass in entries),
+            home=home.path,
+            host=answers["host"],
+            port=int(answers["port"]),
+        )
+        if not entries:
+            return source
+        mounts = "\n".join(
+            f'        apps.application(code="{klass.lower()}", app_class={klass})'
+            for _, klass in entries
+        )
+        return source + RECIPE_APPLICATIONS.format(mounts=mounts)
+
+    def card(self, home: SiteHome, answers: dict[str, str]) -> dict:
+        """The card written under the site's name."""
+        return {
+            "source": home.recipe_name,
+            "home": str(home),
+            "host": answers["host"],
+            "port": int(answers["port"]),
+            "reload": False,
+            "debug": False,
+        }
+
+    def run(self) -> int:
+        """Ask what was not given, lay the home out, write the recipe and the card."""
+        answers = self.answers
+        if answers["template"] not in CONFIGURATION_TEMPLATES:
+            known = ", ".join(sorted(CONFIGURATION_TEMPLATES))
+            raise CliError(f"unknown configuration template {answers['template']!r} (known: {known})")
+        home = SiteHome(answers["home"])
+        if home.path == self.registry.base_dir:
+            raise CliError(
+                f"the site home cannot be the genro-asgi home {self.registry.base_dir}: "
+                "the installation keeps the cards and the defaults layer there"
+            )
+        source = self.recipe_source(home, answers)
+        home.prepare()
+        home.recipe.write_text(source, encoding="utf-8")
+        self.registry.save(self.name, self.card(home, answers))
+        print(f"{self.name}: configured in {home}")
+        return 0
+
+
 class Cli:
     """The command: one parser, one subcommand method each, one exit code."""
 
-    def __init__(self, registry: AppsRegistry | None = None) -> None:
-        self.registry = registry or AppsRegistry()
+    def __init__(self, registry: SitesRegistry | None = None) -> None:
+        self.registry = registry or SitesRegistry()
 
     def parser(self) -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser(prog="genro-asgi", description="Run and manage ASGI servers.")
@@ -450,6 +649,9 @@ class Cli:
             "source",
             help="a config.py path, 'template=<name>', 'application=<target>', "
             "or a registered name",
+        )
+        serve.add_argument(
+            "--home", help="the site home folder (overrides the one on the card)"
         )
         serve.add_argument("--host", help="bind host (overrides the configured one)")
         serve.add_argument("--port", type=int, help="bind port (overrides the configured one)")
@@ -464,7 +666,22 @@ class Cli:
         serve.add_argument("--name", help="register the server under this name")
         serve.set_defaults(handler=self.serve)
 
-        commands.add_parser("apps", help="list the registered servers").set_defaults(handler=self.apps)
+        configure = commands.add_parser(
+            "configure", help="write a site card and lay out its home folder"
+        )
+        configure.add_argument("name", help="the name the site is filed under")
+        configure.add_argument("--home", help="the site home folder")
+        configure.add_argument("--template", help="the configuration template to start from")
+        configure.add_argument(
+            "--applications", help="comma-separated 'package.module:ClassName' targets to mount"
+        )
+        configure.add_argument("--host", help="bind host")
+        configure.add_argument("--port", type=int, help="bind port")
+        configure.set_defaults(handler=self.configure)
+
+        commands.add_parser("sites", help="list the configured sites").set_defaults(
+            handler=self.sites
+        )
 
         stop = commands.add_parser("stop", help="stop a running registered server")
         stop.add_argument("name")
@@ -486,17 +703,21 @@ class Cli:
     def serve(self, options: argparse.Namespace) -> int:
         return ServerLauncher(options, self.registry).run()
 
-    def apps(self, options: argparse.Namespace) -> int:
+    def configure(self, options: argparse.Namespace) -> int:
+        return SiteConfigurator(options, self.registry).run()
+
+    def sites(self, options: argparse.Namespace) -> int:
         names = self.registry.names()
         if not names:
-            print("No registered servers (register one with: genro-asgi serve <source> --name <name>)")
+            print("No configured sites (configure one with: genro-asgi configure <name>)")
             return 0
         for name in names:
-            entry = self.registry.load(name) or {}
+            card = self.registry.load(name) or {}
             pid = self.registry.read_pid(name)
             status = f"running (pid {pid})" if pid else "stopped"
-            address = f"{entry.get('host') or '-'}:{entry.get('port') or '-'}"
-            print(f"{name:<20} {status:<20} {address:<24} {entry.get('source') or '-'}")
+            address = f"{card.get('host') or '-'}:{card.get('port') or '-'}"
+            home = card.get("home") or "-"
+            print(f"{name:<20} {status:<20} {address:<24} {home:<40} {card.get('source') or '-'}")
         return 0
 
     def stop(self, options: argparse.Namespace) -> int:
@@ -540,7 +761,9 @@ def factory() -> AsgiServer:
     except json.JSONDecodeError as error:
         raise CliError(f"{LAUNCHER_ENV} is not valid JSON: {error}") from error
     kwargs = {
-        key: described[key] for key in ("host", "port", "save_session", "debug") if key in described
+        key: described[key]
+        for key in ("host", "port", "save_session", "site_name", "site_home", "debug")
+        if key in described
     }
     if "application" in described:
         server = AsgiServer(
