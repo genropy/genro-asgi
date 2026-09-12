@@ -236,19 +236,6 @@ class AsgiServer(
             )
 
     @property
-    def login_enabled(self) -> bool:
-        """True when the ``_server`` app carries a registered auth method.
-
-        The challenge negotiation (``ErrorMiddleware``) reads this to decide
-        whether a 401 becomes a login redirect (browser) or a ``login_url``
-        body (API). It reflects live state: ``ServerApplication`` registers the
-        password method at construction, so its server has a login surface.
-        """
-        server_app = self.applications.get("_server")
-        section = getattr(server_app, "auth_section", None)
-        return bool(section is not None and section.methods)
-
-    @property
     def config_host(self) -> str | None:
         """The host from the config's ``server`` section (``None`` if unset)."""
         return self._config_host

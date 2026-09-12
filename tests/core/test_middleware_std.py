@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import json
 import logging
-from urllib.parse import quote
 
 import pytest
 
@@ -252,60 +251,43 @@ class TestErrorContentNegotiation:
         assert json.loads(response_body(sent)) == {"error": "Internal Server Error"}
 
 
-class TestChallengeNegotiation:
-    """Macro 5a Phase 5: a 401 is negotiated when the server has a login surface."""
+class TestUnauthorizedIsAnOrdinaryError:
+    """D-SA-4: the core answers a bare 401, the same one to every caller.
 
-    def test_login_enabled_reflects_registered_method(self) -> None:
-        server = AsgiServer(applications=[BaseApplication(mount="")])
-        assert server.login_enabled is True
+    The negotiation that turned a browser's 401 into a 302 to
+    ``/_server/login_page`` — and an API caller's into a ``{"login_url": ...}``
+    body — was the only place where the core knew a login surface it does not
+    own. It is gone: the challenge header the exception carries is forwarded,
+    nothing else is added, and a server composed with the full ``AsgiServer``
+    answers exactly like the bare middleware composition.
+    """
 
-    async def test_browser_navigation_redirects_to_login_page(
-        self, http_request, response_status, response_headers
+    async def test_browser_navigation_keeps_the_bare_401(
+        self, http_request, response_status, response_headers, response_body
     ) -> None:
         server = AsgiServer(applications=[RaisingApp(mount="")])
         sent = await http_request(server, "/challenge", headers=[(b"accept", b"text/html")])
-        assert response_status(sent) == 302
-        assert response_headers(sent)[b"location"] == b"/_server/login_page?next=%2Fchallenge"
+        assert response_status(sent) == 401
+        assert response_headers(sent)[b"www-authenticate"] == b"Bearer"
+        assert b"location" not in response_headers(sent)
+        assert response_body(sent) == b"no"
 
-    async def test_api_caller_gets_login_url_and_challenge_header(
+    async def test_api_caller_gets_the_json_error_and_the_challenge_header(
         self, http_request, response_status, response_headers, response_body
     ) -> None:
         server = AsgiServer(applications=[RaisingApp(mount="")])
         sent = await http_request(server, "/challenge", headers=[(b"accept", b"application/json")])
         assert response_status(sent) == 401
         assert response_headers(sent)[b"www-authenticate"] == b"Bearer"
-        assert json.loads(response_body(sent)) == {"login_url": "/_server/login_page"}
+        assert json.loads(response_body(sent)) == {"error": "no"}
 
-    async def test_login_disabled_leaves_401_unchanged(
+    async def test_the_bare_composition_answers_the_same(
         self, http_request, response_status, response_headers
     ) -> None:
         server = MwServer(applications=[RaisingApp(mount="")])
         sent = await http_request(server, "/challenge", headers=[(b"accept", b"text/html")])
         assert response_status(sent) == 401
         assert response_headers(sent)[b"www-authenticate"] == b"Bearer"
-
-    async def test_browser_redirect_preserves_path_and_query_through_safe_next(self) -> None:
-        server = AsgiServer(applications=[RaisingApp(mount="")])
-        scope: Scope = {
-            "type": "http",
-            "method": "GET",
-            "path": "/challenge",
-            "query_string": b"a=1&b=2",
-            "headers": [(b"accept", b"text/html")],
-        }
-        sent: list[Message] = []
-
-        async def receive() -> Message:
-            return {"type": "http.request"}
-
-        async def send(message: Message) -> None:
-            sent.append(message)
-
-        await server(scope, receive, send)
-        start = next(m for m in sent if m["type"] == "http.response.start")
-        assert start["status"] == 302
-        location = dict(start["headers"])[b"location"].decode()
-        assert location == "/_server/login_page?next=" + quote("/challenge?a=1&b=2", safe="")
 
 
 class TestLoggingMiddleware:

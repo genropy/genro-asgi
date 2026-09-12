@@ -173,21 +173,20 @@ class TestMonitorGate:
         for path in MONITOR_ROUTES:
             assert response_status(await http_request(server, path)) == 200
 
-    async def test_a_browser_lands_on_the_login_page(
+    async def test_a_browser_gets_the_same_401(
         self, http_request, response_status, response_headers
     ) -> None:
-        """The whole point of the 401: an operator opening the monitor gets a login.
+        """D-SA-4: no redirect to a login page, for a browser either.
 
-        ``ErrorMiddleware`` negotiates the challenge only when the server has a
-        login surface, which ``ServerApplication`` always registers.
+        ``ErrorMiddleware`` used to turn this 401 into a 302 to
+        ``/_server/login_page``. The core answers the bare status now; pointing
+        a browser at a login surface is the business of whoever owns one.
         """
         sent = await http_request(
             make_server(None), "/_server/monitor/", headers=[(b"accept", b"text/html")]
         )
-        assert response_status(sent) == 302
-        location = response_headers(sent)[b"location"].decode()
-        assert location.startswith("/_server/login_page?next=")
-        assert "monitor" in location
+        assert response_status(sent) == 401
+        assert b"location" not in response_headers(sent)
 
 
 class TestMonitorPage:

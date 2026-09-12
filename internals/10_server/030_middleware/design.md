@@ -396,16 +396,16 @@ And the installation answers:
 | Request | Answer |
 |---|---|
 | `GET /home` | 200 `{"shop": "open"}`, plus `set-cookie: session_id=…` for the new session |
-| `GET /takings`, `Accept: application/json` | **401** with `{"login_url": "/_server/login_page"}` |
-| `GET /takings`, `Accept: text/html` | **302** to `/_server/login_page?next=%2Ftakings` |
+| `GET /takings`, `Accept: application/json` | **401** with `{"error": "…"}` and the `WWW-Authenticate` challenge |
+| `GET /takings`, `Accept: text/html` | **401** `text/plain`, the same challenge header |
 | `GET /robots.txt` | **404** `Not found: /robots.txt` |
 | `OPTIONS /home` with `Origin` and `Access-Control-Request-Method` | 200, `access-control-allow-origin: https://shop.example.com` |
 
 The two `/takings` rows are the same route, the same refusal and the same
-caller-less request, answered two ways because one caller is a browser and the
-other is not. Neither the handler nor the route resolution knows the
-difference: the resolution raised one 401 and the outermost layer negotiated
-it.
+caller-less request. They differ only in the body format, which follows
+`Accept`: the status and the challenge header are the same for both. The core
+never points a caller at a login page — it owns none (D-SA-4); an application
+that has one redirects from its own routes.
 
 And `/robots.txt` never reached the shop. The probe filter raised, and errors
 turned the raise into the 404 — two layers cooperating without either building
