@@ -793,14 +793,21 @@ and it adds nothing to the core: `DjangoWorker` is a `SpaWorker` whose
 group's `engine_factory` — one `django.setup()` in the template process, every
 worker a fork of it. The recipe names both as dotted paths and gives them the
 same two words, `settings_module` and `project_path` (the child is `python -m`:
-it inherits the environment and not the `sys.path`). The connection is
+it inherits the environment and not the `sys.path`). `project_path` is also the
+working directory the factory moves the template process to before it forks,
+because a real project settles relative settings against it — Wagtail's
+bakerydemo names its template directory relatively — and the core resolves no
+relative path of its own, so nothing of the pool moves with it. The connection is
 Django's session: `serve_django` calls Django, reads the session key off the
 answer's `Set-Cookie` or the request's `Cookie`, and calls `new_connection` with
 it the first time this process sees it — so the `spa_connection_id` cookie
 carries Django's `sessionid` and the pool sends that session back to the process
 that holds it. No user is declared: that is what Django knows at login, and
-`change_connection_user` is separate work. The example and its recipe live in
-`contrib/django/examples/hello_world/`; the guide is `docs/guides/django.md`.
+`change_connection_user` is separate work. The examples and their recipes live
+in `contrib/django/examples/` — `hello_world/`, and `bakerydemo/` (#95), Wagtail's
+demo site on a checkout outside this tree, whose static and media stay Django's
+own views because its dev settings keep `DEBUG` on; the guide is
+`docs/guides/django.md`.
 
 **Not yet built (second pass).** The deliberate reboot command on `_server`
 (`reboot now`/`reboot wait N`, notify_user, the consumer service-message

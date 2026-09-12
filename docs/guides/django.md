@@ -27,10 +27,14 @@ paths:
 | `genro_asgi_django.engine_factory:DjangoEngineFactory` | the group's template: one `django.setup()`, every worker a fork of it |
 
 Both take the same two words: `settings_module`, the dotted path written into
-`DJANGO_SETTINGS_MODULE`, and `project_path`, the directory the project's own
-packages are imported from. The second is needed because the template and the
-workers are children started with `python -m`: they inherit the server's
-environment and not its `sys.path`.
+`DJANGO_SETTINGS_MODULE`, and `project_path`, the project directory — what
+`manage.py` sits in. The second is needed because the template and the workers
+are children started with `python -m`: they inherit the server's environment and
+not its `sys.path`. `project_path` also becomes the **working directory** of the
+template process, and therefore of every worker forked from it, because a real
+project settles relative settings against it: Wagtail's bakerydemo writes
+`TEMPLATES[0]["DIRS"] = ["bakerydemo/templates"]`, which resolves only when the
+process stands where `manage.py` does.
 
 Django itself is not a dependency of `genro-asgi`; importing
 `genro_asgi_django` imports Django.
@@ -107,6 +111,14 @@ with it the first time this process sees it. The core stamps that id on the
 request's slot, the reply carries it back, and the front writes it in the
 `spa_connection_id` cookie — one identity space, the site's own.
 
+## A real site
+
+`contrib/django/examples/bakerydemo/` serves Wagtail's demo bakery — the admin,
+login and logout, sessions, a SQLite database, images, static files and search —
+on the same recipe shape, pointing at a checkout you make yourself outside this
+repository. Its README carries the four commands. What it needed beyond the
+hello world was one thing: the working directory, described under Setup.
+
 ## Gotchas
 
 - **A request that writes nothing to the session declares no connection.**
@@ -120,6 +132,10 @@ request's slot, the reply carries it back, and the front writes it in the
 - **The worker serves Django on the traffic pool**, so the project must be
   thread-safe in the ordinary WSGI sense — nothing new, but the process serves
   several sessions at once.
+- **Static and media are the project's business.** With `DEBUG` on, Django's
+  own urlconf serves `/static/` and `/media/` and they come through the pool
+  like any other view; with `DEBUG` off they are served the way they would be
+  behind any WSGI server, and the pool changes nothing about that choice.
 - **One body in, one body out.** The worker path buffers the whole request and
   the whole response: streaming uploads, downloads and SSE do not go through it
   (see [Multiworker SPA](multiworker-spa.md)).

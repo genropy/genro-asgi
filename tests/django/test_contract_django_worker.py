@@ -29,6 +29,7 @@ from __future__ import annotations
 from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any
+import os
 import sys
 
 import pytest
@@ -46,13 +47,20 @@ WORKER_NAME = "django_0001"
 
 @pytest.fixture(scope="module")
 def django_engine():
-    """Django set up once, the way the group's template does it."""
+    """Django set up once, the way the group's template does it.
+
+    The factory moves the working directory onto the project, which in a
+    template process is the whole point and in a test process is a side effect
+    on every test that follows: the fixture puts it back.
+    """
     from genro_asgi_django.engine_factory import DjangoEngineFactory
 
+    working_directory = os.getcwd()
     engine = DjangoEngineFactory(
         settings_module=SETTINGS_MODULE, project_path=EXAMPLE_PATH
     ).build_group_engine()
     yield engine
+    os.chdir(working_directory)
     sys.path.remove(EXAMPLE_PATH)
 
 
@@ -124,6 +132,19 @@ class TestTheWorkerHostsDjango:
             assert worker.wsgi_app == worker.serve_django
         finally:
             worker.exit_process()
+
+
+class TestTheProjectDirectoryIsWhereTheProcessStands:
+    def test_the_factory_moves_the_working_directory_onto_the_project(
+        self, django_engine
+    ) -> None:
+        # A real project settles relative settings against the working
+        # directory — bakerydemo's template DIRS is ``bakerydemo/templates`` —
+        # and manage.py is always run from the project directory.
+        assert os.path.realpath(os.getcwd()) == os.path.realpath(EXAMPLE_PATH)
+
+    def test_the_project_is_on_the_import_path(self, django_engine) -> None:
+        assert sys.path[0] == EXAMPLE_PATH
 
 
 class TestTheConnectionIsDeclaredFromTheSession:
