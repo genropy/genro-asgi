@@ -125,13 +125,13 @@ With `logging` armed, requests appear in the server's log output.
 
 - The registry enables `errors`; the shipped `AsgiServer` also arms `session`
   and `auth`. CORS, logging and wellknown require explicit configuration.
-- A call the handler cannot take is answered by the dispatcher, never a `500`,
-  on two distinct codes: a call that does not fit the signature — an unknown
-  keyword, a missing required argument, one positional too many — answers
-  **`400`**, while values the signature accepts and the handler's validation
-  rejects answer **`422` Unprocessable Content** (RFC 9110 §15.5.21: the
-  request is well formed, its semantics are not). What the handler BODY raises
-  is mapped to neither and reaches `errors` as a `500`; a handler raising
+- A call the handler cannot take is answered by the dispatcher, never a `500`:
+  a call that does not fit the signature — an unknown keyword, a missing
+  required argument, one positional too many — answers **`400`**, and so do
+  values the signature accepts and the handler's validation rejects, under the
+  application's default `strict` reading. An application declaring the FastAPI
+  convention answers **`422`** to that one case. What the handler BODY raises is
+  mapped to neither and reaches `errors` as a `500`; a handler raising
   `HTTPBadRequest` itself still answers `400`, never remapped.
 - An unknown middleware name in `middleware={...}` raises `ValueError`. If you are
   arming a custom stage, register it in `middleware_registry` first.

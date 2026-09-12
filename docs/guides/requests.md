@@ -1,10 +1,25 @@
 # Requests and errors
 
-> **Status:** Draft; implementation checked against the development source on 2026-09-08.
+> **Status:** Draft; implementation checked against the development source on 2026-09-12.
 
 `RoutedApplication` creates a `Request` and awaits `init()` before resolving and
 calling a handler. It drains the entire ASGI body and decodes it by content type.
 It uses genro-tytx for serialization, not for reading the ASGI protocol.
+
+## Decoded body or raw body
+
+Decoding is an option of the application. The default, `decoded`, is the table
+below. An application that wants the bytes untouched declares `raw`, either on
+the class (`request_body = "raw"`) or in a configuration recipe:
+
+```python
+app = cfg.applications(default="blobs").application(code="blobs", app_class=Blobs)
+app.request(body="raw")
+```
+
+A raw application receives every body as `body_raw` and decodes it itself;
+`Request.decode_body()`, `decode_json()`, `decode_multipart()` and
+`get_transport()` are public for that.
 
 ## Body arguments
 
@@ -13,7 +28,7 @@ It uses genro-tytx for serialization, not for reading the ASGI protocol.
 | JSON, XML, msgpack (including TYTX media types) | Hydrated value in `body_data` |
 | `application/x-www-form-urlencoded` | Individual field kwargs |
 | `multipart/form-data` | Individual field kwargs; file parts are `UploadedFile` |
-| Other or missing content type | Bytes in `body_raw` |
+| Other or missing content type | Refused with `415` (decoded); bytes in `body_raw` (raw) |
 | Empty body | No body argument |
 
 Query parameters form the initial kwargs. Repeated query keys become lists;
@@ -40,13 +55,18 @@ class Bodies(RoutedApplication):
         return {"title": title, "filename": document.filename,
                 "bytes": len(document.data)}
 
+
+class Blobs(RoutedApplication):
+    mount = "raw"
+    request_body = "raw"
+
     @route()
-    def raw(self, body_raw):
+    def count(self, body_raw):
         return {"bytes": len(body_raw)}
 
 
 if __name__ == "__main__":
-    AsgiServer(applications=[Bodies()]).serve(host="127.0.0.1", port=8000)
+    AsgiServer(applications=[Bodies(), Blobs()]).serve(host="127.0.0.1", port=8000)
 ```
 
 ```console
@@ -54,8 +74,10 @@ $ curl -H 'Content-Type: application/json' -d '{"name":"Ada"}' http://127.0.0.1:
 {"received":{"name":"Ada"}}
 $ curl -F title=Example -F document=@bodies.py http://127.0.0.1:8000/upload
 {"title":"Example","filename":"bodies.py","bytes":...}
-$ curl -H 'Content-Type: application/octet-stream' --data-binary abc http://127.0.0.1:8000/raw
+$ curl -H 'Content-Type: application/octet-stream' --data-binary abc http://127.0.0.1:8000/raw/count
 {"bytes":3}
+$ curl -i -H 'Content-Type: application/octet-stream' --data-binary abc http://127.0.0.1:8000/document
+HTTP/1.1 415 Unsupported Media Type
 ```
 
 Stop the process with Ctrl-C. There is no configurable total body-size limit in
@@ -79,13 +101,23 @@ are dropped in that spreading case. Forms and query kwargs still bind normally.
 |---|---|
 | Unknown route | 404 |
 | Missing required argument or unexpected kwarg | 400 |
-| Signature fits, but configured pydantic validation rejects values | 422 |
+| Body not decodable in its declared format, or a malformed form | 400 |
+| Content type the core cannot decode (decoded mode) | 415 |
+| Signature fits, but configured pydantic validation rejects values | 400 (`strict`), 422 (`fastapi`) |
 | Exception raised inside the handler body | 500, unless it is an HTTP exception |
 | Handler raises an `HTTPException` subclass | That exception's status |
 
-Malformed payload decoding is separate from signature validation: do not assume
-that every parse error becomes 400 or 422. See the error middleware and
-[request API](../api/core.rst) for the current mappings.
+The last row is the second option of the application. The default, `strict`,
+answers 400 to every failure the core judges and leaves 422 to the handler, for
+a domain rule of its own. An application declaring the FastAPI convention —
+`request_error_codes = "fastapi"` on the class, or `app.request(error_codes=
+"fastapi")` in a recipe — answers 422 to a rejected value, and 400 to
+everything else. The generated OpenAPI document declares the code the
+application chose. See
+[Coming from Starlette / FastAPI](../coming-from-fastapi.md#error-codes).
+
+No decode failure becomes a 500: it is refused inside the request, with the
+reason the decoder gave.
 
 A handler that declares an **unannotated** `_request` parameter can receive the
 live request when parameter metadata is available. `AsgiServer` supplies that
