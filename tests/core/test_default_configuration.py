@@ -36,6 +36,7 @@ from genro_asgi.config.templates import (
     ShortcutConfiguration,
 )
 from genro_asgi.middleware.base import BaseMiddleware
+from genro_asgi.session.store import MemorySessionStore
 from genro_asgi.middleware.cors import CORSMiddleware
 from genro_asgi.types import Receive, Scope, Send
 
@@ -61,6 +62,9 @@ class ApiApp(BaseApplication):
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         await send({"type": "http.response.start", "status": 200, "headers": []})
         await send({"type": "http.response.body", "body": b"api"})
+
+
+BASIC_ADA = {"headers": [(b"authorization", b"Basic YWRhOmxvdmVsYWNl")]}
 
 
 class TestTheConfigurationAlwaysExists:
@@ -134,6 +138,44 @@ class TestTheConfigurationAlwaysExists:
         server = AsgiServer(applications=[(ShopApp, {"mount": ""})], debug="sql")
         assert server.config("server.debug") == "sql"
         assert server.debug == "sql"
+
+
+class TestNoLiveObjectReachesTheConstructor:
+    """Every store is a CLASS the configuration names; the server builds it."""
+
+    def test_the_session_store_class_reaches_the_tree(self) -> None:
+        server = AsgiServer(
+            applications=[(ShopApp, {"mount": ""})], session_store=MemorySessionStore
+        )
+        assert server.config("server.session.store_class") is MemorySessionStore
+        assert isinstance(server.session_store, MemorySessionStore)
+
+    def test_the_storage_mounts_reach_the_tree(self, tmp_path: Any) -> None:
+        server = AsgiServer(
+            applications=[(ShopApp, {"mount": ""})],
+            storage=[{"name": "data", "protocol": "local", "base_path": str(tmp_path)}],
+        )
+        mounts = list(server.config.node("storage").value)
+        assert [child.node_tag for child in mounts] == ["local"]
+        assert mounts[0].attr["name"] == "data"
+        assert server.storage.get_mount_names() == ["data"]
+
+    def test_the_identity_store_classes_reach_the_tree(self) -> None:
+        server = AsgiServer(
+            applications=[(ShopApp, {"mount": ""})],
+            users={"store_class": MemorySessionStore},
+        )
+        assert server.config("authentication.users.store_class") is MemorySessionStore
+
+    def test_the_header_credentials_reach_the_tree(self) -> None:
+        server = AsgiServer(
+            applications=[(ShopApp, {"mount": ""})],
+            auth={"basic": {"ada": {"password": "lovelace", "tags": "admin"}}},
+        )
+        written = list(server.config.node("authentication.credentials").value)
+        assert [child.node_tag for child in written] == ["basic_user"]
+        assert written[0].attr["username"] == "ada"
+        assert server.auth_core.authenticate(BASIC_ADA) is not None
 
 
 class TestTheShortcutTreeMatchesARecipe:

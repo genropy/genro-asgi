@@ -14,22 +14,31 @@
 
 """The storage a store test runs on: one ``site:`` mount over a temporary directory.
 
-``site_storage`` builds exactly the manager ``StorageMixin`` builds when
-``storage=`` is omitted, only rooted at a ``tmp_path`` instead of the deployment
-directory, so a store test exercises the real production shape. ``storage_key``
-installs the at-rest key material the credential stores need.
+``site_mounts`` is exactly the mount list ``StorageMixin`` builds when ``storage=``
+is omitted, only rooted at a ``tmp_path`` instead of the deployment directory, so a
+store test exercises the real production shape. ``site_storage`` builds the manager
+itself, for a store exercised without a server: a server never receives one, it
+builds its own from the mounts its configuration declares.
 """
 
 from __future__ import annotations
 
+from typing import Any
+
 from genro_storage import StorageManager
 
 
+def site_mounts(base_dir: object) -> list[dict[str, Any]]:
+    """The single ``site:`` mount rooted at ``base_dir``, in genro-storage's own shape."""
+    return [{"name": "site", "protocol": "local", "base_path": str(base_dir)}]
+
+
 def site_storage(base_dir: object, storage_key: str | None = None) -> StorageManager:
-    """A ``StorageManager`` with the single ``site:`` mount rooted at ``base_dir``."""
+    """A built ``StorageManager`` over ``site_mounts`` — for a store tested WITHOUT a server.
+
+    A server never receives one: it builds its own from the mounts its
+    configuration declares.
+    """
     storage = StorageManager()
-    storage.configure(
-        [{"name": "site", "protocol": "local", "base_path": str(base_dir)}],
-        storage_key=storage_key,
-    )
+    storage.configure(site_mounts(base_dir), storage_key=storage_key)
     return storage

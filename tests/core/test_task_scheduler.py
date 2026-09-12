@@ -29,7 +29,7 @@ from pathlib import Path
 import pytest
 from genro_routes import route
 
-from tests.storage_support import site_storage
+from tests.storage_support import site_mounts
 
 from genro_asgi import AsgiServer, RoutedApplication
 from genro_asgi.tasks.scheduler import TaskScheduler
@@ -98,7 +98,7 @@ def server(tmp_path: Path) -> AsgiServer:
     """A real AsgiServer: DemoApp primary + MountApp mounted, storage on tmp_path."""
     srv = AsgiServer(
         applications=[(DemoApp, {"mount": ""}), (MountApp, {"code": "extra"})],
-        storage=site_storage(tmp_path),
+        storage=site_mounts(tmp_path),
     )
     return srv
 
@@ -125,7 +125,7 @@ class TestScan:
             @route(task="twin")
             def two(self) -> None: ...
 
-        srv = AsgiServer(applications=[(Dup, {"mount": ""})], storage=site_storage(tmp_path))
+        srv = AsgiServer(applications=[(Dup, {"mount": ""})], storage=site_mounts(tmp_path))
         assert "twin" not in srv.tasks.scheduler.scan()   # both excluded, no silent pick
 
 

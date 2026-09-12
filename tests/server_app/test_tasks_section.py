@@ -30,7 +30,7 @@ from typing import Any
 
 from genro_routes import route
 
-from tests.storage_support import site_storage
+from tests.storage_support import site_mounts
 
 from genro_asgi import AsgiServer, Avatar, RoutedApplication
 from genro_asgi_server_app import ServerApplication
@@ -77,7 +77,7 @@ def make_server(tmp_path: Path, avatar: Avatar | None = SUPERADMIN,
     """A real server: TaskApp primary, stamped auth, storage on tmp_path."""
     return AsgiServer(
         applications=[ServerApplication, (TaskApp, {"mount": ""})],
-        storage=site_storage(tmp_path),
+        storage=site_mounts(tmp_path),
         tasks=tasks,
         middleware={"stamp": {"avatar": avatar}},
         middleware_registry={"stamp": StampAuthMiddleware},

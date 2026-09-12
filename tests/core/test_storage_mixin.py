@@ -43,7 +43,7 @@ from genro_storage.exceptions import (
     StorageNotFoundError,
 )
 
-from tests.storage_support import site_storage
+from tests.storage_support import site_mounts, site_storage
 
 from genro_asgi import (
     AsgiConfigBuilder,
@@ -82,7 +82,7 @@ def chain_types(server: AsgiServer) -> list[str]:
 
 
 class TestMixinComposition:
-    """The three shapes ``storage=`` accepts, plus the composition without the mixin."""
+    """The two shapes ``storage=`` accepts, plus the composition without the mixin."""
 
     def test_default_storage_is_the_site_mount_on_the_deployment_directory(self) -> None:
         server = AsgiServer(applications=[(BaseApplication, {"mount": ""})])
@@ -90,10 +90,13 @@ class TestMixinComposition:
         assert server.storage.get_mount_names() == ["site"]
         assert server.storage.node("site:pyproject.toml").exists()   # anchored to the cwd
 
-    def test_manager_instance_is_adopted_as_is(self, tmp_path: Path) -> None:
-        provided = site_storage(tmp_path)
-        server = AsgiServer(applications=[(BaseApplication, {"mount": ""})], storage=provided)
-        assert server.storage is provided
+    def test_a_built_manager_is_not_a_configuration_value(self, tmp_path: Path) -> None:
+        """#91: the server builds its storage from the declared mounts, never adopts one."""
+        with pytest.raises((TypeError, AttributeError)):
+            AsgiServer(
+                applications=[(BaseApplication, {"mount": ""})],
+                storage=site_storage(tmp_path),
+            )
 
     def test_mount_list_is_passed_through_to_configure(self, tmp_path: Path) -> None:
         (tmp_path / "data").mkdir()      # genro-storage mounts an existing directory
@@ -114,7 +117,7 @@ class TestStorageKey:
         """A credential is an envelope on disk, a session next to it stays plain."""
         server = AsgiServer(
             applications=[(BaseApplication, {"mount": ""})],
-            storage=site_storage(tmp_path),
+            storage=site_mounts(tmp_path),
             storage_key=key,
         )
         assert server.storage.encryption_active
@@ -132,7 +135,7 @@ class TestStorageKey:
         """Dormancy is loud: ``encrypted=True`` with no key installed fails at the write."""
         server = AsgiServer(
             applications=[(BaseApplication, {"mount": ""})],
-            storage=site_storage(tmp_path),
+            storage=site_mounts(tmp_path),
         )
         with pytest.raises(StorageError):
             server.storage.node("site:users/admin.json").write_text("{}", encrypted=True)
@@ -141,14 +144,14 @@ class TestStorageKey:
         with pytest.raises(StorageConfigError):
             AsgiServer(
                 applications=[(BaseApplication, {"mount": ""})],
-                storage=site_storage(tmp_path),
+                storage=site_mounts(tmp_path),
                 storage_key="",
             )
 
     def test_omitted_storage_key_leaves_encryption_dormant(self, tmp_path: Path) -> None:
         server = AsgiServer(
             applications=[(BaseApplication, {"mount": ""})],
-            storage=site_storage(tmp_path),
+            storage=site_mounts(tmp_path),
         )
         assert not server.storage.encryption_active
 

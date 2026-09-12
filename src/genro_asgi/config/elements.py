@@ -162,10 +162,17 @@ class AsgiServerGrammar(TaskGrammar):
         """
 
     @element(parent_tags="server", sub_tags="")
-    def session(self, ttl: int) -> None:
-        """Session options: ``ttl`` (seconds, REQUIRED — the grammar rejects a
-        session without it) → the server's ``session_ttl`` kwarg. Server-domain,
-        so it lives under ``server``, not under an application."""
+    def session(self, ttl: int = None, store_class: type = None, **params: Any) -> None:
+        """Session options: the lifetime, and the store that keeps them.
+
+        ``ttl`` (seconds) becomes the server's ``session_ttl``.
+        ``store_class`` names the backend CLASS — the server instantiates it with
+        the remaining attributes (``store_class(**params)``), so a deployment
+        that keeps sessions elsewhere declares the class here instead of handing
+        the server a built object. Omitted, the composition's own
+        ``MemorySessionStore`` applies.
+
+        Server-domain, so it lives under ``server``, not under an application."""
 
     @element(parent_tags="configuration", sub_tags="")
     def middleware(
@@ -210,14 +217,24 @@ class AsgiServerGrammar(TaskGrammar):
         but a string, is a boot error."""
 
     @element(parent_tags="authentication", sub_tags="")
-    def users(self, mount: str = None, prefix: str = None) -> None:
-        """Identity store descriptor: ``{mount, prefix}`` (or empty for the
-        default) — the ``users=`` kwarg ``AuthMixin`` peels."""
+    def users(
+        self, mount: str = None, prefix: str = None, store_class: type = None, **params: Any
+    ) -> None:
+        """Identity store: where it keeps its records, and which class keeps them.
+
+        ``mount``/``prefix`` place the records (default ``site:users``);
+        ``store_class`` names the CLASS the server builds — ``FileUserStore``
+        when omitted — and the remaining attributes are its own kwargs. The
+        server hands it the storage: a built store is not a configuration
+        value."""
 
     @element(parent_tags="authentication", sub_tags="")
-    def tokens(self, mount: str = None, prefix: str = None) -> None:
-        """Api-key store descriptor: ``{mount, prefix}`` — the ``tokens=`` kwarg
-        ``AuthMixin`` peels."""
+    def tokens(
+        self, mount: str = None, prefix: str = None, store_class: type = None, **params: Any
+    ) -> None:
+        """Api-key store: the same three words as ``users`` — ``mount``/``prefix``
+        for the records, ``store_class`` for the class the server builds
+        (``FileApiKeyStore`` when omitted) and its own remaining kwargs."""
 
     @element(
         parent_tags="authentication",

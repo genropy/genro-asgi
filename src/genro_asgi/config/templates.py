@@ -37,6 +37,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from genro_storage import StorageManager
+
 from .builder import AsgiConfigBuilder, BaseConfiguration
 
 __all__ = [
@@ -106,6 +108,12 @@ class ShortcutConfiguration(AsgiConfigBuilder):
         self.default_code = kwargs.pop("default", None)
         self.middleware_switches = kwargs.pop("middleware", None)
         self.plugin_switches = kwargs.pop("plugins", None)
+        self.session_store = kwargs.pop("session_store", None)
+        self.storage_mounts_declared = kwargs.pop("storage", None)
+        self.storage_key = kwargs.pop("storage_key", None)
+        self.user_store = kwargs.pop("users", None)
+        self.api_key_store = kwargs.pop("tokens", None)
+        self.credentials = kwargs.pop("auth", None)
         self.app_entries = self.application_entries(kwargs.pop("applications", ()))
 
     def application_entries(self, declared: Any) -> list[tuple[type, dict[str, Any]]]:
@@ -118,25 +126,39 @@ class ShortcutConfiguration(AsgiConfigBuilder):
         """
         entries: list[tuple[type, dict[str, Any]]] = []
         for entry in declared:
-            app_class, params = entry if isinstance(entry, tuple) else (entry, {})
-            params = dict(params)
+            app_class, params = self.class_and_params(entry)
             code = params.pop("code", None) or app_class.code or app_class.__name__.lower()
             entries.append((app_class, {"code": code, **params}))
         return entries
 
     def main(self, root: Any) -> None:
-        """The sections the kwargs describe: server, middleware, plugins, applications."""
+        """Every section the kwargs describe, each in the grammar's own words."""
         cfg = root.configuration()
         self.server_section(cfg)
         self.middleware_section(cfg)
         self.plugins_section(cfg)
+        self.storage_section(cfg)
+        self.authentication_section(cfg)
         self.applications_section(cfg)
 
     def server_section(self, cfg: Any) -> None:
-        """The listener words, and the session ttl as the child it belongs to."""
+        """The listener words, and the session child: its ttl and its store class."""
         section = cfg.server(**self.server_options)
+        session = self.session_options
+        if session:
+            section.session(**session)
+
+    @property
+    def session_options(self) -> dict[str, Any]:
+        """The ``session`` attributes: the ttl, and the store class with its params."""
+        options: dict[str, Any] = {}
         if self.session_ttl is not None:
-            section.session(ttl=self.session_ttl)
+            options["ttl"] = self.session_ttl
+        if self.session_store is not None:
+            store_class, params = self.class_and_params(self.session_store)
+            options["store_class"] = store_class
+            options.update(params)
+        return options
 
     def middleware_section(self, cfg: Any) -> None:
         """The switches as the attributes of the section — the element is open."""
@@ -147,6 +169,47 @@ class ShortcutConfiguration(AsgiConfigBuilder):
         """The switches as the attributes of the collection — the short form."""
         if self.plugin_switches is not None:
             cfg.plugins(**self.plugin_switches)
+
+    def storage_section(self, cfg: Any) -> None:
+        """The declared mounts in genro-storage's own words — the tag IS the protocol.
+
+        An empty list is written as the bare section, which the composition reads
+        as "the default layout"; nothing declared leaves the template's section
+        alone.
+        """
+        if self.storage_mounts_declared is None and self.storage_key is None:
+            return
+        section = cfg.storage(app=StorageManager, storage_key=self.storage_key)
+        for mount in self.storage_mounts_declared or ():
+            attrs = dict(mount)
+            getattr(section, attrs.pop("protocol"))(**attrs)
+
+    def authentication_section(self, cfg: Any) -> None:
+        """The identity stores and the header credentials, each in its own element."""
+        declared = (self.user_store, self.api_key_store, self.credentials)
+        if all(item is None for item in declared):
+            return
+        section = cfg.authentication()
+        for tag, declared in (("users", self.user_store), ("tokens", self.api_key_store)):
+            if declared is not None:
+                getattr(section, tag)(**declared)
+        if self.credentials:
+            self.credentials_section(section.credentials())
+
+    def credentials_section(self, credentials: Any) -> None:
+        """One child per header credential: the three tags key differently."""
+        for username, entry in (self.credentials.get("basic") or {}).items():
+            credentials.basic_user(username=username, **entry)
+        for identity, entry in (self.credentials.get("bearer") or {}).items():
+            credentials.bearer_token(identity=identity, **entry)
+        for entry in self.credentials.get("jwt") or ():
+            credentials.jwt(**entry)
+
+    def class_and_params(self, declared: Any) -> tuple[type, dict[str, Any]]:
+        """A declared class, or a ``(class, params)`` pair, as the pair it is."""
+        if isinstance(declared, tuple):
+            return declared[0], dict(declared[1])
+        return declared, {}
 
     def applications_section(self, cfg: Any) -> None:
         """One ``application`` node per declared class: its grammar, its parameters.

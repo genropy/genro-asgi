@@ -248,7 +248,12 @@ both elements now have an OPEN signature, so a name registered through
 `application` node per DECLARED CLASS. `applications=` takes classes, or
 `(class, params)` pairs, never instances: the server instantiates off the tree
 here exactly as for a written recipe, and an instance is refused by the grammar
-(`app_class: expected type`). A template NAME is a configuration source like a
+(`app_class: expected type`). **No live object reaches the constructor**: a store
+is a CLASS the configuration names and the server builds — `session_store=` and
+the `store_class` of `server.session`, `users=` / `tokens=` as descriptors whose
+`store_class` defaults to `FileUserStore` / `FileApiKeyStore` — `storage=` takes
+the MOUNTS and never a built `StorageManager`, and `auth=` becomes the
+`credentials` children. A template NAME is a configuration source like a
 `config.py` path, on the constructor (`AsgiServer(config="default")`) and on the
 CLI (`genro-asgi serve template=default`). Config comes from the config builder + CLI;
 `OpenApiApplication`, `McpApplication` and the tasks subsystem (scheduler,

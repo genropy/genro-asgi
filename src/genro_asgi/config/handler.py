@@ -71,7 +71,9 @@ class ConfigurationHandler(ConfigHandler):
     def server_kwargs(self) -> dict[str, Any]:
         """The ``server`` section as server kwargs, its children lifted.
 
-        ``session`` becomes ``session_ttl``, ``tasks`` becomes the ``tasks``
+        ``session`` becomes ``session_ttl`` (and, when it names a
+        ``store_class``, the ``session_store`` the server is handed — the class
+        is instantiated HERE, with the section's remaining attributes), ``tasks`` becomes the ``tasks``
         tuning dict and ``websocket`` the websocket options: all three are
         server-domain (sessions, the task backbone and the sockets live on the
         server), so their values lift to the kwargs the owning mixins peel
@@ -88,8 +90,15 @@ class ConfigurationHandler(ConfigHandler):
             "shutdown_timeout_seconds",
             "debug",
         )
-        if self.node("server.session") is not None:
-            kwargs["session_ttl"] = self("server.session.ttl")
+        session = self.node("server.session")
+        if session is not None:
+            options = self.open_attrs(session)
+            ttl = options.pop("ttl", None)
+            if ttl is not None:
+                kwargs["session_ttl"] = ttl
+            store_class = options.pop("store_class", None)
+            if store_class is not None:
+                kwargs["session_store"] = store_class(**options)
         if self.node("server.websocket") is not None:
             websocket = self.closed_attrs("server.websocket", "origins", "max_concurrent")
             origins = websocket.get("origins")
@@ -122,15 +131,18 @@ class ConfigurationHandler(ConfigHandler):
         line (secrets stay out of recipes). Resolving empty is a boot error
         (the recipe promised a secret that does not exist — an empty bootstrap
         password would arm a passwordless SUPERADMIN), and so is resolving to
-        a non-string. ``users``/``tokens`` are ``{mount, prefix}`` descriptors.
+        a non-string. ``users``/``tokens`` are the store descriptors, every attribute the
+        section carries — ``mount``/``prefix``, the optional ``store_class`` and
+        its own kwargs.
         """
         kwargs: dict[str, Any] = {}
         password_node = self.node("authentication.admin_password")
         if password_node is not None:
             kwargs["admin_password"] = self.admin_password(password_node)
         for tag in ("users", "tokens"):
-            if self.node(f"authentication.{tag}") is not None:
-                kwargs[tag] = self.closed_attrs(f"authentication.{tag}", "mount", "prefix")
+            node = self.node(f"authentication.{tag}")
+            if node is not None:
+                kwargs[tag] = self.open_attrs(node)
         return kwargs
 
     def admin_password(self, node: Any) -> str:

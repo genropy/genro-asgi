@@ -50,7 +50,7 @@ class MemoryUserStore(UserStore):
 
     __slots__ = ("_records",)
 
-    def __init__(self) -> None:
+    def __init__(self, storage: object = None) -> None:
         self._records: dict[str, dict[str, Any]] = {}
 
     def load_all(self) -> list[dict[str, Any]]:
@@ -303,6 +303,10 @@ class TestBootstrapAdmin:
     """The admin the server seeds at boot can reach its own monitor."""
 
     async def test_admin_carries_the_monitor_tag(self) -> None:
-        store = MemoryUserStore()
-        AsgiServer(applications=[ServerApplication], users=store, admin_password="opspassword")
+        server = AsgiServer(
+            applications=[ServerApplication],
+            users={"store_class": MemoryUserStore},
+            admin_password="opspassword",
+        )
+        store = server.user_store
         assert "SERVER_ADMIN" in store.get("admin")["tags"]

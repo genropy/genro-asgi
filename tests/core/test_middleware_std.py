@@ -340,8 +340,11 @@ class SessionMutatingApp(BaseApplication):
 
 class TestSessionWriteBack:
     def _server(self) -> tuple[AsgiServer, CountingSessionStore]:
-        store = CountingSessionStore()
-        return AsgiServer(applications=[(SessionMutatingApp, {"mount": ""})], session_store=store), store
+        server = AsgiServer(
+            applications=[(SessionMutatingApp, {"mount": ""})],
+            session_store=CountingSessionStore,
+        )
+        return server, server.session_store
 
     async def test_read_only_request_does_not_save(self, http_request, response_status) -> None:
         server, store = self._server()

@@ -41,7 +41,7 @@ class MemoryApiKeyStore(ApiKeyStore):
 
     __slots__ = ("_records",)
 
-    def __init__(self) -> None:
+    def __init__(self, storage: object = None) -> None:
         self._records: dict[str, dict[str, Any]] = {}
 
     def load_all(self) -> list[dict[str, Any]]:
@@ -72,22 +72,22 @@ class StampAuthMiddleware(BaseMiddleware):
 
 
 SUPERADMIN = Avatar("root", ["SUPERADMIN"])
-_DEFAULT = object()  # sentinel: "build a fresh MemoryApiKeyStore"
+_DEFAULT = object()  # sentinel: "declare a plain MemoryApiKeyStore"
 
 
 def make_server(
     avatar: Avatar | None = SUPERADMIN, store: Any = _DEFAULT, with_jwt: bool = True
 ) -> AsgiServer:
-    """A server whose chain stamps ``avatar``; wires the api-key store and jwt config."""
+    """A server whose chain stamps ``avatar``; ``store`` names the api-key store CLASS."""
     if store is _DEFAULT:
-        store = MemoryApiKeyStore()
+        store = MemoryApiKeyStore
     kwargs: dict[str, Any] = {
         "applications": [ServerApplication, (BaseApplication, {"mount": ""})],
         "middleware": {"stamp": {"avatar": avatar}},
         "middleware_registry": {"stamp": StampAuthMiddleware},
     }
     if store is not None:
-        kwargs["tokens"] = store
+        kwargs["tokens"] = {"store_class": store}
     if with_jwt:
         kwargs["auth"] = {"jwt": [{"secret": JWT_SECRET, "algorithm": "HS256", "name": "main"}]}
     return AsgiServer(**kwargs)

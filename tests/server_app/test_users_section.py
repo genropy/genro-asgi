@@ -40,7 +40,7 @@ class MemoryUserStore(UserStore):
 
     __slots__ = ("_records",)
 
-    def __init__(self) -> None:
+    def __init__(self, storage: object = None) -> None:
         self._records: dict[str, dict[str, Any]] = {}
 
     def load_all(self) -> list[dict[str, Any]]:
@@ -71,24 +71,40 @@ class StampAuthMiddleware(BaseMiddleware):
 
 
 SUPERADMIN = Avatar("root", ["SUPERADMIN"])
-_DEFAULT_STORE = object()  # sentinel: "build a fresh MemoryUserStore"
+_DEFAULT_STORE = object()  # sentinel: "declare a plain MemoryUserStore"
+
+
+def store_holding(store_class: type, *records: dict) -> type:
+    """A store CLASS pre-loaded with *records* — the configuration names a class.
+
+    A test that needs seeded data declares the class that carries it instead of
+    handing the server a built store (#91).
+    """
+
+    class Seeded(store_class):  # type: ignore[misc, valid-type]
+        def __init__(self, storage: object = None) -> None:
+            super().__init__(storage)
+            for record in records:
+                self.save(record)
+
+    return Seeded
 
 
 def make_server(avatar: Avatar | None, store: Any = _DEFAULT_STORE) -> AsgiServer:
-    """A server whose chain stamps ``avatar``; ``store`` wires the user store.
+    """A server whose chain stamps ``avatar``; ``store`` names the user store CLASS.
 
-    ``store`` defaults to a fresh ``MemoryUserStore``; pass ``None`` for a server
-    without identity, or an explicit store to seed records first.
+    ``store`` defaults to ``MemoryUserStore``; pass ``None`` for a server without
+    identity, or a class from ``store_holding`` to start with records.
     """
     if store is _DEFAULT_STORE:
-        store = MemoryUserStore()
+        store = MemoryUserStore
     kwargs: dict[str, Any] = {
         "applications": [ServerApplication, (BaseApplication, {"mount": ""})],
         "middleware": {"stamp": {"avatar": avatar}},
         "middleware_registry": {"stamp": StampAuthMiddleware},
     }
     if store is not None:
-        kwargs["users"] = store
+        kwargs["users"] = {"store_class": store}
     return AsgiServer(**kwargs)
 
 
@@ -199,8 +215,7 @@ class TestCrud:
         assert "error" in payload(sent)
 
     async def test_create_user_rejects_a_duplicate(self) -> None:
-        store = MemoryUserStore()
-        store.save({"identity": "alice", "password_hash": "x", "tags": [], "enabled": True})
+        store = store_holding(MemoryUserStore, {"identity": "alice", "password_hash": "x", "tags": [], "enabled": True})
         sent = await drive(
             make_server(SUPERADMIN, store),
             "/_server/users/create_user?identity=alice",
@@ -210,8 +225,7 @@ class TestCrud:
         assert "error" in payload(sent)
 
     async def test_list_and_get_strip_the_hash(self) -> None:
-        store = MemoryUserStore()
-        store.save({"identity": "alice", "password_hash": "secret", "tags": ["a"], "enabled": True})
+        store = store_holding(MemoryUserStore, {"identity": "alice", "password_hash": "secret", "tags": ["a"], "enabled": True})
         server = make_server(SUPERADMIN, store)
         listed = payload(await drive(server, "/_server/users/list"))
         assert all("password_hash" not in u for u in listed["users"])
@@ -220,8 +234,7 @@ class TestCrud:
         assert "password_hash" not in got
 
     async def test_save_merges_metadata_and_preserves_the_hash(self) -> None:
-        store = MemoryUserStore()
-        store.save({"identity": "alice", "password_hash": "keep", "tags": ["a"], "enabled": True})
+        store = store_holding(MemoryUserStore, {"identity": "alice", "password_hash": "keep", "tags": ["a"], "enabled": True})
         server = make_server(SUPERADMIN, store)
         sent = await drive(
             server,
@@ -230,14 +243,13 @@ class TestCrud:
             body={"tags": ["a", "b"], "email": "alice@x.io"},
         )
         assert status(sent) == 200
-        stored = store.get("alice")
+        stored = server.user_store.get("alice")
         assert stored["tags"] == ["a", "b"]
         assert stored["email"] == "alice@x.io"  # new metadata field, no signature change
         assert stored["password_hash"] == "keep"  # the credential is untouched
 
     async def test_save_ignores_a_password_hash_on_the_wire(self) -> None:
-        store = MemoryUserStore()
-        store.save({"identity": "alice", "password_hash": "keep", "tags": [], "enabled": True})
+        store = store_holding(MemoryUserStore, {"identity": "alice", "password_hash": "keep", "tags": [], "enabled": True})
         server = make_server(SUPERADMIN, store)
         await drive(
             server,
@@ -245,7 +257,7 @@ class TestCrud:
             "POST",
             body={"password_hash": "attacker", "tags": ["x"]},
         )
-        assert store.get("alice")["password_hash"] == "keep"  # injection dropped
+        assert server.user_store.get("alice")["password_hash"] == "keep"  # injection dropped
 
     async def test_save_on_a_missing_user_is_an_error(self) -> None:
         sent = await drive(
@@ -254,8 +266,7 @@ class TestCrud:
         assert "error" in payload(sent)
 
     async def test_set_password_changes_the_credential(self) -> None:
-        store = MemoryUserStore()
-        store.save({"identity": "alice", "password_hash": "old", "tags": [], "enabled": True})
+        store = store_holding(MemoryUserStore, {"identity": "alice", "password_hash": "old", "tags": [], "enabled": True})
         server = make_server(SUPERADMIN, store)
         sent = await drive(
             server,
@@ -267,8 +278,7 @@ class TestCrud:
         assert server.user_store.verify("alice", "new") is not None
 
     async def test_set_password_rejects_a_mismatch(self) -> None:
-        store = MemoryUserStore()
-        store.save({"identity": "alice", "password_hash": "old", "tags": [], "enabled": True})
+        store = store_holding(MemoryUserStore, {"identity": "alice", "password_hash": "old", "tags": [], "enabled": True})
         sent = await drive(
             make_server(SUPERADMIN, store),
             "/_server/users/set_password?identity=alice",
@@ -278,12 +288,11 @@ class TestCrud:
         assert "error" in payload(sent)
 
     async def test_delete_removes_the_record(self) -> None:
-        store = MemoryUserStore()
-        store.save({"identity": "alice", "password_hash": "x", "tags": [], "enabled": True})
+        store = store_holding(MemoryUserStore, {"identity": "alice", "password_hash": "x", "tags": [], "enabled": True})
         server = make_server(SUPERADMIN, store)
         sent = await drive(server, "/_server/users/delete?identity=alice", "POST")
         assert payload(sent)["deleted"] is True
-        assert store.get("alice") is None
+        assert server.user_store.get("alice") is None
 
 
 class TestNoStore:

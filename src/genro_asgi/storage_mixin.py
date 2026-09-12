@@ -81,7 +81,7 @@ class StorageMixin:
     """
 
     def __init__(self, **kwargs: Any) -> None:
-        storage: StorageManager | list[dict[str, Any]] | None = kwargs.pop("storage", None)
+        storage: list[dict[str, Any]] | None = kwargs.pop("storage", None)
         storage_key: str | None = kwargs.pop("storage_key", None)
         set_sync()
         super().__init__(**kwargs)
@@ -89,14 +89,15 @@ class StorageMixin:
 
     def _build_storage(
         self,
-        storage: StorageManager | list[dict[str, Any]] | None,
+        storage: list[dict[str, Any]] | None,
         storage_key: str | None,
     ) -> StorageManager:
-        """Turn ``storage=``/``storage_key=`` into the ``StorageManager`` the server owns."""
-        if isinstance(storage, StorageManager):
-            if storage_key is not None:
-                storage.set_encryption_keys(storage_key)
-            return storage
+        """Build the ``StorageManager`` the server owns, from the MOUNTS it was given.
+
+        The mounts come from the ``storage`` section of the configuration — a
+        built manager is not something a configuration can carry, so none is
+        accepted here. An empty list means "the default layout".
+        """
         mounts = storage or self._default_mounts()
         built = StorageManager()
         built.configure(mounts, storage_key=storage_key)

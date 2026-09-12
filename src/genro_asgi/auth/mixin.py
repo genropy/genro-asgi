@@ -24,7 +24,8 @@ uses, so composing the mixins arms header auth with no user action while an
 explicit ``middleware={"auth": False}`` still wins.
 
 It also wires the server's identity stores. ``users=`` and ``tokens=`` each take
-a config dict (``{mount, prefix}``, defaulting to ``site:users`` /
+the store DESCRIPTOR the configuration declares — ``store_class`` plus that
+class's kwargs, ``{mount, prefix}`` defaulting to ``site:users`` /
 ``site:api_keys``) OR a ready store instance; ``admin_password=`` seeds the
 bootstrap admin. The stores are built AFTER ``super().__init__()`` returns — by
 then the cooperative chain has run and ``self.storage`` exists, since AuthMixin
@@ -70,7 +71,7 @@ class AuthMixin:
     Constructor kwargs peeled here: ``auth`` — the credential config dict
     (``{'basic': ..., 'bearer': ..., 'jwt': [...]}``); ``None`` arms no header
     backend but still resolves the session identity through §5.5 precedence.
-    ``users`` / ``tokens`` — a ``{mount, prefix}`` config dict or a ready store
+    ``users`` / ``tokens`` — the store descriptor (``store_class`` plus its kwargs)
     instance for the identity/api-key stores; ``admin_password`` — the bootstrap
     admin's password (implies the default users store when ``users`` is absent).
     """
@@ -108,20 +109,27 @@ class AuthMixin:
         return self._api_key_store
 
     def _build_user_store(self, users: Any) -> UserStore | None:
-        """Build the user store from a config dict, pass through an instance, or None."""
+        """Build the user store the descriptor names, or ``None`` when unconfigured.
+
+        The descriptor is what the ``authentication.users`` section carries:
+        ``store_class`` (``FileUserStore`` when omitted) plus that class's own
+        kwargs. The storage is handed to it — no built store ever arrives here,
+        because a store is not a value a configuration can hold.
+        """
         if users is None:
             return None
-        if isinstance(users, UserStore):
-            return users
-        return FileUserStore(self._require_storage("users"), **users)
+        options = dict(users)
+        store_class = options.pop("store_class", None) or FileUserStore
+        return store_class(self._require_storage("users"), **options)
 
     def _build_api_key_store(self, tokens: Any) -> ApiKeyStore | None:
-        """Build the api-key store from a config dict, pass through an instance, or None."""
+        """Build the api-key store the descriptor names, or ``None`` — see
+        ``_build_user_store``; the default class is ``FileApiKeyStore``."""
         if tokens is None:
             return None
-        if isinstance(tokens, ApiKeyStore):
-            return tokens
-        return FileApiKeyStore(self._require_storage("tokens"), **tokens)
+        options = dict(tokens)
+        store_class = options.pop("store_class", None) or FileApiKeyStore
+        return store_class(self._require_storage("tokens"), **options)
 
     def _require_storage(self, section: str) -> Any:
         """Return the server storage, or raise when a config-dict store needs it.

@@ -54,10 +54,13 @@ Notes on the config shape:
   comma-separated string or a list) that become the avatar's roles.
 - `jwt` is a **list** of verifier configurations, each with a `secret` and an
   `algorithm` — you can accept tokens from more than one issuer.
-- API keys with the `gak_...` prefix are handled by an `ApiKeyStore`. Pass
-  `tokens=<ApiKeyStore | dict>` alongside `auth`. Users can likewise come from a
-  `UserStore` via `users=<UserStore | dict>`, and an `admin_password="..."`
-  bootstraps a SUPERADMIN identity.
+- API keys with the `gak_...` prefix are handled by an `ApiKeyStore`. The store
+  is DECLARED, never handed over: `tokens={"store_class": MyApiKeyStore, ...}`
+  alongside `auth` (`FileApiKeyStore` when the class is omitted), and the server
+  builds it with its storage. Users are the same shape —
+  `users={"store_class": ..., "mount": ..., "prefix": ...}` — and an
+  `admin_password="..."` bootstraps a SUPERADMIN identity. In a recipe the same
+  words are `authentication.users(...)` and `authentication.tokens(...)`.
 
 ## Minimal snippet
 
