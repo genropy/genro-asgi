@@ -21,7 +21,8 @@ optional response ``headers`` — ASGI ``(name, value)`` byte pairs forwarded to
 the response, e.g. a ``WWW-Authenticate`` challenge on a 401); the common
 errors are pre-filled subclasses — ``HTTPBadRequest`` (400), ``HTTPNotFound``
 (404), ``HTTPUnauthorized`` (401), ``HTTPForbidden`` (403),
-``HTTPUnprocessableContent`` (422). ``Redirect(location, status=302)`` is the
+``HTTPUnsupportedMediaType`` (415), ``HTTPUnprocessableContent`` (422).
+``Redirect(location, status=302)`` is the
 redirecting sibling: its ``location`` becomes the ``Location`` header. The
 mapping to actual ASGI responses lives in ``middleware/errors.py``.
 
@@ -40,6 +41,7 @@ __all__ = [
     "HTTPNotFound",
     "HTTPUnauthorized",
     "HTTPUnprocessableContent",
+    "HTTPUnsupportedMediaType",
     "Redirect",
     "WebSocketDisconnect",
 ]
@@ -98,6 +100,15 @@ class HTTPForbidden(HTTPException):
         self, detail: str | None = None, headers: list[tuple[bytes, bytes]] | None = None
     ) -> None:
         super().__init__(403, detail, headers)
+
+
+class HTTPUnsupportedMediaType(HTTPException):
+    """415 Unsupported Media Type."""
+
+    def __init__(
+        self, detail: str | None = None, headers: list[tuple[bytes, bytes]] | None = None
+    ) -> None:
+        super().__init__(415, detail, headers)
 
 
 class HTTPUnprocessableContent(HTTPException):

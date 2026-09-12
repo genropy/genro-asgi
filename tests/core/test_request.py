@@ -14,15 +14,17 @@
 
 """Request tests (Phase 1c/2): the HTTP request parses a real ASGI scope
 (method/path/query/headers/cookies), body dispatch through ``handler_kwargs``
-follows the content-type (form merges, hydrated body → ``body_data``, opaque
-bytes → ``body_raw``, empty body → query only), the request id comes from the
-header or is generated, TYTX mode is read off the header, and auth/session ride
-the scope.
+follows the content-type (form merges, hydrated body → ``body_data``, the bytes
+of a raw application → ``body_raw``, empty body → query only), the request id
+comes from the header or is generated, TYTX mode is read off the header, and
+auth/session ride the scope.
 
 Body decoding is exercised per content-type (xml/msgpack/json hydration, an
-urlencoded form with typed values, an unknown type and a type-less body kept
-raw, a body split over several ASGI messages) and multipart forms deliver text
-fields hydrated and file parts as ``UploadedFile`` kwargs.
+urlencoded form with typed values, a body split over several ASGI messages) and
+multipart forms deliver text fields hydrated and file parts as ``UploadedFile``
+kwargs. A content-type the core cannot decode is refused with 415 while
+decoding and kept whole for an application declaring ``request_body = "raw"``
+(issue #87).
 
 The ``db`` preparation layer is exercised end-to-end through the server: a fake
 app touches ``request.db`` and the server drains ``closeConnection`` at end of
@@ -37,6 +39,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
+import pytest
 from genro_tytx import to_tytx
 
 from genro_asgi import (
@@ -48,7 +51,14 @@ from genro_asgi import (
     Session,
     UploadedFile,
 )
+from genro_asgi.exceptions import HTTPUnsupportedMediaType
 from genro_asgi.types import Receive, Scope, Send
+
+
+class RawBodyApp(BaseApplication):
+    """An application declaring ``request(body="raw")`` on the class (issue #87)."""
+
+    request_body = "raw"
 
 
 async def make_request(
@@ -145,12 +155,13 @@ class TestHandlerKwargs:
         kwargs = request.handler_kwargs()
         assert kwargs == {"a": 1, "b": "hello", "page": 2}  # body 'a' wins over query 'a'
 
-    async def test_opaque_body_passed_as_body_raw(self) -> None:
+    async def test_a_raw_body_is_passed_as_body_raw(self) -> None:
         request = await make_request(
             method="POST",
             query=b"x=1",
             headers=[(b"content-type", b"application/octet-stream")],
             body=b"\x00\x01\x02",
+            application=RawBodyApp(),
         )
         assert request.data == b"\x00\x01\x02"
         assert request.handler_kwargs() == {"x": 1, "body_raw": b"\x00\x01\x02"}
@@ -189,17 +200,31 @@ class TestBodyDecoding:
         )
         assert request.data == {"price": Decimal("100.50")}
 
-    async def test_unknown_content_type_stays_raw(self) -> None:
+    async def test_unknown_content_type_is_refused_while_decoding(self) -> None:
+        blob = b"\x89PNG\r\n\x1a\n binary image bytes"
+        with pytest.raises(HTTPUnsupportedMediaType):
+            await make_request(
+                method="POST", headers=[(b"content-type", b"image/png")], body=blob
+            )
+
+    async def test_unknown_content_type_stays_raw_for_a_raw_application(self) -> None:
         blob = b"\x89PNG\r\n\x1a\n binary image bytes"
         request = await make_request(
-            method="POST", headers=[(b"content-type", b"image/png")], body=blob
+            method="POST",
+            headers=[(b"content-type", b"image/png")],
+            body=blob,
+            application=RawBodyApp(),
         )
         assert request.data == blob
         assert request.handler_kwargs() == {"body_raw": blob}
 
+    async def test_body_without_content_type_is_refused_while_decoding(self) -> None:
+        with pytest.raises(HTTPUnsupportedMediaType):
+            await make_request(method="POST", body=b"orphan payload")
+
     async def test_body_without_content_type_is_read_and_kept_raw(self) -> None:
         blob = b"orphan payload"
-        request = await make_request(method="POST", body=blob)
+        request = await make_request(method="POST", body=blob, application=RawBodyApp())
         assert request.data == blob
         assert request.handler_kwargs() == {"body_raw": blob}
 

@@ -267,15 +267,17 @@ class TestArgumentErrors:
     """Bad handler arguments surface as an HTTP answer, never 500.
 
     genro-routes keeps the two failures apart: an unbindable extra argument is
-    a ``signature_error`` and answers 400, an uncoercible typed argument is a
-    ``validation_error`` and answers 422. The dispatcher catches one marker per
-    code.
+    a ``signature_error``, an uncoercible typed argument is a
+    ``validation_error``. The dispatcher catches one marker per code and both
+    answer 400 under the strict reading, the application default (issue #87);
+    an application declaring the FastAPI convention answers 422 to the second
+    (``tests/core/test_body_decoding.py``).
     """
 
-    async def test_uncoercible_typed_arg_is_422(self, query_request, response_status) -> None:
+    async def test_uncoercible_typed_arg_is_400(self, query_request, response_status) -> None:
         server = AsgiServer(applications=[TypedApp(mount="")])
         sent = await query_request(server, "/add", b"x=abc")
-        assert response_status(sent) == 422
+        assert response_status(sent) == 400
 
     async def test_unbindable_extra_arg_is_400(self, query_request, response_status) -> None:
         server = AsgiServer(applications=[TypedApp(mount="")])

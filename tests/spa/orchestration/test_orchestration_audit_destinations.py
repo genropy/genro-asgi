@@ -93,8 +93,8 @@ async def test_reload_handler_errors_audited_as_rejected(tmp_path, caplog):
 
 async def test_request_parser_400_is_not_orchestration_audit(tmp_path, caplog):
     # wf:contract: T22c — a body the handler cannot take is answered by the
-    # wf:contract: dispatcher (422 here: the malformed JSON reaches the handler
-    # wf:contract: as a string and pydantic rejects it) and leaves NO
+    # wf:contract: dispatcher (400 here: the malformed JSON is refused while
+    # wf:contract: decoding, issue #87) and leaves NO
     # wf:contract: orchestration log line: the single exclusion from the audit.
     server = pool_server(tmp_path, control_enabled=True)
     await boot(server)
@@ -104,7 +104,7 @@ async def test_request_parser_400_is_not_orchestration_audit(tmp_path, caplog):
             server, f"/{ORCHESTRATION_ROOT}/apply", method="POST", body=b"{not json"
         )
 
-    assert status == 422
+    assert status == 400
     assert not [record for record in caplog.records if record.name == ORDERS_LOGGER_NAME]
     commander = server.applications["site0"].commander
     # The last attempt on record is still the boot: this one never reached the vertex.

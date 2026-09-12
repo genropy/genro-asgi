@@ -71,16 +71,32 @@ _MISSING = object()
 class ApplicationGrammar:
     """The configuration grammar every application inherits.
 
-    One element, ``parameters``, for the free options a plain app needs: an
+    Two elements: ``parameters``, for the free options a plain app needs — an
     application with nothing of its own still has a mountable grammar (an EMPTY
-    grammar class is rejected by builders), and a richer app subclasses this to
-    add its own vocabulary.
+    grammar class is rejected by builders) — and ``request``, the two options
+    every application has about the requests the core serves for it. A richer
+    app subclasses this to add its own vocabulary.
     """
 
     @element(node_label="parameters")
     def parameters(self, **options: Any) -> None:
         """Free application options, read back as
         ``applications.<code>.parameters.<name>``."""
+
+    @element(node_label="request")
+    def request(self, body: str = "decoded", error_codes: str = "strict") -> None:
+        """How this application takes a request body, and which codes it answers.
+
+        ``body`` is ``"decoded"`` (the default: the core decodes by content-type
+        and the fields become handler kwargs) or ``"raw"`` (the handler receives
+        the bytes as ``body_raw`` and decodes them itself — the core's decode
+        helpers on ``Request`` stay public for exactly that).
+
+        ``error_codes`` is ``"strict"`` (the default: a value rejected by
+        validation is a 400 like every other failure the core judges — 422
+        belongs to the handler, for a domain rule) or ``"fastapi"`` (that one
+        case answers 422, the convention a FastAPI client expects).
+        """
 
 
 class BaseApplication:
@@ -95,6 +111,17 @@ class BaseApplication:
     code: str = ""
     mount: str | None = None
     grammar: type = ApplicationGrammar
+
+    # The two words of the ``request`` element, declarable on the class the way
+    # ``code`` and ``mount`` are and overridden by the recipe that writes
+    # ``request(...)`` under this application. The maps read them as what they
+    # decide: whether the body arrives raw, and which status a value rejected by
+    # validation answers. A word neither map knows raises a noisy KeyError at
+    # the first request, naming what was written.
+    request_body: str = "decoded"
+    request_error_codes: str = "strict"
+    BODY_MODES: dict[str, bool] = {"decoded": False, "raw": True}
+    ERROR_CODES: dict[str, int] = {"strict": 400, "fastapi": 422}
 
     def __init__(self, **kwargs: Any) -> None:
         cls = type(self)
@@ -148,6 +175,29 @@ class BaseApplication:
         if default is _MISSING:
             return handler(full_path)
         return handler(full_path, default=default)
+
+    @property
+    def raw_body(self) -> bool:
+        """True when this application takes the request body bytes untouched.
+
+        Written in the application's own grammar as ``request(body="raw")``, or
+        on the class as ``request_body`` when the composition carries no recipe;
+        the default, ``"decoded"``, leaves the decoding to the core.
+        """
+        return self.BODY_MODES[self.config("request.body", default=self.request_body)]
+
+    @property
+    def validation_error_status(self) -> int:
+        """The status a value rejected by validation answers: 400, or 422.
+
+        Written in the application's own grammar as
+        ``request(error_codes="fastapi")``, or on the class as
+        ``request_error_codes``; the default, ``"strict"``, answers 400 like
+        every other failure the core judges.
+        """
+        return self.ERROR_CODES[
+            self.config("request.error_codes", default=self.request_error_codes)
+        ]
 
     @property
     def handshake_cookie(self) -> str | None:

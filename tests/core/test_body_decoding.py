@@ -131,13 +131,14 @@ def body_request() -> Callable[..., object]:
         body: bytes,
         content_type: bytes | None = b"application/json",
         method: str = "POST",
+        query: bytes = b"",
     ) -> list[Message]:
         headers = [(b"content-type", content_type)] if content_type is not None else []
         scope: Scope = {
             "type": "http",
             "method": method,
             "path": path,
-            "query_string": b"",
+            "query_string": query,
             "headers": headers,
         }
         sent: list[Message] = []
@@ -215,8 +216,10 @@ class TestStrictCodes:
         sent = await body_request(plain_server(), "/add", b'{"x": "abc", "y": 2}')
         assert response_status(sent) == 400
 
-    async def test_unknown_field_is_400(self, body_request, response_status) -> None:
-        sent = await body_request(plain_server(), "/blob", b'{"nope": 1}')
+    async def test_kwargs_the_signature_refuses_are_400(
+        self, body_request, response_status
+    ) -> None:
+        sent = await body_request(plain_server(), "/add", b'{"x": 1, "y": 2}', query=b"z=99")
         assert response_status(sent) == 400
 
     async def test_rejected_value_is_400_when_the_recipe_says_strict(
@@ -240,9 +243,11 @@ class TestFastApiCodes:
         sent = await body_request(server, "/add", b'{"x": 1, ')
         assert response_status(sent) == 400
 
-    async def test_unknown_field_is_still_400(self, body_request, response_status) -> None:
+    async def test_kwargs_the_signature_refuses_are_still_400(
+        self, body_request, response_status
+    ) -> None:
         server = configured_server(error_codes="fastapi")
-        sent = await body_request(server, "/blob", b'{"nope": 1}')
+        sent = await body_request(server, "/add", b'{"x": 1, "y": 2}', query=b"z=99")
         assert response_status(sent) == 400
 
     async def test_unsupported_content_type_is_still_415(
