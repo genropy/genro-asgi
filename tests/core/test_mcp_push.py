@@ -53,7 +53,7 @@ class Primary(RoutedApplication):
 def server(tmp_path: Path) -> AsgiServer:
     """A real server: Primary + McpApplication at ``/mcp``, storage on tmp_path."""
     srv = AsgiServer(
-        applications=[Primary(mount=""), McpApplication(code="mcp")],
+        applications=[(Primary, {"mount": ""}), (McpApplication, {"code": "mcp"})],
         storage=site_storage(tmp_path),
     )
     return srv
@@ -117,7 +117,7 @@ class TestSessionId:
 
     async def test_get_without_tasks_is_405(self, tmp_path: Path) -> None:
         srv = AsgiServer(
-            applications=[Primary(mount=""), McpApplication(code="mcp")],
+            applications=[(Primary, {"mount": ""}), (McpApplication, {"code": "mcp"})],
             tasks=False,
             storage=site_storage(tmp_path),
         )

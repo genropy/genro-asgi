@@ -37,10 +37,9 @@ THE CONFIGURATION ALWAYS EXISTS (#91). ``AsgiServer(applications=[...], ...)``
 without a source is a SHORTCUT, not a second way to be born: it takes the
 ready-made ``default`` template and writes the kwargs it received into a
 ``ShortcutConfiguration`` layered on top of it, so ``server.config`` is a
-handler here as everywhere and every option is read from the tree. What the
-grammar cannot hold — a live ``session_store``, a ``middleware`` switch naming a
-class registered in code — stays a constructor kwarg and reaches the mixin that
-peels it.
+handler here as everywhere and every option is read from the tree. Every option it received is written there and popped, applications
+included: the shortcut declares CLASSES with their parameters, and the server
+instantiates them off the tree exactly as it does for a written recipe.
 
 Its cooperative ``__init__`` peels the kwargs the frozen Macro 1 ``BaseServer``
 does not accept — ``host``/``port``/``external_url`` — and forwards
@@ -123,7 +122,7 @@ class AsgiServer(
 
     def __init__(self, config: ConfigSource | None = None, **kwargs: Any) -> None:
         self._config = self._build_config(config, kwargs)
-        kwargs = {**self._configured_kwargs(self.config, kwargs), **kwargs}
+        kwargs = {**self._configured_kwargs(self.config), **kwargs}
         self._config_host: str | None = kwargs.pop("host", None)
         self._config_port: int | None = kwargs.pop("port", None)
         external_url: str | None = kwargs.pop("external_url", None)
@@ -167,18 +166,15 @@ class AsgiServer(
             config = defaults.recipe_class(config)
         return ConfigurationHandler(config, parents=defaults.parents_for(config))
 
-    def _configured_kwargs(
-        self, config: ConfigurationHandler, given: dict[str, Any]
-    ) -> dict[str, Any]:
+    def _configured_kwargs(self, config: ConfigurationHandler) -> dict[str, Any]:
         """The constructor kwargs the configuration declares.
 
         One helper of the read door per section, each mapped to the kwarg the
         owning class peels; a section the recipe omits contributes nothing, so
         the composition's own defaults apply. ``applications`` are instantiated
         HERE — the recipe named the classes and their kwargs, and a recipe error
-        surfaces as a boot error instead of a broken server — UNLESS *given*
-        already carries them: a caller composing in code hands instances, and
-        those instances are what gets mounted.
+        surfaces as a boot error instead of a broken server. There is one road:
+        a server composed in code declares CLASSES too, through the shortcut.
         """
         kwargs: dict[str, Any] = config.server_kwargs()
         kwargs.update(config.identity_kwargs())
@@ -193,8 +189,7 @@ class AsgiServer(
         if storage is not None:
             kwargs["storage"], kwargs["storage_key"] = storage
         entries, default = config.applications()
-        if "applications" not in given:
-            kwargs["applications"] = [app_class(**app_kwargs) for app_class, app_kwargs in entries]
+        kwargs["applications"] = [app_class(**app_kwargs) for app_class, app_kwargs in entries]
         if default is not None:
             kwargs["default"] = default
         return kwargs

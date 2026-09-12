@@ -14,9 +14,10 @@ elements exist and which attributes each one takes.
 
 Use a recipe as soon as the server is more than a demo: it is the one place a
 deployment differs, and `genro-asgi serve ./config.py` turns it into a complete
-deployment unit (see [the `genro-asgi` command](cli.md)). Keep building the
-server by hand — `AsgiServer(applications=[...])` — for a test, a script, or an
-embedded server whose objects the recipe cannot express.
+deployment unit (see [the `genro-asgi` command](cli.md)). Building the
+server by hand — `AsgiServer(applications=[...])` — is the same road written
+shorter: the kwargs become a configuration (see below), so a test or a script
+declares what a recipe would have declared.
 
 ## Setup
 
@@ -119,26 +120,28 @@ server = AsgiServer(config="default")                    # template name
 
 ## The configuration always exists
 
-A server built with kwargs alone has one too. `AsgiServer(applications=[Shop()],
+A server built with kwargs alone has one too. `AsgiServer(applications=[Shop],
 port=8000)` is a **shortcut**: it takes the ready-made `default` configuration
 (`DefaultConfiguration`, named in `CONFIGURATION_TEMPLATES`), writes the kwargs
 it received into a top layer of its own and runs the same road as a recipe.
 `server.config` is a `ConfigurationHandler` here as everywhere, and the tree
-carries what a recipe would have written — the `server` section, and one
-`application` node per instance, so every application reads its own options
+carries what a recipe would have written — the `server` section (`debug`
+included), the `middleware` and `plugins` switches, and one `application` node
+per declared class, so every application reads its own options
 (`applications.<code>.request`, and whatever its grammar declares) through the
-same door.
+same door. `applications` entries are CLASSES, or `(class, params)` pairs: the
+server instantiates them off the tree, here exactly as for a written recipe, and
+an instance is refused by the grammar.
 
 ```python
-server = AsgiServer(applications=[Shop(mount="")], host="0.0.0.0", port=9000)
+server = AsgiServer(applications=[(Shop, {"mount": ""})], host="0.0.0.0", port=9000)
 server.config("server.port")             # 9000 — written into the tree
 server.config("applications.shop.mount") # "" — the instance's own placement
 ```
 
-What the grammar cannot hold stays a constructor kwarg and reaches the mixin
-that peels it: a live `session_store` or `storage` manager, and the
-`middleware=` / `plugins=` switches, whose names may be classes registered in
-code through `middleware_registry=` / `plugin_registry=`.
+The `middleware` and `plugins` elements have an OPEN signature, so a switch for
+a class registered in code (`middleware_registry=` / `plugin_registry=`) is
+written by its own name like any other.
 
 An explicit constructor kwarg **wins over the configured value, wholesale per
 kwarg** — the server computes nothing, it just prefers what you passed:

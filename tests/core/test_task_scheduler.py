@@ -97,7 +97,7 @@ def _clear_marks() -> None:
 def server(tmp_path: Path) -> AsgiServer:
     """A real AsgiServer: DemoApp primary + MountApp mounted, storage on tmp_path."""
     srv = AsgiServer(
-        applications=[DemoApp(mount=""), MountApp(code="extra")],
+        applications=[(DemoApp, {"mount": ""}), (MountApp, {"code": "extra"})],
         storage=site_storage(tmp_path),
     )
     return srv
@@ -125,7 +125,7 @@ class TestScan:
             @route(task="twin")
             def two(self) -> None: ...
 
-        srv = AsgiServer(applications=[Dup(mount="")], storage=site_storage(tmp_path))
+        srv = AsgiServer(applications=[(Dup, {"mount": ""})], storage=site_storage(tmp_path))
         assert "twin" not in srv.tasks.scheduler.scan()   # both excluded, no silent pick
 
 

@@ -112,10 +112,17 @@ SERVER_ADMIN = Avatar("ops", ["SERVER_ADMIN"])
 MONITOR_ROUTES = ("/_server/monitor/snapshot", "/_server/monitor/panels")
 
 
-def make_server(avatar: Avatar | None, *applications: BaseApplication) -> AsgiServer:
-    """A server whose chain stamps ``avatar``, mounting ``applications``."""
+def make_server(avatar: Avatar | None, *applications: Any) -> AsgiServer:
+    """A server whose chain stamps ``avatar``, mounting ``applications``.
+
+    Each entry is a class or a ``(class, params)`` pair — the one form the
+    configuration accepts.
+    """
     return AsgiServer(
-        applications=[ServerApplication(), *(applications or [BaseApplication(mount="")])],
+        applications=[
+            ServerApplication,
+            *(applications or [(BaseApplication, {"mount": ""})]),
+        ],
         middleware={"stamp": {"avatar": avatar}},
         middleware_registry={"stamp": StampAuthMiddleware},
     )
@@ -200,13 +207,13 @@ class TestSnapshot:
     """The polled aggregate: server facts plus one entry per application."""
 
     async def test_server_facts(self, http_request) -> None:
-        server = make_server(SERVER_ADMIN, BaseApplication(mount=""))
+        server = make_server(SERVER_ADMIN, (BaseApplication, {"mount": ""}))
         facts = payload(await http_request(server, "/_server/monitor/snapshot"))["server"]
         assert facts["pid"] > 0
         assert "monitor" in facts["sections"]
 
     async def test_one_entry_per_application(self, http_request) -> None:
-        server = make_server(SERVER_ADMIN, BaseApplication(mount=""), RichApplication())
+        server = make_server(SERVER_ADMIN, (BaseApplication, {"mount": ""}), RichApplication)
         apps = payload(await http_request(server, "/_server/monitor/snapshot"))["apps"]
         assert set(apps) == {"", "rich"}
 
@@ -216,7 +223,7 @@ class TestSnapshot:
         assert "_server" not in apps
 
     async def test_identity_facts_by_default(self, http_request) -> None:
-        server = make_server(SERVER_ADMIN, BaseApplication(code="shop", mount="shop"))
+        server = make_server(SERVER_ADMIN, (BaseApplication, {"code": "shop", "mount": "shop"}))
         apps = payload(await http_request(server, "/_server/monitor/snapshot"))["apps"]
         assert apps["shop"] == {
             "class": "BaseApplication",
@@ -225,7 +232,7 @@ class TestSnapshot:
         }
 
     async def test_an_app_extends_its_own_entry(self, http_request) -> None:
-        server = make_server(SERVER_ADMIN, RichApplication())
+        server = make_server(SERVER_ADMIN, RichApplication)
         apps = payload(await http_request(server, "/_server/monitor/snapshot"))["apps"]
         assert apps["rich"]["orders"] == 7
         assert apps["rich"]["code"] == "rich"
@@ -235,18 +242,18 @@ class TestPanels:
     """The descriptors: who draws what, fetched once."""
 
     async def test_generic_by_default(self, http_request) -> None:
-        server = make_server(SERVER_ADMIN, BaseApplication(code="shop", mount="shop"))
+        server = make_server(SERVER_ADMIN, (BaseApplication, {"code": "shop", "mount": "shop"}))
         panels = payload(await http_request(server, "/_server/monitor/panels"))
         assert panels["shop"] == {"panel": "generic"}
 
     async def test_a_declared_panel_carries_its_module(self, http_request) -> None:
-        server = make_server(SERVER_ADMIN, RichApplication())
+        server = make_server(SERVER_ADMIN, RichApplication)
         panels = payload(await http_request(server, "/_server/monitor/panels"))
         assert panels["rich"] == {"panel": "orders", "src": "./orders_panel.js"}
 
     async def test_a_shipped_module_gets_its_src_filled_in(self, http_request) -> None:
         """Declaring ``panel_source`` is enough: the app publishes no route."""
-        server = make_server(SERVER_ADMIN, ShippingApplication())
+        server = make_server(SERVER_ADMIN, ShippingApplication)
         panels = payload(await http_request(server, "/_server/monitor/panels"))
         assert panels["shipping"] == {
             "panel": "shipping",
@@ -255,12 +262,12 @@ class TestPanels:
 
     async def test_an_explicit_src_wins(self, http_request) -> None:
         """An app free to serve the module itself keeps its own address."""
-        server = make_server(SERVER_ADMIN, RichApplication())
+        server = make_server(SERVER_ADMIN, RichApplication)
         panels = payload(await http_request(server, "/_server/monitor/panels"))
         assert panels["rich"]["src"] == "./orders_panel.js"
 
     async def test_panels_and_snapshot_agree(self, http_request) -> None:
-        server = make_server(SERVER_ADMIN, BaseApplication(mount=""), RichApplication())
+        server = make_server(SERVER_ADMIN, (BaseApplication, {"mount": ""}), RichApplication)
         panels = payload(await http_request(server, "/_server/monitor/panels"))
         apps = payload(await http_request(server, "/_server/monitor/snapshot"))["apps"]
         assert set(panels) == set(apps)
@@ -272,13 +279,13 @@ class TestPanelModule:
     async def test_the_module_is_served_as_javascript(
         self, response_headers, response_body
     ) -> None:
-        server = make_server(SERVER_ADMIN, ShippingApplication())
+        server = make_server(SERVER_ADMIN, ShippingApplication)
         sent = await drive(server, "/_server/monitor/panel?app=shipping")
         assert response_headers(sent)[b"content-type"].startswith(b"text/javascript")
         assert b"export default" in response_body(sent)
 
     async def test_an_app_without_a_module_is_not_found(self, response_status) -> None:
-        server = make_server(SERVER_ADMIN, BaseApplication(code="plain", mount="plain"))
+        server = make_server(SERVER_ADMIN, (BaseApplication, {"code": "plain", "mount": "plain"}))
         sent = await drive(server, "/_server/monitor/panel?app=plain")
         assert response_status(sent) == 404
 
@@ -287,7 +294,7 @@ class TestPanelModule:
         assert response_status(sent) == 404
 
     async def test_the_module_is_gated_like_the_rest(self, response_status) -> None:
-        server = make_server(None, ShippingApplication())
+        server = make_server(None, ShippingApplication)
         sent = await drive(server, "/_server/monitor/panel?app=shipping")
         assert response_status(sent) == 401
 
@@ -297,5 +304,5 @@ class TestBootstrapAdmin:
 
     async def test_admin_carries_the_monitor_tag(self) -> None:
         store = MemoryUserStore()
-        AsgiServer(applications=[ServerApplication()], users=store, admin_password="opspassword")
+        AsgiServer(applications=[ServerApplication], users=store, admin_password="opspassword")
         assert "SERVER_ADMIN" in store.get("admin")["tags"]

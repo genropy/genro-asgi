@@ -32,7 +32,7 @@ The helpers read the tree by two rules, and the grammar decides which applies:
 
 Section → constructor kwarg:
 
-- ``server`` → ``host``/``port``/``external_url``/``max_threads``/``shutdown_timeout_seconds``, its
+- ``server`` → ``host``/``port``/``external_url``/``max_threads``/``shutdown_timeout_seconds``/``debug``, its
   ``session`` child → ``session_ttl``, its ``tasks`` child → ``tasks``.
 - ``middleware`` → ``middleware`` ({name: bool | dict} switches).
 - ``authentication`` → ``admin_password``/``users``/``tokens`` (the store
@@ -80,7 +80,13 @@ class ConfigurationHandler(ConfigHandler):
         a recipe and reach the server as the list it reads.
         """
         kwargs = self.closed_attrs(
-            "server", "host", "port", "external_url", "max_threads", "shutdown_timeout_seconds"
+            "server",
+            "host",
+            "port",
+            "external_url",
+            "max_threads",
+            "shutdown_timeout_seconds",
+            "debug",
         )
         if self.node("server.session") is not None:
             kwargs["session_ttl"] = self("server.session.ttl")
@@ -98,12 +104,15 @@ class ConfigurationHandler(ConfigHandler):
 
     def middleware_config(self) -> dict[str, Any] | None:
         """The ``middleware`` switches, or ``None`` when the section is absent
-        (the composition's own defaults then apply)."""
-        if self.node("middleware") is None:
+        (the composition's own defaults then apply).
+
+        The element's signature is OPEN, so the attributes ARE the switches: the
+        six the grammar declares and any name a registry added from outside, read
+        in bulk with no list to keep in step."""
+        node = self.node("middleware")
+        if node is None:
             return None
-        return self.closed_attrs(
-            "middleware", "errors", "wellknown", "logging", "cors", "auth", "session"
-        )
+        return self.open_attrs(node)
 
     def identity_kwargs(self) -> dict[str, Any]:
         """The identity STORE kwargs of ``authentication`` (``AuthMixin`` peels them).
@@ -203,13 +212,15 @@ class ConfigurationHandler(ConfigHandler):
         the section is absent (the composition arms no extra plugin).
 
         A plugin maps to ``False`` when ``enabled`` is explicitly false, to its
-        remaining options when it carries any, else to ``True``.
+        remaining options when it carries any, else to ``True``. The collection's
+        OWN attributes are switches too — the short form, and the only one a
+        plugin registered from outside can use.
         """
         node = self.node("plugins")
         if node is None:
             return None
-        switches: dict[str, bool | dict[str, Any]] = {}
-        for child in node.value:
+        switches: dict[str, bool | dict[str, Any]] = dict(self.open_attrs(node))
+        for child in node.value or ():
             options = self.open_attrs(child)
             options.pop("code", None)
             enabled = options.pop("enabled", True)

@@ -57,7 +57,7 @@ class App(RoutedApplication):
 
 
 server = AsgiServer(
-    applications=[App()],
+    applications=[App],
     middleware={
         "cors": True,
         "logging": True,
@@ -72,7 +72,7 @@ server.serve(host="127.0.0.1", port=8000)
 
 ```python
 server = AsgiServer(
-    applications=[App()],
+    applications=[App],
     middleware={"cors": {
         "allow_origins": ["https://example.com"],
         "allow_credentials": True,
@@ -95,7 +95,7 @@ class StampMiddleware(BaseMiddleware):
 
 
 server = AsgiServer(
-    applications=[App()],
+    applications=[App],
     middleware_registry={"stamp": StampMiddleware},
     middleware={"stamp": {...}},
 )

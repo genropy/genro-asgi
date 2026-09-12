@@ -77,7 +77,7 @@ class Hello(RoutedApplication):
 
 
 if __name__ == "__main__":
-    server = AsgiServer(applications=[Hello()])
+    server = AsgiServer(applications=[Hello])
     server.serve(host="127.0.0.1", port=8000)
 ```
 
@@ -152,12 +152,15 @@ without `PluginMixin` does not supply this pair. See
 ### Building and serving
 
 ```python
-server = AsgiServer(applications=[Hello()])
+server = AsgiServer(applications=[Hello])
 server.serve(host="127.0.0.1", port=8000)
 ```
 
 `AsgiServer(applications=[...])` builds the server with the applications it
-serves. Each application carries its own placement in its `mount`, and
+serves. Each entry is an application **class**, or a `(class, params)` pair when
+the application needs its own `code`, `mount` or constructor arguments — the
+same three things a configuration recipe writes, because that is what the kwargs
+become. Each application carries its own placement in its `mount`, and
 `mount = ""` is the site root: that app answers `/` and every path no other
 mount claims.
 

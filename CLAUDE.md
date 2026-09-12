@@ -240,15 +240,15 @@ a `ConfigurationHandler` for every server: `AsgiServer(applications=[...], ...)`
 without a source is a SHORTCUT, not a second way to be born — it takes the
 ready-made `default` template (`DefaultConfiguration` in
 `config/templates.py`, named in `CONFIGURATION_TEMPLATES`) and layers a
-`ShortcutConfiguration` on top of it, whose `main` writes the kwargs it received:
-the `server` scalars, the session ttl, one `application` node per instance (class
-+ code + mount) and the `applications` default. Those kwargs are POPPED, so the
-value is read back off the tree; what the grammar cannot hold — a live
-`session_store` or `storage`, a `middleware` / `plugins` switch naming a class
-registered through `middleware_registry` / `plugin_registry` — stays a
-constructor kwarg and reaches the mixin that peels it, and `applications` stays
-too because the recipe holds a CLASS while the caller handed instances (the
-server mounts the instances). A template NAME is a configuration source like a
+`ShortcutConfiguration` on top of it, whose `main` writes the kwargs it received
+and POPS each one, so the value is read back off the tree: the `server` scalars
+(`debug` among them), the session ttl, the `middleware` and `plugins` switches —
+both elements now have an OPEN signature, so a name registered through
+`middleware_registry` / `plugin_registry` is an attribute like any other — and one
+`application` node per DECLARED CLASS. `applications=` takes classes, or
+`(class, params)` pairs, never instances: the server instantiates off the tree
+here exactly as for a written recipe, and an instance is refused by the grammar
+(`app_class: expected type`). A template NAME is a configuration source like a
 `config.py` path, on the constructor (`AsgiServer(config="default")`) and on the
 CLI (`genro-asgi serve template=default`). Config comes from the config builder + CLI;
 `OpenApiApplication`, `McpApplication` and the tasks subsystem (scheduler,

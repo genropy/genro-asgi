@@ -235,16 +235,15 @@ class TestLazyArming:
         assert {plugin.name for plugin in app.route.iter_plugins()} == {"auth"}
 
     def test_mounted_app_arms_on_first_route_access(self) -> None:
-        app = ApiApp(mount="")
-        AsgiServer(applications=[app], plugins={"openapi": True})
+        server = AsgiServer(applications=[(ApiApp, {"mount": ""})], plugins={"openapi": True})
+        app = server.applications["apiapp"]
         names = {plugin.name for plugin in app.route.iter_plugins()}
         assert {"auth", "openapi"} <= names
 
     def test_no_plugins_config_still_arms_the_fixed_base(self) -> None:
         # A mixin-equipped server always arms the fixed base (pydantic/openapi)
         # on top of the app's own ``auth`` plug, even with no plugins config.
-        app = ApiApp(mount="")
-        AsgiServer(applications=[app])
+        app = AsgiServer(applications=[(ApiApp, {"mount": ""})]).applications["apiapp"]
         assert {plugin.name for plugin in app.route.iter_plugins()} == {
             "auth",
             "pydantic",

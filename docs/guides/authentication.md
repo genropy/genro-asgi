@@ -43,7 +43,7 @@ class App(RoutedApplication):
         return {"classified": True}
 
 
-server = AsgiServer(applications=[App()], auth=AUTH)
+server = AsgiServer(applications=[App], auth=AUTH)
 server.serve(host="127.0.0.1", port=8000)
 ```
 

@@ -59,7 +59,7 @@ class Calc(McpOpenApiApplication):
 
 
 if __name__ == "__main__":
-    AsgiServer(applications=[Calc()]).serve(host="127.0.0.1", port=8000)
+    AsgiServer(applications=[Calc]).serve(host="127.0.0.1", port=8000)
 ```
 
 Save this as `calc.py`, run `python calc.py`, and stop it with Ctrl-C after

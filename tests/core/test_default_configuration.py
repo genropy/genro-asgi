@@ -35,6 +35,7 @@ from genro_asgi.config.templates import (
     DefaultConfiguration,
     ShortcutConfiguration,
 )
+from genro_asgi.middleware.base import BaseMiddleware
 from genro_asgi.middleware.cors import CORSMiddleware
 from genro_asgi.types import Receive, Scope, Send
 
@@ -45,6 +46,13 @@ class ShopApp(BaseApplication):
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         await send({"type": "http.response.start", "status": 200, "headers": []})
         await send({"type": "http.response.body", "body": b"shop"})
+
+
+class StampMiddleware(BaseMiddleware):
+    """A middleware the core's registry does not know, registered in code."""
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await self.next_app(scope, receive, send)
 
 
 class ApiApp(BaseApplication):
@@ -59,29 +67,33 @@ class TestTheConfigurationAlwaysExists:
     """A server built with kwargs reads through a handler like every other."""
 
     def test_a_server_composed_in_code_has_a_read_door(self) -> None:
-        server = AsgiServer(applications=[ShopApp(mount="")])
+        server = AsgiServer(applications=[(ShopApp, {"mount": ""})])
         assert isinstance(server.config, ConfigurationHandler)
 
     def test_the_default_template_is_the_base_of_the_shortcut(self) -> None:
         assert CONFIGURATION_TEMPLATES[DEFAULT_TEMPLATE] is DefaultConfiguration
 
     def test_the_template_brings_the_shipped_storage_layout(self) -> None:
-        server = AsgiServer(applications=[ShopApp(mount="")])
+        server = AsgiServer(applications=[(ShopApp, {"mount": ""})])
         assert [child.node_tag for child in server.config.node("storage").value] == ["local"]
 
     def test_the_applications_reach_the_tree(self) -> None:
-        server = AsgiServer(applications=[ShopApp(mount=""), ApiApp()])
+        server = AsgiServer(applications=[(ShopApp, {"mount": ""}), ApiApp])
         assert server.config("applications.shopapp.mount") == ""
-        assert server.config("applications.apiapp.mount") == "apiapp"
+        assert server.config("applications.apiapp.mount", default=None) is None
         assert server.config.node("applications.shopapp").attr["app_class"] is ShopApp
 
-    def test_the_instances_given_are_the_ones_mounted(self) -> None:
-        shop = ShopApp(mount="")
-        server = AsgiServer(applications=[shop])
-        assert server.applications["shopapp"] is shop
+    def test_the_server_instantiates_from_the_tree(self) -> None:
+        server = AsgiServer(applications=[(ShopApp, {"mount": ""})])
+        assert isinstance(server.applications["shopapp"], ShopApp)
+        assert server.applications["shopapp"].mount == ""
+
+    def test_an_instance_is_refused_by_the_grammar(self) -> None:
+        with pytest.raises(ValueError, match="app_class"):
+            AsgiServer(applications=[ShopApp(mount="")])  # the refused form
 
     def test_the_listener_kwargs_reach_the_tree(self) -> None:
-        server = AsgiServer(applications=[ShopApp(mount="")], host="0.0.0.0", port=9101)
+        server = AsgiServer(applications=[(ShopApp, {"mount": ""})], host="0.0.0.0", port=9101)
         assert server.config("server.host") == "0.0.0.0"
         assert server.config("server.port") == 9101
         assert server.config_host == "0.0.0.0"
@@ -89,24 +101,39 @@ class TestTheConfigurationAlwaysExists:
 
     def test_the_public_address_reaches_the_tree(self) -> None:
         server = AsgiServer(
-            applications=[ShopApp(mount="")], external_url="https://shop.example.com/"
+            applications=[(ShopApp, {"mount": ""})], external_url="https://shop.example.com/"
         )
         assert server.config("server.external_url") == "https://shop.example.com/"
         assert server.external_url == "https://shop.example.com"
 
     def test_the_session_ttl_reaches_the_tree(self) -> None:
-        server = AsgiServer(applications=[ShopApp(mount="")], session_ttl=120)
+        server = AsgiServer(applications=[(ShopApp, {"mount": ""})], session_ttl=120)
         assert server.config("server.session.ttl") == 120
         assert server.session_store._default_ttl == 120
 
     def test_the_default_application_reaches_the_tree(self) -> None:
-        server = AsgiServer(applications=[ShopApp(), ApiApp()], default="apiapp")
+        server = AsgiServer(applications=[ShopApp, ApiApp], default="apiapp")
         assert server.config("applications.default") == "apiapp"
         assert server.default_application is server.applications["apiapp"]
 
-    def test_a_kwarg_the_grammar_cannot_hold_still_reaches_the_server(self) -> None:
-        server = AsgiServer(applications=[ShopApp(mount="")], middleware={"cors": True})
+    def test_the_middleware_switches_reach_the_tree(self) -> None:
+        server = AsgiServer(applications=[(ShopApp, {"mount": ""})], middleware={"cors": True})
+        assert server.config("middleware.cors") is True
         assert server.get_middleware(CORSMiddleware) is not None
+
+    def test_a_switch_named_outside_the_grammar_reaches_the_tree(self) -> None:
+        server = AsgiServer(
+            applications=[(ShopApp, {"mount": ""})],
+            middleware={"stamp": True},
+            middleware_registry={"stamp": StampMiddleware},
+        )
+        assert server.config("middleware.stamp") is True
+        assert server.get_middleware(StampMiddleware) is not None
+
+    def test_the_declared_usage_mode_reaches_the_tree(self) -> None:
+        server = AsgiServer(applications=[(ShopApp, {"mount": ""})], debug="sql")
+        assert server.config("server.debug") == "sql"
+        assert server.debug == "sql"
 
 
 class TestTheShortcutTreeMatchesARecipe:
@@ -125,7 +152,9 @@ class TestTheShortcutTreeMatchesARecipe:
                 cfg.server(host="0.0.0.0", port=9101)
 
         by_recipe = AsgiServer(config=HandWritten)
-        by_kwargs = AsgiServer(applications=[ShopApp(mount="")], host="0.0.0.0", port=9101)
+        by_kwargs = AsgiServer(
+            applications=[(ShopApp, {"mount": ""})], host="0.0.0.0", port=9101
+        )
         assert by_kwargs.config.builder.render() == by_recipe.config.builder.render()
 
 
@@ -146,13 +175,20 @@ class TestTheShortcutRecipe:
     """``ShortcutConfiguration`` is a recipe like any other."""
 
     def test_it_leaves_the_instances_in_the_kwargs(self) -> None:
-        apps = [ShopApp(mount="")]
-        kwargs: dict[str, Any] = {"applications": apps, "host": "127.0.0.1", "default": "shopapp"}
+        kwargs: dict[str, Any] = {
+            "applications": [ShopApp],
+            "host": "127.0.0.1",
+            "default": "shopapp",
+            "middleware": {"cors": True},
+            "plugins": {"openapi": True},
+            "debug": True,
+            "parent": "public",
+        }
         ShortcutConfiguration(kwargs)
-        assert kwargs == {"applications": apps}
+        assert kwargs == {"parent": "public"}
 
     def test_it_builds_one_configuration_root(self) -> None:
-        recipe = ShortcutConfiguration({"applications": [ShopApp(mount="")]})
+        recipe = ShortcutConfiguration({"applications": [ShopApp]})
         recipe.create()
         assert [node.label for node in recipe.source] == ["configuration"]
 
@@ -165,8 +201,7 @@ class TestTheRequestOptionsComeFromTheGrammarOnly:
         assert not hasattr(BaseApplication, "request_error_codes")
 
     def test_the_defaults_answer_without_a_request_node(self) -> None:
-        app = ShopApp(mount="")
-        AsgiServer(applications=[app])
+        app = AsgiServer(applications=[(ShopApp, {"mount": ""})]).applications["shopapp"]
         assert app.raw_body is False
         assert app.validation_error_status == 400
 

@@ -71,16 +71,17 @@ class Empty(RoutedApplication):
 
 def direct_server() -> AsgiServer:
     """A server whose plugin config arms pydantic + openapi on routed apps."""
-    return AsgiServer(applications=[DirectApi(mount="")], plugins={"openapi": True, "pydantic": True})
+    return AsgiServer(
+        applications=[(DirectApi, {"mount": ""})], plugins={"openapi": True, "pydantic": True}
+    )
 
 
-def mounted_server(app: OpenApiApplication) -> AsgiServer:
-    """A server with ``app`` mounted at its ``mount`` over an empty root app."""
-    server = AsgiServer(
-        applications=[Empty(mount=""), app],
+def mounted_server(entry: tuple[type, dict]) -> AsgiServer:
+    """A server with *entry* mounted at its ``mount`` over an empty root app."""
+    return AsgiServer(
+        applications=[(Empty, {"mount": ""}), entry],
         plugins={"openapi": True, "pydantic": True},
     )
-    return server
 
 
 @pytest.fixture
@@ -175,7 +176,7 @@ class TestDirectMode:
 class TestDocsOff:
     async def test_docs_off_is_404(self, http_request, response_status) -> None:
         server = AsgiServer(
-            applications=[DirectApi(mount="", docs="off")], plugins={"openapi": True, "pydantic": True}
+            applications=[(DirectApi, {"mount": "", "docs": "off"})], plugins={"openapi": True, "pydantic": True}
         )
         sent = await http_request(server, "/_meta/docs")
         assert response_status(sent) == 404
@@ -185,7 +186,7 @@ class TestMountedMode:
     async def test_endpoint_under_mount_and_api(
         self, http_request, response_status, response_body
     ) -> None:
-        app = OpenApiApplication(code="mount", routing_class=SubApi())
+        app = (OpenApiApplication, {"code": "mount", "routing_class": SubApi()})
         scope: Scope = {
             "type": "http",
             "method": "GET",
@@ -208,7 +209,7 @@ class TestMountedMode:
     async def test_schema_covers_mounted_endpoints(
         self, http_request, response_status, response_body
     ) -> None:
-        app = OpenApiApplication(code="mount", routing_class=SubApi())
+        app = (OpenApiApplication, {"code": "mount", "routing_class": SubApi()})
         sent = await http_request(mounted_server(app), "/mount/_meta/schema_json")
         assert response_status(sent) == 200
         doc = json.loads(response_body(sent))
@@ -218,7 +219,9 @@ class TestMountedMode:
         assert doc["paths"]["/api/ping"]["get"]["operationId"] == "ping"
 
     async def test_module_import_mode(self) -> None:
-        app = OpenApiApplication(code="m", module=f"{SubApi.__module__}:SubApi")
+        app = mounted_server(
+            (OpenApiApplication, {"code": "m", "module": f"{SubApi.__module__}:SubApi"})
+        ).applications["m"]
         assert app.api_name == "api"
         node = app.route.node("/api/ping")
         assert node.error is None, node.error

@@ -35,7 +35,7 @@ class App(RoutedApplication):
         return {"ok": True}
 
 
-server = AsgiServer(applications=[App()], session_store=MemorySessionStore())
+server = AsgiServer(applications=[App], session_store=MemorySessionStore())
 server.serve(host="127.0.0.1", port=8000)
 ```
 

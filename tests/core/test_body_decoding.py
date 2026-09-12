@@ -84,7 +84,7 @@ class ApiApp(OpenApiApplication):
 
 def plain_server() -> AsgiServer:
     """A server with the application's options left at their defaults."""
-    return AsgiServer(applications=[BodyApp(mount="")])
+    return AsgiServer(applications=[(BodyApp, {"mount": ""})])
 
 
 def configured_server(**options: Any) -> AsgiServer:

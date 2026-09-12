@@ -92,7 +92,8 @@ so a recipe error surfaces as the same boot error you get from
 ## Serving one application, no config
 
 For a quick run there is the `application=` form, which resolves a class and
-hands it to `AsgiServer(applications=[...])` — instantiated with no arguments:
+hands it to `AsgiServer(applications=[...])` — the server instantiates it with
+no arguments:
 
 ```
 $ genro-asgi serve application=./hello.py:Hello --port 8124

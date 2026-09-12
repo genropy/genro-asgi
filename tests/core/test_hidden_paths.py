@@ -129,10 +129,10 @@ class StampAuthMiddleware(BaseMiddleware):
         await self.app(scope, receive, send)
 
 
-def auth_server(app: RoutedApplication, avatar: Avatar | None) -> AsgiServer:
+def auth_server(entry: tuple[type, dict], avatar: Avatar | None) -> AsgiServer:
     """An ``AsgiServer`` whose chain stamps ``avatar`` as the request identity."""
     return AsgiServer(
-        applications=[app],
+        applications=[entry],
         middleware={"stamp": {"avatar": avatar}},
         middleware_registry={"stamp": StampAuthMiddleware},
     )
@@ -256,11 +256,11 @@ class TestWellKnownRequests:
     async def test_the_owning_application_authorization_rules_apply(
         self, http_request, response_status, response_body
     ) -> None:
-        anonymous = auth_server(DiscoveryApp(code="site", mount="site"), avatar=None)
+        anonymous = auth_server((DiscoveryApp, {"code": "site", "mount": "site"}), avatar=None)
         assert response_status(await http_request(anonymous, "/.well-known/guarded")) == 401
-        viewer = auth_server(DiscoveryApp(code="site", mount="site"), Avatar("bob", ["viewer"]))
+        viewer = auth_server((DiscoveryApp, {"code": "site", "mount": "site"}), Avatar("bob", ["viewer"]))
         assert response_status(await http_request(viewer, "/.well-known/guarded")) == 403
-        admin = auth_server(DiscoveryApp(code="site", mount="site"), Avatar("alice", ["admin"]))
+        admin = auth_server((DiscoveryApp, {"code": "site", "mount": "site"}), Avatar("alice", ["admin"]))
         sent = await http_request(admin, "/.well-known/guarded")
         assert response_status(sent) == 200
         assert json.loads(response_body(sent)) == {"served": "guarded"}

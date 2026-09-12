@@ -406,12 +406,12 @@ class TestWithoutAuthMixin:
 def encrypted_server(tmp_path, **kwargs) -> AsgiServer:
     """An ``AsgiServer`` whose site storage carries key material, for store wiring."""
     storage = site_storage(tmp_path, storage_key=Fernet.generate_key().decode())
-    return AsgiServer(applications=[BaseApplication(mount="")], storage=storage, **kwargs)
+    return AsgiServer(applications=[(BaseApplication, {"mount": ""})], storage=storage, **kwargs)
 
 
 class TestStoreWiring:
     def test_stores_are_none_when_unconfigured(self) -> None:
-        server = AsgiServer(applications=[BaseApplication(mount="")])
+        server = AsgiServer(applications=[(BaseApplication, {"mount": ""})])
         assert server.user_store is None
         assert server.api_key_store is None
 
@@ -434,7 +434,7 @@ class TestStoreWiring:
 
     def test_ready_instance_is_passed_through(self) -> None:
         store = MemoryUserStore()
-        server = AsgiServer(applications=[BaseApplication(mount="")], users=store)
+        server = AsgiServer(applications=[(BaseApplication, {"mount": ""})], users=store)
         assert server.user_store is store
 
     def test_config_dict_without_storage_is_a_boot_error(self) -> None:
@@ -448,7 +448,7 @@ class TestStoreWiring:
 class TestBootstrapAdmin:
     def test_admin_password_seeds_the_superadmin(self) -> None:
         store = MemoryUserStore()
-        server = AsgiServer(applications=[BaseApplication(mount="")], users=store, admin_password="pw")
+        server = AsgiServer(applications=[(BaseApplication, {"mount": ""})], users=store, admin_password="pw")
         record = server.user_store.get("admin")
         assert record is not None
         # administration AND observation: the identity that configures the
@@ -467,7 +467,7 @@ class TestBootstrapAdmin:
         store.save(
             {"identity": "admin", "password_hash": "stale", "tags": [], "enabled": False}
         )
-        server = AsgiServer(applications=[BaseApplication(mount="")], users=store, admin_password="fresh")
+        server = AsgiServer(applications=[(BaseApplication, {"mount": ""})], users=store, admin_password="fresh")
         record = server.user_store.get("admin")
         assert record["enabled"] is True
         assert record["tags"] == ["SUPERADMIN", "SERVER_ADMIN"]
@@ -522,7 +522,7 @@ class TestApiKeyBearer:
 
     def test_end_to_end_gak_key_authenticates_through_the_server(self) -> None:
         store = MemoryApiKeyStore()
-        server = AsgiServer(applications=[BaseApplication(mount="")], tokens=store)
+        server = AsgiServer(applications=[(BaseApplication, {"mount": ""})], tokens=store)
         key = store.issue("robot", ["worker"])
         avatar = server.auth_core.authenticate(bearer_scope(key))
         assert avatar is not None

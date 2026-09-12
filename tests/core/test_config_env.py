@@ -328,13 +328,11 @@ class TestUnconfiguredServer:
     """An app on a server composed in code reads a tree that declares nothing."""
 
     def test_call_site_default_answers(self) -> None:
-        app = ShopApp(mount="")
-        AsgiServer(applications=[app])
+        app = AsgiServer(applications=[(ShopApp, {"mount": ""})]).applications["shopapp"]
         assert app.config("catalog.title", default="none") == "none"
 
     def test_without_a_default_it_raises(self) -> None:
-        app = ShopApp(mount="")
-        AsgiServer(applications=[app])
+        app = AsgiServer(applications=[(ShopApp, {"mount": ""})]).applications["shopapp"]
         with pytest.raises(KeyError, match="applications.shopapp.catalog.title"):
             app.config("catalog.title")
 

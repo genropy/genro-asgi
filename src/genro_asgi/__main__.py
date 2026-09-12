@@ -368,7 +368,7 @@ class ServerLauncher:
         """The server this source describes, host/port forwarded when given."""
         if self.is_quickstart:
             app_class = TargetResolver(self.source.partition("=")[2]).resolve()
-            return AsgiServer(applications=[app_class()], **self.constructor_kwargs)
+            return AsgiServer(applications=[app_class], **self.constructor_kwargs)
         if self.is_template:
             return AsgiServer(config=self.template_name, **self.constructor_kwargs)
         if self.is_config_path:
@@ -544,7 +544,7 @@ def factory() -> AsgiServer:
     }
     if "application" in described:
         server = AsgiServer(
-            applications=[TargetResolver(described["application"]).resolve()()], **kwargs
+            applications=[TargetResolver(described["application"]).resolve()], **kwargs
         )
     elif "config" in described:
         # The reloaded process starts fresh: the sibling-import path the parent

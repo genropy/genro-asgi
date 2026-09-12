@@ -110,6 +110,7 @@ class AsgiServerGrammar(TaskGrammar):
         external_url: str | BagResolver = None,
         max_threads: int | BagResolver = None,
         shutdown_timeout_seconds: float | BagResolver = None,
+        debug: bool | str | BagResolver = None,
     ) -> None:
         """Server runtime options.
 
@@ -126,6 +127,10 @@ class AsgiServerGrammar(TaskGrammar):
         ``max_threads`` sizes the server's thread pool: ``BaseServer`` peels it
         and hands it to ``WorkPool`` (omitted, the stdlib default
         ``min(32, cpu + 4)`` applies).
+
+        ``debug`` is the DECLARED usage mode the core never branches on (the CLI
+        spells it ``--debug``): ``True``, or a comma-separated string of
+        parameters an application reads for itself.
 
         ``shutdown_timeout_seconds`` (5.0) bounds how long uvicorn waits for open
         connections at shutdown before cancelling them: one endless response —
@@ -171,12 +176,15 @@ class AsgiServerGrammar(TaskGrammar):
         cors: bool | dict = None,
         auth: bool | dict = None,
         session: bool | dict = None,
+        **extra: bool | dict,
     ) -> None:
         """Global middleware switches: one ``{name: bool | dict}`` kwarg per
         middleware. A dict value enables the middleware and becomes its
-        constructor options. The names are the core's own registry
-        (``middleware.default_registry()``); one registered through
-        ``middleware_registry=`` is not configurable here."""
+        constructor options. The six declared names are the core's own registry
+        (``middleware.default_registry()``); a middleware registered from
+        outside (``middleware_registry=``) is written by its own name and rides
+        through ``**extra`` — the signature is OPEN so that the switches have
+        ONE place, the configuration, whatever registry the class came from."""
 
     @element(
         parent_tags="configuration",
@@ -340,10 +348,15 @@ class AsgiServerGrammar(TaskGrammar):
         user-provided — the core never imports db drivers."""
 
     @element(parent_tags="configuration", sub_tags="plugin", collection_key="code")
-    def plugins(self) -> None:
+    def plugins(self, **extra: bool | dict) -> None:
         """Collection of router plugins, each labelled by its ``code``.
-        Materialized as the server's ``plugins=`` switches (``PluginMixin``):
-        the server arms every enabled plugin onto each routed app it hosts."""
+        Materialized as the server's plugin switches (``PluginMixin``): the
+        server arms every enabled plugin onto each routed app it hosts.
+
+        A plugin is normally one ``plugin`` child. The signature is OPEN as
+        well, so a switch may also be written as an attribute of the collection
+        — the short form the shortcut uses, and the one a plugin registered
+        from outside (``plugin_registry=``) needs."""
 
     @element(parent_tags="plugins", sub_tags="")
     def plugin(self, code: str = None, enabled: bool = True, **options: Any) -> None:

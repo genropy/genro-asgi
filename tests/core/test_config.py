@@ -158,7 +158,7 @@ class TestSelfConfiguringServer:
 
     def test_a_server_composed_in_code_has_one_too(self) -> None:
         """#91: the configuration always exists — the kwargs build it."""
-        server = AsgiServer(applications=[ShopApp(mount="")])
+        server = AsgiServer(applications=[(ShopApp, {"mount": ""})])
         assert isinstance(server.config, ConfigurationHandler)
         assert server.config("applications.shopapp.mount") == ""
 
@@ -626,7 +626,7 @@ class TestTasksConfig:
         assert server.tasks.task_store.mount == "site"       # explicit override
 
     def test_direct_dict_kwarg(self) -> None:
-        server = AsgiServer(applications=[ShopApp(mount="")],
+        server = AsgiServer(applications=[(ShopApp, {"mount": ""})],
                             tasks={"enabled": True, "tick_seconds": 3})
         assert server.tasks.scheduler.tick_seconds == 3.0
         assert server.tasks_config == {"tick_seconds": 3}    # enabled peeled away

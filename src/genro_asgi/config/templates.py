@@ -26,15 +26,11 @@ the constructor kwargs it was handed, and it is layered ON TOP of a template by
 ``AsgiServer``. From the handler down nothing knows which of the two roads was
 taken: there is one tree, read through one door.
 
-What the shortcut writes is what the grammar can hold losslessly — the
-``server`` scalars, the session ttl, one ``application`` node per instance and
-the ``applications`` default. It POPS those kwargs, so the value is read back
-from the tree and from nowhere else. What carries a live object
-(``session_store``, ``storage``, ``auth``) or a name outside a closed signature
-(``middleware``, ``plugins``, whose switches also name classes registered
-through ``middleware_registry`` / ``plugin_registry``) has no grammar word and
-stays a constructor kwarg; ``applications`` stays too, because the recipe holds
-a CLASS and the caller handed instances.
+The shortcut writes every option it receives — the ``server`` scalars (``debug``
+among them), the session ttl, the ``middleware`` and ``plugins`` switches (both
+elements have an OPEN signature, so a name registered from outside is an
+attribute like any other) and one ``application`` node per declared class — and
+POPS each one, so the value is read back from the tree and from nowhere else.
 """
 
 from __future__ import annotations
@@ -83,12 +79,22 @@ class ShortcutConfiguration(AsgiConfigBuilder):
 
     Built with the kwargs dict itself, which it MUTATES: every option it writes
     into the tree it pops, so the server reads that value back through the
-    handler like any other. ``applications`` is left in place — the tree names
-    the classes, the caller handed the instances, and the instances are what the
-    server mounts.
+    handler like any other and no option survives at the constructor.
+
+    ``applications`` is a list of CLASSES, or of ``(class, params)`` pairs when
+    an application needs its own ``code``/``mount``/kwargs — the shape of the
+    ``application`` grammar line, which is what it becomes. The server
+    instantiates from the tree, here exactly as for a written configuration.
     """
 
-    server_words = ("host", "port", "external_url", "max_threads", "shutdown_timeout_seconds")
+    server_words = (
+        "host",
+        "port",
+        "external_url",
+        "max_threads",
+        "shutdown_timeout_seconds",
+        "debug",
+    )
     """The ``server`` attributes a constructor kwarg spells the same way."""
 
     def __init__(self, kwargs: dict[str, Any], name: str | None = None) -> None:
@@ -98,12 +104,32 @@ class ShortcutConfiguration(AsgiConfigBuilder):
         }
         self.session_ttl = kwargs.pop("session_ttl", None)
         self.default_code = kwargs.pop("default", None)
-        self.app_instances = list(kwargs.get("applications") or ())
+        self.middleware_switches = kwargs.pop("middleware", None)
+        self.plugin_switches = kwargs.pop("plugins", None)
+        self.app_entries = self.application_entries(kwargs.pop("applications", ()))
+
+    def application_entries(self, declared: Any) -> list[tuple[type, dict[str, Any]]]:
+        """The declared applications as ``(class, params)``, each with its ``code``.
+
+        A bare class is the same entry with no parameters. The code is resolved
+        HERE because it is the collection key the tree files the node under, and
+        it follows the rule the application applies to itself: what the caller
+        wrote, else the class attribute, else the class name lowercased.
+        """
+        entries: list[tuple[type, dict[str, Any]]] = []
+        for entry in declared:
+            app_class, params = entry if isinstance(entry, tuple) else (entry, {})
+            params = dict(params)
+            code = params.pop("code", None) or app_class.code or app_class.__name__.lower()
+            entries.append((app_class, {"code": code, **params}))
+        return entries
 
     def main(self, root: Any) -> None:
-        """The server section the kwargs describe, and one node per application."""
+        """The sections the kwargs describe: server, middleware, plugins, applications."""
         cfg = root.configuration()
         self.server_section(cfg)
+        self.middleware_section(cfg)
+        self.plugins_section(cfg)
         self.applications_section(cfg)
 
     def server_section(self, cfg: Any) -> None:
@@ -112,8 +138,18 @@ class ShortcutConfiguration(AsgiConfigBuilder):
         if self.session_ttl is not None:
             section.session(ttl=self.session_ttl)
 
+    def middleware_section(self, cfg: Any) -> None:
+        """The switches as the attributes of the section — the element is open."""
+        if self.middleware_switches is not None:
+            cfg.middleware(**self.middleware_switches)
+
+    def plugins_section(self, cfg: Any) -> None:
+        """The switches as the attributes of the collection — the short form."""
+        if self.plugin_switches is not None:
+            cfg.plugins(**self.plugin_switches)
+
     def applications_section(self, cfg: Any) -> None:
-        """One ``application`` node per instance: its class, its code, its mount.
+        """One ``application`` node per declared class: its grammar, its parameters.
 
         The class carries the grammar, so the subtree an application reads its
         own options from (``applications.<code>.request``, and whatever it
@@ -121,5 +157,5 @@ class ShortcutConfiguration(AsgiConfigBuilder):
         one written as a recipe.
         """
         apps = cfg.applications(default=self.default_code)
-        for app in self.app_instances:
-            apps.application(code=app.code, mount=app.mount, app_class=type(app))
+        for app_class, params in self.app_entries:
+            apps.application(**params, app_class=app_class)
