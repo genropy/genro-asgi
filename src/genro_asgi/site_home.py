@@ -20,7 +20,7 @@ virtualenv, in Docker and in Kubernetes: only the folder moves::
 
     <home>/
         config.py            the configuration recipe (the card names the file)
-        static/              the files served before the 404
+        static/              the site's static files (the turn before the 404 is later work)
         data/
             frozen_users/    the deposit of the frozen users
             sessions/        the session snapshots
