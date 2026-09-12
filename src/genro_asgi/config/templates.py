@@ -109,6 +109,7 @@ class ShortcutConfiguration(AsgiConfigBuilder):
         self.middleware_switches = kwargs.pop("middleware", None)
         self.plugin_switches = kwargs.pop("plugins", None)
         self.session_store = kwargs.pop("session_store", None)
+        self.websocket_options = kwargs.pop("websocket", None)
         self.storage_mounts_declared = kwargs.pop("storage", None)
         self.storage_key = kwargs.pop("storage_key", None)
         self.user_store = kwargs.pop("users", None)
@@ -142,11 +143,22 @@ class ShortcutConfiguration(AsgiConfigBuilder):
         self.applications_section(cfg)
 
     def server_section(self, cfg: Any) -> None:
-        """The listener words, and the session child: its ttl and its store class."""
+        """The listener words, and the two children: the session and the handshake."""
         section = cfg.server(**self.server_options)
         session = self.session_options
         if session:
             section.session(**session)
+        if self.websocket_options is not None:
+            section.websocket(**self.handshake_options)
+
+    @property
+    def handshake_options(self) -> dict[str, Any]:
+        """The ``websocket`` attributes: the recipe spells ``origins`` as one string."""
+        options = dict(self.websocket_options)
+        origins = options.get("origins")
+        if origins is not None and not isinstance(origins, str):
+            options["origins"] = ",".join(origins)
+        return options
 
     @property
     def session_options(self) -> dict[str, Any]:

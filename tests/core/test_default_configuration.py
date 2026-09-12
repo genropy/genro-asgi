@@ -134,6 +134,14 @@ class TestTheConfigurationAlwaysExists:
         assert server.config("middleware.stamp") is True
         assert server.get_middleware(StampMiddleware) is not None
 
+    def test_the_handshake_options_reach_the_tree(self) -> None:
+        server = AsgiServer(
+            applications=[(ShopApp, {"mount": ""})],
+            websocket={"origins": ["https://app.example.org"], "max_concurrent": 4},
+        )
+        assert server.config("server.websocket.origins") == "https://app.example.org"
+        assert server.websocket_origins == ["https://app.example.org"]
+
     def test_the_declared_usage_mode_reaches_the_tree(self) -> None:
         server = AsgiServer(applications=[(ShopApp, {"mount": ""})], debug="sql")
         assert server.config("server.debug") == "sql"
