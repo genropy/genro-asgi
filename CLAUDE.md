@@ -252,8 +252,14 @@ here exactly as for a written recipe, and an instance is refused by the grammar
 is a CLASS the configuration names and the server builds — `session_store=` and
 the `store_class` of `server.session`, `users=` / `tokens=` as descriptors whose
 `store_class` defaults to `FileUserStore` / `FileApiKeyStore` — `storage=` takes
-the MOUNTS and never a built `StorageManager`, and `auth=` becomes the
-`credentials` children. A template NAME is a configuration source like a
+the MOUNTS and never a built `StorageManager`, `auth=` becomes the `credentials`
+children, and the session snapshot is the `save_path` of `server.session`.
+**The server creates no user** (owner, 2026-09-12): `admin_password=`, the
+grammar word, `_bootstrap_admin` and `ADMIN_IDENTITY`/`ADMIN_TAGS` are gone —
+a deployment that needs a first identity declares the store class that carries
+it, and the login surface belongs to the application. `tasks=` is untouched by
+this pass, by the owner's decision: it belongs to the orchestration branch.
+A template NAME is a configuration source like a
 `config.py` path, on the constructor (`AsgiServer(config="default")`) and on the
 CLI (`genro-asgi serve template=default`). Config comes from the config builder + CLI;
 `OpenApiApplication`, `McpApplication` and the tasks subsystem (scheduler,

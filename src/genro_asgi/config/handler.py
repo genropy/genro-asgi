@@ -35,9 +35,8 @@ Section → constructor kwarg:
 - ``server`` → ``host``/``port``/``external_url``/``max_threads``/``shutdown_timeout_seconds``/``debug``, its
   ``session`` child → ``session_ttl``, its ``tasks`` child → ``tasks``.
 - ``middleware`` → ``middleware`` ({name: bool | dict} switches).
-- ``authentication`` → ``admin_password``/``users``/``tokens`` (the store
-  kwargs ``AuthMixin`` peels) and ``auth`` (the ``AuthCore`` entries folded
-  from ``credentials``).
+- ``authentication`` → ``users``/``tokens`` (the store descriptors ``AuthMixin``
+  peels) and ``auth`` (the ``AuthCore`` entries folded from ``credentials``).
 - ``storage`` → ``storage`` (genro-storage's own ``list[dict]`` of mounts) and
   ``storage_key`` (the section's at-rest key material).
 - ``applications`` → ``applications``/``default`` (each entry an
@@ -71,9 +70,10 @@ class ConfigurationHandler(ConfigHandler):
     def server_kwargs(self) -> dict[str, Any]:
         """The ``server`` section as server kwargs, its children lifted.
 
-        ``session`` becomes ``session_ttl`` (and, when it names a
-        ``store_class``, the ``session_store`` the server is handed — the class
-        is instantiated HERE, with the section's remaining attributes), ``tasks`` becomes the ``tasks``
+        ``session`` becomes ``session_ttl``, ``save_session`` (its ``save_path``)
+        and, when it names a ``store_class``, the ``session_store`` the server is
+        handed — the class is instantiated HERE, with the section's remaining
+        attributes, ``tasks`` becomes the ``tasks``
         tuning dict and ``websocket`` the websocket options: all three are
         server-domain (sessions, the task backbone and the sockets live on the
         server), so their values lift to the kwargs the owning mixins peel
@@ -96,6 +96,9 @@ class ConfigurationHandler(ConfigHandler):
             ttl = options.pop("ttl", None)
             if ttl is not None:
                 kwargs["session_ttl"] = ttl
+            save_path = options.pop("save_path", None)
+            if save_path is not None:
+                kwargs["save_session"] = save_path
             store_class = options.pop("store_class", None)
             if store_class is not None:
                 kwargs["session_store"] = store_class(**options)
@@ -126,38 +129,17 @@ class ConfigurationHandler(ConfigHandler):
     def identity_kwargs(self) -> dict[str, Any]:
         """The identity STORE kwargs of ``authentication`` (``AuthMixin`` peels them).
 
-        ``admin_password`` is the ``admin_password`` node's VALUE, which a
-        resolver must supply — the grammar rejects a literal at the recipe
-        line (secrets stay out of recipes). Resolving empty is a boot error
-        (the recipe promised a secret that does not exist — an empty bootstrap
-        password would arm a passwordless SUPERADMIN), and so is resolving to
-        a non-string. ``users``/``tokens`` are the store descriptors, every attribute the
+        ``users``/``tokens`` are the store descriptors: every attribute the
         section carries — ``mount``/``prefix``, the optional ``store_class`` and
-        its own kwargs.
+        its own kwargs. Nothing else: the server creates no user, so there is no
+        bootstrap password to read.
         """
         kwargs: dict[str, Any] = {}
-        password_node = self.node("authentication.admin_password")
-        if password_node is not None:
-            kwargs["admin_password"] = self.admin_password(password_node)
         for tag in ("users", "tokens"):
             node = self.node(f"authentication.{tag}")
             if node is not None:
                 kwargs[tag] = self.open_attrs(node)
         return kwargs
-
-    def admin_password(self, node: Any) -> str:
-        """The bootstrap password carried by ``node``, resolved to a non-empty string.
-
-        The grammar already rejects a literal at the recipe line
-        (``node_value: BagResolver``); here we validate what the resolver
-        actually DELIVERED at boot.
-        """
-        value = node.value
-        if not value:
-            raise ConfigError("authentication.admin_password resolved empty")
-        if not isinstance(value, str):
-            raise ConfigError("authentication.admin_password must resolve to a string")
-        return value
 
     def auth_entries(self) -> dict[str, Any] | None:
         """The ``credentials`` children folded into the ``AuthCore`` sections.

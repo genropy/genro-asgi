@@ -96,15 +96,14 @@ The environment gives strings, so a value that is not a string needs
 `^pointer` strings in this dialect: the resolver object itself sits in the
 attribute.
 
-For secrets this is not a convention but the signature: `admin_password` takes
-`node_value: BagResolver`, so a literal is **rejected at the recipe line** —
+For secrets this is a convention, not a signature rule: every secret-bearing
+attribute accepts a literal and should be given a resolver instead —
 
 ```python
-cfg.authentication().admin_password(EnvResolver("SHOP_ADMIN_PASSWORD"))
+cfg.storage(app=StorageManager, storage_key=EnvResolver("SHOP_STORAGE_KEY"))
 ```
 
-— and a resolver that delivers nothing at boot is a `ConfigError`, never a
-passwordless SUPERADMIN.
+— because a recipe is code you commit, and the key material is not.
 
 ## Handing it to the server
 
@@ -273,7 +272,7 @@ One line each; the deep dives live in their own guides.
 - **`middleware`** — one `{name: bool | dict}` switch per middleware; a dict
   enables it and becomes its options (see [Middleware](middleware.md)).
 - **`authentication`** — the whole identity surface in one section:
-  `admin_password`, the `users`/`tokens` stores, the `login` lockout policy, the
+  the `users`/`tokens` stores, the `login` lockout policy, the
   `oidc` providers and the header `credentials`. The grammar of each is in
   [Authentication](authentication.md).
 - **`storage`** — the mount point of [genro-storage](https://pypi.org/project/genro-storage/)'s
@@ -633,8 +632,8 @@ class ServerConfiguration(AsgiConfigBuilder):
         ).local(name="site", base_path="/srv/shop")
 
     def authentication_section(self, cfg):
-        """The bootstrap secret comes from the environment, never from here."""
-        cfg.authentication().admin_password(EnvResolver("SHOP_ADMIN_PASSWORD"))
+        """The identity store: where the records live, and who keeps them."""
+        cfg.authentication().users(mount="site", prefix="users")
 
     def applications_section(self, cfg):
         """One app on the site root, declaring its own catalog block."""
@@ -655,9 +654,8 @@ storage section above), so the recipe fails before any read without this step:
 mkdir -p /srv/shop
 ```
 
-Then, with `SHOP_PORT=8123`, `SHOP_STORAGE_KEY` (a Fernet key) and
-`SHOP_ADMIN_PASSWORD` (the bootstrap secret) exported, build the server and
-read it back through both doors:
+Then, with `SHOP_PORT=8123` and `SHOP_STORAGE_KEY` (a Fernet key) exported,
+build the server and read it back through both doors:
 
 ```python
 >>> server = AsgiServer(config=ServerConfiguration)
@@ -682,17 +680,16 @@ True
 
 ## Gotchas
 
-- **A secret is a resolver, not a string.** `admin_password` refuses a literal
-  in the signature; the other secret-bearing attributes (`storage_key`,
-  `client_secret`, `password`, `token`, `secret`) accept one, and should not get
-  it — a recipe is code you commit.
+- **A secret is a resolver, not a string.** The secret-bearing attributes
+  (`storage_key`, `client_secret`, `password`, `token`, `secret`) accept a
+  literal, and should not get one — a recipe is code you commit.
 - **`dtype=` or you get a string.** `port=EnvResolver("SHOP_PORT")` without
   `dtype="L"` hands the server `"8123"`.
-- **`admin_password` needs a key, not just somewhere to write.** The bootstrap
-  admin lands in the identity store under `site:users`, which writes
-  `encrypted=True`, so a recipe with an `admin_password` and no `storage_key`
-  fails at the write with genro-storage's `Cannot encrypt for encryption domain
-  '': it requires installed key material`.
+- **The identity store needs a key, not just somewhere to write.** Its records
+  land under `site:users` written `encrypted=True`, so a recipe declaring
+  `authentication.users(...)` and no `storage_key` fails at the first write with
+  genro-storage's `Cannot encrypt for encryption domain '': it requires
+  installed key material`.
 - **`storage_key` lives on `storage`, not on `server`.** It is meaningless
   without the mounts it unlocks; a recipe still passing it to `cfg.server(...)`
   is a boot error naming the attribute.

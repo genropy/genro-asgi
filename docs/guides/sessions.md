@@ -50,7 +50,8 @@ implement the `SessionStore` protocol.
 
 ## The shutdown snapshot
 
-The `save_session=` kwarg names a pickle file; when set, the server saves
+`server.session(save_path=...)` names a pickle file — `save_session=` is the
+same word in the shortcut form; when set, the server saves
 **every live session — data included** — to that file at shutdown, and loads
 it back at the next startup (a session past its TTL is dropped on load; an
 absent file starts empty).

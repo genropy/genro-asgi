@@ -109,6 +109,7 @@ class ShortcutConfiguration(AsgiConfigBuilder):
         self.middleware_switches = kwargs.pop("middleware", None)
         self.plugin_switches = kwargs.pop("plugins", None)
         self.session_store = kwargs.pop("session_store", None)
+        self.session_save_path = kwargs.pop("save_session", None)
         self.websocket_options = kwargs.pop("websocket", None)
         self.storage_mounts_declared = kwargs.pop("storage", None)
         self.storage_key = kwargs.pop("storage_key", None)
@@ -162,10 +163,12 @@ class ShortcutConfiguration(AsgiConfigBuilder):
 
     @property
     def session_options(self) -> dict[str, Any]:
-        """The ``session`` attributes: the ttl, and the store class with its params."""
+        """The ``session`` attributes: the ttl, the snapshot path, the store class."""
         options: dict[str, Any] = {}
         if self.session_ttl is not None:
             options["ttl"] = self.session_ttl
+        if self.session_save_path is not None:
+            options["save_path"] = str(self.session_save_path)
         if self.session_store is not None:
             store_class, params = self.class_and_params(self.session_store)
             options["store_class"] = store_class

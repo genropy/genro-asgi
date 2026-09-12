@@ -299,14 +299,27 @@ class TestPanelModule:
         assert response_status(sent) == 401
 
 
-class TestBootstrapAdmin:
-    """The admin the server seeds at boot can reach its own monitor."""
+class TestTheAdministratorReachesTheMonitor:
+    """An administrator declared by the store reaches the monitor (#91: the
+    server seeds nobody — the store the configuration names carries him)."""
 
-    async def test_admin_carries_the_monitor_tag(self) -> None:
+    async def test_the_declared_admin_carries_the_monitor_tag(self) -> None:
+        class AdminStore(MemoryUserStore):
+            """The store the configuration names, born with its administrator."""
+
+            def __init__(self, storage: object = None) -> None:
+                super().__init__(storage)
+                self.save(
+                    {
+                        "identity": "admin",
+                        "password_hash": self.hash_password("opspassword"),
+                        "tags": ["SUPERADMIN", "SERVER_ADMIN"],
+                        "enabled": True,
+                    }
+                )
+
         server = AsgiServer(
             applications=[ServerApplication],
-            users={"store_class": MemoryUserStore},
-            admin_password="opspassword",
+            users={"store_class": AdminStore},
         )
-        store = server.user_store
-        assert "SERVER_ADMIN" in store.get("admin")["tags"]
+        assert "SERVER_ADMIN" in server.user_store.get("admin")["tags"]

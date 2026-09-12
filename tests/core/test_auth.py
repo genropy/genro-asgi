@@ -452,50 +452,45 @@ class TestStoreWiring:
             NoStorageServer(applications=[BaseApplication(mount="")], users={})
 
 
-class TestBootstrapAdmin:
-    def test_admin_password_seeds_the_superadmin(self) -> None:
+class TestTheServerCreatesNoUser:
+    """#91: the server seeds no identity — the declared store carries the records."""
+
+    def test_a_fresh_store_is_empty(self) -> None:
         server = AsgiServer(
             applications=[(BaseApplication, {"mount": ""})],
             users={"store_class": MemoryUserStore},
-            admin_password="pw",
         )
-        record = server.user_store.get("admin")
-        assert record is not None
-        # administration AND observation: the identity that configures the
-        # server also reaches its monitor on a fresh install
-        assert record["tags"] == ["SUPERADMIN", "SERVER_ADMIN"]
-        assert record["enabled"] is True
-        assert server.user_store.verify("admin", "pw") is not None
+        assert server.user_store.load_all() == []
 
-    def test_admin_password_without_users_implies_the_default_store(self, tmp_path: Path) -> None:
-        server = encrypted_server(tmp_path, admin_password="pw")
-        assert isinstance(server.user_store, FileUserStore)
-        assert server.user_store.verify("admin", "pw") is not None
-
-    def test_bootstrap_is_an_upsert_config_wins(self) -> None:
-        class SeededUserStore(MemoryUserStore):
-            """A store born with a stale admin — declared, like every store."""
+    def test_the_declared_store_class_is_what_carries_an_identity(self) -> None:
+        class AdminStore(MemoryUserStore):
+            """The store the configuration names, born with its administrator."""
 
             def __init__(self, storage: object = None) -> None:
                 super().__init__(storage)
                 self.save(
                     {
                         "identity": "admin",
-                        "password_hash": "stale",
-                        "tags": [],
-                        "enabled": False,
+                        "password_hash": self.hash_password("pw"),
+                        "tags": ["SUPERADMIN", "SERVER_ADMIN"],
+                        "enabled": True,
                     }
                 )
 
         server = AsgiServer(
             applications=[(BaseApplication, {"mount": ""})],
-            users={"store_class": SeededUserStore},
-            admin_password="fresh",
+            users={"store_class": AdminStore},
         )
-        record = server.user_store.get("admin")
-        assert record["enabled"] is True
-        assert record["tags"] == ["SUPERADMIN", "SERVER_ADMIN"]
-        assert server.user_store.verify("admin", "fresh") is not None
+        assert server.user_store.verify("admin", "pw") is not None
+        assert server.user_store.get("admin")["tags"] == ["SUPERADMIN", "SERVER_ADMIN"]
+
+    def test_the_bootstrap_password_is_no_longer_a_kwarg(self) -> None:
+        with pytest.raises(TypeError, match="admin_password"):
+            AsgiServer(
+                applications=[(BaseApplication, {"mount": ""})],
+                users={"store_class": MemoryUserStore},
+                admin_password="pw",
+            )
 
 
 def bearer_scope(token: str) -> Scope:

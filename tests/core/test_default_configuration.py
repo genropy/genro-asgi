@@ -134,6 +134,14 @@ class TestTheConfigurationAlwaysExists:
         assert server.config("middleware.stamp") is True
         assert server.get_middleware(StampMiddleware) is not None
 
+    def test_the_session_snapshot_path_reaches_the_tree(self, tmp_path: Any) -> None:
+        snapshot = tmp_path / "sessions.pickle"
+        server = AsgiServer(
+            applications=[(ShopApp, {"mount": ""})], save_session=str(snapshot)
+        )
+        assert server.config("server.session.save_path") == str(snapshot)
+        assert server.save_session == snapshot
+
     def test_the_handshake_options_reach_the_tree(self) -> None:
         server = AsgiServer(
             applications=[(ShopApp, {"mount": ""})],
