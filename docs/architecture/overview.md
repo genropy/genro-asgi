@@ -43,8 +43,9 @@ The response returns through ASGI send. Middleware may answer before core dispat
 ```text
 uvicorn
   → AsgiServer                      the server IS the ASGI app
-    → middleware chain              errors → wellknown → logging → cors → session → auth
-      → demultiplex                 first path segment → mount, else root app
+    → middleware chain              errors → logging → cors → session → auth
+      → demultiplex                 dotted first segment → 404 (hidden path)
+                                    else first path segment → mount, else root app
         → application               a RoutedApplication (or a subclass)
           → @route handler(**params)
             → Response              buffered, or a StreamingResponse

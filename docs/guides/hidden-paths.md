@@ -6,12 +6,17 @@
 
 A path whose **first segment starts with a dot** is hidden or of service:
 `/.git/config`, `/.env`, `/.aws/credentials`. Nothing of your site lives there,
-and bots probe those paths on every host on the internet. `WellKnownMiddleware`
-answers them **404**, and no application is ever reached: not a mount, not the
-root application, not the `default` redirect.
+and bots probe those paths on every host on the internet. The server answers
+them **404** in its own demux, and no application is ever reached: not a mount,
+not the root application, not the `default` redirect.
 
-It is **on by default**. Beside the dotted rule it answers 404 to two fixed
-probes that carry no dot, `/robots.txt` and `/sitemap.xml`, as it always did.
+The rule is the **server's own**, not a middleware: it holds on a bare
+`BaseServer` with no chain at all, and there is no switch to turn it off.
+
+A path **without** a dot is ordinary, the conventional probes included.
+`/favicon.ico`, `/robots.txt`, `/sitemap.xml` and `/apple-touch-icon-*.png`
+are demuxed like any other path and reach the application mounted there: the
+server silences none of them.
 
 ```console
 $ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/.env
@@ -92,13 +97,6 @@ $ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/.well-known/abs
 404
 ```
 
-## Switching it off
-
-`middleware={"wellknown": False}` removes the stage: nothing is filtered and
-every path goes to the demux, dotted or not — a root application then receives
-`/.git/config` itself. The `.well-known` names keep working, because resolving
-them is the demux's job, not the middleware's.
-
 ## Gotchas
 
 - The names are read **once, at mount time**. A branch attached to an
@@ -109,3 +107,5 @@ them is the demux's job, not the middleware's.
   name on the wire is the name in the router.
 - The rule reads the **first** segment only. `/static/.hidden.css` is not a
   hidden path and reaches the application that serves `/static`.
+- A websocket handshake takes the same demux, so a hidden path finds no
+  application there either and the socket is closed.

@@ -3,7 +3,7 @@
 **Version**: 0.4 · **Last Updated**: 2026-09-08 · **Status**: 🔴 DA REVISIONARE
 
 The middleware chain every request passes through on its way in and on its way
-out, and the six things this core puts in it.
+out, and the five things this core puts in it.
 
 ## What a middleware is
 
@@ -39,8 +39,7 @@ walks it in and back out. Requests that are not HTTP do not enter it.
 ```mermaid
 flowchart LR
     REQ["an http request"] --> E["errors<br/>100"]
-    E --> W["wellknown<br/>150"]
-    W --> L["logging<br/>200"]
+    E --> L["logging<br/>200"]
     L --> C["cors<br/>300"]
     C --> S["session<br/>400"]
     S --> A["auth<br/>450"]
@@ -51,7 +50,7 @@ flowchart LR
 |---|---|
 | the middleware chain and its order | one number per layer, and why the order is the design |
 | assembly | built once, from an explicit list, with no global registry |
-| the six | what each one does, and what it puts on the request |
+| the five | what each one does, and what it puts on the request |
 | the outermost layer | the one that turns a raised exception into an answer |
 | what the middleware chain does not see | and why that is a decision, not an omission |
 | what a site writes | the switches, and what the capabilities arm by themselves |
@@ -69,9 +68,8 @@ get right. A layer states where it belongs and the chain forms itself.
 | Layer | `middleware_order` | Outside it | On in a shipped server? |
 |---|---|---|---|
 | errors | 100 | nothing | **yes**, unless switched off |
-| wellknown | 150 | errors | **yes**, unless switched off |
-| logging | 200 | errors, wellknown | only if named |
-| cors | 300 | errors, wellknown, logging | only if named |
+| logging | 200 | errors | only if named |
+| cors | 300 | errors, logging | only if named |
 | session | 400 | and cors | **yes** — its own capability arms it |
 | auth | 450 | and session | **yes** — its own capability arms it |
 
@@ -125,17 +123,9 @@ as its constructor options, and an option nobody declared is refused by name.
 
 ---
 
-## 3. The six, and what each leaves on the request
+## 3. The five, and what each leaves on the request
 
 **errors** — turns anything raised into an answer. Block 4.
-
-**wellknown** — answers the hidden paths every browser and bot probes on every
-site with a clean 404, so a probe never reaches a mounted application: a first
-segment starting with a dot (`/.git`, `/.env`), plus the two fixed probes that
-carry no dot (`/robots.txt`, `/sitemap.xml`). Its one exception is RFC 8615:
-`/.well-known/<name>` is delegated when `<name>` is a discovery document an
-application declared (issue #88 — see `docs/guides/hidden-paths.md`). It does
-not send that 404 itself: it raises, and errors answers.
 
 **logging** — one line when a request arrives, one when it leaves, with the
 method, the path, the status and the elapsed milliseconds. Its logger is its
@@ -227,7 +217,6 @@ One section, one switch per layer:
 
 ```python
 cfg.middleware(
-    wellknown=True,
     logging=True,
     cors={"allow_origins": "https://shop.example.com"},
 )
@@ -236,7 +225,7 @@ cfg.middleware(
 `True` turns a layer on with its own defaults; a dict turns it on and becomes
 its options; `False` turns off one that would otherwise be on.
 
-**Three of the six are not in that list and are on anyway.** Errors is on by
+**Three of the five are not in that list and are on anyway.** Errors is on by
 its own default, so a server with no middleware section still answers its
 exceptions. The session and identity layers are armed by the capabilities they
 belong to, so a server composed with sessions has the session layer whether or
@@ -310,8 +299,8 @@ carry `x-served-by: web-01`. If downstream processing raises, the outer
 `ErrorMiddleware` generates the error response outside that wrapper, so the
 header is absent from that response.
 
-The asymmetry with the six is deliberate and worth stating: **a middleware of
-your own cannot be named in the description.** The section's words are the six
+The asymmetry with the five is deliberate and worth stating: **a middleware of
+your own cannot be named in the description.** The section's words are the five
 core names and no others, so `middleware=` at construction is the only way in —
 and because the description is mapped onto that same argument, a site that has
 both a description and a hand-passed switch has two writers for one value.
@@ -368,7 +357,6 @@ class ServerConfiguration(BaseConfiguration):
         self.server_section(cfg)
         self.storage_section(cfg)
         cfg.middleware(
-            wellknown=True,
             logging=True,
             cors={"allow_origins": "https://shop.example.com"},
         )
@@ -387,11 +375,11 @@ calls two methods it does not define, and defines a third (`storage_mounts`)
 that the inherited `storage_section` calls. That mechanism belongs to
 [015 configuration](../015_configuration/README.md).
 
-Walking the chain outwards from `server.middleware_chain` gives the six in
+Walking the chain outwards from `server.middleware_chain` gives the five in
 order:
 
 ```
-ErrorMiddleware · WellKnownMiddleware · LoggingMiddleware · CORSMiddleware · SessionMiddleware · AuthMiddleware
+ErrorMiddleware · LoggingMiddleware · CORSMiddleware · SessionMiddleware · AuthMiddleware
 ```
 
 And the installation answers:
@@ -401,7 +389,6 @@ And the installation answers:
 | `GET /home` | 200 `{"shop": "open"}`, plus `set-cookie: session_id=…` for the new session |
 | `GET /takings`, `Accept: application/json` | **401** with `{"error": "…"}` and the `WWW-Authenticate` challenge |
 | `GET /takings`, `Accept: text/html` | **401** `text/plain`, the same challenge header |
-| `GET /robots.txt` | **404** `Not found: /robots.txt` |
 | `OPTIONS /home` with `Origin` and `Access-Control-Request-Method` | 200, `access-control-allow-origin: https://shop.example.com` |
 
 The two `/takings` rows are the same route, the same refusal and the same
@@ -410,6 +397,8 @@ caller-less request. They differ only in the body format, which follows
 never points a caller at a login page — it owns none (D-SA-4); an application
 that has one redirects from its own routes.
 
-And `/robots.txt` never reached the shop. The probe filter raised, and errors
-turned the raise into the 404 — two layers cooperating without either building
-a response.
+Hidden paths are not in this table because they are not the chain's business:
+a first segment starting with a dot answers 404 in the server's own demux,
+under every layer here, and no switch turns it off (issue #88 — see
+`docs/guides/hidden-paths.md`). A probe WITHOUT a dot — `/robots.txt` — is an
+ordinary path and reaches the shop.

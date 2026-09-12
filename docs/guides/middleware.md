@@ -26,7 +26,6 @@ out):
 | Name        | Priority | Default | Notes                                        |
 |-------------|----------|---------|----------------------------------------------|
 | `errors`    | 100      | **on**  | maps exceptions and unmatched paths to status codes |
-| `wellknown` | 150      | **on**  | hidden paths 404, `.well-known` documents pass |
 | `logging`   | 200      | off     | request logging                              |
 | `cors`      | 300      | off     | CORS headers                                 |
 | `session`   | 400      | off     | armed automatically by `SessionMixin`        |
@@ -123,10 +122,11 @@ With `logging` armed, requests appear in the server's log output.
 
 ## Gotchas
 
-- The registry enables `errors` and `wellknown`; the shipped `AsgiServer` also
-  arms `session` and `auth`. CORS and logging require explicit configuration.
-  What `wellknown` filters, and the `.well-known` exception, are described in
-  [Hidden paths](hidden-paths.md).
+- The registry enables `errors`; the shipped `AsgiServer` also arms `session`
+  and `auth`. CORS and logging require explicit configuration.
+- Hidden paths are NOT a middleware: a first path segment starting with a dot
+  answers 404 in the server's own demux, always, and no switch turns it off.
+  See [Hidden paths](hidden-paths.md).
 - A call the handler cannot take is answered by the dispatcher, never a `500`:
   a call that does not fit the signature — an unknown keyword, a missing
   required argument, one positional too many — answers **`400`**, and so do

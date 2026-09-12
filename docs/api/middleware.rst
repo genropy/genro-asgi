@@ -16,10 +16,6 @@ logging, CORS, authentication, session.
    :members:
    :show-inheritance:
 
-.. automodule:: genro_asgi.middleware.wellknown
-   :members:
-   :show-inheritance:
-
 .. automodule:: genro_asgi.middleware.logging
    :members:
    :show-inheritance:

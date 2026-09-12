@@ -15,7 +15,6 @@ installed layer, or returns `None`.
 | Layer | Order | Class default |
 |---|---:|---|
 | ErrorMiddleware | 100 | enabled |
-| WellKnownMiddleware | 150 | enabled |
 | LoggingMiddleware | 200 | disabled |
 | CORSMiddleware | 300 | disabled |
 | SessionMiddleware | 400 | disabled |
@@ -23,8 +22,8 @@ installed layer, or returns `None`.
 
 `AsgiServer` nevertheless enables session and auth through their capability
 mixins' `setdefault`; an explicit `False` wins. Therefore a bare composition
-normally has errors, wellknown, session and auth. Extra registry classes are Python
-constructor options; the recipe middleware element names only the six built-ins.
+normally has errors, session and auth. Extra registry classes are Python
+constructor options; the recipe middleware element names only the five built-ins.
 
 Claim anchors: [`MiddlewareMixin`](../../../src/genro_asgi/middleware/__init__.py#L80), [`get_middleware`](../../../src/genro_asgi/middleware/__init__.py#L103).
 
@@ -85,7 +84,6 @@ Claim anchors: [`WsxConnection`](../../../src/genro_asgi/wsx.py#L193), [`get_mid
 - [src/genro_asgi/middleware/session.py](../../../src/genro_asgi/middleware/session.py)
 - [src/genro_asgi/middleware/authentication.py](../../../src/genro_asgi/middleware/authentication.py)
 - [src/genro_asgi/middleware/logging.py](../../../src/genro_asgi/middleware/logging.py)
-- [src/genro_asgi/middleware/wellknown.py](../../../src/genro_asgi/middleware/wellknown.py)
 - [src/genro_asgi/wsx.py](../../../src/genro_asgi/wsx.py)
 - [tests/core/test_middleware.py](../../../tests/core/test_middleware.py)
 - [tests/core/test_middleware_std.py](../../../tests/core/test_middleware_std.py)
