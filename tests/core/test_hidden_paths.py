@@ -15,11 +15,16 @@
 """Hidden paths and the ``.well-known`` exception (issue #88).
 
 A path whose first segment starts with a dot is hidden or of service: the
-chain answers 404 and no application is touched. The one exception is
+SERVER answers 404 in its own demux — always, with no middleware and no
+switch — and no application is touched. The one exception is
 ``/.well-known/<name>``, when ``<name>`` is a child of the ``_well_known``
 branch of a routed application the server mounts: the request then reaches
 that application as ``_well_known/<name>/<rest>``, with its own
 authorization rules.
+
+A probe path without a dot (``/favicon.ico``, ``/robots.txt``) is an
+ordinary path: the server silences nothing, and the application it is
+demuxed to answers it.
 """
 
 from __future__ import annotations
@@ -35,15 +40,10 @@ from genro_asgi import (
     BaseApplication,
     BaseMiddleware,
     BaseServer,
-    MiddlewareMixin,
     RoutedApplication,
 )
 from genro_asgi.well_known import WELL_KNOWN_ROOT
 from genro_asgi.types import Receive, Scope, Send
-
-
-class MwServer(MiddlewareMixin, BaseServer):
-    """Middleware capability over the base server — the chain under test."""
 
 
 class RecordingApp(BaseApplication):
@@ -142,12 +142,12 @@ class TestHiddenPaths:
     """A dotted first segment is hidden: 404, and no application sees it."""
 
     async def test_dotted_first_segment_answers_404(self, http_request, response_status) -> None:
-        server = MwServer(applications=[RecordingApp(mount="")])
+        server = BaseServer(applications=[RecordingApp(mount="")])
         assert response_status(await http_request(server, "/.git/config")) == 404
 
     async def test_the_hidden_path_never_reaches_the_application(self, http_request) -> None:
         app = RecordingApp(mount="")
-        server = MwServer(applications=[app])
+        server = BaseServer(applications=[app])
         await http_request(server, "/.env")
         assert app.seen == []
 
@@ -155,40 +155,39 @@ class TestHiddenPaths:
         self, http_request, response_status
     ) -> None:
         app = RecordingApp(code="api", mount="api")
-        server = MwServer(applications=[app], default="api")
+        server = BaseServer(applications=[app], default="api")
         assert response_status(await http_request(server, "/.well-known/nothing")) == 404
         assert app.seen == []
 
-    async def test_the_middleware_is_on_without_naming_it(
+    async def test_the_bare_server_applies_the_rule_with_no_middleware_at_all(
         self, http_request, response_status
     ) -> None:
-        # No ``middleware=`` switch at all: the rule applies out of the box.
-        server = MwServer(applications=[RecordingApp(mount="")])
+        # A ``BaseServer`` has no middleware chain: the demux answers by itself.
+        server = BaseServer(applications=[RecordingApp(mount="")])
         assert response_status(await http_request(server, "/.svn/entries")) == 404
 
-    async def test_switched_off_everything_goes_to_the_demux(
+    async def test_the_rule_has_no_switch(self, http_request, response_status) -> None:
+        # The assembled server, whose chain is complete, answers the same.
+        app = RecordingApp(mount="")
+        server = AsgiServer(applications=[app])
+        assert response_status(await http_request(server, "/.git/config")) == 404
+        assert app.seen == []
+
+    async def test_the_probes_without_a_dot_reach_the_application(
         self, http_request, response_status, response_body
     ) -> None:
         app = RecordingApp(mount="")
-        server = MwServer(applications=[app], middleware={"wellknown": False})
-        sent = await http_request(server, "/.git/config")
-        assert response_status(sent) == 200
-        assert response_body(sent) == b"ok:/.git/config"
-        assert app.seen == ["/.git/config"]
-
-    async def test_the_fixed_probes_without_a_dot_still_answer_404(
-        self, http_request, response_status
-    ) -> None:
-        app = RecordingApp(mount="")
-        server = MwServer(applications=[app])
-        assert response_status(await http_request(server, "/robots.txt")) == 404
-        assert response_status(await http_request(server, "/sitemap.xml")) == 404
-        assert app.seen == []
+        server = BaseServer(applications=[app])
+        for probe in ("/favicon.ico", "/robots.txt", "/sitemap.xml", "/apple-touch-icon.png"):
+            sent = await http_request(server, probe)
+            assert response_status(sent) == 200
+            assert response_body(sent) == f"ok:{probe}".encode()
+        assert app.seen == ["/favicon.ico", "/robots.txt", "/sitemap.xml", "/apple-touch-icon.png"]
 
     async def test_an_ordinary_path_still_reaches_the_application(
         self, http_request, response_status, response_body
     ) -> None:
-        server = MwServer(applications=[RecordingApp(mount="")])
+        server = BaseServer(applications=[RecordingApp(mount="")])
         sent = await http_request(server, "/index")
         assert response_status(sent) == 200
         assert response_body(sent) == b"ok:/index"
@@ -224,7 +223,7 @@ class TestWellKnownRequests:
     async def test_the_served_name_reaches_the_owning_application(
         self, http_request, response_status, response_body
     ) -> None:
-        server = MwServer(applications=[DiscoveryApp(code="site", mount="site")])
+        server = BaseServer(applications=[DiscoveryApp(code="site", mount="site")])
         sent = await http_request(server, "/.well-known/probe")
         assert response_status(sent) == 200
         assert json.loads(response_body(sent)) == {"served": "probe"}
@@ -232,19 +231,19 @@ class TestWellKnownRequests:
     async def test_the_rest_of_the_path_resolves_under_the_branch(
         self, http_request, response_status, response_body
     ) -> None:
-        server = MwServer(applications=[DiscoveryApp(code="site", mount="site")])
+        server = BaseServer(applications=[DiscoveryApp(code="site", mount="site")])
         sent = await http_request(server, "/.well-known/acme/detail")
         assert response_status(sent) == 200
         assert json.loads(response_body(sent)) == {"served": "acme-detail"}
 
     async def test_an_unserved_name_answers_404(self, http_request, response_status) -> None:
-        server = MwServer(applications=[DiscoveryApp(code="site", mount="")])
+        server = BaseServer(applications=[DiscoveryApp(code="site", mount="")])
         assert response_status(await http_request(server, "/.well-known/absent")) == 404
 
     async def test_the_last_declared_application_answers_the_shared_name(
         self, http_request, response_body
     ) -> None:
-        server = MwServer(
+        server = BaseServer(
             applications=[
                 DiscoveryApp(code="site", mount="site"),
                 OtherApp(code="other", mount="other"),
