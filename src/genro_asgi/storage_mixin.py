@@ -22,8 +22,8 @@ and ``storage_key=`` and forwards everything else down the D16 chain.
 
 ``storage=`` shapes the ``genro_storage.StorageManager`` the server owns:
 
-- ``None`` → a manager with the single mount ``site:``, the deployment
-  directory (the process cwd);
+- ``None`` → a manager with the two default mounts, both on the deployment
+  directory (the process cwd): ``site:`` and ``home:``;
 - a ``StorageManager`` instance → adopted as-is;
 - a ``list[dict]`` → genro-storage's own mount configuration, handed to
   ``configure()`` verbatim (``{"name": ..., "protocol": ..., ...}``); an EMPTY
@@ -60,14 +60,19 @@ from typing import Any
 from genro_storage import StorageManager
 from genro_toolbox.smartasync import set_sync
 
-__all__ = ["DEFAULT_SITE_MOUNT", "StorageMixin"]
+__all__ = ["DEFAULT_HOME_MOUNT", "DEFAULT_SITE_MOUNT", "StorageMixin"]
 
 DEFAULT_SITE_MOUNT = {"name": "site", "protocol": "local"}
-"""The default layout, minus its anchor: ONE local mount named ``site``.
+"""The site's own folder as the configuration declares it: its code, its resources."""
 
-The anchor is deliberately absent — it is the cwd read when the manager is
-built, which is boot. ``BaseConfiguration.storage_mounts`` writes the same
-mount as a recipe line, so this is the one place the two agree on.
+DEFAULT_HOME_MOUNT = {"name": "home", "protocol": "local"}
+"""The space the site keeps its own things in: statics, deposits, sockets, logs.
+
+Both are the default layout minus their anchor. ``site:`` is anchored on the cwd
+read when the manager is built, which is boot; ``home:`` on the folder the card
+names, and with no home declared on the folder of ``site:``.
+``AsgiConfigBuilder.storage_mounts`` writes the same two mounts as recipe lines,
+so this is the one place the two roads agree on.
 """
 
 
@@ -75,7 +80,7 @@ class StorageMixin:
     """Storage capability mixin, composed over the base server. Arms no middleware.
 
     Constructor kwargs peeled here: ``storage`` — ``None`` (a manager with the
-    single ``site:`` mount on the deployment directory), a ``StorageManager``
+    ``site:`` and ``home:`` mounts on the deployment directory), a ``StorageManager``
     instance (adopted), or a ``list[dict]`` of genro-storage mount configs (empty
     reads like ``None``); ``storage_key`` — the at-rest key material.
     """
@@ -104,8 +109,16 @@ class StorageMixin:
         return built
 
     def _default_mounts(self) -> list[dict[str, Any]]:
-        """The default configuration: one ``site:`` mount on the deployment directory."""
-        return [{**DEFAULT_SITE_MOUNT, "base_path": str(Path.cwd())}]
+        """The default layout: ``site:`` and ``home:``, both on the deployment directory.
+
+        A composition reaching here declared no home, so the two coincide — the
+        rule ``AsgiConfigBuilder.storage_mounts`` applies on the recipe road.
+        """
+        anchor = str(Path.cwd())
+        return [
+            {**DEFAULT_SITE_MOUNT, "base_path": anchor},
+            {**DEFAULT_HOME_MOUNT, "base_path": anchor},
+        ]
 
     @property
     def storage(self) -> StorageManager:

@@ -43,7 +43,7 @@ from genro_asgi.__main__ import SitesRegistry
 from genro_asgi.config import HOME_ENV, BaseConfiguration, DefaultConfig
 from genro_asgi.exceptions import HTTPUnauthorized
 from genro_asgi.middleware.base import BaseMiddleware
-from genro_asgi.storage_mixin import DEFAULT_SITE_MOUNT
+from genro_asgi.storage_mixin import DEFAULT_HOME_MOUNT, DEFAULT_SITE_MOUNT
 from genro_asgi.types import Message, Receive, Scope, Send
 
 
@@ -735,7 +735,7 @@ class TestParentRecipes:
     recipe last and winning.
     """
 
-    def test_a_site_inherits_the_default_site_mount_and_adds_its_key(
+    def test_a_site_inherits_the_default_mounts_and_adds_its_key(
         self, tmp_path: Path
     ) -> None:
         class KeyOnlyConfig(BaseConfiguration):
@@ -744,7 +744,10 @@ class TestParentRecipes:
         parents = DefaultConfig(tmp_path).parents_for(KeyOnlyConfig)
         mounts, storage_key = ConfigurationHandler(KeyOnlyConfig, parents=parents).storage_config()
         assert storage_key == "k1"
-        assert mounts == [{**DEFAULT_SITE_MOUNT, "base_path": str(Path.cwd())}]
+        assert mounts == [
+            {**DEFAULT_SITE_MOUNT, "base_path": str(Path.cwd())},
+            {**DEFAULT_HOME_MOUNT, "base_path": str(Path.cwd())},
+        ]
 
     def test_only_the_package_defaults_are_layered_without_a_defaults_recipe(
         self, tmp_path: Path
@@ -776,7 +779,12 @@ class TestParentRecipes:
         assert handler("server.host") == "127.0.0.1"      # the site wins
         assert handler("server.port") == 9999             # the defaults layer holds
         mounts, _ = handler.storage_config()              # over the package default
-        assert mounts == [{**DEFAULT_SITE_MOUNT, "base_path": "/srv/deployment"}]
+        # The deployment layer declares ``site:`` only, so ``home:`` is the one
+        # the package defaults wrote under it.
+        assert mounts == [
+            {**DEFAULT_SITE_MOUNT, "base_path": "/srv/deployment"},
+            {**DEFAULT_HOME_MOUNT, "base_path": str(Path.cwd())},
+        ]
 
     def test_a_key_only_section_without_parents_yields_no_mount(self) -> None:
         """The guard: a storage section with no mount child is not a crash."""

@@ -115,13 +115,16 @@ class AsgiServerGrammar(TaskGrammar):
         ``home`` is the site's own folder. Inside it every site-owned path is
         relative and named — the recipe, ``static/``, ``data/frozen_users``,
         ``data/sessions``, ``sockets/``, ``logs/``, ``run/`` — and the server
-        hands the folder out as ``server.site_home`` (``SiteHome``). It also
-        anchors the default ``site:`` storage mount, which without a home sits
-        on the working directory.
+        hands the folder out as ``server.site_home`` (``SiteHome``). It anchors
+        the default ``home:`` storage volume — beside ``site:``, the site's
+        folder as the configuration declares it — and with no home declared the
+        two coincide.
 
         A site declares both in its recipe (the ``site_name`` / ``site_home``
         attributes of ``AsgiConfigBuilder`` write this element); the CLI writes
-        them from the card.
+        them from the card. A configuration carrying a ``name`` is a site the
+        CLI recognises: ``genro-asgi serve <path>`` files its card, so the next
+        boot is ``genro-asgi serve <name>``.
         """
 
     @element(parent_tags="configuration", sub_tags="session[0:1],tasks[0:1],websocket[0:1]")

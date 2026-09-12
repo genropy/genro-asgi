@@ -51,7 +51,7 @@ from genro_bag import BagResolver
 from genro_builders.contrib.config import ConfigBuilder
 from genro_storage import StorageManager
 
-from ..storage_mixin import DEFAULT_SITE_MOUNT
+from ..storage_mixin import DEFAULT_HOME_MOUNT, DEFAULT_SITE_MOUNT
 from .elements import AsgiServerGrammar
 
 __all__ = ["AsgiConfigBuilder", "BaseConfiguration"]
@@ -77,8 +77,8 @@ class AsgiConfigBuilder(ConfigBuilder, AsgiServerGrammar):
     site_home: str | Path | None = None
     """The folder this site owns (``SiteHome``), written into the ``site`` section.
 
-    It also anchors the default ``site:`` storage mount. Unset, the site is
-    homeless: the mount sits on the working directory, as it always has.
+    It also anchors the default ``home:`` storage mount. Unset, the site is
+    homeless and ``home:`` sits on the folder of ``site:``, as it always has.
     """
 
     def site_section(self, cfg: Any) -> None:
@@ -92,25 +92,27 @@ class AsgiConfigBuilder(ConfigBuilder, AsgiServerGrammar):
         home = str(self.site_home) if self.site_home is not None else None
         cfg.site(name=self.site_name, home=home)
 
-    @property
-    def site_base_path(self) -> Path:
-        """What ``site:`` is anchored on: the declared home, else the working directory.
-
-        The working directory is read WHEN THE RECIPE RUNS, which is boot, so a
-        homeless site follows whatever directory it starts from.
-        """
-        return Path(self.site_home) if self.site_home is not None else Path.cwd()
-
     def storage_mounts(self, section: Any) -> None:
-        """The default layout: one ``site:`` mount on the site's base path.
+        """The default layout: ``site:`` on the deployment directory, ``home:`` on the home.
 
-        The mount is ``DEFAULT_SITE_MOUNT`` written as a recipe line — the tag IS
-        its ``protocol`` — so the layout the mixin builds without a recipe and the
-        layout this recipe declares cannot drift apart. It is written absolute
-        because genro-storage's local backend rejects a relative ``base_path``
-        string outright.
+        ``site:`` is the site's own folder as the configuration declares it — its
+        code and its resources — anchored on the working directory read WHEN THE
+        RECIPE RUNS, which is boot, so a site follows whatever directory it
+        starts from. ``home:`` is the space the site keeps its own things in
+        (``static``, ``data/frozen_users``, ``data/sessions``, ``sockets``,
+        ``logs``): the folder the card names, and with no home declared the
+        folder of ``site:``.
+
+        Both are ``DEFAULT_SITE_MOUNT`` / ``DEFAULT_HOME_MOUNT`` written as
+        recipe lines — the tag IS the ``protocol`` — so the layout the mixin
+        builds without a recipe and the layout this recipe declares cannot drift
+        apart. They are written absolute because genro-storage's local backend
+        rejects a relative ``base_path`` string outright.
         """
-        section.local(name=DEFAULT_SITE_MOUNT["name"], base_path=str(self.site_base_path))
+        site_path = Path.cwd()
+        home_path = Path(self.site_home) if self.site_home is not None else site_path
+        section.local(name=DEFAULT_SITE_MOUNT["name"], base_path=str(site_path))
+        section.local(name=DEFAULT_HOME_MOUNT["name"], base_path=str(home_path))
 
 
 class BaseConfiguration(AsgiConfigBuilder):

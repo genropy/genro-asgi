@@ -79,7 +79,9 @@ class TestTheConfigurationAlwaysExists:
 
     def test_the_template_brings_the_shipped_storage_layout(self) -> None:
         server = AsgiServer(applications=[(ShopApp, {"mount": ""})])
-        assert [child.node_tag for child in server.config.node("storage").value] == ["local"]
+        mounts = list(server.config.node("storage").value)
+        assert [child.node_tag for child in mounts] == ["local", "local"]
+        assert [child.attr["name"] for child in mounts] == ["site", "home"]
 
     def test_the_applications_reach_the_tree(self) -> None:
         server = AsgiServer(applications=[(ShopApp, {"mount": ""}), ApiApp])
@@ -172,9 +174,10 @@ class TestNoLiveObjectReachesTheConstructor:
             storage=[{"name": "data", "protocol": "local", "base_path": str(tmp_path)}],
         )
         mounts = list(server.config.node("storage").value)
-        assert [child.node_tag for child in mounts] == ["local"]
+        # The declared mounts override the shipped ones position by position, so
+        # ``home:`` — the second of the layout — survives under them.
         assert mounts[0].attr["name"] == "data"
-        assert server.storage.get_mount_names() == ["data"]
+        assert server.storage.get_mount_names() == ["data", "home"]
 
     def test_the_identity_store_classes_reach_the_tree(self) -> None:
         server = AsgiServer(

@@ -37,6 +37,13 @@ names where genro-asgi keeps the site CARDS and the machine defaults layer;
 this class is one SITE's folder, named by the card and written into the
 configuration as ``site(home=...)``.
 
+The folder is also the anchor of the ``home:`` storage volume, beside ``site:``
+— the site's own folder as the configuration declares it, its code and its
+resources. With no home declared the two coincide.
+
+The folder is laid out by ``genro-asgi configure <name>`` and by nobody else:
+``serve`` creates nothing and refuses a home that is not there.
+
 Nothing here reads the environment and nothing here decides: the paths are
 properties of the folder, and whoever needs one asks for it by name.
 """

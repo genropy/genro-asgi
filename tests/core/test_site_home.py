@@ -32,6 +32,14 @@ from genro_asgi import AsgiServer, SiteHome
 from genro_asgi.__main__ import Cli, CliError, ServerLauncher, SiteConfigurator, SitesRegistry
 from genro_asgi.config import DefaultConfig, DefaultConfiguration
 
+ANONYMOUS_RECIPE = (
+    "from genro_asgi.config import DefaultConfiguration\n"
+    "\n"
+    "\n"
+    "class ServerConfiguration(DefaultConfiguration):\n"
+    "    pass\n"
+)
+
 HOME_RECIPE = (
     "from genro_asgi.config import DefaultConfiguration\n"
     "\n"
@@ -114,29 +122,54 @@ class TestTheHomeReachesTheConfiguration:
         assert server.site_name is None
         assert server.config.node("site") is None
 
-    def test_the_home_anchors_the_site_storage_mount(self, tmp_path: Path) -> None:
+    def test_the_home_anchors_the_home_volume_and_site_stays_where_it_was(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         home = SiteHome(tmp_path / "shop")
         home.prepare()
+        deployment = tmp_path / "checkout"
+        deployment.mkdir()
+        monkeypatch.chdir(deployment)
 
         class Recipe(DefaultConfiguration):
             site_home = str(tmp_path / "shop")
 
-        AsgiServer(config=Recipe).storage.node("site:probe.txt").write_text("here")
-        assert (home.path / "probe.txt").read_text(encoding="utf-8") == "here"
+        server = AsgiServer(config=Recipe)
+        server.storage.node("home:probe.txt").write_text("kept")
+        server.storage.node("site:probe.txt").write_text("code")
+        assert (home.path / "probe.txt").read_text(encoding="utf-8") == "kept"
+        assert (deployment / "probe.txt").read_text(encoding="utf-8") == "code"
 
-    def test_the_shortcut_anchors_the_same_mount(self, tmp_path: Path) -> None:
+    def test_the_shortcut_anchors_the_same_two_volumes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         home = SiteHome(tmp_path / "shop")
         home.prepare()
+        deployment = tmp_path / "checkout"
+        deployment.mkdir()
+        monkeypatch.chdir(deployment)
         server = AsgiServer(site_home=str(home))
-        server.storage.node("site:probe.txt").write_text("here")
-        assert (home.path / "probe.txt").read_text(encoding="utf-8") == "here"
+        server.storage.node("home:probe.txt").write_text("kept")
+        server.storage.node("site:probe.txt").write_text("code")
+        assert (home.path / "probe.txt").read_text(encoding="utf-8") == "kept"
+        assert (deployment / "probe.txt").read_text(encoding="utf-8") == "code"
 
-    def test_a_homeless_site_keeps_the_working_directory(
+    def test_with_no_home_the_two_volumes_coincide(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.chdir(tmp_path)
-        AsgiServer().storage.node("site:probe.txt").write_text("here")
-        assert (tmp_path / "probe.txt").read_text(encoding="utf-8") == "here"
+        server = AsgiServer()
+        server.storage.node("site:probe.txt").write_text("here")
+        assert server.storage.node("home:probe.txt").read_text() == "here"
+
+    def test_the_named_paths_of_the_home_are_reachable_on_the_home_volume(
+        self, tmp_path: Path
+    ) -> None:
+        home = SiteHome(tmp_path / "shop")
+        home.prepare()
+        server = AsgiServer(site_home=str(home))
+        server.storage.node("home:data/sessions/probe.pickle").write_text("snapshot")
+        assert (home.sessions / "probe.pickle").read_text(encoding="utf-8") == "snapshot"
 
     def test_an_explicit_kwarg_wins_over_the_configured_home(self, tmp_path: Path) -> None:
         SiteHome(tmp_path / "configured").prepare()
@@ -227,19 +260,53 @@ class TestTheCardResolvesTheName:
         launcher = ServerLauncher(options, cli.registry)
         assert launcher.save_session_path == str(tmp_path / "root" / "sessions" / "shop.pickle")
 
-    def test_serving_an_empty_mounted_home_lays_it_out(self, tmp_path: Path) -> None:
-        home = SiteHome(tmp_path / "mounted")
+    def test_a_home_that_is_not_there_stops_the_boot(self, tmp_path: Path) -> None:
         cli = Cli(registry=SitesRegistry(base_dir=tmp_path / "root"))
-        cli.registry.save("shop", {"source": "template=default", "home": str(home)})
-        ServerLauncher(cli.parser().parse_args(["serve", "shop"]), cli.registry).build_server()
-        assert [folder.is_dir() for folder in home.folders] == [True] * 7
+        cli.registry.save(
+            "shop", {"source": "template=default", "home": str(tmp_path / "mounted")}
+        )
+        launcher = ServerLauncher(cli.parser().parse_args(["serve", "shop"]), cli.registry)
+        with pytest.raises(CliError, match="is not there"):
+            launcher.build_server()
+        assert not (tmp_path / "mounted").exists()
 
-    def test_a_bare_path_writes_no_card(self, tmp_path: Path) -> None:
-        recipe = tmp_path / "config.py"
-        recipe.write_text(HOME_RECIPE.format(home=str(tmp_path)), encoding="utf-8")
+    def test_a_name_with_no_card_names_the_command_that_configures_it(
+        self, tmp_path: Path
+    ) -> None:
         cli = Cli(registry=SitesRegistry(base_dir=tmp_path / "root"))
-        ServerLauncher(cli.parser().parse_args(["serve", str(recipe)]), cli.registry).build_server()
+        with pytest.raises(CliError, match="run 'genro-asgi configure shop'"):
+            ServerLauncher(cli.parser().parse_args(["serve", "shop"]), cli.registry)
+
+    def test_a_configuration_that_names_its_site_gets_a_card(self, tmp_path: Path) -> None:
+        home = SiteHome(tmp_path / "shop")
+        home.prepare()
+        recipe = tmp_path / "config.py"
+        recipe.write_text(HOME_RECIPE.format(home=str(home)), encoding="utf-8")
+        cli = Cli(registry=SitesRegistry(base_dir=tmp_path / "root"))
+        launcher = ServerLauncher(cli.parser().parse_args(["serve", str(recipe)]), cli.registry)
+        launcher.adopt_site_identity(launcher.build_server())
+        assert (launcher.name, launcher.home) == ("shop", home)
+        assert launcher.entry["home"] == str(home)
+
+    def test_a_configuration_that_names_none_runs_anonymous(self, tmp_path: Path) -> None:
+        recipe = tmp_path / "config.py"
+        recipe.write_text(ANONYMOUS_RECIPE, encoding="utf-8")
+        cli = Cli(registry=SitesRegistry(base_dir=tmp_path / "root"))
+        launcher = ServerLauncher(cli.parser().parse_args(["serve", str(recipe)]), cli.registry)
+        launcher.adopt_site_identity(launcher.build_server())
+        assert launcher.name is None
         assert cli.registry.names() == []
+
+    def test_the_command_line_name_wins_over_the_configured_one(self, tmp_path: Path) -> None:
+        home = SiteHome(tmp_path / "shop")
+        home.prepare()
+        recipe = tmp_path / "config.py"
+        recipe.write_text(HOME_RECIPE.format(home=str(home)), encoding="utf-8")
+        cli = Cli(registry=SitesRegistry(base_dir=tmp_path / "root"))
+        options = cli.parser().parse_args(["serve", str(recipe), "--name", "staging"])
+        launcher = ServerLauncher(options, cli.registry)
+        launcher.adopt_site_identity(launcher.build_server())
+        assert launcher.name == "staging"
 
 
 class TestConfigureWritesTheCardAndTheHome:
@@ -290,7 +357,7 @@ class TestConfigureWritesTheCardAndTheHome:
         assert server.site_home == home
         assert (server.config_host, server.config_port) == ("0.0.0.0", 8100)
         assert "baseapplication" in server.applications
-        server.storage.node("site:probe.txt").write_text("here")
+        server.storage.node("home:probe.txt").write_text("here")
         assert (home.path / "probe.txt").read_text(encoding="utf-8") == "here"
 
     def test_a_site_with_no_application_is_configured_too(self, tmp_path: Path) -> None:

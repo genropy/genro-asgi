@@ -84,11 +84,12 @@ def chain_types(server: AsgiServer) -> list[str]:
 class TestMixinComposition:
     """The two shapes ``storage=`` accepts, plus the composition without the mixin."""
 
-    def test_default_storage_is_the_site_mount_on_the_deployment_directory(self) -> None:
+    def test_default_storage_is_the_two_mounts_on_the_deployment_directory(self) -> None:
         server = AsgiServer(applications=[(BaseApplication, {"mount": ""})])
         assert isinstance(server.storage, StorageManager)
-        assert server.storage.get_mount_names() == ["site"]
+        assert server.storage.get_mount_names() == ["site", "home"]
         assert server.storage.node("site:pyproject.toml").exists()   # anchored to the cwd
+        assert server.storage.node("home:pyproject.toml").exists()   # no home: the same folder
 
     def test_a_built_manager_is_not_a_configuration_value(self, tmp_path: Path) -> None:
         """#91: the server builds its storage from the declared mounts, never adopts one."""
@@ -222,11 +223,11 @@ class TestConfigDriven:
 class TestDefaultLayoutFallback:
     """An empty mount list means "the default layout", not "no storage"."""
 
-    def test_an_empty_mount_list_falls_back_to_the_site_mount(self) -> None:
+    def test_an_empty_mount_list_falls_back_to_the_default_layout(self) -> None:
         server = AsgiServer(applications=[(BaseApplication, {"mount": ""})], storage=[])
-        assert server.storage.get_mount_names() == ["site"]
+        assert server.storage.get_mount_names() == ["site", "home"]
 
-    def test_a_key_only_recipe_section_still_serves_the_site_mount(self, key: str) -> None:
+    def test_a_key_only_recipe_section_still_serves_the_default_layout(self, key: str) -> None:
         """The recipe declares the key and no mount; the default layout applies."""
 
         class KeyOnlyConfig(AsgiConfigBuilder):
@@ -236,5 +237,5 @@ class TestDefaultLayoutFallback:
                 cfg.applications(default="shop").application(code="shop", app_class=ShopApp)
 
         server = AsgiServer(config=ConfigurationHandler(KeyOnlyConfig))
-        assert server.storage.get_mount_names() == ["site"]
+        assert server.storage.get_mount_names() == ["site", "home"]
         assert server.storage.encryption_active
