@@ -485,6 +485,9 @@ class GroupHandler:
         self._cpu_pressure_monotonic: float | None = None
         self._logger = logging.getLogger(__name__)
         self._worker_counter = 0
+        #: Whether the refused birth has already been journaled: the server
+        #: never returns to RUNNING, so one row says it for the whole shutdown.
+        self._birth_refused_while_leaving = False
         #: One row per periodic method of this group — turns seen, runs, errors
         #: and the last one's text.
         self.beat_counts: dict[str, dict[str, Any]] = {}
@@ -1451,11 +1454,29 @@ class GroupHandler:
         """Bring one more worker into this group and start its process.
 
         Returns:
-            The worker now serving, or None when its process could not be started.
+            The worker now serving, or None when its process could not be
+            started, or None without trying while the server is leaving.
 
         Acts on ``worker_handler_map`` and on ``state``: a launch that lands ends
         both crises, a launch that fails is the ``broken`` one.
+
+        The server leaving RUNNING closes every birth road of this group, the
+        wild death's (``on_child_lost`` → ``ping_now`` → ``check_occupancy``)
+        included: a process born inside the graceful window is a process nobody
+        will ever take down in order. The refusal is journaled once — the state
+        never goes back to RUNNING, so every later attempt says the same thing.
         """
+        if self.spa_commander.server_leaving:
+            if not self._birth_refused_while_leaving:
+                self._birth_refused_while_leaving = True
+                self.spa_commander.log_order(
+                    self.name,
+                    "start_worker",
+                    None,
+                    outcome="refused: the server is leaving",
+                    reason="server_leaving",
+                )
+            return None
         self._worker_counter += 1
         name = f"{self.name}_{self._worker_counter:04d}"
         worker_handler = WorkerHandler(self, name, **self.worker_settings)

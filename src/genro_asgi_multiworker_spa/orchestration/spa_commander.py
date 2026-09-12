@@ -179,6 +179,7 @@ from genro_routes import RoutingClass, route
 import psutil
 from genro_tytx import from_tytx, to_tytx
 from genro_asgi.channel.frame import Frame
+from genro_asgi.lifespan import RUNNING
 from genro_asgi.channel.control import ControlPayload
 
 from genro_asgi.orchestration_profile_store import (
@@ -547,6 +548,10 @@ class SpaCommander:
         cpu_temperature_sample_seconds: float | None = CPU_TEMPERATURE_SAMPLE_SECONDS,
     ) -> None:
         self.freeze_handler = FreezeHandler(frozen_users_path)
+        #: The server this pool serves, written by the front at its startup.
+        #: ``None`` in a pool built without one — a test, a bench — and then
+        #: nothing of the server's lifecycle is read.
+        self.server: Any | None = None
         self.user_expiry_hours = user_expiry_hours
         self.guest_expiry_hours = guest_expiry_hours
         self.machine_memory_alarm_percent = machine_memory_alarm_percent
@@ -1378,6 +1383,15 @@ class SpaCommander:
                 numbers={"had_state": had_state},
                 outcome=cause,
             )
+
+    @property
+    def server_leaving(self) -> bool:
+        """Whether the server this pool serves has left RUNNING.
+
+        False when there is no server: a pool built without one has no
+        lifecycle to obey.
+        """
+        return self.server is not None and self.server.state != RUNNING
 
     def log_order(
         self,

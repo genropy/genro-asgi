@@ -313,7 +313,7 @@ class TestShutdownTimeout:
         captured: list[Any] = []
 
         class XT_Server:
-            def __init__(self, config: Any) -> None:
+            def __init__(self, base_server: Any, config: Any) -> None:
                 captured.append(config)
 
             def run(self) -> None:
@@ -321,7 +321,7 @@ class TestShutdownTimeout:
 
         import genro_asgi.server as server_module
 
-        monkeypatch.setattr(server_module.uvicorn, "Server", XT_Server)
+        monkeypatch.setattr(server_module, "UvicornServer", XT_Server)
         server = AsgiServer(config=BoundedConfig)
         assert server.shutdown_timeout_seconds == 2.0
         server.serve()

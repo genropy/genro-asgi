@@ -30,8 +30,10 @@ of running without what the hook was there to build.
 
 **The server's lifecycle states live here** — the lifespan is the lifecycle.
 ``RUNNING`` takes new requests in charge; anything else refuses them with 503.
-The shutdown is where the state turns: BEFORE any application's hook runs, the
-server stops accepting — ``QUITTING`` when whoever triggered the shutdown chose
+Under a signal the state has already turned when the shutdown arrives here
+(``UvicornServer.handle_exit``, ``server.py``); the shutdown is where it turns
+for everybody else, and BEFORE any application's hook runs the server stops
+accepting — ``QUITTING`` when whoever triggered the shutdown chose
 to save (``shutdown_mode``, set by the ``--reload`` launcher and one day by
 the deliberate command), ``STOPPING`` otherwise — and the in-flight requests are
 drained, bounded by ``SHUTDOWN_DRAIN_TIMEOUT_SECONDS``. Only then do the hooks
@@ -121,15 +123,15 @@ class Lifespan:
     async def shutdown(self) -> None:
         """Stop accepting, drain what is in flight, THEN run the hooks in reverse.
 
-        The state turns first — to ``shutdown_mode`` when it is still
-        ``RUNNING``, and it stays untouched when somebody already chose — so no
-        application saves while new work can still arrive. The drain is bounded:
+        The state turns first — ``start_leaving``: to ``shutdown_mode`` when it
+        is still ``RUNNING``, untouched when somebody already chose, which under
+        a signal is the normal case since ``UvicornServer`` turned it there — so
+        no application saves while new work can still arrive. The drain is bounded:
         past ``SHUTDOWN_DRAIN_TIMEOUT_SECONDS`` the count still in flight goes in
         the log and the sequence proceeds — those calls are answered by the
         worker-level cut, never waited for twice.
         """
-        if self.server.state == RUNNING:
-            self.server.state = self.server.shutdown_mode
+        self.server.start_leaving()
         still_in_flight = await self.server.requests.await_drain(SHUTDOWN_DRAIN_TIMEOUT_SECONDS)
         if still_in_flight:
             self._logger.warning(
