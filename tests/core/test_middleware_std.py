@@ -365,12 +365,11 @@ class TestSessionWriteBack:
 
 class TestDisabledByDefault:
     async def test_standard_middlewares_absent_without_switches(
-        self, http_request, response_status, response_headers
+        self, http_request, response_headers
     ) -> None:
+        # ``wellknown`` is NOT in this list: it is on by default since #88,
+        # and its two states are covered in ``tests/core/test_hidden_paths.py``.
         server = MwServer(applications=[RoutedApp(mount="")])
-
-        wellknown_sent = await http_request(server, "/.well-known/probe")
-        assert response_status(wellknown_sent) == 200
 
         cors_sent = await http_request(server, "/", headers=[(b"origin", b"https://example.test")])
         assert b"access-control-allow-origin" not in response_headers(cors_sent)
