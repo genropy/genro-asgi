@@ -34,7 +34,7 @@ from typing import Any
 import pytest
 from cryptography.fernet import Fernet
 
-from tests.storage_support import site_storage
+from tests.storage_support import site_mounts
 
 from genro_asgi import AsgiServer, BaseApplication, FileUserStore, UserStore
 from genro_asgi_server_app import (
@@ -52,7 +52,7 @@ class MemoryUserStore(UserStore):
 
     __slots__ = ("_records",)
 
-    def __init__(self) -> None:
+    def __init__(self, storage: object = None) -> None:
         self._records: dict[str, dict[str, Any]] = {}
 
     def load_all(self) -> list[dict[str, Any]]:
@@ -68,29 +68,35 @@ class MemoryUserStore(UserStore):
         return self._records.pop(identity, None) is not None
 
 
+class SeededUserStore(MemoryUserStore):
+    """The store the configuration names: alice enabled, mallory disabled."""
+
+    def __init__(self, storage: object = None) -> None:
+        super().__init__(storage)
+        self.save(
+            {
+                "identity": "alice",
+                "password_hash": self.hash_password("wonder"),
+                "tags": ["admin"],
+                "enabled": True,
+            }
+        )
+        self.save(
+            {
+                "identity": "mallory",
+                "password_hash": self.hash_password("evil"),
+                "tags": [],
+                "enabled": False,
+            }
+        )
+
+
 def make_server(with_users: bool = True) -> AsgiServer:
-    """A full hand-built server; ``with_users`` seeds alice/wonder on a user store."""
-    if not with_users:
-        return AsgiServer(applications=[ServerApplication(), BaseApplication(mount="")])
-    store = MemoryUserStore()
-    store.save(
-        {
-            "identity": "alice",
-            "password_hash": store.hash_password("wonder"),
-            "tags": ["admin"],
-            "enabled": True,
-        }
-    )
-    store.save(
-        {
-            "identity": "mallory",
-            "password_hash": store.hash_password("evil"),
-            "tags": [],
-            "enabled": False,
-        }
-    )
+    """A full server composed in code; ``with_users`` declares the seeded store."""
+    users = {"store_class": SeededUserStore} if with_users else None
     return AsgiServer(
-        applications=[ServerApplication(), BaseApplication(mount="")], users=store
+        applications=[ServerApplication, (BaseApplication, {"mount": ""})],
+        **({"users": users} if users else {}),
     )
 
 
@@ -177,17 +183,27 @@ def make_lockout_server(
     policy: dict[str, Any] | None = None,
 ) -> tuple[AsgiServer, MemoryUserStore]:
     """A server seeded with alice/wonder; ``policy`` rides the ``login()`` config lift."""
-    store = MemoryUserStore()
-    store.save(
-        {
-            "identity": "alice",
-            "password_hash": store.hash_password("wonder"),
-            "tags": ["admin"],
-            "enabled": True,
-        }
+
+    class AliceStore(MemoryUserStore):
+        """The store the configuration names, born with alice in it."""
+
+        def __init__(self, storage: object = None) -> None:
+            super().__init__(storage)
+            self.save(
+                {
+                    "identity": "alice",
+                    "password_hash": self.hash_password("wonder"),
+                    "tags": ["admin"],
+                    "enabled": True,
+                }
+            )
+
+    server_app = (ServerApplication, {"login": policy} if policy else {})
+    server = AsgiServer(
+        applications=[server_app, (BaseApplication, {"mount": ""})],
+        users={"store_class": AliceStore},
     )
-    server_app = ServerApplication(login=policy) if policy else ServerApplication()
-    return AsgiServer(applications=[server_app, BaseApplication(mount="")], users=store), store
+    return server, server.user_store
 
 
 async def login_attempt(
@@ -230,19 +246,25 @@ class TestLoginHappyPath:
         assert promoted.data["cart"] == "kept"  # the cart survives the login
 
     async def test_login_green_path_against_a_file_user_store(self, tmp_path: Path) -> None:
-        storage = site_storage(tmp_path)
-        storage.set_encryption_keys(Fernet.generate_key().decode())
-        store = FileUserStore(storage)
-        store.save(
-            {
-                "identity": "alice",
-                "password_hash": store.hash_password("wonder"),
-                "tags": ["admin"],
-                "enabled": True,
-            }
-        )
+        class SeededFileStore(FileUserStore):
+            """The file store the configuration names, seeded at birth."""
+
+            def __init__(self, storage: Any, **params: Any) -> None:
+                super().__init__(storage, **params)
+                self.save(
+                    {
+                        "identity": "alice",
+                        "password_hash": self.hash_password("wonder"),
+                        "tags": ["admin"],
+                        "enabled": True,
+                    }
+                )
+
         server = AsgiServer(
-            applications=[ServerApplication(), BaseApplication(mount="")], users=store
+            applications=[ServerApplication, (BaseApplication, {"mount": ""})],
+            storage=site_mounts(tmp_path),
+            storage_key=Fernet.generate_key().decode(),
+            users={"store_class": SeededFileStore},
         )
         anonymous = server.session_store.create()
         _, sent = await drive(

@@ -209,8 +209,8 @@ middleware chain.
 **S3 [undocumented · cross] — a middleware of one's own cannot be named in a
 description, and here the grammar refuses the word.** The class travels as a
 construction argument. Unlike the plugins section, which accepts any code, the
-middleware element declares **six keyword parameters and no more**, so a
-seventh name is rejected by the grammar itself. The element's own docstring
+middleware element declares **five keyword parameters and no more**, so a
+sixth name is rejected by the grammar itself. The element's own docstring
 records this ("one registered through `middleware_registry=` is not
 configurable here"), which makes it a statement rather than an oversight — but
 no ratified decision says it, and
@@ -272,7 +272,7 @@ instead of the 404 the middleware chain carefully negotiated. The negotiation
 is honoured and then made unreadable.
 
 **S10 [silent] — `errors=False` is accepted, and then nothing answers.** The
-switch is a plain member of the six, so a description may turn the outermost
+switch is a plain member of the five, so a description may turn the outermost
 layer off. With it off, an `HTTPNotFound` raised by the route resolution
 **escapes the server uncaught** — proven live in [status.md](status.md).
 

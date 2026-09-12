@@ -26,9 +26,8 @@ dispatch — and routes ONLY ``http`` scopes through it: ``lifespan`` and
 mixin simply lacks the attributes — a different type, not a ghost.
 
 ``default_registry()`` returns a FRESH dict per call ({"errors":
-ErrorMiddleware, "wellknown": WellKnownMiddleware, "logging":
-LoggingMiddleware, "cors": CORSMiddleware, "auth": AuthMiddleware, "session":
-SessionMiddleware} as of Phase 5) — deliberately a function so no module-level
+ErrorMiddleware, "logging": LoggingMiddleware, "cors": CORSMiddleware,
+"auth": AuthMiddleware, "session": SessionMiddleware}) — deliberately a function so no module-level
 mutable registry exists.
 It lives in this module, not in ``base.py``, because ``base.py`` cannot import
 the concrete middleware modules (which subclass ``BaseMiddleware``) without a
@@ -45,7 +44,6 @@ from .cors import CORSMiddleware
 from .errors import ErrorMiddleware
 from .logging import LoggingMiddleware
 from .session import SessionMiddleware
-from .wellknown import WellKnownMiddleware
 
 if TYPE_CHECKING:
     from ..types import ASGIApp, Receive, Scope, Send
@@ -58,7 +56,6 @@ __all__ = [
     "LoggingMiddleware",
     "MiddlewareMixin",
     "SessionMiddleware",
-    "WellKnownMiddleware",
     "build_chain",
     "default_registry",
     "headers_dict",
@@ -69,7 +66,6 @@ def default_registry() -> dict[str, type[BaseMiddleware]]:
     """A fresh ``{name: class}`` mapping of the middlewares shipped with the core."""
     return {
         "errors": ErrorMiddleware,
-        "wellknown": WellKnownMiddleware,
         "logging": LoggingMiddleware,
         "cors": CORSMiddleware,
         "auth": AuthMiddleware,

@@ -69,9 +69,11 @@ def drive() -> Callable[..., object]:
 
 
 def profile_server(folder: Path) -> AsgiServer:
-    app = ConfigurationProfilesApplication(folder=folder)
     return AsgiServer(
-        applications=[Empty(mount=""), app],
+        applications=[
+            (Empty, {"mount": ""}),
+            (ConfigurationProfilesApplication, {"folder": folder}),
+        ],
         plugins={"openapi": True},
     )
 
@@ -138,7 +140,7 @@ async def test_rejects_path_traversal_and_non_object_body(
         headers=[(b"content-type", b"application/json")],
         body=b"[]",
     )
-    assert response_status(array) == 422
+    assert response_status(array) == 400
 
 
 async def test_an_empty_folder_lists_no_profiles(tmp_path, drive, response_body) -> None:

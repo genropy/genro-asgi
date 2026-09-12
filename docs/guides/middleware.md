@@ -26,7 +26,6 @@ out):
 | Name        | Priority | Default | Notes                                        |
 |-------------|----------|---------|----------------------------------------------|
 | `errors`    | 100      | **on**  | maps exceptions and unmatched paths to status codes |
-| `wellknown` | 150      | off     | `.well-known` endpoints                       |
 | `logging`   | 200      | off     | request logging                              |
 | `cors`      | 300      | off     | CORS headers                                 |
 | `session`   | 400      | off     | armed automatically by `SessionMixin`        |
@@ -57,7 +56,7 @@ class App(RoutedApplication):
 
 
 server = AsgiServer(
-    applications=[App()],
+    applications=[App],
     middleware={
         "cors": True,
         "logging": True,
@@ -72,7 +71,7 @@ server.serve(host="127.0.0.1", port=8000)
 
 ```python
 server = AsgiServer(
-    applications=[App()],
+    applications=[App],
     middleware={"cors": {
         "allow_origins": ["https://example.com"],
         "allow_credentials": True,
@@ -95,7 +94,7 @@ class StampMiddleware(BaseMiddleware):
 
 
 server = AsgiServer(
-    applications=[App()],
+    applications=[App],
     middleware_registry={"stamp": StampMiddleware},
     middleware={"stamp": {...}},
 )
@@ -124,14 +123,17 @@ With `logging` armed, requests appear in the server's log output.
 ## Gotchas
 
 - The registry enables `errors`; the shipped `AsgiServer` also arms `session`
-  and `auth`. CORS, logging and wellknown require explicit configuration.
-- A call the handler cannot take is answered by the dispatcher, never a `500`,
-  on two distinct codes: a call that does not fit the signature — an unknown
-  keyword, a missing required argument, one positional too many — answers
-  **`400`**, while values the signature accepts and the handler's validation
-  rejects answer **`422` Unprocessable Content** (RFC 9110 §15.5.21: the
-  request is well formed, its semantics are not). What the handler BODY raises
-  is mapped to neither and reaches `errors` as a `500`; a handler raising
+  and `auth`. CORS and logging require explicit configuration.
+- Hidden paths are NOT a middleware: a first path segment starting with a dot
+  answers 404 in the server's own demux, always, and no switch turns it off.
+  See [Hidden paths](hidden-paths.md).
+- A call the handler cannot take is answered by the dispatcher, never a `500`:
+  a call that does not fit the signature — an unknown keyword, a missing
+  required argument, one positional too many — answers **`400`**, and so do
+  values the signature accepts and the handler's validation rejects, under the
+  application's default `strict` reading. An application declaring the FastAPI
+  convention answers **`422`** to that one case. What the handler BODY raises is
+  mapped to neither and reaches `errors` as a `500`; a handler raising
   `HTTPBadRequest` itself still answers `400`, never remapped.
 - An unknown middleware name in `middleware={...}` raises `ValueError`. If you are
   arming a custom stage, register it in `middleware_registry` first.

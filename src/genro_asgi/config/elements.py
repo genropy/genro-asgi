@@ -40,8 +40,8 @@ Sections:
   (the session TTL) and ``tasks`` (declared by ``TaskGrammar``, the class that
   peels ``tasks=``).
 - ``middleware`` — one ``{name: bool | dict}`` switch per middleware.
-- ``authentication`` — the identity surface the core owns: the bootstrap
-  ``admin_password``, the ``users``/``tokens`` store descriptors and the
+- ``authentication`` — the identity surface the core owns:
+  the ``users``/``tokens`` store descriptors and the
   ``credentials`` handed to ``AuthCore``.
 - ``storage`` — the mount point of genro-storage's own grammar: the mounts of
   the server's ``StorageManager``, plus the section's ``storage_key``.
@@ -110,6 +110,7 @@ class AsgiServerGrammar(TaskGrammar):
         external_url: str | BagResolver = None,
         max_threads: int | BagResolver = None,
         shutdown_timeout_seconds: float | BagResolver = None,
+        debug: bool | str | BagResolver = None,
     ) -> None:
         """Server runtime options.
 
@@ -126,6 +127,10 @@ class AsgiServerGrammar(TaskGrammar):
         ``max_threads`` sizes the server's thread pool: ``BaseServer`` peels it
         and hands it to ``WorkPool`` (omitted, the stdlib default
         ``min(32, cpu + 4)`` applies).
+
+        ``debug`` is the DECLARED usage mode the core never branches on (the CLI
+        spells it ``--debug``): ``True``, or a comma-separated string of
+        parameters an application reads for itself.
 
         ``shutdown_timeout_seconds`` (5.0) bounds how long uvicorn waits for open
         connections at shutdown before cancelling them: one endless response —
@@ -157,59 +162,83 @@ class AsgiServerGrammar(TaskGrammar):
         """
 
     @element(parent_tags="server", sub_tags="")
-    def session(self, ttl: int) -> None:
-        """Session options: ``ttl`` (seconds, REQUIRED — the grammar rejects a
-        session without it) → the server's ``session_ttl`` kwarg. Server-domain,
-        so it lives under ``server``, not under an application."""
+    def session(
+        self,
+        ttl: int = None,
+        store_class: type = None,
+        save_path: str = None,
+        **params: Any,
+    ) -> None:
+        """Session options: the lifetime, the store that keeps them, the snapshot.
+
+        ``ttl`` (seconds) becomes the server's ``session_ttl``.
+        ``store_class`` names the backend CLASS — the server instantiates it with
+        the remaining attributes (``store_class(**params)``), so a deployment
+        that keeps sessions elsewhere declares the class here instead of handing
+        the server a built object. Omitted, the composition's own
+        ``MemorySessionStore`` applies.
+
+        ``save_path`` is the pickle file the sessions are written to at shutdown
+        and read back from at startup — the development survival line. Unset,
+        the snapshot is disarmed. ``genro-asgi serve --name <n>`` writes
+        ``<home>/sessions/<n>.pickle`` here.
+
+        Server-domain, so it lives under ``server``, not under an application."""
 
     @element(parent_tags="configuration", sub_tags="")
     def middleware(
         self,
         errors: bool | dict = None,
-        wellknown: bool | dict = None,
         logging: bool | dict = None,
         cors: bool | dict = None,
         auth: bool | dict = None,
         session: bool | dict = None,
+        **extra: bool | dict,
     ) -> None:
         """Global middleware switches: one ``{name: bool | dict}`` kwarg per
         middleware. A dict value enables the middleware and becomes its
-        constructor options. The names are the core's own registry
-        (``middleware.default_registry()``); one registered through
-        ``middleware_registry=`` is not configurable here."""
+        constructor options. The six declared names are the core's own registry
+        (``middleware.default_registry()``); a middleware registered from
+        outside (``middleware_registry=``) is written by its own name and rides
+        through ``**extra`` — the signature is OPEN so that the switches have
+        ONE place, the configuration, whatever registry the class came from."""
 
     @element(
         parent_tags="configuration",
-        sub_tags="admin_password[0:1],users[0:1],tokens[0:1],credentials[0:1]",
+        sub_tags="users[0:1],tokens[0:1],credentials[0:1]",
         node_label="authentication",
     )
     def authentication(self) -> None:
         """The server's identity surface: the STORES and the header credentials.
 
-        ``admin_password``, ``users``, ``tokens`` are the kwargs ``AuthMixin``
-        peels and ``credentials`` the entries ``AuthCore`` verifies. What asks a
+        ``users`` and ``tokens`` are the store descriptors ``AuthMixin`` peels
+        and ``credentials`` the entries ``AuthCore`` verifies. What asks a
         human for a user and a password is NOT here (D-SA-10): the login policy
         and the OIDC providers are words of the grammar the application owning
         the login surface declares, written under its own ``application``
-        element.
+        element. The server creates no user either (owner, 2026-09-12): there is
+        no bootstrap password word.
         """
 
     @element(parent_tags="authentication", sub_tags="")
-    def admin_password(self, node_value: BagResolver = None) -> None:
-        """The SUPERADMIN bootstrap password as the NODE VALUE, supplied by a
-        resolver — never a literal (secrets stay out of recipes; the signature
-        rejects a literal at the recipe line). Resolving empty, or to anything
-        but a string, is a boot error."""
+    def users(
+        self, mount: str = None, prefix: str = None, store_class: type = None, **params: Any
+    ) -> None:
+        """Identity store: where it keeps its records, and which class keeps them.
+
+        ``mount``/``prefix`` place the records (default ``site:users``);
+        ``store_class`` names the CLASS the server builds — ``FileUserStore``
+        when omitted — and the remaining attributes are its own kwargs. The
+        server hands it the storage: a built store is not a configuration
+        value."""
 
     @element(parent_tags="authentication", sub_tags="")
-    def users(self, mount: str = None, prefix: str = None) -> None:
-        """Identity store descriptor: ``{mount, prefix}`` (or empty for the
-        default) — the ``users=`` kwarg ``AuthMixin`` peels."""
-
-    @element(parent_tags="authentication", sub_tags="")
-    def tokens(self, mount: str = None, prefix: str = None) -> None:
-        """Api-key store descriptor: ``{mount, prefix}`` — the ``tokens=`` kwarg
-        ``AuthMixin`` peels."""
+    def tokens(
+        self, mount: str = None, prefix: str = None, store_class: type = None, **params: Any
+    ) -> None:
+        """Api-key store: the same three words as ``users`` — ``mount``/``prefix``
+        for the records, ``store_class`` for the class the server builds
+        (``FileApiKeyStore`` when omitted) and its own remaining kwargs."""
 
     @element(
         parent_tags="authentication",
@@ -340,10 +369,15 @@ class AsgiServerGrammar(TaskGrammar):
         user-provided — the core never imports db drivers."""
 
     @element(parent_tags="configuration", sub_tags="plugin", collection_key="code")
-    def plugins(self) -> None:
+    def plugins(self, **extra: bool | dict) -> None:
         """Collection of router plugins, each labelled by its ``code``.
-        Materialized as the server's ``plugins=`` switches (``PluginMixin``):
-        the server arms every enabled plugin onto each routed app it hosts."""
+        Materialized as the server's plugin switches (``PluginMixin``): the
+        server arms every enabled plugin onto each routed app it hosts.
+
+        A plugin is normally one ``plugin`` child. The signature is OPEN as
+        well, so a switch may also be written as an attribute of the collection
+        — the short form the shortcut uses, and the one a plugin registered
+        from outside (``plugin_registry=``) needs."""
 
     @element(parent_tags="plugins", sub_tags="")
     def plugin(self, code: str = None, enabled: bool = True, **options: Any) -> None:

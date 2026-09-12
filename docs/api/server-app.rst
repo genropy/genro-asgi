@@ -8,7 +8,7 @@ of it. It is declared like any other application, with the code ``_server``::
     from genro_asgi import AsgiServer
     from genro_asgi_server_app import ServerApplication
 
-    server = AsgiServer(applications=[ServerApplication(), MyApp(mount="")])
+    server = AsgiServer(applications=[ServerApplication, (MyApp, {"mount": ""})])
 
 A server that declares none exposes no ``/_server/...``. The management pages
 themselves are not here: this package serves the JSON a page drives.

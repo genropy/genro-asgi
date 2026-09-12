@@ -14,9 +14,10 @@ elements exist and which attributes each one takes.
 
 Use a recipe as soon as the server is more than a demo: it is the one place a
 deployment differs, and `genro-asgi serve ./config.py` turns it into a complete
-deployment unit (see [the `genro-asgi` command](cli.md)). Keep building the
-server by hand — `AsgiServer(applications=[...])` — for a test, a script, or an
-embedded server whose objects the recipe cannot express.
+deployment unit (see [the `genro-asgi` command](cli.md)). Building the
+server by hand — `AsgiServer(applications=[...])` — is the same road written
+shorter: the kwargs become a configuration (see below), so a test or a script
+declares what a recipe would have declared.
 
 ## Setup
 
@@ -95,25 +96,51 @@ The environment gives strings, so a value that is not a string needs
 `^pointer` strings in this dialect: the resolver object itself sits in the
 attribute.
 
-For secrets this is not a convention but the signature: `admin_password` takes
-`node_value: BagResolver`, so a literal is **rejected at the recipe line** —
+For secrets this is a convention, not a signature rule: every secret-bearing
+attribute accepts a literal and should be given a resolver instead —
 
 ```python
-cfg.authentication().admin_password(EnvResolver("SHOP_ADMIN_PASSWORD"))
+cfg.storage(app=StorageManager, storage_key=EnvResolver("SHOP_STORAGE_KEY"))
 ```
 
-— and a resolver that delivers nothing at boot is a `ConfigError`, never a
-passwordless SUPERADMIN.
+— because a recipe is code you commit, and the key material is not.
 
 ## Handing it to the server
 
-`AsgiServer(config=...)` accepts four sources: a recipe **class**, a recipe
-**instance**, a **path** to a `config.py`, or a ready `ConfigurationHandler`.
+`AsgiServer(config=...)` accepts five sources: a recipe **class**, a recipe
+**instance**, a **path** to a `config.py`, the **name of a ready-made
+configuration**, or a ready `ConfigurationHandler`.
 
 ```python
 server = AsgiServer(config=ServerConfiguration)          # class
 server = AsgiServer(config="/srv/shop/config.py")        # path
+server = AsgiServer(config="default")                    # template name
 ```
+
+## The configuration always exists
+
+A server built with kwargs alone has one too. `AsgiServer(applications=[Shop],
+port=8000)` is a **shortcut**: it takes the ready-made `default` configuration
+(`DefaultConfiguration`, named in `CONFIGURATION_TEMPLATES`), writes the kwargs
+it received into a top layer of its own and runs the same road as a recipe.
+`server.config` is a `ConfigurationHandler` here as everywhere, and the tree
+carries what a recipe would have written — the `server` section (`debug`
+included), the `middleware` and `plugins` switches, and one `application` node
+per declared class, so every application reads its own options
+(`applications.<code>.request`, and whatever its grammar declares) through the
+same door. `applications` entries are CLASSES, or `(class, params)` pairs: the
+server instantiates them off the tree, here exactly as for a written recipe, and
+an instance is refused by the grammar.
+
+```python
+server = AsgiServer(applications=[(Shop, {"mount": ""})], host="0.0.0.0", port=9000)
+server.config("server.port")             # 9000 — written into the tree
+server.config("applications.shop.mount") # "" — the instance's own placement
+```
+
+The `middleware` and `plugins` elements have an OPEN signature, so a switch for
+a class registered in code (`middleware_registry=` / `plugin_registry=`) is
+written by its own name like any other.
 
 An explicit constructor kwarg **wins over the configured value, wholesale per
 kwarg** — the server computes nothing, it just prefers what you passed:
@@ -245,7 +272,7 @@ One line each; the deep dives live in their own guides.
 - **`middleware`** — one `{name: bool | dict}` switch per middleware; a dict
   enables it and becomes its options (see [Middleware](middleware.md)).
 - **`authentication`** — the whole identity surface in one section:
-  `admin_password`, the `users`/`tokens` stores, the `login` lockout policy, the
+  the `users`/`tokens` stores, the `login` lockout policy, the
   `oidc` providers and the header `credentials`. The grammar of each is in
   [Authentication](authentication.md).
 - **`storage`** — the mount point of [genro-storage](https://pypi.org/project/genro-storage/)'s
@@ -605,8 +632,8 @@ class ServerConfiguration(AsgiConfigBuilder):
         ).local(name="site", base_path="/srv/shop")
 
     def authentication_section(self, cfg):
-        """The bootstrap secret comes from the environment, never from here."""
-        cfg.authentication().admin_password(EnvResolver("SHOP_ADMIN_PASSWORD"))
+        """The identity store: where the records live, and who keeps them."""
+        cfg.authentication().users(mount="site", prefix="users")
 
     def applications_section(self, cfg):
         """One app on the site root, declaring its own catalog block."""
@@ -627,9 +654,8 @@ storage section above), so the recipe fails before any read without this step:
 mkdir -p /srv/shop
 ```
 
-Then, with `SHOP_PORT=8123`, `SHOP_STORAGE_KEY` (a Fernet key) and
-`SHOP_ADMIN_PASSWORD` (the bootstrap secret) exported, build the server and
-read it back through both doors:
+Then, with `SHOP_PORT=8123` and `SHOP_STORAGE_KEY` (a Fernet key) exported,
+build the server and read it back through both doors:
 
 ```python
 >>> server = AsgiServer(config=ServerConfiguration)
@@ -654,17 +680,16 @@ True
 
 ## Gotchas
 
-- **A secret is a resolver, not a string.** `admin_password` refuses a literal
-  in the signature; the other secret-bearing attributes (`storage_key`,
-  `client_secret`, `password`, `token`, `secret`) accept one, and should not get
-  it — a recipe is code you commit.
+- **A secret is a resolver, not a string.** The secret-bearing attributes
+  (`storage_key`, `client_secret`, `password`, `token`, `secret`) accept a
+  literal, and should not get one — a recipe is code you commit.
 - **`dtype=` or you get a string.** `port=EnvResolver("SHOP_PORT")` without
   `dtype="L"` hands the server `"8123"`.
-- **`admin_password` needs a key, not just somewhere to write.** The bootstrap
-  admin lands in the identity store under `site:users`, which writes
-  `encrypted=True`, so a recipe with an `admin_password` and no `storage_key`
-  fails at the write with genro-storage's `Cannot encrypt for encryption domain
-  '': it requires installed key material`.
+- **The identity store needs a key, not just somewhere to write.** Its records
+  land under `site:users` written `encrypted=True`, so a recipe declaring
+  `authentication.users(...)` and no `storage_key` fails at the first write with
+  genro-storage's `Cannot encrypt for encryption domain '': it requires
+  installed key material`.
 - **`storage_key` lives on `storage`, not on `server`.** It is meaningless
   without the mounts it unlocks; a recipe still passing it to `cfg.server(...)`
   is a boot error naming the attribute.

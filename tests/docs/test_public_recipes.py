@@ -142,10 +142,14 @@ def test_request_bodies_and_multipart(recipes, serve_recipe):
         assert status == 200
         assert json.loads(body) == {"received": {"name": "Ada"}}
         status, body = server.get_response(
-            "/raw", b"abc", {"Content-Type": "application/octet-stream"}
+            "/raw/count", b"abc", {"Content-Type": "application/octet-stream"}
         )
         assert status == 200
         assert json.loads(body) == {"bytes": 3}
+        # The decoded application refuses the content-type the raw one serves.
+        assert server.get_response(
+            "/document", b"abc", {"Content-Type": "application/octet-stream"}
+        )[0] == 415
         multipart = (
             '--docsboundary\r\nContent-Disposition: form-data; name="title"\r\n\r\n'
             'Example\r\n--docsboundary\r\nContent-Disposition: form-data; '
@@ -157,7 +161,7 @@ def test_request_bodies_and_multipart(recipes, serve_recipe):
         )
         assert status == 200
         assert json.loads(body) == {"title": "Example", "filename": "demo.txt", "bytes": 3}
-        assert server.get_response("/raw")[0] == 400
+        assert server.get_response("/raw/count")[0] == 400
 
 
 def test_authentication_statuses(recipes, serve_recipe):
@@ -174,8 +178,9 @@ def test_openapi_and_argument_errors(recipes, serve_recipe):
         assert status == 200
         assert json.loads(body)["openapi"] == "3.1.0"
         assert server.get_response("/_meta/docs")[0] == 200
-        assert server.get_response("/search?max_price=invalid")[0] == 422
+        assert server.get_response("/search?max_price=invalid")[0] == 400
         assert server.get_response("/search?extra=1")[0] == 400
+        assert "400" in json.loads(body)["paths"]["/search"]["get"]["responses"]
 
 
 def test_wsx_client_roundtrip(recipes, serve_recipe, tmp_path):

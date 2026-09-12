@@ -25,6 +25,7 @@ runs.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -32,9 +33,10 @@ from typing import Any
 import pytest
 from genro_routes import route
 
-from tests.storage_support import site_storage
+from tests.storage_support import site_mounts
 
 from genro_asgi import AsgiServer, McpApplication, RoutedApplication
+from genro_asgi.lifespan import STOPPING
 from genro_asgi.tasks import new_descriptor
 from genro_asgi.types import Message, Scope
 
@@ -51,8 +53,8 @@ class Primary(RoutedApplication):
 def server(tmp_path: Path) -> AsgiServer:
     """A real server: Primary + McpApplication at ``/mcp``, storage on tmp_path."""
     srv = AsgiServer(
-        applications=[Primary(mount=""), McpApplication(code="mcp")],
-        storage=site_storage(tmp_path),
+        applications=[(Primary, {"mount": ""}), (McpApplication, {"code": "mcp"})],
+        storage=site_mounts(tmp_path),
     )
     return srv
 
@@ -115,9 +117,9 @@ class TestSessionId:
 
     async def test_get_without_tasks_is_405(self, tmp_path: Path) -> None:
         srv = AsgiServer(
-            applications=[Primary(mount=""), McpApplication(code="mcp")],
+            applications=[(Primary, {"mount": ""}), (McpApplication, {"code": "mcp"})],
             tasks=False,
-            storage=site_storage(tmp_path),
+            storage=site_mounts(tmp_path),
         )
         sent = await drive(srv, "/mcp", method="GET")
         start = next(m for m in sent if m["type"] == "http.response.start")
@@ -253,3 +255,26 @@ class TestInitializeAdvertisesPush:
                            body=json.dumps(envelope).encode())
         start = next(m for m in sent if m["type"] == "http.response.start")
         assert start["status"] == 202
+
+
+class TestServerLeaving:
+    """A stream over a server that starts leaving ends by itself, unsubscribed."""
+
+    async def test_the_stream_ends_when_the_server_leaves(
+        self, server: AsgiServer, sse_request
+    ) -> None:
+        conn = await sse_request(server, "/mcp", headers=[(b"mcp-session-id", b"sess-leaving")])
+
+        server.state = STOPPING
+
+        await asyncio.wait_for(conn.task, timeout=2.0)
+
+    async def test_the_stream_that_ends_by_itself_still_unsubscribes(
+        self, server: AsgiServer, sse_request
+    ) -> None:
+        conn = await sse_request(server, "/mcp", headers=[(b"mcp-session-id", b"sess-leaving-2")])
+
+        server.state = STOPPING
+        await asyncio.wait_for(conn.task, timeout=2.0)
+
+        assert "sess-leaving-2" not in server.tasks.hub._subscribers

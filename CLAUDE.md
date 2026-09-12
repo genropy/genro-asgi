@@ -45,7 +45,29 @@ describes: a stale overview misleads more than no overview.)*
 keyed by `code`, mounted by first path segment — D29 demux: segment match →
 that app with the segment stripped; else the root app; else 307 to the
 declared default; else the site index on `/` (ratified 2026-08-24, not yet
-built — today 404); else 404). It owns one thread pool (`run_sync`), a
+built — today 404); else 404).
+**A path whose first segment starts with a dot is hidden or of service
+(landed 2026-09-12, #88).** The rule is the SERVER's own and lives in the
+demux: `BaseServer.demux_hidden` answers it 404 before any branch is taken —
+no mount, no root application, no default redirect — always on, with no
+middleware and no switch (owner, 2026-09-12: nobody has a reason to turn it
+off). There is no `WellKnownMiddleware` and no `wellknown` word in the
+`middleware` grammar. Its one exception is RFC 8615: `/.well-known/<name>`
+passes when `<name>` is one of the names the server read at mount time into
+`well_known_applications`, and the same method hands it to the application
+that declared it as `/_well_known/<name>/<rest>` — no translation invented,
+and that application's own `auth_rule` answers 401/403 there like anywhere
+else. WHO declares a name is the application: `well_known_names` is `()` on
+`BaseApplication` and, on `RoutedApplication`, the children of its
+`_well_known` branch (a routing class attached like the other reserved
+branches), read through `super().route` because the configured plugins are
+armed later, on the first access a request makes. Duplicates go to the LAST
+registered application, a fixed rule with no option. A path WITHOUT a dot is
+ordinary, the conventional probes included: `/favicon.ico`, `/robots.txt`,
+`/sitemap.xml` and `/apple-touch-icon*` are demuxed like any other path and
+the server silences none of them (the site home will serve them from its
+static folder — later work).
+It owns one thread pool (`run_sync`), a
 `RequestRegistry` holding the in-flight picture, ordered lifespan, and boots
 uvicorn programmatically (`serve()`, CLI `genro-asgi serve/apps/stop/remove`,
 `--debug` = a declared usage mode the core never branches on; `shutdown_timeout_seconds`
@@ -55,9 +77,29 @@ never ran, measured 2026-09-08). The server
 carries a lifecycle `state` (`lifespan.py`: `RUNNING`/`QUITTING`/`STOPPING`):
 anything but RUNNING answers 503 + `Retry-After` and registers nothing, while
 what the middleware chain serves itself passes. `Lifespan.shutdown` turns the
-state first (to `shutdown_mode` — STOPPING by default, QUITTING set by the
-reload child in `factory()`), drains the in-flight requests (bounded), THEN
-runs the hooks in reverse.
+state first (`start_leaving`: to `shutdown_mode` — STOPPING by default, QUITTING
+set by the reload child in `factory()`), drains the in-flight requests
+(bounded), THEN runs the hooks in reverse.
+**The server learns it is leaving at the signal, not at the hooks (landed
+2026-09-12, #89).** `serve()` boots `UvicornServer`, the subclass that OWNS the
+SIGINT/SIGTERM handlers: the first signal calls `start_leaving` and only then
+raises uvicorn's exit flag, so uvicorn's three steps — close the listeners, wait
+`shutdown_timeout_seconds`, send `lifespan.shutdown` — all run over a server
+that already refuses new work. Before this, `Lifespan.shutdown` was the only
+writer of `state` and it runs AFTER the grace is spent. Declared contract
+change: during the graceful window a request on an already open connection
+reads 503 + `Retry-After` instead of being served; and under uvicorn's own
+`--reload` the child builds no `UvicornServer`, so there the ordered shutdown
+is not guaranteed (owner, 2026-09-12: accepted for the stateless
+single-process mode). `BaseServer.leaving` is the awaitable half of the turn —
+an `asyncio.Event` set by the `state` setter, never cleared — and
+`BaseServer.get_until_leaving(queue)` is how an endless response reads its
+feed: the queue's next item, or `None` the moment the server starts leaving.
+The two SSE sources (`applications/mcp.py`, `inspector_section.py`) use it and
+end by themselves, unsubscribing on their own `finally`; `SseStream` stays
+self-contained and now waits on its pending read instead of shielding it, so a
+source that ends past a keepalive leaves no unretrieved exception behind.
+Measured: SIGTERM to exit 0.36 s with an SSE stream open, grace 5.0 s.
 **The websocket is a live connection whose every message is a request (landed
 2026-09-06, #68 phases 1-2).** `BaseServer.on_websocket` — the empty socket of
 D7 until now — gives each socket one `WsxConnection`, whose `serve()` is its
@@ -154,16 +196,30 @@ NEITHER is the base worker, legitimate, which serves its orders and refuses an
 http CALL with the property's message.
 `Request` reads the ASGI request by itself (landed 2026-09-02): headers and
 cookies off the scope, the query, the body drained ALWAYS from `receive` and
-joined once; the body is decoded by content-type — json/xml/msgpack hydrated,
+joined once. **Decoding the body is an option of the application, and the codes
+are the strict HTTP reading (landed 2026-09-12, #87).** The two words live in
+the application's own grammar — `request(body=..., error_codes=...)` under
+`applications.<code>` — and are read from there and nowhere else (#91 removed
+the class attributes `request_body` / `request_error_codes`). Decoded (the
+default), the body is decoded by content-type — json/xml/msgpack hydrated,
 urlencoded via `from_qs`, `multipart/form-data` via the stdlib `email` parser
 into fields (text hydrated, files as `UploadedFile` with `name`/`filename`/
-`content_type`/`data`), anything else raw bytes. Form fields, files included,
+`content_type`/`data`); a body that is not what its content-type declares is
+400 with the decoder's reason, raised inside `Request` so nothing escapes as a
+500, and a content-type with no decoder is 415 (`HTTPUnsupportedMediaType`).
+`body="raw"` hands the handler the bytes as `body_raw` and `decode_body`,
+`decode_json`, `decode_multipart` and `get_transport` stay public for it. The
+second word moves ONE case: values pydantic rejects answer
+`application.validation_error_status` — 400 strict, 422 under the FastAPI
+convention — and the core produces 422 nowhere else; the OpenAPI document
+declares the code the application chose
+(`OpenApiApplication.declare_validation_error`). Form fields, files included,
 reach the handler as kwargs named after the form field (a repeated name gives
 a list). genro-tytx is used ONLY as a serializer (`from_tytx`, `from_qs`,
 `to_tytx`, `json_dumps`): nothing is imported from `genro_tytx.http`, and the
 transport → media type map lives in `media_types.py`.
 Middleware wraps the dispatch (errors, authentication, session, cors,
-logging, wellknown). Auth answers **401 to the anonymous, 403 to the known**,
+logging). Auth answers **401 to the anonymous, 403 to the known**,
 and a 401 is answered like any other error — the bare status with the
 exception's `WWW-Authenticate` (D-SA-4, 2026-09-12): the core owns no login
 page and points nobody at one. Admin surfaces live under the `_server` app as
@@ -184,7 +240,33 @@ front for `_server`-like pages is later work. Sessions: `MemoryStore`, cookie
 `Max-Age = ttl x 24`. Filesystem access goes **only through storage nodes**
 (logical volumes, e.g. `GENROASGI:frozen_users`); storage is pinned
 synchronous (`StorageMixin` calls `set_sync()`, tests pin the same) — never
-`await` a storage node call here. Config comes from the config builder + CLI;
+`await` a storage node call here. **The configuration always exists (landed 2026-09-12, #91).** `server.config` is
+a `ConfigurationHandler` for every server: `AsgiServer(applications=[...], ...)`
+without a source is a SHORTCUT, not a second way to be born — it takes the
+ready-made `default` template (`DefaultConfiguration` in
+`config/templates.py`, named in `CONFIGURATION_TEMPLATES`) and layers a
+`ShortcutConfiguration` on top of it, whose `main` writes the kwargs it received
+and POPS each one, so the value is read back off the tree: the `server` scalars
+(`debug` among them), the session ttl, the `middleware` and `plugins` switches —
+both elements now have an OPEN signature, so a name registered through
+`middleware_registry` / `plugin_registry` is an attribute like any other — and one
+`application` node per DECLARED CLASS. `applications=` takes classes, or
+`(class, params)` pairs, never instances: the server instantiates off the tree
+here exactly as for a written recipe, and an instance is refused by the grammar
+(`app_class: expected type`). **No live object reaches the constructor**: a store
+is a CLASS the configuration names and the server builds — `session_store=` and
+the `store_class` of `server.session`, `users=` / `tokens=` as descriptors whose
+`store_class` defaults to `FileUserStore` / `FileApiKeyStore` — `storage=` takes
+the MOUNTS and never a built `StorageManager`, `auth=` becomes the `credentials`
+children, and the session snapshot is the `save_path` of `server.session`.
+**The server creates no user** (owner, 2026-09-12): `admin_password=`, the
+grammar word, `_bootstrap_admin` and `ADMIN_IDENTITY`/`ADMIN_TAGS` are gone —
+a deployment that needs a first identity declares the store class that carries
+it, and the login surface belongs to the application. `tasks=` is untouched by
+this pass, by the owner's decision: it belongs to the orchestration branch.
+A template NAME is a configuration source like a
+`config.py` path, on the constructor (`AsgiServer(config="default")`) and on the
+CLI (`genro-asgi serve template=default`). Config comes from the config builder + CLI;
 `OpenApiApplication`, `McpApplication` and the tasks subsystem (scheduler,
 spool, executor) mount like any other app.
 
@@ -402,6 +484,15 @@ eliminated, not left behind. A request meeting a user between two homes
 parks on the per-user barrier up to `REQUEST_HOLD_MAX_SECONDS`. A sudden
 worker death restarts the small set of users involved: an accepted,
 observable risk, not a gap.
+
+**No worker is born while the server is leaving (landed 2026-09-12, #89).**
+`GroupHandler.start_worker` — the ONE door of every birth, the wild death's
+(`on_child_lost` → `ping_now` → `check_occupancy`) included — refuses and
+answers None while `SpaCommander.server_leaving`, journaled once
+(`reason="server_leaving"`: the state never returns to RUNNING). The commander
+reads the lifecycle off `self.server`, which the front writes at its startup
+(`commander.server = self.server`) and which is None in a pool built without a
+server, where nothing of the lifecycle is read.
 
 **Putting ONE user to sleep is one ordered operation, and the group owns it**
 (wf/41, landing): `GroupHandler.freeze_hosted_user` blocks him at the vertex

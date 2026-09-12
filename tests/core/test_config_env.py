@@ -40,7 +40,6 @@ from genro_asgi import (
     AsgiConfigBuilder,
     AsgiServer,
     BaseApplication,
-    ConfigError,
     ConfigurationHandler,
 )
 from genro_asgi.application import ApplicationGrammar
@@ -49,7 +48,6 @@ from genro_asgi.types import Receive, Scope, Send
 HOST_ENV_VAR = "GENRO_TEST_HOST"
 PORT_ENV_VAR = "GENRO_TEST_PORT"
 STORAGE_KEY_ENV_VAR = "GENRO_TEST_STORAGE_KEY"
-ADMIN_PW_ENV_VAR = "GENRO_TEST_ENV_ADMIN_PW"
 BASIC_PW_ENV_VAR = "GENRO_TEST_BASIC_PW"
 DB_PW_ENV_VAR = "GENRO_TEST_DB_PW"
 
@@ -197,21 +195,7 @@ class TestStorageKeyFromTheEnvironment:
 
 
 class TestSecretsFromTheEnvironment:
-    """``admin_password`` as a node value, ``basic_user.password`` as an attribute."""
-
-    def test_admin_password_node_value_resolves(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv(ADMIN_PW_ENV_VAR, "boot-s3cret")
-
-        class AdminConfig(AsgiConfigBuilder):
-            def main(self, root: Any) -> None:
-                cfg = root.configuration()
-                cfg.authentication().admin_password(EnvResolver(ADMIN_PW_ENV_VAR))
-                cfg.applications().application(code="shop", mount="", app_class=ShopApp)
-
-        handler = ConfigurationHandler(AdminConfig)
-        assert handler.identity_kwargs()["admin_password"] == "boot-s3cret"
+    """A secret written as an attribute resolves through the read stack."""
 
     def test_basic_user_password_attribute_resolves_into_the_auth_entries(
         self, monkeypatch: pytest.MonkeyPatch
@@ -232,25 +216,6 @@ class TestSecretsFromTheEnvironment:
         entries = ConfigurationHandler(BasicConfig).auth_entries()
         assert entries is not None
         assert entries["basic"]["admin"]["password"] == "attr-s3cret"
-
-    def test_admin_password_resolving_non_string_is_a_boot_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # dtype="L" makes the resolver deliver an int: the recipe line is
-        # legal (it IS a resolver), so the type check belongs to the fold.
-        monkeypatch.setenv(ADMIN_PW_ENV_VAR, "12345")
-
-        class TypedConfig(AsgiConfigBuilder):
-            def main(self, root: Any) -> None:
-                cfg = root.configuration()
-                cfg.authentication().admin_password(
-                    EnvResolver(ADMIN_PW_ENV_VAR, dtype="L")
-                )
-                cfg.applications().application(code="shop", mount="", app_class=ShopApp)
-
-        with pytest.raises(ConfigError, match="must resolve to a string"):
-            ConfigurationHandler(TypedConfig).identity_kwargs()
-
 
 class RecordingDb:
     """A ``db_class`` stand-in: the fold hands it the connection params."""
@@ -325,17 +290,15 @@ class TestApplicationSideReads:
 
 
 class TestUnconfiguredServer:
-    """An app on a bare server has nothing to read."""
+    """An app on a server composed in code reads a tree that declares nothing."""
 
     def test_call_site_default_answers(self) -> None:
-        app = ShopApp(mount="")
-        AsgiServer(applications=[app])
+        app = AsgiServer(applications=[(ShopApp, {"mount": ""})]).applications["shopapp"]
         assert app.config("catalog.title", default="none") == "none"
 
     def test_without_a_default_it_raises(self) -> None:
-        app = ShopApp(mount="")
-        AsgiServer(applications=[app])
-        with pytest.raises(KeyError, match="not attached to a configured server"):
+        app = AsgiServer(applications=[(ShopApp, {"mount": ""})]).applications["shopapp"]
+        with pytest.raises(KeyError, match="applications.shopapp.catalog.title"):
             app.config("catalog.title")
 
     def test_a_detached_app_raises_too(self) -> None:

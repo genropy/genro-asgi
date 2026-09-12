@@ -24,16 +24,19 @@ uses, so composing the mixins arms header auth with no user action while an
 explicit ``middleware={"auth": False}`` still wins.
 
 It also wires the server's identity stores. ``users=`` and ``tokens=`` each take
-a config dict (``{mount, prefix}``, defaulting to ``site:users`` /
-``site:api_keys``) OR a ready store instance; ``admin_password=`` seeds the
-bootstrap admin. The stores are built AFTER ``super().__init__()`` returns — by
-then the cooperative chain has run and ``self.storage`` exists, since AuthMixin
-precedes StorageMixin in the MRO. The ``user_store`` / ``api_key_store``
-properties return ``None`` when unconfigured (the shape ``login`` already reads).
-A config dict without storage on the server is a boot error (no silent fallback);
-a ready instance needs no storage. ``admin_password`` with no ``users=`` config
-implies the default users store. The bootstrap admin is an UPSERT at boot (config
-wins): runtime edits to the admin record do not survive a reboot.
+the store DESCRIPTOR the configuration declares — ``store_class`` (``FileUserStore``
+/ ``FileApiKeyStore`` when omitted) plus that class's kwargs, ``{mount, prefix}``
+defaulting to ``site:users`` / ``site:api_keys``. The stores are built AFTER
+``super().__init__()`` returns — by then the cooperative chain has run and
+``self.storage`` exists, since AuthMixin precedes StorageMixin in the MRO. The
+``user_store`` / ``api_key_store`` properties return ``None`` when unconfigured
+(the shape ``login`` already reads). A descriptor without storage on the server
+is a boot error (no silent fallback).
+
+The server creates NO user (owner, 2026-09-12): ``admin_password=`` and the
+boot-time UPSERT of a bootstrap admin are gone, with the grammar word that fed
+them. Authentication belongs to the applications, and a deployment that needs a
+first identity declares the store class that carries it.
 
 It overrides the §4 contract method ``authenticate(request)`` with the §5.5
 identity precedence: an ``Authorization`` header wins (API-first) — its
@@ -56,13 +59,6 @@ from .user_store import FileUserStore, UserStore
 
 __all__ = ["AuthMixin"]
 
-ADMIN_IDENTITY = "admin"
-#: The bootstrap admin answers for the whole server, so it carries both the
-#: administration tag and the one gating the monitor: a freshly installed
-#: server is observable by the identity that configures it. The UPSERT at boot
-#: applies this list to an existing record too, so no store needs migrating.
-ADMIN_TAGS = ["SUPERADMIN", "SERVER_ADMIN"]
-
 
 class AuthMixin:
     """Auth capability mixin, composed BEFORE the session/middleware/server classes.
@@ -70,27 +66,25 @@ class AuthMixin:
     Constructor kwargs peeled here: ``auth`` — the credential config dict
     (``{'basic': ..., 'bearer': ..., 'jwt': [...]}``); ``None`` arms no header
     backend but still resolves the session identity through §5.5 precedence.
-    ``users`` / ``tokens`` — a ``{mount, prefix}`` config dict or a ready store
-    instance for the identity/api-key stores; ``admin_password`` — the bootstrap
-    admin's password (implies the default users store when ``users`` is absent).
+    ``users`` / ``tokens`` — the store descriptor (``store_class`` plus its
+    kwargs) for the identity/api-key stores.
+
+    The server creates NO user: authentication belongs to the applications
+    (owner, 2026-09-12). A deployment that needs a first identity declares the
+    store class that carries it.
     """
 
     def __init__(self, **kwargs: Any) -> None:
         auth: dict[str, Any] | None = kwargs.pop("auth", None)
         users = kwargs.pop("users", None)
         tokens = kwargs.pop("tokens", None)
-        admin_password: str | None = kwargs.pop("admin_password", None)
         middleware: dict[str, Any] = dict(kwargs.get("middleware") or {})
         middleware.setdefault("auth", True)
         kwargs["middleware"] = middleware
         super().__init__(**kwargs)
-        if users is None and admin_password is not None:
-            users = {}
         self._user_store = self._build_user_store(users)
         self._api_key_store = self._build_api_key_store(tokens)
         self._auth_core = AuthCore(**(auth or {}), api_key_store=self._api_key_store)
-        if admin_password is not None:
-            self._bootstrap_admin(admin_password)
 
     @property
     def auth_core(self) -> AuthCore:
@@ -108,20 +102,27 @@ class AuthMixin:
         return self._api_key_store
 
     def _build_user_store(self, users: Any) -> UserStore | None:
-        """Build the user store from a config dict, pass through an instance, or None."""
+        """Build the user store the descriptor names, or ``None`` when unconfigured.
+
+        The descriptor is what the ``authentication.users`` section carries:
+        ``store_class`` (``FileUserStore`` when omitted) plus that class's own
+        kwargs. The storage is handed to it — no built store ever arrives here,
+        because a store is not a value a configuration can hold.
+        """
         if users is None:
             return None
-        if isinstance(users, UserStore):
-            return users
-        return FileUserStore(self._require_storage("users"), **users)
+        options = dict(users)
+        store_class = options.pop("store_class", None) or FileUserStore
+        return store_class(self._require_storage("users"), **options)
 
     def _build_api_key_store(self, tokens: Any) -> ApiKeyStore | None:
-        """Build the api-key store from a config dict, pass through an instance, or None."""
+        """Build the api-key store the descriptor names, or ``None`` — see
+        ``_build_user_store``; the default class is ``FileApiKeyStore``."""
         if tokens is None:
             return None
-        if isinstance(tokens, ApiKeyStore):
-            return tokens
-        return FileApiKeyStore(self._require_storage("tokens"), **tokens)
+        options = dict(tokens)
+        store_class = options.pop("store_class", None) or FileApiKeyStore
+        return store_class(self._require_storage("tokens"), **options)
 
     def _require_storage(self, section: str) -> Any:
         """Return the server storage, or raise when a config-dict store needs it.
@@ -135,18 +136,6 @@ class AuthMixin:
                 f"'{section}' store needs a storage mount, but the server has no storage"
             )
         return storage
-
-    def _bootstrap_admin(self, admin_password: str) -> None:
-        """UPSERT the bootstrap admin at boot (config wins over any stored record)."""
-        store = self._user_store
-        store.save(
-            {
-                "identity": ADMIN_IDENTITY,
-                "password_hash": store.hash_password(admin_password),
-                "tags": list(ADMIN_TAGS),
-                "enabled": True,
-            }
-        )
 
     def authenticate(self, request: Any) -> Any:
         """Resolve the request identity: header credentials win, else the session.

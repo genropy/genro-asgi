@@ -19,7 +19,9 @@
 under ``api_name`` (mounted mode) — and adds a ``_meta`` sub-tree with three
 introspection endpoints:
 
-- ``_meta/schema_json`` — the OpenAPI 3.1 document of the API;
+- ``_meta/schema_json`` — the OpenAPI 3.1 document of the API, every operation
+  declaring the code this application answers a rejected value with
+  (``declare_validation_error``);
 - ``_meta/docs`` — a Swagger-UI page pointing at ``_meta/schema_json``;
 - ``_meta/index`` — an HTML splash linking to the docs.
 
@@ -104,6 +106,19 @@ class OpenApiApplication(RoutedApplication):
         """OpenAPI info dict: the mounted class's, else the app's, else empty."""
         return self._mounted_info or self.openapi_info or {}
 
+    def declare_validation_error(self, paths: dict[str, Any]) -> None:
+        """Write the code this application answers a rejected value with.
+
+        Every operation of the document gains one response entry on
+        ``validation_error_status`` — 400 under the strict reading, 422 for an
+        application declaring the FastAPI convention (issue #87) — so a client
+        reads the code it will actually receive.
+        """
+        status = str(self.validation_error_status)
+        for path_item in paths.values():
+            for operation in path_item.values():
+                operation["responses"][status] = {"description": "Invalid argument values"}
+
     def schema_filters(self) -> dict[str, Any]:
         """Node filters forwarded to ``router_openapi`` when building the schema.
 
@@ -139,6 +154,7 @@ class OpenApiMeta(RoutingClass):
         app = self.application
         info = app.api_info
         paths_data = router_openapi(app.route, **app.schema_filters())
+        app.declare_validation_error(paths_data.get("paths") or {})
         return {
             "openapi": "3.1.0",
             "servers": [{"url": f"/{app.mount}" if app.mount else "/"}],

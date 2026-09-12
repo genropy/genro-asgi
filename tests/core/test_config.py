@@ -46,7 +46,6 @@ from genro_asgi.middleware.base import BaseMiddleware
 from genro_asgi.storage_mixin import DEFAULT_SITE_MOUNT
 from genro_asgi.types import Message, Receive, Scope, Send
 
-ADMIN_PW_ENV_VAR = "GENRO_TEST_ADMIN_PW"
 
 
 class ShopApp(BaseApplication):
@@ -156,8 +155,11 @@ class TestSelfConfiguringServer:
         assert set(server.applications) == {"shop", "api"}
         assert isinstance(server.applications["api"], ApiApp)
 
-    def test_a_bare_server_has_no_configuration(self) -> None:
-        assert AsgiServer(applications=[ShopApp(mount="")]).config is None
+    def test_a_server_composed_in_code_has_one_too(self) -> None:
+        """#91: the configuration always exists — the kwargs build it."""
+        server = AsgiServer(applications=[(ShopApp, {"mount": ""})])
+        assert isinstance(server.config, ConfigurationHandler)
+        assert server.config("applications.shopapp.mount") == ""
 
     def test_the_handler_stays_reachable_as_the_read_door(self) -> None:
         server = AsgiServer(config=TwoAppConfig)
@@ -313,7 +315,7 @@ class TestShutdownTimeout:
         captured: list[Any] = []
 
         class XT_Server:
-            def __init__(self, config: Any) -> None:
+            def __init__(self, base_server: Any, config: Any) -> None:
                 captured.append(config)
 
             def run(self) -> None:
@@ -321,7 +323,7 @@ class TestShutdownTimeout:
 
         import genro_asgi.server as server_module
 
-        monkeypatch.setattr(server_module.uvicorn, "Server", XT_Server)
+        monkeypatch.setattr(server_module, "UvicornServer", XT_Server)
         server = AsgiServer(config=BoundedConfig)
         assert server.shutdown_timeout_seconds == 2.0
         server.serve()
@@ -505,9 +507,8 @@ def storage_site_config(base_path: Path) -> type[AsgiConfigBuilder]:
             self.identity_section(cfg)
 
         def identity_section(self, cfg: Any) -> None:
-            """Bootstrap admin plus both identity stores on ``idstore``."""
+            """Both identity stores on ``idstore``."""
             auth = cfg.authentication()
-            auth.admin_password(EnvResolver(ADMIN_PW_ENV_VAR))
             auth.users(mount="idstore", prefix="users")
             auth.tokens(mount="idstore", prefix="api_keys")
 
@@ -558,31 +559,21 @@ class TestIdentitySection:
         assert server.user_store is None
         assert server.api_key_store is None
 
-    def test_stores_and_bootstrap_admin_reach_the_server(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv(ADMIN_PW_ENV_VAR, "s3cret")
+    def test_the_declared_stores_reach_the_server(self, tmp_path: Path) -> None:
         server = AsgiServer(config=storage_site_config(tmp_path))
         assert server.user_store is not None
         assert server.api_key_store is not None
-        admin = server.user_store.get("admin")
-        assert admin is not None
-        assert "SUPERADMIN" in admin["tags"]
+        assert server.user_store.load_all() == []   # the server seeds nobody
 
-    def test_admin_password_literal_is_rejected_by_the_grammar(self) -> None:
-        class LiteralConfig(AsgiConfigBuilder):
+    def test_the_bootstrap_password_is_no_longer_a_word(self) -> None:
+        """#91: the server creates no user, so the recipe has nothing to say."""
+
+        class BootstrapConfig(AsgiConfigBuilder):
             def main(self, root: Any) -> None:
-                root.configuration().authentication().admin_password("plain-secret")
+                root.configuration().authentication().admin_password("anything")
 
-        with pytest.raises(ValueError, match="node_value"):
-            AsgiServer(config=LiteralConfig)
-
-    def test_admin_password_resolving_empty_is_a_boot_error(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.delenv(ADMIN_PW_ENV_VAR, raising=False)
-        with pytest.raises(ConfigError, match="resolved empty"):
-            AsgiServer(config=storage_site_config(tmp_path))
+        with pytest.raises(AttributeError, match="admin_password"):
+            ConfigurationHandler(BootstrapConfig)
 
     def test_a_second_users_element_is_rejected_by_the_grammar(self) -> None:
         class DoubledConfig(AsgiConfigBuilder):
@@ -623,7 +614,7 @@ class TestTasksConfig:
         assert server.tasks.task_store.mount == "site"       # explicit override
 
     def test_direct_dict_kwarg(self) -> None:
-        server = AsgiServer(applications=[ShopApp(mount="")],
+        server = AsgiServer(applications=[(ShopApp, {"mount": ""})],
                             tasks={"enabled": True, "tick_seconds": 3})
         assert server.tasks.scheduler.tick_seconds == 3.0
         assert server.tasks_config == {"tick_seconds": 3}    # enabled peeled away

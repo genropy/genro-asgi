@@ -26,7 +26,9 @@ body with ``from_tytx(transport=...)``. The transport → media type map lives
 in ``media_types``, the inbound content-type is resolved here in
 ``get_transport``; the protocol reading lives here and nowhere else.
 
-The body is decoded by content-type:
+The owning application decides whether the body is decoded at all
+(``request(body=...)`` in its own grammar, ``decoded`` by default). Decoded,
+it is decoded by content-type:
 
 - json / xml / msgpack (standard or ``application/vnd.tytx+*`` media type) →
   the hydrated value;
@@ -34,8 +36,16 @@ The body is decoded by content-type:
 - ``multipart/form-data`` → a dict: text parts hydrated with ``from_tytx``,
   file parts (those carrying a ``filename``) as ``UploadedFile``; a field
   name repeated across parts collects its values in a list;
-- anything else → the raw bytes;
+- anything else → ``HTTPUnsupportedMediaType`` (415): the core decodes what it
+  knows and says so when it does not;
 - an empty body → ``None``.
+
+A body that is not what its content-type declares — broken JSON, XML or
+msgpack, a malformed form or multipart — raises ``HTTPBadRequest`` (400) with
+the reason the decoder gave, inside the request itself, so no decode failure
+reaches the client as a 500. An application that declared ``body="raw"``
+receives the bytes untouched and decodes them itself: ``decode_body``,
+``decode_json``, ``decode_multipart`` and ``get_transport`` are public for it.
 
 ``UploadedFile`` is the file a client uploaded in a multipart form: ``name``
 (the form field), ``filename`` (as sent by the client), ``content_type``
@@ -52,7 +62,7 @@ holds the response seam: ``self.response`` is a ``Response`` bound back to it.
 the base; a form body — urlencoded OR multipart — is merged field by field
 (body wins on a clash, files included: ``def upload(self, title, doc)`` gets
 ``doc`` as an ``UploadedFile``); a hydrated body is passed whole as
-``body_data``; opaque bytes as ``body_raw``; an empty body adds nothing.
+``body_data``; an undecoded body as ``body_raw``; an empty body adds nothing.
 
 ``db`` is the deferred preparation layer (no ORM yet): on first access it
 resolves the server's registered handler for the owning app's ``db_name`` (else
@@ -75,6 +85,7 @@ from urllib.parse import parse_qs
 
 from genro_tytx import from_qs, from_tytx
 
+from .exceptions import HTTPBadRequest, HTTPException, HTTPUnsupportedMediaType
 from .response import Response
 from .session.session import Session
 
@@ -159,7 +170,7 @@ class Request:
         self._cookies = self.decode_cookies(cookie_header)
         self._query = self.decode_query(self._scope.get("query_string", b"").decode("latin-1"))
         body = await self.read_body()
-        self._data = self.decode_body(body, str(self.content_type or ""))
+        self._data = self.parse_body(body)
         transport = self._headers.get("x-tytx-transport")
         if transport:
             self._tytx_mode = True
@@ -222,46 +233,91 @@ class Request:
             return "msgpack"
         return None
 
+    def parse_body(self, body: bytes) -> Any:
+        """The body as the owning application wants it: decoded, or the bytes.
+
+        An application declaring ``request(body="raw")`` — and one serving a
+        request nobody owns — keeps the bytes (an empty body is ``None``);
+        every other application gets ``decode_body`` on the declared
+        content-type.
+        """
+        application = self._application
+        if application is not None and application.raw_body:
+            return body or None
+        return self.decode_body(body, str(self.content_type or ""))
+
     def decode_body(self, body: bytes, content_type: str) -> Any:
         """Decode the body bytes by content-type.
 
-        A json/xml/msgpack body comes back hydrated, a form body (urlencoded or
-        multipart) as a dict of fields, anything else as the opaque bytes it is;
-        an empty body is ``None``. The media type decides case-insensitively,
-        while the multipart parser gets the header as sent — its boundary is
-        case-sensitive.
+        A json/xml/msgpack body comes back hydrated and a form body (urlencoded
+        or multipart) as a dict of fields; an empty body is ``None``. The media
+        type decides case-insensitively, while the multipart parser gets the
+        header as sent — its boundary is case-sensitive.
+
+        A body that is not what its content-type declares raises
+        ``HTTPBadRequest`` with the reason the decoder gave — a JSON decoder
+        that answers the text it could not parse is read as the failure it is —
+        and a content-type with no decoder raises ``HTTPUnsupportedMediaType``.
+        Public, and callable by an application that took the body raw.
         """
         if not body:
             return None
         media = content_type.lower()
         transport = self.get_transport(media)
-        if transport == "msgpack":
-            return from_tytx(body, transport=transport)
-        if transport is not None:
-            return from_tytx(body.decode("utf-8"), transport=transport)
-        if "x-www-form-urlencoded" in media:
-            return from_qs(body.decode("latin-1"))
-        if "multipart/form-data" in media:
-            return self.decode_multipart(body, content_type)
-        return body
+        try:
+            if transport == "msgpack":
+                return from_tytx(body, transport=transport)
+            if transport == "xml":
+                return from_tytx(body.decode("utf-8"), transport=transport)
+            if transport == "json":
+                return self.decode_json(body.decode("utf-8"))
+            if "x-www-form-urlencoded" in media:
+                return from_qs(body.decode("latin-1"))
+            if "multipart/form-data" in media:
+                return self.decode_multipart(body, content_type)
+        except HTTPException:
+            raise
+        except Exception as error:
+            raise HTTPBadRequest(f"body is not valid {media}: {error}") from error
+        raise HTTPUnsupportedMediaType(f"no decoder for content-type {media or '(none)'}")
+
+    def decode_json(self, text: str) -> Any:
+        """Hydrate a JSON body, refusing the text a broken document decodes to.
+
+        ``from_tytx`` answers the input itself when the JSON does not parse, so
+        a result identical to the text it was given IS the parse failure.
+        """
+        decoded = from_tytx(text, transport="json")
+        if isinstance(decoded, str) and decoded == text:
+            raise HTTPBadRequest("body is not valid json")
+        return decoded
 
     def decode_multipart(self, body: bytes, content_type: str) -> dict[str, Any]:
         """Split a multipart form body into its fields, keyed by form name.
 
         A part carrying a ``filename`` becomes an ``UploadedFile``, a text part is
         TYTX-hydrated, and a name repeated across parts collects a list.
+
+        The stdlib parser is lenient where HTTP is not: a body that yields no
+        part at all, and a part that names no form field, are malformed and
+        raise ``HTTPBadRequest`` — a nameless field would otherwise reach the
+        handler as a keyword that is not a string.
         """
         raw = b"Content-Type: " + content_type.encode("latin-1") + b"\r\n\r\n" + body
         form = BytesParser(policy=email.policy.HTTP).parsebytes(raw)
         fields: defaultdict[str, list[Any]] = defaultdict(list)
         for part in form.iter_parts():
             name = part.get_param("name", header="content-disposition")
+            if name is None:
+                raise HTTPBadRequest("multipart body carries a part with no form name")
             filename = part.get_filename()
             payload = part.get_payload(decode=True)
             if filename is None:
                 fields[name].append(from_tytx(payload.decode("utf-8")))
             else:
                 fields[name].append(UploadedFile(name, filename, part.get_content_type(), payload))
+        if not fields:
+            raise HTTPBadRequest("body is not a valid multipart form")
         return {name: values[0] if len(values) == 1 else values for name, values in fields.items()}
 
     @property
@@ -412,19 +468,20 @@ class Request:
         ``multipart/form-data`` — arrives as a dict of hydrated fields (files
         included, as ``UploadedFile``) and is merged field by field, the body
         winning on a name clash; a hydrated body (JSON/XML/msgpack) is passed
-        whole as ``body_data``; opaque bytes are passed as ``body_raw``; an
-        empty body adds nothing.
+        whole as ``body_data``; the bytes of a raw body are passed as
+        ``body_raw``; an empty body adds nothing.
         """
         kwargs: dict[str, Any] = dict(self._query)
         data = self._data
         if data is None:
             return kwargs
+        if isinstance(data, bytes):
+            kwargs["body_raw"] = data
+            return kwargs
         content_type = (self.content_type or "").lower()
         if "x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
             if isinstance(data, dict):
                 kwargs.update(data)
-        elif isinstance(data, bytes):
-            kwargs["body_raw"] = data
         else:
             kwargs["body_data"] = data
         return kwargs

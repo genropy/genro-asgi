@@ -17,6 +17,7 @@
 Usage::
 
     genro-asgi serve ./config.py                      # a config.py recipe
+    genro-asgi serve template=default                 # a ready-made configuration
     genro-asgi serve application=./hello.py:Hello     # one app, no config
     genro-asgi serve application=pkg.mod:App --name demo   # serve AND register
     genro-asgi serve demo                             # relaunch a registered name
@@ -26,11 +27,12 @@ Usage::
 
 The ``serve`` source resolves in this order: an ``application=<target>``
 assignment (quickstart — the target class is instantiated with no arguments and
-handed to ``AsgiServer(applications=[...])``), an existing ``.py`` path (handed
-to ``AsgiServer(config=<absolute path>)``, whose contract is the contrib
-handler's own: exactly one ``ConfigBuilder`` subclass defined in the file — this
-command ships no loader and lets that error surface), otherwise a NAME looked up
-in the registry.
+handed to ``AsgiServer(applications=[...])``), a ``template=<name>`` assignment
+(one of the ready-made configurations, ``CONFIGURATION_TEMPLATES``), an existing
+``.py`` path (handed to ``AsgiServer(config=<absolute path>)``, whose contract is
+the contrib handler's own: exactly one ``ConfigBuilder`` subclass defined in the
+file — this command ships no loader and lets that error surface), otherwise a
+NAME looked up in the registry.
 
 Explicit ``--host``/``--port`` are forwarded as ``AsgiServer`` kwargs: the
 server's own "explicit kwarg wins over the configured value" rule does the
@@ -69,6 +71,7 @@ from .asgi_server import AsgiServer
 from .lifespan import QUITTING
 from .reloading import LAUNCHER_ENV, serve_reloading
 from .config.default_config import DefaultConfig
+from .config.templates import CONFIGURATION_TEMPLATES
 
 __all__ = [
     "LAUNCHER_ENV",
@@ -225,12 +228,26 @@ class ServerLauncher:
         self.port = options.port
         self.reload = options.reload
         self.debug = options.debug
-        if not (self.is_quickstart or self.is_config_path):
+        if not (self.is_quickstart or self.is_template or self.is_config_path):
             self.adopt_registered(self.source)
 
     @property
     def is_quickstart(self) -> bool:
         return self.source.startswith("application=")
+
+    @property
+    def is_template(self) -> bool:
+        """True when the source names one of the ready-made configurations."""
+        return self.source.startswith("template=")
+
+    @property
+    def template_name(self) -> str:
+        """The template the source names; an unknown one is a usage error."""
+        name = self.source.partition("=")[2]
+        if name not in CONFIGURATION_TEMPLATES:
+            known = ", ".join(sorted(CONFIGURATION_TEMPLATES))
+            raise CliError(f"unknown configuration template {name!r} (known: {known})")
+        return name
 
     @property
     def is_config_path(self) -> bool:
@@ -297,6 +314,8 @@ class ServerLauncher:
         payload = dict(self.constructor_kwargs)
         if self.is_quickstart:
             payload["application"] = self.quickstart_target
+        elif self.is_template:
+            payload["config"] = self.template_name
         else:
             payload["config"] = str(Path(self.source).resolve())
         return payload
@@ -308,6 +327,8 @@ class ServerLauncher:
         A dotted target has no file of its own to anchor on, so the working
         directory is watched instead.
         """
+        if self.is_template:
+            return str(Path.cwd())
         module_part = (
             self.quickstart_target.partition(":")[0] if self.is_quickstart else self.source
         )
@@ -347,13 +368,16 @@ class ServerLauncher:
         """The server this source describes, host/port forwarded when given."""
         if self.is_quickstart:
             app_class = TargetResolver(self.source.partition("=")[2]).resolve()
-            return AsgiServer(applications=[app_class()], **self.constructor_kwargs)
+            return AsgiServer(applications=[app_class], **self.constructor_kwargs)
+        if self.is_template:
+            return AsgiServer(config=self.template_name, **self.constructor_kwargs)
         if self.is_config_path:
             config_path = Path(self.source).resolve()
             self.ensure_importable(config_path.parent)
             return AsgiServer(config=str(config_path), **self.constructor_kwargs)
         raise CliError(
             f"cannot serve {self.source!r}: not an existing config.py path, "
+            "not a 'template=<name>' assignment, "
             "not an 'application=<target>' assignment"
         )
 
@@ -419,8 +443,14 @@ class Cli:
         parser = argparse.ArgumentParser(prog="genro-asgi", description="Run and manage ASGI servers.")
         commands = parser.add_subparsers(dest="command", required=True)
 
-        serve = commands.add_parser("serve", help="run a server from a config.py, a target or a name")
-        serve.add_argument("source", help="a config.py path, 'application=<target>', or a registered name")
+        serve = commands.add_parser(
+            "serve", help="run a server from a config.py, a template, a target or a name"
+        )
+        serve.add_argument(
+            "source",
+            help="a config.py path, 'template=<name>', 'application=<target>', "
+            "or a registered name",
+        )
         serve.add_argument("--host", help="bind host (overrides the configured one)")
         serve.add_argument("--port", type=int, help="bind port (overrides the configured one)")
         serve.add_argument("--reload", action="store_true", help="restart on source changes")
@@ -514,13 +544,14 @@ def factory() -> AsgiServer:
     }
     if "application" in described:
         server = AsgiServer(
-            applications=[TargetResolver(described["application"]).resolve()()], **kwargs
+            applications=[TargetResolver(described["application"]).resolve()], **kwargs
         )
     elif "config" in described:
         # The reloaded process starts fresh: the sibling-import path the parent
         # inserted (ServerLauncher.ensure_importable) must be re-inserted here.
+        # A template name has no file and no siblings to reach.
         parent = str(Path(described["config"]).parent)
-        if parent not in sys.path:
+        if described["config"].endswith(".py") and parent not in sys.path:
             sys.path.insert(0, parent)
         server = AsgiServer(config=described["config"], **kwargs)
     else:

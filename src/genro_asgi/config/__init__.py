@@ -22,14 +22,27 @@ source and reads every value through it.
 The recipe is never alone: the handler layers ``BaseConfiguration`` (the
 package's shipped defaults) and the defaults source the recipe itself declares
 through its ``default_config`` attribute underneath it — see ``DefaultConfig``.
+
+The configuration ALWAYS exists (#91): a server composed in code takes the
+ready-made ``DefaultConfiguration`` (named in ``CONFIGURATION_TEMPLATES``) and
+writes its constructor kwargs into a ``ShortcutConfiguration`` on top of it — see
+``templates``.
 """
 
 from .builder import AsgiConfigBuilder, BaseConfiguration
 from .default_config import HOME_ENV, DefaultConfig
 from .elements import AsgiServerGrammar
 from .handler import ConfigError, ConfigurationHandler
+from .templates import (
+    CONFIGURATION_TEMPLATES,
+    DEFAULT_TEMPLATE,
+    DefaultConfiguration,
+    ShortcutConfiguration,
+)
 
 __all__ = [
+    "CONFIGURATION_TEMPLATES",
+    "DEFAULT_TEMPLATE",
     "HOME_ENV",
     "AsgiConfigBuilder",
     "AsgiServerGrammar",
@@ -37,4 +50,6 @@ __all__ = [
     "ConfigError",
     "ConfigurationHandler",
     "DefaultConfig",
+    "DefaultConfiguration",
+    "ShortcutConfiguration",
 ]

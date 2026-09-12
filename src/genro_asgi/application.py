@@ -67,20 +67,42 @@ __all__ = ["ApplicationGrammar", "BaseApplication"]
 
 _MISSING = object()
 
+BODY_MODES: dict[str, bool] = {"decoded": False, "raw": True}
+"""The ``request(body=...)`` words, as what they decide: raw bytes or decoded."""
+
+ERROR_CODES: dict[str, int] = {"strict": 400, "fastapi": 422}
+"""The ``request(error_codes=...)`` words, as the status a rejected value answers."""
+
 
 class ApplicationGrammar:
     """The configuration grammar every application inherits.
 
-    One element, ``parameters``, for the free options a plain app needs: an
+    Two elements: ``parameters``, for the free options a plain app needs — an
     application with nothing of its own still has a mountable grammar (an EMPTY
-    grammar class is rejected by builders), and a richer app subclasses this to
-    add its own vocabulary.
+    grammar class is rejected by builders) — and ``request``, the two options
+    every application has about the requests the core serves for it. A richer
+    app subclasses this to add its own vocabulary.
     """
 
     @element(node_label="parameters")
     def parameters(self, **options: Any) -> None:
         """Free application options, read back as
         ``applications.<code>.parameters.<name>``."""
+
+    @element(node_label="request")
+    def request(self, body: str = "decoded", error_codes: str = "strict") -> None:
+        """How this application takes a request body, and which codes it answers.
+
+        ``body`` is ``"decoded"`` (the default: the core decodes by content-type
+        and the fields become handler kwargs) or ``"raw"`` (the handler receives
+        the bytes as ``body_raw`` and decodes them itself — the core's decode
+        helpers on ``Request`` stay public for exactly that).
+
+        ``error_codes`` is ``"strict"`` (the default: a value rejected by
+        validation is a 400 like every other failure the core judges — 422
+        belongs to the handler, for a domain rule) or ``"fastapi"`` (that one
+        case answers 422, the convention a FastAPI client expects).
+        """
 
 
 class BaseApplication:
@@ -150,6 +172,30 @@ class BaseApplication:
         return handler(full_path, default=default)
 
     @property
+    def raw_body(self) -> bool:
+        """True when this application takes the request body bytes untouched.
+
+        Read from the configuration and nowhere else: the word is
+        ``request(body="raw")`` under ``applications.<code>``, written by the
+        site recipe or by the shortcut that builds one. The default,
+        ``"decoded"``, is the grammar element's own and leaves the decoding to
+        the core; a word the map does not know raises a noisy ``KeyError`` at
+        the first request, naming what was written.
+        """
+        return BODY_MODES[self.config("request.body", default="decoded")]
+
+    @property
+    def validation_error_status(self) -> int:
+        """The status a value rejected by validation answers: 400, or 422.
+
+        Read from the configuration and nowhere else: the word is
+        ``request(error_codes="fastapi")`` under ``applications.<code>``. The
+        default, ``"strict"``, answers 400 like every other failure the core
+        judges.
+        """
+        return ERROR_CODES[self.config("request.error_codes", default="strict")]
+
+    @property
     def handshake_cookie(self) -> str | None:
         """The cookie a websocket handshake must carry to reach this application.
 
@@ -165,6 +211,20 @@ class BaseApplication:
         1008, so the browser reads why.
         """
         return None
+
+    @property
+    def well_known_names(self) -> tuple[str, ...]:
+        """The discovery documents this application answers under ``/.well-known/``.
+
+        Returns:
+            The names, empty here — an application that serves none, which is
+            the base answer.
+
+        The server reads this at mount time and keeps one name → application
+        index; a routed application answers with the children of its
+        ``_well_known`` branch.
+        """
+        return ()
 
     @property
     def app_snapshot(self) -> dict[str, Any]:

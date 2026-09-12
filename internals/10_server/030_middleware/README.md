@@ -9,15 +9,15 @@ request, whichever application the request was going to. That is what keeps
 questions with one machine-wide answer out of the applications: authentication,
 cross-origin reads, what to do when something raises, whether a request deserves
 a line in a log. Each layer declares one integer, `middleware_order`, and the
-chain sorts itself by it, lowest outermost. This core ships six — errors,
-wellknown, logging, cors, session, auth.
+chain sorts itself by it, lowest outermost. This core ships five — errors,
+logging, cors, session, auth.
 
 Its parts:
 
 - **the middleware chain and its order** — one number per layer, and why the
   order is the design
 - **assembly** — built once, from an explicit list, with no global registry
-- **the six** — what each one does, and what it puts on the request
+- **the five** — what each one does, and what it puts on the request
 - **the outermost layer** — the one that turns a raised exception into an answer
 - **what the middleware chain does not see** — and why that is a decision, not
   an omission

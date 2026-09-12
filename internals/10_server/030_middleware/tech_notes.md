@@ -57,7 +57,7 @@ inside one layer reaches only what that layer does.
 
 ## The boundary with 040 and 050
 
-Two of the six layers are the visible half of entries that come later:
+Two of the five layers are the visible half of entries that come later:
 `SessionMiddleware` is where [040 sessions](../040_sessions/README.md) touches a
 request, and `AuthMiddleware` is where
 [050 authentication](../050_authentication/README.md) does. This entry owns
@@ -121,16 +121,16 @@ anonymous, 403 for the known — and it is the same commit
   class attribute alone gives the wrong answer about a shipped server.
 - **`errors=False` is writable and nothing refuses it.** With the outermost
   layer gone, raises escape the server. Friction S10.
-- **The middleware grammar element has six named parameters and no
-  `**kwargs`.** Unlike the plugins section, it physically cannot name a seventh
+- **The middleware grammar element has five named parameters and no
+  `**kwargs`.** Unlike the plugins section, it physically cannot name a sixth
   middleware. Friction S3.
 
 ## What was verified live while writing this
 
 Five probes, all driving composed servers at the ASGI level:
 
-- the full recipe: the chain walked outwards gives the six in declared order,
-  and all five rows of the answer table are the probe's own output — including
+- the full recipe: the chain walked outwards gives the five in declared order,
+  and every row of the answer table is the probe's own output — including
   the same 401 answered as a **401 with a login URL** to a JSON caller and as a
   **302 to the login page** to a browser;
 - the access log's `level` option: `WARNING` and `debug` resolve as written,

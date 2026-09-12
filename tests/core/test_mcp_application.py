@@ -113,17 +113,16 @@ def result_of(response_body: Callable[[list[Message]], bytes], sent: list[Messag
     return json.loads(response_body(sent))
 
 
-def mcp_server(app: McpApplication) -> AsgiServer:
-    """A server with ``app`` mounted at its ``mount`` over an empty root app."""
-    server = AsgiServer(applications=[Empty(mount=""), app])
-    return server
+def mcp_server(entry: tuple[type, dict]) -> AsgiServer:
+    """A server with *entry* mounted at its ``mount`` over an empty root app."""
+    return AsgiServer(applications=[(Empty, {"mount": ""}), entry])
 
 
 class TestMcpApplication:
     async def test_initialize_negotiates_version(
         self, mcp_post, response_status, response_body
     ) -> None:
-        app = McpApplication(code="mcp", routing_class=Calc())
+        app = (McpApplication, {"code": "mcp", "routing_class": Calc()})
         sent = await mcp_post(
             mcp_server(app), "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
         )
@@ -135,10 +134,11 @@ class TestMcpApplication:
     async def test_mcp_name_names_the_engine_the_client_sees(
         self, mcp_post, response_body
     ) -> None:
-        app = McpApplication(code="mcp", mcp_name="demo", routing_class=Calc())
-        assert app.mcp_engine.name == "demo"
+        app = (McpApplication, {"code": "mcp", "mcp_name": "demo", "routing_class": Calc()})
+        server = mcp_server(app)
+        assert server.applications["mcp"].mcp_engine.name == "demo"
         sent = await mcp_post(
-            mcp_server(app), "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+            server, "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
         )
         server_info = result_of(response_body, sent)["result"]["serverInfo"]
         assert server_info["name"] == "demo"
@@ -146,14 +146,14 @@ class TestMcpApplication:
     async def test_tools_list_enumerates_external_router(
         self, mcp_post, response_status, response_body
     ) -> None:
-        app = McpApplication(code="mcp", routing_class=Calc())
+        app = (McpApplication, {"code": "mcp", "routing_class": Calc()})
         sent = await mcp_post(mcp_server(app), "/mcp", {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
         assert response_status(sent) == 200
         tools = result_of(response_body, sent)["result"]["tools"]
         assert {tool["name"] for tool in tools} == {"add", "greet"}
 
     async def test_tools_call_sync_tool(self, mcp_post, response_body) -> None:
-        app = McpApplication(code="mcp", routing_class=Calc())
+        app = (McpApplication, {"code": "mcp", "routing_class": Calc()})
         sent = await mcp_post(
             mcp_server(app),
             "/mcp",
@@ -163,7 +163,7 @@ class TestMcpApplication:
         assert result["structuredContent"] == {"sum": 5}
 
     async def test_tools_call_async_tool(self, mcp_post, response_body) -> None:
-        app = McpApplication(code="mcp", routing_class=Calc())
+        app = (McpApplication, {"code": "mcp", "routing_class": Calc()})
         sent = await mcp_post(
             mcp_server(app),
             "/mcp",
@@ -174,7 +174,7 @@ class TestMcpApplication:
 
     async def test_sync_tool_runs_off_the_loop_thread(self, mcp_post) -> None:
         calc = Calc()
-        app = McpApplication(code="mcp", routing_class=calc)
+        app = (McpApplication, {"code": "mcp", "routing_class": calc})
         await mcp_post(
             mcp_server(app),
             "/mcp",
@@ -185,7 +185,7 @@ class TestMcpApplication:
     async def test_notification_answers_202_empty(
         self, mcp_post, response_status, response_body
     ) -> None:
-        app = McpApplication(code="mcp", routing_class=Calc())
+        app = (McpApplication, {"code": "mcp", "routing_class": Calc()})
         sent = await mcp_post(mcp_server(app), "/mcp", {"jsonrpc": "2.0", "method": "initialize"})
         assert response_status(sent) == 202
         assert response_body(sent) == b""
@@ -193,14 +193,14 @@ class TestMcpApplication:
     async def test_other_method_is_method_not_allowed(self, drive, response_status) -> None:
         # GET is the push stream since core 1e (test_mcp_push.py); DELETE keeps
         # the 405 gate covered.
-        app = McpApplication(code="mcp", routing_class=Calc())
+        app = (McpApplication, {"code": "mcp", "routing_class": Calc()})
         sent = await drive(mcp_server(app), "/mcp", method="DELETE")
         assert response_status(sent) == 405
 
     async def test_unsupported_protocol_version_is_400(
         self, mcp_post, response_status
     ) -> None:
-        app = McpApplication(code="mcp", routing_class=Calc())
+        app = (McpApplication, {"code": "mcp", "routing_class": Calc()})
         sent = await mcp_post(
             mcp_server(app),
             "/mcp",
@@ -212,7 +212,7 @@ class TestMcpApplication:
     async def test_supported_protocol_version_passes(
         self, mcp_post, response_status
     ) -> None:
-        app = McpApplication(code="mcp", routing_class=Calc())
+        app = (McpApplication, {"code": "mcp", "routing_class": Calc()})
         sent = await mcp_post(
             mcp_server(app),
             "/mcp",
@@ -222,7 +222,7 @@ class TestMcpApplication:
         assert response_status(sent) == 200
 
     async def test_disallowed_origin_is_403(self, mcp_post, response_status) -> None:
-        app = McpApplication(code="mcp", routing_class=Calc(), allowed_origins=["https://ok.example"])
+        app = (McpApplication, {"code": "mcp", "routing_class": Calc(), "allowed_origins": ["https://ok.example"]})
         sent = await mcp_post(
             mcp_server(app),
             "/mcp",
@@ -232,7 +232,7 @@ class TestMcpApplication:
         assert response_status(sent) == 403
 
     async def test_allowed_origin_passes(self, mcp_post, response_status) -> None:
-        app = McpApplication(code="mcp", routing_class=Calc(), allowed_origins=["https://ok.example"])
+        app = (McpApplication, {"code": "mcp", "routing_class": Calc(), "allowed_origins": ["https://ok.example"]})
         sent = await mcp_post(
             mcp_server(app),
             "/mcp",
@@ -242,7 +242,7 @@ class TestMcpApplication:
         assert response_status(sent) == 200
 
     async def test_unknown_method_is_a_jsonrpc_error(self, mcp_post, response_status, response_body) -> None:
-        app = McpApplication(code="mcp", routing_class=Calc())
+        app = (McpApplication, {"code": "mcp", "routing_class": Calc()})
         sent = await mcp_post(
             mcp_server(app), "/mcp", {"jsonrpc": "2.0", "id": 10, "method": "resources/list"}
         )
@@ -253,7 +253,7 @@ class TestMcpApplication:
         assert envelope["id"] == 10
 
     async def test_without_router_lists_no_tools(self, mcp_post, response_body) -> None:
-        app = McpApplication(code="mcp")
+        app = (McpApplication, {"code": "mcp"})
         sent = await mcp_post(mcp_server(app), "/mcp", {"jsonrpc": "2.0", "id": 11, "method": "tools/list"})
         assert result_of(response_body, sent)["result"] == {"tools": []}
 
@@ -261,7 +261,7 @@ class TestMcpApplication:
         # A sync tool with an invalid annotated argument: the error travels back
         # through the run_sync future and lands as an isError result (SEP-1303),
         # never a JSON-RPC protocol error.
-        app = McpApplication(code="mcp", routing_class=Calc())
+        app = (McpApplication, {"code": "mcp", "routing_class": Calc()})
         sent = await mcp_post(
             mcp_server(app),
             "/mcp",
@@ -274,7 +274,7 @@ class TestMcpApplication:
     async def test_non_object_body_is_invalid_request(self, drive, response_status, response_body) -> None:
         # A JSON body that is not an object is rejected by the engine with -32600
         # and rendered as a JSON-RPC error envelope (HTTP 200, id null).
-        app = McpApplication(code="mcp", routing_class=Calc())
+        app = (McpApplication, {"code": "mcp", "routing_class": Calc()})
         sent = await drive(
             mcp_server(app),
             "/mcp",
@@ -306,7 +306,7 @@ class BridgeApi(McpOpenApiApplication):
 
 def bridge_server() -> AsgiServer:
     """A server whose plugin config arms openapi on the bridge app."""
-    return AsgiServer(applications=[BridgeApi(mount="")], plugins={"openapi": True})
+    return AsgiServer(applications=[(BridgeApi, {"mount": ""})], plugins={"openapi": True})
 
 
 class TestMcpOpenApiApplication:
@@ -364,8 +364,10 @@ class TestMcpOpenApiMountedMode:
                 """Ping."""
                 return {"pong": name}
 
-        app = McpOpenApiApplication(code="mount", routing_class=SubApi())
-        server = AsgiServer(applications=[Empty(mount=""), app], plugins={"openapi": True})
+        app = (McpOpenApiApplication, {"code": "mount", "routing_class": SubApi()})
+        server = AsgiServer(
+            applications=[(Empty, {"mount": ""}), app], plugins={"openapi": True}
+        )
 
         rest = await drive(server, "/mount/api/ping", method="GET", query=b"name=z")
         assert json.loads(response_body(rest)) == {"pong": "z"}
@@ -381,7 +383,7 @@ class TestMcpOpenApiMountedMode:
 class TestExternalRouterAuthEnforcement:
     """``build_engine`` plugs auth: a ruled tool on an external router is enforced."""
 
-    def _app(self) -> McpApplication:
+    def _app(self) -> tuple[type, dict]:
         class Ruled(RoutingClass):
             @route()
             def open_tool(self) -> dict:
@@ -393,7 +395,7 @@ class TestExternalRouterAuthEnforcement:
                 """Admin-only tool."""
                 return {"secret": True}
 
-        return McpApplication(code="mcp", routing_class=Ruled())
+        return (McpApplication, {"code": "mcp", "routing_class": Ruled()})
 
     async def test_ruled_tool_hidden_from_anonymous_tools_list(
         self, mcp_post, response_body

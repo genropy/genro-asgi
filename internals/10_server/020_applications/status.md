@@ -27,12 +27,15 @@ Claim anchors: [`BaseApplication`](../../../src/genro_asgi/application.py#L86), 
 drains all body chunks even without a Content-Type. JSON, XML and MessagePack
 are decoded with TYTX; URL-encoded fields use `from_qs`. Multipart text fields
 are hydrated and files become `UploadedFile` values (`name`, `filename`,
-`content_type`, `data`); repeated field names produce a list. Unknown media
-and absent Content-Type retain raw bytes. The request body is buffered in full.
+`content_type`, `data`); repeated field names produce a list. Unknown media and
+absent Content-Type are refused with 415, and a body that is not what its
+content type declares with 400; an application declaring `request(body="raw")`
+receives the bytes untouched instead, and decodes them itself (issue #87). The
+request body is buffered in full.
 
 `handler_kwargs` starts with query values. Form fields override colliding query
-values; decoded non-form data becomes `body_data`, and opaque bytes become
-`body_raw`. `bind_kwargs` spreads a decoded dict over declared parameters unless
+values; decoded non-form data becomes `body_data`, and the bytes of a raw
+application become `body_raw`. `bind_kwargs` spreads a decoded dict over declared parameters unless
 the handler accepts `body_data` or `**kwargs`. A declared, unannotated `_request`
 receives the live request in every `RoutedApplication`, not only `_server`.
 This common opt-in seam was explicitly approved in N37 on 2026-09-06; its
@@ -49,7 +52,9 @@ run `route_cleanup` on that same thread even on failure. Router misses yield
 403. The outer error middleware may turn a browser's 401 into a login redirect.
 
 Signature mismatch yields 400. Values rejected by Pydantic after successful
-binding yield 422. An exception from the handler body, including `TypeError`,
+binding yield the application's `validation_error_status`: 400 under the
+default strict reading, 422 for an application declaring
+`request(error_codes="fastapi")` (issue #87). An exception from the handler body, including `TypeError`,
 propagates to the error middleware as 500. The `Response.set_error` helper's
 standalone exception table must not be substituted for that dispatch contract.
 

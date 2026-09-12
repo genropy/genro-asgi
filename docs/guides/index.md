@@ -18,6 +18,7 @@ mcp
 tasks
 streaming
 middleware
+hidden-paths
 configuration
 cli
 requests
@@ -43,6 +44,9 @@ multiworker-spa
   `StreamingResponse` and Server-Sent Events with `SseStream`.
 - **[Middleware](middleware.md)** — the built-in chain, its order and defaults,
   how to arm each stage, and how to register a custom middleware.
+- **[Hidden paths](hidden-paths.md)** — the dotted first segment answered 404
+  before any application, and the `.well-known` documents an application
+  declares.
 - **[Configuration](configuration.md)** — write the recipe a server reads itself
   from, keep secrets out of it with resolvers, and read values back through the
   server and its applications.

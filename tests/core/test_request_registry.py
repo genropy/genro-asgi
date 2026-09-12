@@ -312,9 +312,12 @@ class TestServerState:
     async def test_what_the_chain_answers_itself_passes_a_server_not_running(
         self, http_request, response_status
     ) -> None:
-        server = MwServer(applications=[OkApp(mount="")], middleware={"wellknown": True})
+        server = MwServer(applications=[OkApp(mount="")], middleware={"cors": True})
         server.state = QUITTING
-        # The wellknown middleware answers /.well-known/* itself, before the
-        # dispatch the state guards: 404 from the chain, never the 503.
-        assert response_status(await http_request(server, "/.well-known/probe")) == 404
+        # The cors middleware answers a preflight itself, before the dispatch
+        # the state guards: 200 from the chain, never the 503.
+        preflight = await http_request(
+            server, "/", method="OPTIONS", headers=[(b"origin", b"https://example.test")]
+        )
+        assert response_status(preflight) in (200, 204)
         assert response_status(await http_request(server, "/")) == 503

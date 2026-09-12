@@ -18,13 +18,22 @@ in reverse, one app's error does not block the others.
 The ASGI lifespan protocol is driven directly through ``BaseServer.__call__``
 (no uvicorn needed): a canned ``receive()`` queue delivers ``startup`` then
 ``shutdown``, and the recording apps append to a shared event list from their
-hooks so ordering and error isolation can be asserted.
+hooks so ordering and error isolation can be asserted. The signal path is
+driven the same way: ``UvicornServer.handle_exit`` is called by hand, which is
+exactly what the C-level handler does, and no process is ever signalled.
 """
 
 from __future__ import annotations
 
+import asyncio
+import signal
+
+import uvicorn
+
+import genro_asgi.server as server_module
 from genro_asgi import BaseApplication, BaseServer
 from genro_asgi.lifespan import QUITTING, STOPPING, FatalBootError, Lifespan
+from genro_asgi.server import UvicornServer
 
 
 class SyncRecordingApp(BaseApplication):
@@ -265,3 +274,95 @@ class TestShutdownState:
         await request
 
         assert in_flight_at_hook == [0]
+
+
+class TestLeavingAtSignal:
+    """SIGINT/SIGTERM turns the state, at the signal and not at the hooks.
+
+    ``UvicornServer`` owns the signal handlers: uvicorn's three shutdown steps
+    (close the listeners, wait the grace, send the lifespan shutdown) then run
+    over a server that already refuses new work.
+    """
+
+    def uvicorn_server(self, server: BaseServer) -> UvicornServer:
+        return UvicornServer(server, uvicorn.Config(server))
+
+    def test_the_signal_turns_the_state(self) -> None:
+        server = BaseServer(applications=[BaseApplication(mount="")])
+        self.uvicorn_server(server).handle_exit(signal.SIGTERM, None)
+        assert server.state == STOPPING
+
+    def test_the_signal_raises_uvicorn_own_exit_flag(self) -> None:
+        server = BaseServer(applications=[BaseApplication(mount="")])
+        uvicorn_server = self.uvicorn_server(server)
+        uvicorn_server.handle_exit(signal.SIGINT, None)
+        assert uvicorn_server.should_exit is True
+
+    def test_the_signal_makes_a_quit_when_the_shutdown_mode_says_so(self) -> None:
+        server = BaseServer(applications=[BaseApplication(mount="")])
+        server.shutdown_mode = QUITTING
+        self.uvicorn_server(server).handle_exit(signal.SIGTERM, None)
+        assert server.state == QUITTING
+
+    async def test_the_hooks_find_the_state_the_signal_chose(self) -> None:
+        seen: list[str] = []
+
+        class Watcher(BaseApplication):
+            def on_shutdown(self) -> None:
+                seen.append(self.server.state)
+
+        server = BaseServer(applications=[Watcher(mount="")])
+        self.uvicorn_server(server).handle_exit(signal.SIGTERM, None)
+        await Lifespan(server).shutdown()
+
+        assert seen == [STOPPING]
+
+    def test_serve_builds_a_server_that_owns_the_signals(self, monkeypatch) -> None:
+        built: list[UvicornServer] = []
+
+        class XT_UvicornServer(UvicornServer):
+            def run(self) -> None:
+                built.append(self)
+
+        monkeypatch.setattr(server_module, "UvicornServer", XT_UvicornServer)
+        server = BaseServer(applications=[BaseApplication(mount="")])
+        server.serve()
+
+        assert built[0].base_server is server
+        assert server.uvicorn_server is built[0]
+
+
+class TestLeavingEvent:
+    """The one awaitable an endless response watches to end by itself."""
+
+    def test_a_running_server_is_not_leaving(self) -> None:
+        server = BaseServer(applications=[BaseApplication(mount="")])
+        assert server.leaving.is_set() is False
+
+    def test_the_event_is_set_when_the_state_leaves_running(self) -> None:
+        server = BaseServer(applications=[BaseApplication(mount="")])
+        server.state = STOPPING
+        assert server.leaving.is_set() is True
+
+    async def test_get_until_leaving_answers_the_queue_item(self) -> None:
+        server = BaseServer(applications=[BaseApplication(mount="")])
+        queue: asyncio.Queue[str] = asyncio.Queue()
+        queue.put_nowait("event")
+        assert await server.get_until_leaving(queue) == "event"
+
+    async def test_get_until_leaving_answers_none_when_the_server_leaves(self) -> None:
+        server = BaseServer(applications=[BaseApplication(mount="")])
+        queue: asyncio.Queue[str] = asyncio.Queue()
+        reader = asyncio.ensure_future(server.get_until_leaving(queue))
+        await asyncio.sleep(0)
+        server.state = STOPPING
+        assert await asyncio.wait_for(reader, timeout=2.0) is None
+
+    async def test_get_until_leaving_leaves_no_task_behind(self) -> None:
+        server = BaseServer(applications=[BaseApplication(mount="")])
+        queue: asyncio.Queue[str] = asyncio.Queue()
+        before = len(asyncio.all_tasks())
+        queue.put_nowait("event")
+        await server.get_until_leaving(queue)
+        await asyncio.sleep(0)
+        assert len(asyncio.all_tasks()) == before

@@ -43,7 +43,7 @@ class App(RoutedApplication):
         return {"classified": True}
 
 
-server = AsgiServer(applications=[App()], auth=AUTH)
+server = AsgiServer(applications=[App], auth=AUTH)
 server.serve(host="127.0.0.1", port=8000)
 ```
 
@@ -54,10 +54,15 @@ Notes on the config shape:
   comma-separated string or a list) that become the avatar's roles.
 - `jwt` is a **list** of verifier configurations, each with a `secret` and an
   `algorithm` — you can accept tokens from more than one issuer.
-- API keys with the `gak_...` prefix are handled by an `ApiKeyStore`. Pass
-  `tokens=<ApiKeyStore | dict>` alongside `auth`. Users can likewise come from a
-  `UserStore` via `users=<UserStore | dict>`, and an `admin_password="..."`
-  bootstraps a SUPERADMIN identity.
+- API keys with the `gak_...` prefix are handled by an `ApiKeyStore`. The store
+  is DECLARED, never handed over: `tokens={"store_class": MyApiKeyStore, ...}`
+  alongside `auth` (`FileApiKeyStore` when the class is omitted), and the server
+  builds it with its storage. Users are the same shape —
+  `users={"store_class": ..., "mount": ..., "prefix": ...}`. In a recipe the
+  same words are `authentication.users(...)` and `authentication.tokens(...)`.
+- **The server creates no user.** There is no bootstrap password: a deployment
+  that needs a first identity declares the store class that carries it, and the
+  login surface belongs to the application.
 
 ## Minimal snippet
 
@@ -166,9 +171,8 @@ class ServerConfiguration(AsgiConfigBuilder):
 Each provider is addressed by its `code` — `applications._server.oidc.google` —
 and the `client_secret` is an `EnvResolver` (from `genro_bag.resolvers`) read at
 read time, so the secret never sits in the recipe. The `authentication` section
-still carries `admin_password` (a resolver, never a literal — a literal is a
-boot error) and the `credentials` block that replaces the `auth=` dict when the
-server is configured rather than hand-built.
+carries the `users`/`tokens` store descriptors and the `credentials` block that
+replaces the `auth=` dict when the server is configured rather than hand-built.
 
 - `GET /_server/auth/oidc:google/start?next=...` → `302` (PKCE S256).
 - `GET /_server/auth/oidc:google/callback?...` → token exchange, avatar attach,

@@ -62,21 +62,6 @@ class RoutedApp(BaseApplication):
         await send({"type": "http.response.body", "body": f"ok:{scope['path']}".encode()})
 
 
-class TestWellKnownMiddleware:
-    async def test_probe_path_returns_404(self, http_request, response_status) -> None:
-        server = MwServer(applications=[RoutedApp(mount="")], middleware={"wellknown": True})
-        sent = await http_request(server, "/.well-known/probe")
-        assert response_status(sent) == 404
-
-    async def test_ordinary_path_still_reaches_the_app(
-        self, http_request, response_status, response_body
-    ) -> None:
-        server = MwServer(applications=[RoutedApp(mount="")], middleware={"wellknown": True})
-        sent = await http_request(server, "/")
-        assert response_status(sent) == 200
-        assert response_body(sent) == b"ok:/"
-
-
 class TestCORSMiddleware:
     async def test_preflight_returns_cors_headers(
         self, http_request, response_status, response_headers
@@ -265,7 +250,7 @@ class TestUnauthorizedIsAnOrdinaryError:
     async def test_browser_navigation_keeps_the_bare_401(
         self, http_request, response_status, response_headers, response_body
     ) -> None:
-        server = AsgiServer(applications=[RaisingApp(mount="")])
+        server = AsgiServer(applications=[(RaisingApp, {"mount": ""})])
         sent = await http_request(server, "/challenge", headers=[(b"accept", b"text/html")])
         assert response_status(sent) == 401
         assert response_headers(sent)[b"www-authenticate"] == b"Bearer"
@@ -275,7 +260,7 @@ class TestUnauthorizedIsAnOrdinaryError:
     async def test_api_caller_gets_the_json_error_and_the_challenge_header(
         self, http_request, response_status, response_headers, response_body
     ) -> None:
-        server = AsgiServer(applications=[RaisingApp(mount="")])
+        server = AsgiServer(applications=[(RaisingApp, {"mount": ""})])
         sent = await http_request(server, "/challenge", headers=[(b"accept", b"application/json")])
         assert response_status(sent) == 401
         assert response_headers(sent)[b"www-authenticate"] == b"Bearer"
@@ -340,8 +325,11 @@ class SessionMutatingApp(BaseApplication):
 
 class TestSessionWriteBack:
     def _server(self) -> tuple[AsgiServer, CountingSessionStore]:
-        store = CountingSessionStore()
-        return AsgiServer(applications=[SessionMutatingApp(mount="")], session_store=store), store
+        server = AsgiServer(
+            applications=[(SessionMutatingApp, {"mount": ""})],
+            session_store=CountingSessionStore,
+        )
+        return server, server.session_store
 
     async def test_read_only_request_does_not_save(self, http_request, response_status) -> None:
         server, store = self._server()
@@ -365,12 +353,11 @@ class TestSessionWriteBack:
 
 class TestDisabledByDefault:
     async def test_standard_middlewares_absent_without_switches(
-        self, http_request, response_status, response_headers
+        self, http_request, response_headers
     ) -> None:
+        # Hidden paths are not a middleware since #88: the rule is the
+        # server's own, covered in ``tests/core/test_hidden_paths.py``.
         server = MwServer(applications=[RoutedApp(mount="")])
-
-        wellknown_sent = await http_request(server, "/.well-known/probe")
-        assert response_status(wellknown_sent) == 200
 
         cors_sent = await http_request(server, "/", headers=[(b"origin", b"https://example.test")])
         assert b"access-control-allow-origin" not in response_headers(cors_sent)

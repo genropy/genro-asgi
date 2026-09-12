@@ -168,10 +168,7 @@ def make_server(provider: dict[str, Any] | None = None) -> AsgiServer:
     without it refuses to boot.
     """
     return AsgiServer(
-        applications=[
-            ServerApplication(oidc={"google": provider if provider is not None else PROVIDER}),
-            BaseApplication(mount=""),
-        ],
+        applications=[(ServerApplication, {"oidc": {"google": provider if provider is not None else PROVIDER}}), (BaseApplication, {"mount": ""})],
         external_url=EXTERNAL_URL,
     )
 
@@ -400,10 +397,7 @@ class TestOidcRedirectUri:
         self, mock_discovery: None
     ) -> None:
         server = AsgiServer(
-            applications=[
-                ServerApplication(oidc={"google": PROVIDER}),
-                BaseApplication(mount=""),
-            ],
+            applications=[(ServerApplication, {"oidc": {"google": PROVIDER}}), (BaseApplication, {"mount": ""})],
             external_url="https://shop.example.com/",
         )
         session = server.session_store.create()
@@ -421,14 +415,11 @@ class TestOidcRedirectUri:
         # error at the first login attempt.
         with pytest.raises(ValueError, match="external_url"):
             AsgiServer(
-                applications=[
-                    ServerApplication(oidc={"google": PROVIDER}),
-                    BaseApplication(mount=""),
-                ],
+                applications=[(ServerApplication, {"oidc": {"google": PROVIDER}}), (BaseApplication, {"mount": ""})],
             )
 
     def test_a_server_without_providers_needs_no_external_url(self) -> None:
-        server = AsgiServer(applications=[BaseApplication(mount="")])
+        server = AsgiServer(applications=[(BaseApplication, {"mount": ""})])
         assert server.external_url is None
 
 

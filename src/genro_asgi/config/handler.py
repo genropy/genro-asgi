@@ -32,12 +32,11 @@ The helpers read the tree by two rules, and the grammar decides which applies:
 
 Section → constructor kwarg:
 
-- ``server`` → ``host``/``port``/``external_url``/``max_threads``/``shutdown_timeout_seconds``, its
+- ``server`` → ``host``/``port``/``external_url``/``max_threads``/``shutdown_timeout_seconds``/``debug``, its
   ``session`` child → ``session_ttl``, its ``tasks`` child → ``tasks``.
 - ``middleware`` → ``middleware`` ({name: bool | dict} switches).
-- ``authentication`` → ``admin_password``/``users``/``tokens`` (the store
-  kwargs ``AuthMixin`` peels) and ``auth`` (the ``AuthCore`` entries folded
-  from ``credentials``).
+- ``authentication`` → ``users``/``tokens`` (the store descriptors ``AuthMixin``
+  peels) and ``auth`` (the ``AuthCore`` entries folded from ``credentials``).
 - ``storage`` → ``storage`` (genro-storage's own ``list[dict]`` of mounts) and
   ``storage_key`` (the section's at-rest key material).
 - ``applications`` → ``applications``/``default`` (each entry an
@@ -71,7 +70,10 @@ class ConfigurationHandler(ConfigHandler):
     def server_kwargs(self) -> dict[str, Any]:
         """The ``server`` section as server kwargs, its children lifted.
 
-        ``session`` becomes ``session_ttl``, ``tasks`` becomes the ``tasks``
+        ``session`` becomes ``session_ttl``, ``save_session`` (its ``save_path``)
+        and, when it names a ``store_class``, the ``session_store`` the server is
+        handed — the class is instantiated HERE, with the section's remaining
+        attributes, ``tasks`` becomes the ``tasks``
         tuning dict and ``websocket`` the websocket options: all three are
         server-domain (sessions, the task backbone and the sockets live on the
         server), so their values lift to the kwargs the owning mixins peel
@@ -80,10 +82,26 @@ class ConfigurationHandler(ConfigHandler):
         a recipe and reach the server as the list it reads.
         """
         kwargs = self.closed_attrs(
-            "server", "host", "port", "external_url", "max_threads", "shutdown_timeout_seconds"
+            "server",
+            "host",
+            "port",
+            "external_url",
+            "max_threads",
+            "shutdown_timeout_seconds",
+            "debug",
         )
-        if self.node("server.session") is not None:
-            kwargs["session_ttl"] = self("server.session.ttl")
+        session = self.node("server.session")
+        if session is not None:
+            options = self.open_attrs(session)
+            ttl = options.pop("ttl", None)
+            if ttl is not None:
+                kwargs["session_ttl"] = ttl
+            save_path = options.pop("save_path", None)
+            if save_path is not None:
+                kwargs["save_session"] = save_path
+            store_class = options.pop("store_class", None)
+            if store_class is not None:
+                kwargs["session_store"] = store_class(**options)
         if self.node("server.websocket") is not None:
             websocket = self.closed_attrs("server.websocket", "origins", "max_concurrent")
             origins = websocket.get("origins")
@@ -98,45 +116,30 @@ class ConfigurationHandler(ConfigHandler):
 
     def middleware_config(self) -> dict[str, Any] | None:
         """The ``middleware`` switches, or ``None`` when the section is absent
-        (the composition's own defaults then apply)."""
-        if self.node("middleware") is None:
+        (the composition's own defaults then apply).
+
+        The element's signature is OPEN, so the attributes ARE the switches: the
+        five the grammar declares and any name a registry added from outside, read
+        in bulk with no list to keep in step."""
+        node = self.node("middleware")
+        if node is None:
             return None
-        return self.closed_attrs(
-            "middleware", "errors", "wellknown", "logging", "cors", "auth", "session"
-        )
+        return self.open_attrs(node)
 
     def identity_kwargs(self) -> dict[str, Any]:
         """The identity STORE kwargs of ``authentication`` (``AuthMixin`` peels them).
 
-        ``admin_password`` is the ``admin_password`` node's VALUE, which a
-        resolver must supply — the grammar rejects a literal at the recipe
-        line (secrets stay out of recipes). Resolving empty is a boot error
-        (the recipe promised a secret that does not exist — an empty bootstrap
-        password would arm a passwordless SUPERADMIN), and so is resolving to
-        a non-string. ``users``/``tokens`` are ``{mount, prefix}`` descriptors.
+        ``users``/``tokens`` are the store descriptors: every attribute the
+        section carries — ``mount``/``prefix``, the optional ``store_class`` and
+        its own kwargs. Nothing else: the server creates no user, so there is no
+        bootstrap password to read.
         """
         kwargs: dict[str, Any] = {}
-        password_node = self.node("authentication.admin_password")
-        if password_node is not None:
-            kwargs["admin_password"] = self.admin_password(password_node)
         for tag in ("users", "tokens"):
-            if self.node(f"authentication.{tag}") is not None:
-                kwargs[tag] = self.closed_attrs(f"authentication.{tag}", "mount", "prefix")
+            node = self.node(f"authentication.{tag}")
+            if node is not None:
+                kwargs[tag] = self.open_attrs(node)
         return kwargs
-
-    def admin_password(self, node: Any) -> str:
-        """The bootstrap password carried by ``node``, resolved to a non-empty string.
-
-        The grammar already rejects a literal at the recipe line
-        (``node_value: BagResolver``); here we validate what the resolver
-        actually DELIVERED at boot.
-        """
-        value = node.value
-        if not value:
-            raise ConfigError("authentication.admin_password resolved empty")
-        if not isinstance(value, str):
-            raise ConfigError("authentication.admin_password must resolve to a string")
-        return value
 
     def auth_entries(self) -> dict[str, Any] | None:
         """The ``credentials`` children folded into the ``AuthCore`` sections.
@@ -203,13 +206,15 @@ class ConfigurationHandler(ConfigHandler):
         the section is absent (the composition arms no extra plugin).
 
         A plugin maps to ``False`` when ``enabled`` is explicitly false, to its
-        remaining options when it carries any, else to ``True``.
+        remaining options when it carries any, else to ``True``. The collection's
+        OWN attributes are switches too — the short form, and the only one a
+        plugin registered from outside can use.
         """
         node = self.node("plugins")
         if node is None:
             return None
-        switches: dict[str, bool | dict[str, Any]] = {}
-        for child in node.value:
+        switches: dict[str, bool | dict[str, Any]] = dict(self.open_attrs(node))
+        for child in node.value or ():
             options = self.open_attrs(child)
             options.pop("code", None)
             enabled = options.pop("enabled", True)
@@ -232,7 +237,7 @@ class ConfigurationHandler(ConfigHandler):
         if node is None:
             return [], None
         entries: list[tuple[type, dict[str, Any]]] = []
-        for child in node.value:
+        for child in node.value or ():
             if not child.label:
                 raise ConfigError(
                     "applications: 'code' must be a non-empty string — an empty "

@@ -31,7 +31,7 @@ from typing import Any
 import pytest
 from genro_routes import route
 
-from tests.storage_support import site_storage
+from tests.storage_support import site_mounts
 
 from genro_asgi import AsgiServer, RoutedApplication
 from genro_asgi.tasks import WORKER_ID, LocalTaskExecutor, TaskSpool, new_descriptor
@@ -56,7 +56,7 @@ class DemoApp(RoutedApplication):
 @pytest.fixture
 def server(tmp_path: Path) -> AsgiServer:
     """A real AsgiServer whose primary is the DemoApp, storage on tmp_path."""
-    return AsgiServer(applications=[DemoApp(mount="")], storage=site_storage(tmp_path))
+    return AsgiServer(applications=[(DemoApp, {"mount": ""})], storage=site_mounts(tmp_path))
 
 
 @pytest.fixture

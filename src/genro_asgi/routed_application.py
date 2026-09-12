@@ -46,10 +46,13 @@ two exception codes genro-routes distinguishes: ``signature_error`` (the bind
 against the handler signature fails: unknown keyword, missing required
 argument, too many positionals) → ``HTTPBadRequest`` (400);
 ``validation_error`` (the signature is satisfied and pydantic rejects the
-values) → ``HTTPUnprocessableContent`` (422). The handler BODY is mapped to
-neither: whatever it raises — a ``TypeError`` included, sync body or async —
-propagates and reaches ``ErrorMiddleware`` as a 500. There is no local
-cleanup drain: the server ``finally`` owns end-of-request cleanups.
+values) → the status the application declared in its own grammar
+(``application.validation_error_status``: 400 under the strict reading, the
+default, and 422 for an application asking for the FastAPI convention — issue
+#87). The handler BODY is mapped to neither: whatever it raises — a
+``TypeError`` included, sync body or async — propagates and reaches
+``ErrorMiddleware`` as a 500. There is no local cleanup drain: the server
+``finally`` owns end-of-request cleanups.
 
 Kwargs binding: ``bind_kwargs`` starts from ``request.handler_kwargs()``
 (query + body by content-type) and reconciles a hydrated JSON body with a
@@ -73,13 +76,14 @@ from genro_routes import RoutingClass, is_result_wrapper
 from .application import BaseApplication
 from .exceptions import (
     HTTPBadRequest,
+    HTTPException,
     HTTPForbidden,
     HTTPNotFound,
     HTTPUnauthorized,
-    HTTPUnprocessableContent,
 )
 from .request import Request
 from .streaming import StreamingResponse
+from .well_known import WELL_KNOWN_ROOT
 
 if TYPE_CHECKING:
     from genro_routes import Router, RouterNode
@@ -170,16 +174,36 @@ class RoutedApplication(BaseApplication, RoutingClass):
             arm_router(router)
         return router
 
+    @property
+    def well_known_names(self) -> tuple[str, ...]:
+        """The children of this app's ``_well_known`` branch — its discovery documents.
+
+        Every child is one name served under ``/.well-known/``: an entry, or a
+        sub-branch with a path of its own under it. A ruled entry is a name
+        like any other (``forbidden=True``), because the answer to an identity
+        that does not match is the application's own 401/403, never a 404 from
+        the demux.
+
+        The router is read through ``super().route``, NOT through the ``route``
+        property: the server asks this at mount time, and the configured
+        plugins are armed later, on the first access a request makes.
+        """
+        branch = super().route.router_at_path(WELL_KNOWN_ROOT)
+        if branch is None:
+            return ()
+        children = branch.nodes(lazy=True, forbidden=True)
+        return (*children.get("entries", ()), *children.get("routers", ()))
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Resolve the request in the app router, execute, respond.
 
         Raises the mapped ``ROUTER_ERRORS`` exception when resolution fails;
         the server's ``ErrorMiddleware`` answers it. A call that does not fit
         the handler signature surfaces as ``HTTPBadRequest`` (400); values the
-        handler's pydantic validation rejects surface as
-        ``HTTPUnprocessableContent`` (422). Both keep the original error as
-        ``__cause__``. What the handler body raises is mapped to neither: it
-        propagates as a 500.
+        handler's pydantic validation rejects surface on this application's
+        ``validation_error_status`` (400 strict, 422 FastAPI). Both keep the
+        original error as ``__cause__``. What the handler body raises is mapped
+        to neither: it propagates as a 500.
 
         A handler that answers with a ``StreamingResponse`` — an SSE stream, a
         long download — speaks the wire itself: it is called with the ASGI
@@ -207,7 +231,9 @@ class RoutedApplication(BaseApplication, RoutingClass):
             raise HTTPBadRequest(f"Arguments do not fit the handler: {detail}") from exc
         except _HandlerArgumentsInvalid as exc:
             detail = exc.__cause__ or exc
-            raise HTTPUnprocessableContent(f"Invalid argument values: {detail}") from exc
+            raise HTTPException(
+                self.validation_error_status, f"Invalid argument values: {detail}"
+            ) from exc
         if isinstance(result, StreamingResponse):
             await result(scope, receive, send)
             return

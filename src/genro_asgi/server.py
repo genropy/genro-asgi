@@ -26,9 +26,11 @@ on the loop; the pool is provisioned lazily on first use and torn down at
 shutdown.
 
 As an ASGI callable, ``__call__`` dispatches on the scope type: ``http`` runs
-the D3 demux — first path segment → the app mounted there with that segment
-stripped; else the app on the site root with the full path; else a 307 from
-``/`` to the declared ``default``; else 404 — ``websocket`` runs
+the D3 demux — a first path segment starting with a dot is hidden and answers
+404 on the spot, ``/.well-known/<declared name>`` excepted; else the app
+mounted on that segment, with the segment stripped; else the app on the site
+root with the full path; else a 307 from ``/`` to the declared ``default``;
+else 404 — ``websocket`` runs
 ``on_websocket``,
 whose DEFAULT is the empty socket of D7 (accepts nothing, closes cleanly with
 code 1000); ``lifespan`` runs the ``Lifespan`` handler (ordered startup,
@@ -42,10 +44,24 @@ leftover kwargs. Mixins go BEFORE ``BaseServer`` in the MRO.
 
 Ownership channel (one direction): registering an application assigns
 ``app.server = self``; the app-side setter enforces exactly-once.
+
+**The server learns it is leaving at the signal.** ``serve()`` boots
+``UvicornServer``, which owns the SIGINT/SIGTERM handlers: the first signal
+turns ``state`` to ``shutdown_mode`` and only then raises uvicorn's own exit
+flag, so uvicorn's three steps — close the listeners, wait
+``shutdown_timeout_seconds``, send ``lifespan.shutdown`` — all run over a
+server that already refuses new work. Whatever the state turn makes true,
+``leaving`` (an ``asyncio.Event``) makes awaitable: an endless response races
+its source against it through ``get_until_leaving`` and ends by itself instead
+of being cancelled when the grace runs out. Under uvicorn's own ``--reload``
+the child process builds no ``UvicornServer``, so there the ordered shutdown is
+not guaranteed (owner, 2026-09-12: accepted for the stateless single-process
+mode).
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 import uvicorn
@@ -56,10 +72,13 @@ from .pool import WorkPool
 from .request_registry import RequestRegistry
 from .response import Response
 from .websocket import WebSocket, WebSocketRegistry
+from .well_known import HIDDEN_SEGMENT_PREFIX, WELL_KNOWN_ROOT, WELL_KNOWN_SEGMENT
 from .wsx_payload import SerializedWsxPayload
 from .wsx import WsxConnection, WsxEnvelope
 
 if TYPE_CHECKING:
+    from types import FrameType
+
     from .types import ASGIApp, Receive, Scope, Send
 
 REFUSED_RETRY_AFTER_SECONDS = 5
@@ -81,7 +100,29 @@ __all__ = [
     "STOPPING",
     "WEBSOCKET_MAX_CONCURRENT",
     "BaseServer",
+    "UvicornServer",
 ]
+
+
+class UvicornServer(uvicorn.Server):
+    """uvicorn's server, with the signal handlers owned by the server it serves.
+
+    Bound to the ``BaseServer`` it runs (dual relationship:
+    ``self.base_server``). ``handle_exit`` is what the C-level signal handler
+    calls: the state turns FIRST — which is the whole point, uvicorn sends the
+    lifespan shutdown only after the graceful wait — and uvicorn's own
+    ``handle_exit`` then raises the exit flag (or, on a second SIGINT, the
+    force flag) exactly as it would have.
+    """
+
+    def __init__(self, base_server: BaseServer, config: uvicorn.Config) -> None:
+        super().__init__(config)
+        self.base_server = base_server
+
+    def handle_exit(self, sig: int, frame: FrameType | None) -> None:
+        """Turn the served server's state, then let uvicorn start its shutdown."""
+        self.base_server.start_leaving()
+        super().handle_exit(sig, frame)
 
 
 class BaseServer:
@@ -116,8 +157,9 @@ class BaseServer:
         super().__init__()
         self._applications: dict[str, BaseApplication] = {}
         self._by_mount: dict[str, BaseApplication] = {}
+        self._well_known: dict[str, BaseApplication] = {}
         self._databases: dict[str, Any] = {}
-        self._uvicorn: uvicorn.Server | None = None
+        self._uvicorn: UvicornServer | None = None
         self._pool = WorkPool(self, max_threads=max_threads)
         self._lifespan = Lifespan(self)
         self._registry = RequestRegistry(self)
@@ -127,8 +169,8 @@ class BaseServer:
             websocket.get("max_concurrent") or WEBSOCKET_MAX_CONCURRENT
         )
         self._shutdown_timeout_seconds = shutdown_timeout
-        self.state = RUNNING
-        """``RUNNING``, ``QUITTING`` or ``STOPPING`` — read by the entry point."""
+        self._state = RUNNING
+        self._leaving = asyncio.Event()
         self.shutdown_mode = STOPPING
         """What ``state`` becomes at the lifespan shutdown when nobody chose first.
 
@@ -177,13 +219,20 @@ class BaseServer:
         """The application answering under the URL prefix ``mount`` (``None`` if none)."""
         return self._by_mount.get(mount)
 
+    @property
+    def well_known_applications(self) -> dict[str, BaseApplication]:
+        """The discovery names served under ``/.well-known/``, each with its application."""
+        return self._well_known
+
     def register_application(self, app: BaseApplication) -> None:
         """Register ``app`` under its ``code`` and its ``mount``.
 
-        Assigns the ownership channel (``app.server = self``). Internal: the
-        set of applications is fixed at construction, so the callers are
-        ``__init__`` and the composition layers building a server. A claimed
-        code and a claimed mount both raise ``ValueError``.
+        Assigns the ownership channel (``app.server = self``), then indexes the
+        discovery names the app declares (``well_known_names``): a name two
+        applications declare belongs to the LAST registered — a fixed rule, no
+        option. Internal: the set of applications is fixed at construction, so
+        the callers are ``__init__`` and the composition layers building a
+        server. A claimed code and a claimed mount both raise ``ValueError``.
         """
         mount = app.code if app.mount is None else app.mount
         if app.code in self.applications:
@@ -191,6 +240,8 @@ class BaseServer:
         if mount in self._by_mount:
             raise ValueError(f"mount already claimed: {mount!r}")
         app.server = self
+        for name in app.well_known_names:
+            self._well_known[name] = app
         self.applications[app.code] = app
         self._by_mount[mount] = app
 
@@ -345,10 +396,18 @@ class BaseServer:
         **307** to that application's mount carrying the query string over;
         else **404**. ``/`` on a server WITH a root application matches its
         empty mount in the first branch, which forwards the same ``/``.
+
+        The hidden paths come first (#88): a first segment starting with a dot
+        never takes those branches, and the rule is the server's own — always
+        on, no middleware, no switch. A path without a dot is ordinary, the
+        conventional probes included (``/favicon.ico``, ``/robots.txt``): the
+        server silences none of them.
         """
         path = scope["path"]
         rest = path.lstrip("/")
         segment, _, remainder = rest.partition("/")
+        if segment.startswith(HIDDEN_SEGMENT_PREFIX):
+            return self.demux_hidden(segment, remainder, scope)
         app = self.application_at(segment)
         if app is not None:
             sub_scope = dict(scope)
@@ -360,6 +419,26 @@ class BaseServer:
         default = self.default_application if not rest else None
         if default is not None:
             return self.redirect_to_default(default, scope), scope
+        return Response(content="Not Found", status_code=404, media_type="text/plain"), scope
+
+    def demux_hidden(self, segment: str, remainder: str, scope: Scope) -> tuple[ASGIApp, Scope]:
+        """What serves a hidden first segment: a declared document, else **404**.
+
+        Nothing of a site lives under a dotted segment — ``/.git/config``,
+        ``/.env`` — so the answer is 404 and no application is reached: not a
+        mount, not the root application, not the ``default`` redirect. The one
+        exception is RFC 8615: when ``segment`` is ``.well-known`` and the
+        first segment of ``remainder`` is a name some application declared at
+        mount time, the request goes to that application rebuilt as
+        ``/_well_known/<name>/<rest>``, the path its own router already
+        resolves. No translation is invented.
+        """
+        if segment == WELL_KNOWN_SEGMENT:
+            app = self.well_known_applications.get(remainder.partition("/")[0])
+            if app is not None:
+                sub_scope = dict(scope)
+                sub_scope["path"] = f"/{WELL_KNOWN_ROOT}/{remainder}"
+                return app, sub_scope
         return Response(content="Not Found", status_code=404, media_type="text/plain"), scope
 
     def redirect_to_default(self, app: BaseApplication, scope: Scope) -> Response:
@@ -411,13 +490,56 @@ class BaseServer:
         await WsxConnection(self, scope, receive, send).serve()
 
     @property
+    def state(self) -> str:
+        """``RUNNING``, ``QUITTING`` or ``STOPPING`` — read by the entry point."""
+        return self._state
+
+    @state.setter
+    def state(self, state: str) -> None:
+        """Write the state, and set ``leaving`` the moment it is no longer RUNNING."""
+        self._state = state
+        if state != RUNNING:
+            self._leaving.set()
+
+    @property
+    def leaving(self) -> asyncio.Event:
+        """Set once the state has left RUNNING, and never cleared again.
+
+        What an endless response watches: the state alone says nothing to
+        somebody parked on a queue, and at the signal there are seconds, not
+        minutes, before uvicorn cancels whoever is still there.
+        """
+        return self._leaving
+
+    def start_leaving(self) -> None:
+        """Turn the state to ``shutdown_mode``; a state somebody chose is left alone."""
+        if self.state == RUNNING:
+            self.state = self.shutdown_mode
+
+    async def get_until_leaving(self, queue: asyncio.Queue[Any]) -> Any | None:
+        """The queue's next item, or ``None`` as soon as the server starts leaving.
+
+        The way a source of an endless response reads its feed: whichever of the
+        two comes first wins and the other is cancelled, so nothing is left
+        pending behind the caller.
+        """
+        item = asyncio.ensure_future(queue.get())
+        leaving = asyncio.ensure_future(self._leaving.wait())
+        try:
+            await asyncio.wait({item, leaving}, return_when=asyncio.FIRST_COMPLETED)
+            return item.result() if item.done() else None
+        finally:
+            for pending in (item, leaving):
+                pending.cancel()
+
+    @property
     def shutdown_timeout_seconds(self) -> float:
         """How long uvicorn waits for open connections at shutdown before cancelling them."""
         return self._shutdown_timeout_seconds
 
     @property
-    def uvicorn_server(self) -> uvicorn.Server | None:
-        """The uvicorn ``Server`` once ``serve()`` has built it (else ``None``).
+    def uvicorn_server(self) -> UvicornServer | None:
+        """The ``UvicornServer`` once ``serve()`` has built it (else ``None``).
 
         Callers that boot the server in a background thread read the bound port
         from ``uvicorn_server.servers[0].sockets[0].getsockname()`` after
@@ -428,19 +550,22 @@ class BaseServer:
     def serve(self, host: str = "127.0.0.1", port: int = 0) -> None:
         """Boot uvicorn programmatically, serving this server (blocking).
 
-        Builds ``uvicorn.Config``/``uvicorn.Server`` and runs it. ``port=0``
+        Builds ``uvicorn.Config``/``UvicornServer`` — the subclass owning the
+        signal handlers, so the state leaves RUNNING at the signal and not at
+        the end of the graceful wait — and runs it. ``port=0``
         lets the OS assign an ephemeral port, discoverable via
         ``uvicorn_server`` once started. ``shutdown_timeout_seconds`` bounds
         uvicorn's wait for open connections, so a response that never ends
         cannot keep the lifespan shutdown — and the applications' own stop —
         from running.
         """
-        self._uvicorn = uvicorn.Server(
+        self._uvicorn = UvicornServer(
+            self,
             uvicorn.Config(
                 self,
                 host=host,
                 port=port,
                 timeout_graceful_shutdown=self.shutdown_timeout_seconds,
-            )
+            ),
         )
         self._uvicorn.run()
