@@ -68,6 +68,7 @@ def test_root_exports_public_api():
         "Session",
         "SessionMixin",
         "SessionStore",
+        "SiteHome",
         "StorageMixin",
         "TaskGrammar",
         "UploadedFile",

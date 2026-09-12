@@ -39,7 +39,7 @@ from genro_asgi import (
     ConfigError,
     ConfigurationHandler,
 )
-from genro_asgi.__main__ import AppsRegistry
+from genro_asgi.__main__ import SitesRegistry
 from genro_asgi.config import HOME_ENV, BaseConfiguration, DefaultConfig
 from genro_asgi.exceptions import HTTPUnauthorized
 from genro_asgi.middleware.base import BaseMiddleware
@@ -888,8 +888,8 @@ class TestHomeResolution:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv(HOME_ENV, str(tmp_path))
-        assert AppsRegistry().base_dir == tmp_path
-        assert AppsRegistry().apps_dir == tmp_path / "apps"
+        assert SitesRegistry().base_dir == tmp_path
+        assert SitesRegistry().sites_dir == tmp_path / "sites"
 
 
 class TestServerLayersTheDeclaredDefaults:
