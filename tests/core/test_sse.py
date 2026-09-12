@@ -23,6 +23,7 @@ source into wire bytes, exercise the heartbeat on a genuinely silent source
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterable
 from typing import Any
 
@@ -103,6 +104,22 @@ class TestHeartbeat:
 
     def test_default_keepalive_interval(self) -> None:
         assert SseStream(source()).keepalive_seconds == KEEPALIVE_SECONDS
+
+    async def test_a_source_that_ends_after_a_keepalive_is_quiet(self, caplog) -> None:
+        # A source that ends BY ITSELF past a keepalive — what a server leaving
+        # RUNNING now does — must not leave an unretrieved exception behind.
+        async def slow_then_done() -> AsyncIterable[dict[str, Any]]:
+            await asyncio.sleep(0.06)
+            return
+            yield {"data": "never"}                      # pragma: no cover
+
+        stream = SseStream(slow_then_done(), keepalive_seconds=0.02)
+        with caplog.at_level(logging.ERROR):
+            chunks = [chunk async for chunk in stream]
+            await asyncio.sleep(0.05)
+
+        assert chunks == [b": keepalive\n\n"] * len(chunks)
+        assert caplog.text == ""
 
 
 class TestConsumerGone:
