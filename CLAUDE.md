@@ -199,8 +199,8 @@ cookies off the scope, the query, the body drained ALWAYS from `receive` and
 joined once. **Decoding the body is an option of the application, and the codes
 are the strict HTTP reading (landed 2026-09-12, #87).** The two words live in
 the application's own grammar — `request(body=..., error_codes=...)` under
-`applications.<code>`, declarable on the class as `request_body` /
-`request_error_codes` when the composition carries no recipe. Decoded (the
+`applications.<code>` — and are read from there and nowhere else (#91 removed
+the class attributes `request_body` / `request_error_codes`). Decoded (the
 default), the body is decoded by content-type — json/xml/msgpack hydrated,
 urlencoded via `from_qs`, `multipart/form-data` via the stdlib `email` parser
 into fields (text hydrated, files as `UploadedFile` with `name`/`filename`/
@@ -240,7 +240,33 @@ front for `_server`-like pages is later work. Sessions: `MemoryStore`, cookie
 `Max-Age = ttl x 24`. Filesystem access goes **only through storage nodes**
 (logical volumes, e.g. `GENROASGI:frozen_users`); storage is pinned
 synchronous (`StorageMixin` calls `set_sync()`, tests pin the same) — never
-`await` a storage node call here. Config comes from the config builder + CLI;
+`await` a storage node call here. **The configuration always exists (landed 2026-09-12, #91).** `server.config` is
+a `ConfigurationHandler` for every server: `AsgiServer(applications=[...], ...)`
+without a source is a SHORTCUT, not a second way to be born — it takes the
+ready-made `default` template (`DefaultConfiguration` in
+`config/templates.py`, named in `CONFIGURATION_TEMPLATES`) and layers a
+`ShortcutConfiguration` on top of it, whose `main` writes the kwargs it received
+and POPS each one, so the value is read back off the tree: the `server` scalars
+(`debug` among them), the session ttl, the `middleware` and `plugins` switches —
+both elements now have an OPEN signature, so a name registered through
+`middleware_registry` / `plugin_registry` is an attribute like any other — and one
+`application` node per DECLARED CLASS. `applications=` takes classes, or
+`(class, params)` pairs, never instances: the server instantiates off the tree
+here exactly as for a written recipe, and an instance is refused by the grammar
+(`app_class: expected type`). **No live object reaches the constructor**: a store
+is a CLASS the configuration names and the server builds — `session_store=` and
+the `store_class` of `server.session`, `users=` / `tokens=` as descriptors whose
+`store_class` defaults to `FileUserStore` / `FileApiKeyStore` — `storage=` takes
+the MOUNTS and never a built `StorageManager`, `auth=` becomes the `credentials`
+children, and the session snapshot is the `save_path` of `server.session`.
+**The server creates no user** (owner, 2026-09-12): `admin_password=`, the
+grammar word, `_bootstrap_admin` and `ADMIN_IDENTITY`/`ADMIN_TAGS` are gone —
+a deployment that needs a first identity declares the store class that carries
+it, and the login surface belongs to the application. `tasks=` is untouched by
+this pass, by the owner's decision: it belongs to the orchestration branch.
+A template NAME is a configuration source like a
+`config.py` path, on the constructor (`AsgiServer(config="default")`) and on the
+CLI (`genro-asgi serve template=default`). Config comes from the config builder + CLI;
 `OpenApiApplication`, `McpApplication` and the tasks subsystem (scheduler,
 spool, executor) mount like any other app.
 

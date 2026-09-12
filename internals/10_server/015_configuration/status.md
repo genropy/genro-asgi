@@ -36,9 +36,11 @@ recipe value converted to a list; `max_concurrent` defaults to 16.
 Storage mounts use the storage application's foreign grammar. Each application
 mounts its own `app_class.grammar`, so the multiworker SPA's pool is under
 `applications.<code>.orchestration.commander`, never a server-level section.
-`admin_password` must be a resolver and must resolve to a nonempty string.
+The `authentication` section declares the `users`/`tokens` store descriptors
+(their `store_class` is the class the server builds) and the `credentials`
+children; it carries no bootstrap password, because the server creates no user.
 
-Claim anchors: [`websocket`](../../../src/genro_asgi/config/elements.py#L142), [`admin_password`](../../../src/genro_asgi/config/handler.py#L128), [`admin_password`](../../../src/genro_asgi/config/elements.py#L200).
+Claim anchors: [`websocket`](../../../src/genro_asgi/config/elements.py#L142), [`authentication`](../../../src/genro_asgi/config/elements.py#L195), [`identity_kwargs`](../../../src/genro_asgi/config/handler.py#L120).
 
 ## Live group settings versus general live configuration
 

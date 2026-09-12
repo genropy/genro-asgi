@@ -19,8 +19,8 @@ class Greeting(RoutedApplication):
 
 
 server = AsgiServer(applications=[
-    Greeting(code="home", mount=""),
-    Greeting(code="catalog", mount="shop"),
+    (Greeting, {"code": "home", "mount": ""}),
+    (Greeting, {"code": "catalog", "mount": "shop"}),
 ])
 ```
 

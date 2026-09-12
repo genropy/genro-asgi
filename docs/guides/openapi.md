@@ -33,7 +33,7 @@ class Shop(OpenApiApplication):
         return {"query": q, "hits": []}
 
 
-server = AsgiServer(applications=[Shop()])
+server = AsgiServer(applications=[Shop])
 server.serve(host="127.0.0.1", port=8000)
 ```
 

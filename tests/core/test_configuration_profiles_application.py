@@ -69,9 +69,11 @@ def drive() -> Callable[..., object]:
 
 
 def profile_server(folder: Path) -> AsgiServer:
-    app = ConfigurationProfilesApplication(folder=folder)
     return AsgiServer(
-        applications=[Empty(mount=""), app],
+        applications=[
+            (Empty, {"mount": ""}),
+            (ConfigurationProfilesApplication, {"folder": folder}),
+        ],
         plugins={"openapi": True},
     )
 

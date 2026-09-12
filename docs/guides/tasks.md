@@ -32,7 +32,7 @@ class App(RoutedApplication):
         return {"result": a + b}
 
 
-server = AsgiServer(applications=[App()], tasks=True)
+server = AsgiServer(applications=[App], tasks=True)
 server.serve(host="127.0.0.1", port=8000)
 ```
 

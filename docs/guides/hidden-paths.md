@@ -57,7 +57,7 @@ class Api(RoutedApplication):
         return {"api": self.code}
 
 
-server = AsgiServer(applications=[Api(code="api", mount="api")])
+server = AsgiServer(applications=[(Api, {"code": "api", "mount": "api"})])
 ```
 
 `GET /.well-known/oauth-protected-resource` now answers from `Api`, whatever

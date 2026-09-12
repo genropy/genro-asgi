@@ -35,7 +35,7 @@ class App(RoutedApplication):
         return {"ok": True}
 
 
-server = AsgiServer(applications=[App()], session_store=MemorySessionStore())
+server = AsgiServer(applications=[App], session_store=MemorySessionStore)
 server.serve(host="127.0.0.1", port=8000)
 ```
 
@@ -43,12 +43,15 @@ server.serve(host="127.0.0.1", port=8000)
 
 One store ships with genro-asgi: **`MemorySessionStore`** — sessions live in
 the process. Simple, fast, lost on restart (but see the shutdown snapshot
-below). A custom backend can be plugged through the `session_store=` kwarg by
-implementing the `SessionStore` protocol.
+below). A custom backend is named as a CLASS — `session_store=MyStore`, or
+`(MyStore, {...})` with its own parameters — and the server builds it; in a
+recipe the same thing is `server.session(store_class=MyStore)`. It must
+implement the `SessionStore` protocol.
 
 ## The shutdown snapshot
 
-The `save_session=` kwarg names a pickle file; when set, the server saves
+`server.session(save_path=...)` names a pickle file — `save_session=` is the
+same word in the shortcut form; when set, the server saves
 **every live session — data included** — to that file at shutdown, and loads
 it back at the next startup (a session past its TTL is dropped on load; an
 absent file starts empty).
@@ -82,7 +85,7 @@ Cookie behaviour is controlled through the `session` middleware options:
 ```python
 server = AsgiServer(
     applications=[App()],
-    session_store=MemorySessionStore(),
+    session_store=MemorySessionStore,
     middleware={"session": {
         "cookie_name": "session_id",
         "secure": True,

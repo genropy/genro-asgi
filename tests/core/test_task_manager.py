@@ -34,7 +34,7 @@ from pathlib import Path
 import pytest
 from genro_routes import route
 
-from tests.storage_support import site_storage
+from tests.storage_support import site_mounts
 
 from genro_asgi import AsgiServer, BaseServer, RoutedApplication
 from genro_asgi.application import BaseApplication
@@ -63,7 +63,7 @@ class DemoApp(RoutedApplication):
 @pytest.fixture
 def server(tmp_path: Path) -> AsgiServer:
     """A real AsgiServer whose primary is the DemoApp, storage on tmp_path."""
-    return AsgiServer(applications=[DemoApp(mount="")], storage=site_storage(tmp_path))
+    return AsgiServer(applications=[(DemoApp, {"mount": ""})], storage=site_mounts(tmp_path))
 
 
 def stage(server: AsgiServer, node_path: str, params: dict[str, int], task_id: str) -> None:
@@ -129,8 +129,8 @@ class TestManagerWiring:
         assert not hasattr(plain, "tasks_enabled")
 
     def test_disabled_server_raises_on_access(self, tmp_path: Path) -> None:
-        disabled = AsgiServer(applications=[DemoApp(mount="")], tasks=False,
-                              storage=site_storage(tmp_path))
+        disabled = AsgiServer(applications=[(DemoApp, {"mount": ""})], tasks=False,
+                              storage=site_mounts(tmp_path))
         assert disabled.tasks_enabled is False
         with pytest.raises(RuntimeError, match="disabled"):
             disabled.tasks
@@ -167,8 +167,8 @@ class TestNonLifespanPassThrough:
     """A disabled server passes the lifespan straight through (no loop)."""
 
     async def test_disabled_lifespan_still_acks(self, tmp_path: Path) -> None:
-        disabled = AsgiServer(applications=[DemoApp(mount="")], tasks=False,
-                              storage=site_storage(tmp_path))
+        disabled = AsgiServer(applications=[(DemoApp, {"mount": ""})], tasks=False,
+                              storage=site_mounts(tmp_path))
         sent: list[dict[str, object]] = []
         queue = [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}]
 

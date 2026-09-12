@@ -8,9 +8,10 @@ It uses genro-tytx for serialization, not for reading the ASGI protocol.
 
 ## Decoded body or raw body
 
-Decoding is an option of the application. The default, `decoded`, is the table
-below. An application that wants the bytes untouched declares `raw`, either on
-the class (`request_body = "raw"`) or in a configuration recipe:
+Decoding is an option of the application, and the configuration is where it is
+written — there is no class attribute for it. The default, `decoded`, is the
+table below. An application that wants the bytes untouched is declared `raw` in
+the recipe that mounts it:
 
 ```python
 app = cfg.applications(default="blobs").application(code="blobs", app_class=Blobs)
@@ -40,12 +41,11 @@ Save this as `bodies.py`, then run `python bodies.py`:
 
 ```python
 from genro_asgi import AsgiServer, RoutedApplication
+from genro_asgi.config import AsgiConfigBuilder
 from genro_routes import route
 
 
 class Bodies(RoutedApplication):
-    mount = ""
-
     @route()
     def document(self, body_data):
         return {"received": body_data}
@@ -57,16 +57,22 @@ class Bodies(RoutedApplication):
 
 
 class Blobs(RoutedApplication):
-    mount = "raw"
-    request_body = "raw"
-
     @route()
     def count(self, body_raw):
         return {"bytes": len(body_raw)}
 
 
+class SiteConfiguration(AsgiConfigBuilder):
+    def main(self, root):
+        cfg = root.configuration()
+        cfg.server(host="127.0.0.1", port=8000)
+        apps = cfg.applications()
+        apps.application(code="bodies", mount="", app_class=Bodies)
+        apps.application(code="blobs", mount="raw", app_class=Blobs).request(body="raw")
+
+
 if __name__ == "__main__":
-    AsgiServer(applications=[Bodies(), Blobs()]).serve(host="127.0.0.1", port=8000)
+    AsgiServer(config=SiteConfiguration).serve()
 ```
 
 ```console
@@ -109,10 +115,9 @@ are dropped in that spreading case. Forms and query kwargs still bind normally.
 
 The last row is the second option of the application. The default, `strict`,
 answers 400 to every failure the core judges and leaves 422 to the handler, for
-a domain rule of its own. An application declaring the FastAPI convention —
-`request_error_codes = "fastapi"` on the class, or `app.request(error_codes=
-"fastapi")` in a recipe — answers 422 to a rejected value, and 400 to
-everything else. The generated OpenAPI document declares the code the
+a domain rule of its own. An application declaring the FastAPI convention in its recipe —
+`app.request(error_codes="fastapi")` — answers 422 to a rejected value, and 400
+to everything else. The generated OpenAPI document declares the code the
 application chose. See
 [Coming from Starlette / FastAPI](../coming-from-fastapi.md#error-codes).
 

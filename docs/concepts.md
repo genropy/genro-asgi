@@ -60,7 +60,7 @@ class Shop(RoutedApplication):
     mount = ""          # answers / and everything unclaimed
 
 
-server = AsgiServer(applications=[Shop(), Api(code="api")])
+server = AsgiServer(applications=[Shop, (Api, {"code": "api"})])
 # GET /orders      → Shop
 # GET /api/orders  → Api, which receives /orders
 ```
@@ -84,7 +84,9 @@ different mechanism — and so is a server of mounts only, with nothing on the
 root:
 
 ```python
-server = AsgiServer(applications=[Api(code="api"), Admin(code="admin")], default="api")
+server = AsgiServer(
+    applications=[(Api, {"code": "api"}), (Admin, {"code": "admin"})], default="api"
+)
 # GET /api/orders  → Api
 # GET /admin/users → Admin
 # GET /            → 307 to /api/   (no default → 404)

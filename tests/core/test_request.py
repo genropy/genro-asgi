@@ -23,8 +23,8 @@ Body decoding is exercised per content-type (xml/msgpack/json hydration, an
 urlencoded form with typed values, a body split over several ASGI messages) and
 multipart forms deliver text fields hydrated and file parts as ``UploadedFile``
 kwargs. A content-type the core cannot decode is refused with 415 while
-decoding and kept whole for an application declaring ``request_body = "raw"``
-(issue #87).
+decoding and kept whole for an application whose recipe declares
+``request(body="raw")`` (issues #87, #91).
 
 The ``db`` preparation layer is exercised end-to-end through the server: a fake
 app touches ``request.db`` and the server drains ``closeConnection`` at end of
@@ -43,6 +43,7 @@ import pytest
 from genro_tytx import to_tytx
 
 from genro_asgi import (
+    AsgiServer,
     Avatar,
     BaseApplication,
     BaseServer,
@@ -51,14 +52,29 @@ from genro_asgi import (
     Session,
     UploadedFile,
 )
+from genro_asgi.config.templates import DefaultConfiguration
 from genro_asgi.exceptions import HTTPUnsupportedMediaType
 from genro_asgi.types import Receive, Scope, Send
 
 
 class RawBodyApp(BaseApplication):
-    """An application declaring ``request(body="raw")`` on the class (issue #87)."""
+    """An application whose site declares ``request(body="raw")`` for it."""
 
-    request_body = "raw"
+
+class RawBodySite(DefaultConfiguration):
+    """The one road to the option (#91): the recipe of the site that mounts it."""
+
+    def main(self, root: Any) -> None:
+        cfg = root.configuration()
+        self.server_section(cfg)
+        self.storage_section(cfg)
+        apps = cfg.applications()
+        apps.application(code="raw", mount="", app_class=RawBodyApp).request(body="raw")
+
+
+def raw_body_app() -> BaseApplication:
+    """The mounted ``RawBodyApp``, reading its option off its own site."""
+    return AsgiServer(config=RawBodySite).applications["raw"]
 
 
 async def make_request(
@@ -161,7 +177,7 @@ class TestHandlerKwargs:
             query=b"x=1",
             headers=[(b"content-type", b"application/octet-stream")],
             body=b"\x00\x01\x02",
-            application=RawBodyApp(),
+            application=raw_body_app(),
         )
         assert request.data == b"\x00\x01\x02"
         assert request.handler_kwargs() == {"x": 1, "body_raw": b"\x00\x01\x02"}
@@ -213,7 +229,7 @@ class TestBodyDecoding:
             method="POST",
             headers=[(b"content-type", b"image/png")],
             body=blob,
-            application=RawBodyApp(),
+            application=raw_body_app(),
         )
         assert request.data == blob
         assert request.handler_kwargs() == {"body_raw": blob}
@@ -224,7 +240,7 @@ class TestBodyDecoding:
 
     async def test_body_without_content_type_is_read_and_kept_raw(self) -> None:
         blob = b"orphan payload"
-        request = await make_request(method="POST", body=blob, application=RawBodyApp())
+        request = await make_request(method="POST", body=blob, application=raw_body_app())
         assert request.data == blob
         assert request.handler_kwargs() == {"body_raw": blob}
 

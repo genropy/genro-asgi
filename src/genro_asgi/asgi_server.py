@@ -24,15 +24,22 @@ base WITHOUT the auth mixin (D6 by construction — the base never learned about
 the chain).
 
 The server is SELF-CONFIGURING: ``AsgiServer(config=source)`` builds its own
-read door — a ``ConfigurationHandler`` over a ``config.py`` path, a recipe class,
-a recipe instance or a ready handler — derives its constructor kwargs from it and
-then runs the ordinary D16 cooperative chain. Nothing materializes a server from
-the outside; the class that needs the values reads them. Explicitly passed
-kwargs WIN over the configured ones, wholesale per kwarg
-(``AsgiServer(config=Recipe, port=0)`` serves the recipe's site on an
+read door — a ``ConfigurationHandler`` over a template NAME, a ``config.py``
+path, a recipe class, a recipe instance or a ready handler — derives its
+constructor kwargs from it and then runs the ordinary D16 cooperative chain.
+Nothing materializes a server from the outside; the class that needs the values
+reads them. Explicitly passed kwargs WIN over the configured ones, wholesale per
+kwarg (``AsgiServer(config=Recipe, port=0)`` serves the recipe's site on an
 OS-assigned port), and the handler stays reachable as ``server.config`` — the
-read door applications delegate to. A bare ``AsgiServer(...)`` has
-``config is None`` and behaves exactly as before.
+read door applications delegate to.
+
+THE CONFIGURATION ALWAYS EXISTS (#91). ``AsgiServer(applications=[...], ...)``
+without a source is a SHORTCUT, not a second way to be born: it takes the
+ready-made ``default`` template and writes the kwargs it received into a
+``ShortcutConfiguration`` layered on top of it, so ``server.config`` is a
+handler here as everywhere and every option is read from the tree. Every option it received is written there and popped, applications
+included: the shortcut declares CLASSES with their parameters, and the server
+instantiates them off the tree exactly as it does for a written recipe.
 
 Its cooperative ``__init__`` peels the kwargs the frozen Macro 1 ``BaseServer``
 does not accept — ``host``/``port``/``external_url`` — and forwards
@@ -74,6 +81,11 @@ from .communication import CommunicationMixin
 from .config.elements import AsgiServerGrammar
 from .config.default_config import DefaultConfig
 from .config.handler import ConfigurationHandler
+from .config.templates import (
+    CONFIGURATION_TEMPLATES,
+    DEFAULT_TEMPLATE,
+    ShortcutConfiguration,
+)
 from .db import AsgiDbHandlerBase
 from .middleware import MiddlewareMixin
 from .plugin_mixin import PluginMixin
@@ -109,37 +121,48 @@ class AsgiServer(
     grammar: type = AsgiServerGrammar
 
     def __init__(self, config: ConfigSource | None = None, **kwargs: Any) -> None:
-        self._config = self._build_config(config)
-        if self.config is not None:
-            kwargs = {**self._configured_kwargs(self.config), **kwargs}
+        self._config = self._build_config(config, kwargs)
+        kwargs = {**self._configured_kwargs(self.config), **kwargs}
         self._config_host: str | None = kwargs.pop("host", None)
         self._config_port: int | None = kwargs.pop("port", None)
         external_url: str | None = kwargs.pop("external_url", None)
         self._external_url: str | None = external_url.rstrip("/") if external_url else None
         super().__init__(**kwargs)
         self._check_oidc_external_url()
-        if self.config is not None:
-            self._register_configured_databases(self.config)
+        self._register_configured_databases(self.config)
 
-    def _build_config(self, config: ConfigSource | None) -> ConfigurationHandler | None:
-        """The read door over ``config``: a ready handler passes through, anything
-        else (a ``config.py`` path, a recipe class, a recipe instance) is wrapped
-        in one over the parent layers. ``None`` — a hand-built server — has no
-        configuration at all.
+    def _build_config(
+        self, config: ConfigSource | None, kwargs: dict[str, Any]
+    ) -> ConfigurationHandler:
+        """The read door over ``config``. There is always one.
 
-        The site recipe is the TOP layer: ``DefaultConfig.parents_for()`` puts the
-        package defaults under it, plus the defaults source the recipe itself
-        declares (``default_config``). A handler handed in ready-made keeps
-        whatever layering it was built with — its owner already decided.
+        A ready handler passes through — its owner already decided its layering.
+        A template NAME, a ``config.py`` path, a recipe class or a recipe
+        instance becomes the TOP layer of a handler whose parents
+        ``DefaultConfig.parents_for()` computes: the package defaults, plus the
+        defaults source the recipe declares (``default_config``).
+
+        ``None`` is the SHORTCUT: the constructor kwargs are written into a
+        ``ShortcutConfiguration`` layered over the ``default`` template, so a
+        server composed in code has the tree a recipe would have produced. The
+        shortcut consumes the kwargs it writes, and the deployment's own defaults
+        layer is not consulted — the caller composed the site in code.
 
         A ``config.py`` path is imported ONCE, here: the loaded class both
         answers ``default_config`` and becomes the handler's source, so a
         module-body side effect fires a single time per boot and the class the
         parents were computed from is the class the handler builds."""
-        if config is None or isinstance(config, ConfigurationHandler):
+        if isinstance(config, ConfigurationHandler):
             return config
+        if config is None:
+            return ConfigurationHandler(
+                ShortcutConfiguration(kwargs),
+                parents=[CONFIGURATION_TEMPLATES[DEFAULT_TEMPLATE]],
+            )
         defaults = DefaultConfig()
-        if isinstance(config, (str, Path)):
+        if isinstance(config, str) and config in CONFIGURATION_TEMPLATES:
+            config = CONFIGURATION_TEMPLATES[config]
+        elif isinstance(config, (str, Path)):
             config = defaults.recipe_class(config)
         return ConfigurationHandler(config, parents=defaults.parents_for(config))
 
@@ -150,7 +173,8 @@ class AsgiServer(
         owning class peels; a section the recipe omits contributes nothing, so
         the composition's own defaults apply. ``applications`` are instantiated
         HERE — the recipe named the classes and their kwargs, and a recipe error
-        surfaces as a boot error instead of a broken server.
+        surfaces as a boot error instead of a broken server. There is one road:
+        a server composed in code declares CLASSES too, through the shortcut.
         """
         kwargs: dict[str, Any] = config.server_kwargs()
         kwargs.update(config.identity_kwargs())
@@ -186,8 +210,8 @@ class AsgiServer(
             )
 
     @property
-    def config(self) -> ConfigurationHandler | None:
-        """The read door over this server's configuration (``None`` when built bare).
+    def config(self) -> ConfigurationHandler:
+        """The read door over this server's configuration. There is always one.
 
         Callable as ``server.config("server.host")`` — the four-layer read stack
         of the ``ConfigurationHandler`` — and the door applications delegate to

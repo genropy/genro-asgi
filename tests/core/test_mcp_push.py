@@ -33,7 +33,7 @@ from typing import Any
 import pytest
 from genro_routes import route
 
-from tests.storage_support import site_storage
+from tests.storage_support import site_mounts
 
 from genro_asgi import AsgiServer, McpApplication, RoutedApplication
 from genro_asgi.lifespan import STOPPING
@@ -53,8 +53,8 @@ class Primary(RoutedApplication):
 def server(tmp_path: Path) -> AsgiServer:
     """A real server: Primary + McpApplication at ``/mcp``, storage on tmp_path."""
     srv = AsgiServer(
-        applications=[Primary(mount=""), McpApplication(code="mcp")],
-        storage=site_storage(tmp_path),
+        applications=[(Primary, {"mount": ""}), (McpApplication, {"code": "mcp"})],
+        storage=site_mounts(tmp_path),
     )
     return srv
 
@@ -117,9 +117,9 @@ class TestSessionId:
 
     async def test_get_without_tasks_is_405(self, tmp_path: Path) -> None:
         srv = AsgiServer(
-            applications=[Primary(mount=""), McpApplication(code="mcp")],
+            applications=[(Primary, {"mount": ""}), (McpApplication, {"code": "mcp"})],
             tasks=False,
-            storage=site_storage(tmp_path),
+            storage=site_mounts(tmp_path),
         )
         sent = await drive(srv, "/mcp", method="GET")
         start = next(m for m in sent if m["type"] == "http.response.start")

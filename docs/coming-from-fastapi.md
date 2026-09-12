@@ -34,7 +34,7 @@ served as REST, as an OpenAPI schema, and as MCP tools without being rewritten.
 
 | Task | FastAPI / Starlette | genro-asgi |
 |------|---------------------|------------|
-| Create the app | `app = FastAPI()` | subclass `RoutedApplication` (or `OpenApiApplication`); build `AsgiServer(applications=[App()])` |
+| Create the app | `app = FastAPI()` | subclass `RoutedApplication` (or `OpenApiApplication`); build `AsgiServer(applications=[App])` |
 | Define a route | `@app.get("/greet")` on a function | `@route()` on a **method** (name = URL segment), imported from `genro_routes` |
 | Path / query params | function args + `Path`/`Query` | method args bind to the query string, typed, with defaults |
 | Request body / validation | pydantic model as a param | the `pydantic` plugin, automatically armed by `AsgiServer` |
@@ -88,7 +88,7 @@ class Shop(OpenApiApplication):
         return {"query": q, "hits": []}
 
 
-server = AsgiServer(applications=[Shop()])
+server = AsgiServer(applications=[Shop])
 server.serve(host="127.0.0.1", port=8000)
 ```
 
@@ -111,14 +111,9 @@ pydantic rejects — answers **400**, and a content type the core cannot decode
 answers **415**. The core never produces 422: that code belongs to the handler,
 for a domain rule it decides itself.
 
-An application that serves clients expecting the FastAPI convention declares it:
-
-```python
-class Shop(OpenApiApplication):
-    request_error_codes = "fastapi"     # a rejected value answers 422
-```
-
-or in a configuration recipe:
+An application that serves clients expecting the FastAPI convention declares it
+in the recipe that mounts it — the configuration is the only place these two
+options are written:
 
 ```python
 app = cfg.applications(default="shop").application(code="shop", app_class=Shop)
@@ -139,8 +134,9 @@ application chose.
   `uvicorn main:app` both point at an ASGI callable in a module. `genro-asgi
   serve ./config.py` points at a **configuration recipe** — the file declaring
   the whole site — and the server builds itself from it; `genro-asgi serve
+  template=default` serves a ready-made configuration, and `genro-asgi serve
   application=./hello.py:Hello` is the closer analogue, for when there is one
-  application and no config. The registry (`--name`, then `apps`/`stop`/`remove`)
+  application and no recipe of its own. The registry (`--name`, then `apps`/`stop`/`remove`)
   has no FastAPI counterpart. There is still no `.run()` method: programmatically
   you build the server and call `.serve()`, which boots a uvicorn loop and blocks
   (`port=0` asks the OS for a free port, useful in tests). See
@@ -160,7 +156,7 @@ application chose.
 - **422 is not the validation code.** See [Error codes](#error-codes) above: a
   rejected value answers 400 unless the application declares the FastAPI
   convention. Bodies are also decoded by the core only for an application that
-  wants them decoded — `request_body = "raw"` hands the handler the bytes.
+  wants them decoded — `app.request(body="raw")` hands the handler the bytes.
 - **An internal `_server` app is always mounted.** Login, task management and the
   system OpenAPI live under `/_server/...` with no setup on your part — there is no
   FastAPI equivalent you need to wire up.

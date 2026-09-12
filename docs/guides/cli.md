@@ -10,6 +10,7 @@ named servers so you can start, list and stop them from any shell.
 
 ```
 genro-asgi serve <source> [--host H] [--port P] [--reload] [--name N] [--debug [PARAMETERS]]
+    <source> = ./config.py | template=<name> | application=<target> | <registered name>
 genro-asgi apps
 genro-asgi stop <name>
 genro-asgi remove <name>
@@ -91,7 +92,8 @@ so a recipe error surfaces as the same boot error you get from
 ## Serving one application, no config
 
 For a quick run there is the `application=` form, which resolves a class and
-hands it to `AsgiServer(applications=[...])` — instantiated with no arguments:
+hands it to `AsgiServer(applications=[...])` — the server instantiates it with
+no arguments:
 
 ```
 $ genro-asgi serve application=./hello.py:Hello --port 8124
@@ -110,6 +112,19 @@ A target without the `:` separator is an error naming both forms.
 `--host` and `--port` are **forwarded as `AsgiServer` kwargs**. The server's own
 rule does the precedence — an explicit kwarg wins over the configured value,
 wholesale per kwarg — and the command computes nothing.
+
+## Serving a ready-made configuration
+
+`template=<name>` serves one of the configurations the package ships complete
+and valid, customised by the command's own options:
+
+```
+$ genro-asgi serve template=default --port 8125
+genro-asgi serving http://127.0.0.1:8125
+```
+
+`default` is the only name today; an unknown one is an error listing the known
+ones. The form is the CLI face of `AsgiServer(config="<name>")`.
 
 ## The registry of named servers
 
