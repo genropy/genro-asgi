@@ -266,7 +266,22 @@ it, and the login surface belongs to the application. `tasks=` is untouched by
 this pass, by the owner's decision: it belongs to the orchestration branch.
 A template NAME is a configuration source like a
 `config.py` path, on the constructor (`AsgiServer(config="default")`) and on the
-CLI (`genro-asgi serve template=default`). Config comes from the config builder + CLI;
+CLI (`genro-asgi serve template=default`).
+**A site is a folder, and one card names it (landed 2026-09-12, #92).**
+`SiteHome` (`site_home.py`) is that folder: inside it every site-owned path is
+relative and named — `config.py`, `static/`, `data/frozen_users`,
+`data/sessions`, `sockets/`, `logs/`, `run/` — and `prepare()` lays an empty
+mounted volume out. The home is a configuration word, `site(name=, home=)`,
+written by the recipe attributes `site_name` / `site_home` or by the CLI, read
+back as `server.site_home`; it anchors the default `site:` mount, which without
+a home keeps the working directory. The CLI registry is now ONE CARD per site,
+`<GENRO_ASGI_HOME>/sites/<name>.json` (`SitesRegistry`, the widened
+`apps/<name>.json`): home, source and options, and a relative source is read
+inside the home. `genro-asgi configure <name>` writes card, home and recipe,
+asking only what the options did not give — so it runs silently in an init
+container — and `genro-asgi sites` lists them. `GENRO_ASGI_HOME` stays the
+INSTALLATION root, one mechanism whose value is what changes across
+development, classic production, virtualenv, Docker and Kubernetes. Config comes from the config builder + CLI;
 `OpenApiApplication`, `McpApplication` and the tasks subsystem (scheduler,
 spool, executor) mount like any other app.
 
