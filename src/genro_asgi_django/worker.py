@@ -77,7 +77,8 @@ class DjangoWorker(SpaWorker):
         kwargs: forwarded to ``SpaWorker`` — the spawn grammar and the policies.
         """
         super().__init__(name, **kwargs)
-        self.django_app = group_engine
+        #: Django's own WSGI callable: the group's, or this worker's own.
+        self.django_app: Callable[..., Iterable[bytes]] = group_engine
         if self.django_app is None:
             self.django_app = DjangoEngineFactory(
                 settings_module=settings_module, project_path=project_path
@@ -107,7 +108,7 @@ class DjangoWorker(SpaWorker):
 
         def watching_start_response(
             status: str, headers: list[tuple[str, str]], exc_info: Any = None
-        ) -> Callable[[bytes], None]:
+        ) -> Any:
             answered.extend(headers)
             return start_response(status, headers, exc_info)
 

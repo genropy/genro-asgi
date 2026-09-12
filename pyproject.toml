@@ -236,3 +236,10 @@ disable_error_code = ["attr-defined"]
 [[tool.mypy.overrides]]
 module = "genro_asgi_server_app.server_sections.tasks_section"
 disable_error_code = ["union-attr", "no-any-return"]
+
+# Django ships no py.typed marker, so every import of it is "missing library
+# stubs" — a fact about the framework and not about this code. Scoped to
+# Django's own modules: nothing of ours is silenced.
+[[tool.mypy.overrides]]
+module = ["django.*"]
+ignore_missing_imports = true
