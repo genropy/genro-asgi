@@ -163,13 +163,16 @@ a list). genro-tytx is used ONLY as a serializer (`from_tytx`, `from_qs`,
 `to_tytx`, `json_dumps`): nothing is imported from `genro_tytx.http`, and the
 transport → media type map lives in `media_types.py`.
 Middleware wraps the dispatch (errors, authentication, session, cors,
-logging, wellknown). Auth answers **401 to the anonymous, 403 to the known**;
-admin surfaces live under the `_server` app as sections: users, tokens and
-tasks require `SUPERADMIN`, the monitor requires `SERVER_ADMIN`, and login
-entry points are public. The SPA-owned inspector has no route authorization
-rule of its own. The monitor renders one page
-over every mounted app via the `app_snapshot`/`app_panel`/`panel_source`
-contract on `BaseApplication`. **`import genro_asgi` loads no orchestration**
+logging, wellknown). Auth answers **401 to the anonymous, 403 to the known**,
+and a 401 is answered like any other error — the bare status with the
+exception's `WWW-Authenticate` (D-SA-4, 2026-09-12): the core owns no login
+page and points nobody at one. Admin surfaces live under the `_server` app as
+sections, in their own package (below): users, tokens and tasks require
+`SUPERADMIN`, the monitor requires `SERVER_ADMIN`, and login entry points are
+public. The SPA-owned inspector has no route authorization rule of its own.
+The monitor serves the snapshot and the panel descriptors of every mounted app
+via the `app_snapshot`/`app_panel`/`panel_source` contract on
+`BaseApplication`. **`import genro_asgi` loads no orchestration**
 (landed 2026-09-07): the last edge was the `inspector` section, which read a
 pool from inside the server sections, and it moved to
 `genro_asgi_multiworker_spa/inspector_section.py` — the SPA front attaches it at `_server/inspector`
@@ -244,6 +247,54 @@ operator-directed. UDS listeners refuse all preexisting entries, bind an explici
 socket without asyncio's unlink/rebind behavior, and remove only the recorded
 socket device/inode on cleanup. No stale-path reclamation or parent-SIGKILL
 supervision is introduced. See `docs/internal/opaque_transport.md`.
+
+### The server application (`genro_asgi_server_app/`)
+
+**One package of its own, beside the core (landed 2026-09-12, #82).** The
+system surface under `/_server` is a third top-level package shipped by the one
+distribution `genro-asgi`: `server_app.py` (`ServerApplication`), the sections
+(`server_sections/`: auth, users, tokens, tasks, monitor) and the login methods
+(`auth_method.py` with `AuthMethod`/`PasswordMethod`/`safe_next_path`,
+`oidc_method.py` with `OidcMethod`). It imports the core by absolute path; the
+core names it in no import, TYPE_CHECKING included, and `import genro_asgi`
+loads no module of it (pinned by a test that asks a fresh interpreter). There
+is no re-export at the old paths: `genro_asgi.__init__` stops exporting
+`AuthSection`, `AuthMethod`, `PasswordMethod`, `OidcMethod` and
+`ServerApplication`. The core keeps what authenticates without asking a human:
+`auth/core.py` (basic/bearer/jwt) and `auth/mixin.py` (the session avatar).
+
+**It is declared, never mounted behind the caller (D-SA-10).** SPEC D4's
+"automatic, not configured" half is superseded: `AsgiServer._register_server_app`,
+the `server_app` kwarg, `ConfigurationHandler.server_app_kwargs` and
+`.oidc_providers` are gone. A server that wants `/_server/...` passes
+`ServerApplication()` in `applications=` or writes it on the `applications`
+section with the code `_server`; a server that declares none has none.
+`AsgiServer._check_oidc_external_url` stays in the core and reads
+`oidc_providers` off whatever answers to `_server` by `getattr`, so a configured
+provider without `external_url` is still a boot error and the core still imports
+no class to ask.
+
+**Its words are its own (D-SA-11).** `login`, `oidc` and `provider` left the
+site dialect and are declared by `ServerApplicationGrammar`, under the
+application element, through the subbuilder seam every application has
+(`app_class:grammar`, the same one `SpaApplicationGrammar` uses). They stay
+ELEMENTS because a provider carries a secret: an element's attributes go
+through the read stack, so `client_secret=EnvResolver(...)` is resolved at read
+time. `ServerApplication.server` — the setter — is where the app reads them:
+attachment is the first moment a read door exists, `read_declared_login_surface`
+folds its own `login` and `oidc` nodes through `handler.closed_attrs`, and each
+provider found becomes a registered auth method. A hand-built server passes
+`login=`/`oidc=` as constructor kwargs and reads nothing.
+
+**No management page (D-SA-3).** `resources/login.html` and
+`server_sections/resources/monitor.html` are deleted with the two routes that
+served them (`ServerApplication.login_page`, `MonitorSection.index`): the
+management pages will be rendered by gramlot, and what this package serves is
+the JSON a page drives. `/_server/login_page` and `/_server/monitor/` are 404.
+
+Tests are a suite of their own, `tests/server_app/`, and `hooks/pre-push`
+selects it from the pushed paths like the other two; more than one of the three
+suites in one range runs everything.
 
 ### The SPA machine (`genro_asgi_multiworker_spa/`)
 
@@ -631,5 +682,5 @@ commits, still to be entered in the register). Decision registers:
 
 **All general policies are inherited from the parent document: [meta-genro-modules CLAUDE.md](https://github.com/softwellsrl/meta-genro-modules/blob/main/CLAUDE.md)**
 
-**Last Updated**: 2026-09-08
+**Last Updated**: 2026-09-12
 

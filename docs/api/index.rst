@@ -19,3 +19,4 @@ by subsystem; private implementation helpers are not an API guarantee.
    plugins
    websocket
    multiworker-spa
+   server-app

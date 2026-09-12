@@ -48,7 +48,8 @@ cd genro-asgi
 python -m pip install -e '.[docs]'
 ```
 
-One distribution supplies both `genro_asgi` and `genro_asgi_multiworker_spa`.
+One distribution supplies `genro_asgi`, `genro_asgi_multiworker_spa` and
+`genro_asgi_server_app`.
 The hello-world uses only the core; see [Multiworker SPA](guides/multiworker-spa.md)
 when your application needs a pool of worker processes.
 

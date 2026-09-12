@@ -88,7 +88,7 @@ testpaths = ["tests"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
-addopts = "-v --cov=genro_asgi --cov=genro_asgi_multiworker_spa --cov-report=term-missing"
+addopts = "-v --cov=genro_asgi --cov=genro_asgi_multiworker_spa --cov=genro_asgi_server_app --cov-report=term-missing"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 

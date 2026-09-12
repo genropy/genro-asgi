@@ -16,10 +16,12 @@
 # have - runs the whole suite, never nothing.
 #
 # Which suite, per changed path, the union over the range deciding:
+#   src/genro_asgi_server_app/, tests/server_app/ -> tests/server_app
 #   src/genro_asgi_multiworker_spa/, tests/spa/   -> tests/spa
 #   src/genro_asgi/, tests/core/                  -> tests/core
 #   pyproject.toml, hooks/, any .py outside those -> the whole suite
 #   anything else (docs, .phased/, README, ...)   -> nothing
+# More than one of the three suites in one range runs the whole suite.
 
 set -e
 
@@ -63,11 +65,13 @@ if [ "$base_unknown" = "1" ]; then
 else
     want_core=0
     want_spa=0
+    want_server_app=0
     want_all=0
 
     while read -r path; do
         [ -z "$path" ] && continue
         case "$path" in
+            src/genro_asgi_server_app/*|tests/server_app/*) want_server_app=1 ;;
             src/genro_asgi_multiworker_spa/*|tests/spa/*) want_spa=1 ;;
             src/genro_asgi/*|tests/core/*) want_core=1 ;;
             pyproject.toml|hooks/*|*.py) want_all=1 ;;
@@ -82,10 +86,12 @@ EOF
         echo "No Python file in the pushed range: no test run"
         printf '%s\n' "$changed_files" | sed '/^$/d' | sort -u | sed 's/^/    /'
         exit 0
-    elif [ "$want_spa" = "1" ] && [ "$want_core" = "1" ]; then
-        echo "Both halves changed: running the whole suite"
+    elif [ $((want_core + want_spa + want_server_app)) -gt 1 ]; then
+        echo "More than one suite changed: running the whole suite"
     elif [ "$want_spa" = "1" ]; then
         test_target="tests/spa"
+    elif [ "$want_server_app" = "1" ]; then
+        test_target="tests/server_app"
     elif [ "$want_core" = "1" ]; then
         test_target="tests/core"
     fi
