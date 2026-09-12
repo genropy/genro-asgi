@@ -70,6 +70,7 @@ from .session import (
     SessionMixin,
     SessionStore,
 )
+from .site_home import SiteHome
 from .storage_mixin import StorageMixin
 from .tasks import TaskGrammar
 from .types import ASGIApp, Message, Receive, Scope, Send
@@ -130,6 +131,7 @@ __all__ = [
     "Session",
     "SessionMixin",
     "SessionStore",
+    "SiteHome",
     "StorageMixin",
     "TaskGrammar",
     "UploadedFile",
