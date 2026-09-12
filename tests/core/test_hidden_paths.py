@@ -168,8 +168,8 @@ class TestHiddenPaths:
 
     async def test_the_rule_has_no_switch(self, http_request, response_status) -> None:
         # The assembled server, whose chain is complete, answers the same.
-        app = RecordingApp(mount="")
-        server = AsgiServer(applications=[app])
+        server = AsgiServer(applications=[(RecordingApp, {"mount": ""})])
+        app = server.applications["recordingapp"]
         assert response_status(await http_request(server, "/.git/config")) == 404
         assert app.seen == []
 
