@@ -198,15 +198,19 @@ class TestServeSourceResolution:
         assert launcher.launcher_payload["config"] == "default"
         assert launcher.reload_dir == str(Path.cwd())
 
-    def test_an_unknown_name_lists_the_registered_ones(self, tmp_path: Path) -> None:
+    def test_an_unknown_name_lists_the_configured_ones(self, tmp_path: Path) -> None:
         cli = Cli(registry=SitesRegistry(base_dir=tmp_path))
         cli.registry.save("demo", {"source": "./a.py"})
-        with pytest.raises(CliError, match="unknown app 'ghost' \\(registered: demo\\)"):
+        with pytest.raises(
+            CliError,
+            match="ghost is not a configured site, run 'genro-asgi configure ghost' "
+            "\\(configured: demo\\)",
+        ):
             ServerLauncher(parse(cli, ["serve", "ghost"]), cli.registry)
 
     def test_an_unknown_name_with_an_empty_registry(self, tmp_path: Path) -> None:
         cli = Cli(registry=SitesRegistry(base_dir=tmp_path))
-        with pytest.raises(CliError, match="none registered"):
+        with pytest.raises(CliError, match="none configured"):
             ServerLauncher(parse(cli, ["serve", "ghost"]), cli.registry)
 
     def test_a_registered_name_restores_source_and_options(self, tmp_path: Path) -> None:

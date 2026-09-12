@@ -52,8 +52,13 @@ stale and reads as not running.
 template, the applications to mount and the listener, and every answer given as an
 option is not asked — with all of them given it runs without a prompt, which is
 what Docker and Kubernetes need. It lays the home out (``SiteHome.prepare``) and
-writes its ``config.py``. ``serve <path>`` writes no card: the name is the
-intention to have one.
+writes its ``config.py``. It is the ONLY command that creates anything: ``serve``
+refuses a name with no card and a card whose home is not on disk, naming
+``configure`` in both messages.
+
+``serve <path>`` files a card when the CONFIGURATION names its site (the ``site``
+section, or the ``site_name`` attribute of the recipe that writes it), so the next
+boot is ``serve <name>``. A configuration that names none runs anonymous.
 
 ``--reload`` runs under uvicorn's reload supervisor, which accepts only an import
 string — never a built instance. The source therefore crosses the process
@@ -383,8 +388,11 @@ class ServerLauncher:
         """Replace the source and the unset options with the ones stored under *name*."""
         stored = self.registry.load(name)
         if stored is None:
-            known = ", ".join(self.registry.names()) or "none registered"
-            raise CliError(f"unknown app {name!r} (registered: {known})")
+            known = ", ".join(self.registry.names()) or "none configured"
+            raise CliError(
+                f"{name} is not a configured site, run 'genro-asgi configure {name}' "
+                f"(configured: {known})"
+            )
         self.name = self.name or name
         self.source = stored["source"]
         if self.home is None and stored.get("home"):
@@ -412,12 +420,11 @@ class ServerLauncher:
     def build_server(self) -> AsgiServer:
         """The server this source describes, host/port forwarded when given.
 
-        A declared home is laid out FIRST: a container's mounted volume arrives
-        empty, and the ``site:`` mount anchored on it refuses a folder that does
-        not exist.
+        A declared home must ALREADY be there: laying one out is ``configure``'s
+        job and nobody else's, so a home that is not on disk stops the boot with
+        the command that creates it instead of starting an empty site.
         """
-        if self.home is not None:
-            self.home.prepare()
+        self.check_home()
         if self.is_quickstart:
             app_class = TargetResolver(self.source.partition("=")[2]).resolve()
             return AsgiServer(applications=[app_class], **self.constructor_kwargs)
@@ -432,6 +439,28 @@ class ServerLauncher:
             "not a 'template=<name>' assignment, "
             "not an 'application=<target>' assignment"
         )
+
+    def check_home(self) -> None:
+        """Stop when the declared home is not on disk."""
+        if self.home is None or self.home.path.is_dir():
+            return
+        name = self.name or self.source
+        raise CliError(
+            f"the home of {name} is not there: {self.home.path} — "
+            f"run 'genro-asgi configure {name}' to lay it out"
+        )
+
+    def adopt_site_identity(self, server: AsgiServer) -> None:
+        """Take the identity the CONFIGURATION declares, when the command line gave none.
+
+        A configuration that names its site is a site the machine recognises: its
+        card is written on this boot, so the next one is ``serve <name>``. One
+        that names none runs anonymous and files nothing.
+        """
+        if self.name is None and server.site_name:
+            self.name = server.site_name
+        if self.home is None and server.site_home is not None:
+            self.home = server.site_home
 
     def address(self, server: AsgiServer) -> tuple[str, int]:
         """The address this boot binds: the explicit option, else what the server has.
@@ -465,8 +494,9 @@ class ServerLauncher:
         )
 
     def run(self) -> int:
-        """Boot the server (blocking), registering the name and its pid first."""
+        """Boot the server (blocking), filing the card and the pid first."""
         server = self.build_server()
+        self.adopt_site_identity(server)
         if self.name:
             self.registry.save(self.name, self.entry)
             # The pidfile goes down BEFORE uvicorn starts: with --reload this

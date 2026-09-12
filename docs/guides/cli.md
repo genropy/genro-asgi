@@ -148,9 +148,20 @@ The same site is therefore the same thing in development, in classic
 production, in a virtualenv, in Docker and in Kubernetes: only the folder moves.
 The home is a configuration word — `site(home=...)`, written by the recipe
 attribute `site_home` or by the card — and the server hands it out as
-`server.site_home`, a `SiteHome` whose properties are the paths above. It also
-anchors the default `site:` storage mount; a site with no home keeps the working
-directory, as before.
+`server.site_home`, a `SiteHome` whose properties are the paths above.
+
+The shipped storage layout is **two volumes**, not one:
+
+- **`site:`** is the site's own folder as the configuration declares it — its
+  code and its resources — anchored on the deployment directory;
+- **`home:`** is the space the site keeps its own things in — `static/`,
+  `data/frozen_users`, `data/sessions`, `sockets/`, `logs/` are paths inside it
+  — anchored on the folder the card names. With no home declared it is the
+  folder of `site:`.
+
+The pool's own path words (`instance_dir`, the frozen-users deposit, the
+orchestration log) are **not** derived from the home: they stay the
+configuration words they are.
 
 `GENRO_ASGI_HOME` is a different thing: the **installation** root, where
 genro-asgi keeps the site cards and the machine defaults layer. One mechanism,
@@ -187,15 +198,21 @@ $ genro-asgi remove demo
 demo: removed
 ```
 
-An unknown name is an error listing the names that do exist. `--name` on
-`serve` still files a card for a server started any other way; a bare path
-(`genro-asgi serve ./config.py`) files none — the name is the intention to have
-one.
+An unknown name is an error listing the names that do exist. `--name` on `serve`
+still files a card for a server started any other way, and so does the
+**configuration itself**: `genro-asgi serve ./config.py` on a recipe that names
+its site (`site_name`, which writes `site(name=...)`) files that site's card, so
+the next boot is `genro-asgi serve <name>`. A configuration that names no site
+runs anonymous and files nothing.
 
 A card's relative source is read **inside the home**, so `serve demo` runs
-`/srv/demo/config.py` whatever directory you start from. A declared home that
-does not exist yet is laid out at boot: a container's mounted volume arrives
-empty.
+`/srv/demo/config.py` whatever directory you start from.
+
+**`serve` creates nothing.** A name with no card stops with
+`shop is not a configured site, run 'genro-asgi configure shop'`, and a card
+whose home is not on disk stops the same way. Laying a home out is `configure`'s
+job and nobody else's — a container's mounted volume is prepared by an init step
+that runs `configure`, not by the boot.
 
 **Naming an instance also arms the session snapshot**: the sessions of
 `--name demo` are pickled to `<home>/data/sessions/demo.pickle` — or

@@ -238,7 +238,7 @@ under `TYPE_CHECKING` only, and reads the ONE pool through
 (owner, 2026-09-07), so a second attach is a `FatalBootError`; a lighter
 front for `_server`-like pages is later work. Sessions: `MemoryStore`, cookie
 `Max-Age = ttl x 24`. Filesystem access goes **only through storage nodes**
-(logical volumes, e.g. `GENROASGI:frozen_users`); storage is pinned
+(logical volumes: the shipped ones are `site:` and `home:`); storage is pinned
 synchronous (`StorageMixin` calls `set_sync()`, tests pin the same) — never
 `await` a storage node call here. **The configuration always exists (landed 2026-09-12, #91).** `server.config` is
 a `ConfigurationHandler` for every server: `AsgiServer(applications=[...], ...)`
@@ -273,15 +273,27 @@ relative and named — `config.py`, `static/`, `data/frozen_users`,
 `data/sessions`, `sockets/`, `logs/`, `run/` — and `prepare()` lays an empty
 mounted volume out. The home is a configuration word, `site(name=, home=)`,
 written by the recipe attributes `site_name` / `site_home` or by the CLI, read
-back as `server.site_home`; it anchors the default `site:` mount, which without
-a home keeps the working directory. The CLI registry is now ONE CARD per site,
+back as `server.site_home`. The shipped storage layout is TWO volumes (owner,
+2026-09-12): `site:` is the site's folder as the configuration declares it —
+code and resources, on the deployment directory — and `home:` is the space the
+site keeps its own things in, anchored on the home, with `static`,
+`data/frozen_users`, `data/sessions`, `sockets` and `logs` as paths inside it;
+`home:` undeclared is the folder of `site:`. The pool's own path words
+(`instance_dir`, `frozen_users_path`, `orchestration_log_path`) are NOT derived
+from the home and stay exactly as they are — the orchestration branch owns them.
+The CLI registry is now ONE CARD per site,
 `<GENRO_ASGI_HOME>/sites/<name>.json` (`SitesRegistry`, the widened
 `apps/<name>.json`): home, source and options, and a relative source is read
 inside the home. `genro-asgi configure <name>` writes card, home and recipe,
 asking only what the options did not give — so it runs silently in an init
-container — and `genro-asgi sites` lists them. `GENRO_ASGI_HOME` stays the
-INSTALLATION root, one mechanism whose value is what changes across
-development, classic production, virtualenv, Docker and Kubernetes. Config comes from the config builder + CLI;
+container — and it is the ONLY command that creates anything: `serve` creates
+nothing, refusing a name with no card and a card whose home is not on disk, and
+naming `configure` in both messages. A `serve <path>` whose CONFIGURATION names
+its site files that site's card (`ServerLauncher.adopt_site_identity`), so the
+next boot is `serve <name>`; a configuration naming none runs anonymous.
+`genro-asgi sites` lists them. `GENRO_ASGI_HOME` stays the INSTALLATION root,
+one mechanism whose value is what changes across development, classic
+production, virtualenv, Docker and Kubernetes. Config comes from the config builder + CLI;
 `OpenApiApplication`, `McpApplication` and the tasks subsystem (scheduler,
 spool, executor) mount like any other app.
 
