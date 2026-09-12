@@ -15,7 +15,7 @@ installed layer, or returns `None`.
 | Layer | Order | Class default |
 |---|---:|---|
 | ErrorMiddleware | 100 | enabled |
-| WellKnownMiddleware | 150 | disabled |
+| WellKnownMiddleware | 150 | enabled |
 | LoggingMiddleware | 200 | disabled |
 | CORSMiddleware | 300 | disabled |
 | SessionMiddleware | 400 | disabled |
@@ -23,7 +23,7 @@ installed layer, or returns `None`.
 
 `AsgiServer` nevertheless enables session and auth through their capability
 mixins' `setdefault`; an explicit `False` wins. Therefore a bare composition
-normally has errors, session and auth. Extra registry classes are Python
+normally has errors, wellknown, session and auth. Extra registry classes are Python
 constructor options; the recipe middleware element names only the six built-ins.
 
 Claim anchors: [`MiddlewareMixin`](../../../src/genro_asgi/middleware/__init__.py#L80), [`get_middleware`](../../../src/genro_asgi/middleware/__init__.py#L103).

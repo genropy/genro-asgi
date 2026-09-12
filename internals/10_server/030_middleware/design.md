@@ -69,7 +69,7 @@ get right. A layer states where it belongs and the chain forms itself.
 | Layer | `middleware_order` | Outside it | On in a shipped server? |
 |---|---|---|---|
 | errors | 100 | nothing | **yes**, unless switched off |
-| wellknown | 150 | errors | only if named |
+| wellknown | 150 | errors | **yes**, unless switched off |
 | logging | 200 | errors, wellknown | only if named |
 | cors | 300 | errors, wellknown, logging | only if named |
 | session | 400 | and cors | **yes** — its own capability arms it |
@@ -129,10 +129,13 @@ as its constructor options, and an option nobody declared is refused by name.
 
 **errors** — turns anything raised into an answer. Block 4.
 
-**wellknown** — answers the paths every browser and bot probes on every site
-(`/.well-known/…`, `/robots.txt`, `/sitemap.xml`) with a clean 404, so a probe
-never reaches a mounted application. It does not send that 404 itself: it
-raises, and errors answers.
+**wellknown** — answers the hidden paths every browser and bot probes on every
+site with a clean 404, so a probe never reaches a mounted application: a first
+segment starting with a dot (`/.git`, `/.env`), plus the two fixed probes that
+carry no dot (`/robots.txt`, `/sitemap.xml`). Its one exception is RFC 8615:
+`/.well-known/<name>` is delegated when `<name>` is a discovery document an
+application declared (issue #88 — see `docs/guides/hidden-paths.md`). It does
+not send that 404 itself: it raises, and errors answers.
 
 **logging** — one line when a request arrives, one when it leaves, with the
 method, the path, the status and the elapsed milliseconds. Its logger is its

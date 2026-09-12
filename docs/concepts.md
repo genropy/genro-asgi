@@ -192,7 +192,7 @@ Putting it together, here is the path an HTTP request travels:
       └─────┬──────┘
             ▼
   ┌───────────────────────┐
-  │   middleware chain      │  errors → (wellknown) → (logging) →
+  │   middleware chain      │  errors → wellknown → (logging) →
   │  (outer → inner)        │  (cors) → (session) → (auth)
   └───────────┬────────────┘
               ▼
