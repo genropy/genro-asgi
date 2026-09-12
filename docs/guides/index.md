@@ -26,6 +26,7 @@ applications
 lifecycle
 websockets
 multiworker-spa
+django
 ```
 
 ## The guides
@@ -59,6 +60,7 @@ multiworker-spa
 - **[Lifecycle](lifecycle.md)** — startup hooks, admission state and bounded shutdown.
 - **[WebSockets](websockets.md)** — WSX messages, handshake rules and the raw socket seam.
 - **[Multiworker SPA](multiworker-spa.md)** — package boundary, hosted applications and global store.
+- **[Django on the pool](django.md)** — a Django project hosted by the worker group, sticky on its session.
 
 ## How each guide is structured
 

@@ -786,6 +786,43 @@ the type fixed by the store protocol; the VALUES are the consumer's own, and mus
 be types the TYTX codec knows because a grant carries them down the lane). The parcel stays a plain dict built from the row:
 no row class reaches the disk.
 
+**A Django project is hosted like any other site (landed 2026-09-12, #85).**
+`genro_asgi_django/` is a fourth top-level package of the same distribution,
+and it adds nothing to the core: `DjangoWorker` is a `SpaWorker` whose
+`wsgi_app` is Django's own WSGI callable, and `DjangoEngineFactory` is the
+group's `engine_factory` — one `django.setup()` in the template process, every
+worker a fork of it. The recipe names both as dotted paths and gives them the
+same two words, `settings_module` and `project_path` (the child is `python -m`:
+it inherits the environment and not the `sys.path`). `project_path` is also the
+working directory the factory moves the template process to before it forks,
+because a real project settles relative settings against it — Wagtail's
+bakerydemo names its template directory relatively — and the core resolves no
+relative path of its own, so nothing of the pool moves with it. The connection is
+Django's session: `serve_django` calls Django, reads the session key off the
+answer's `Set-Cookie` or the request's `Cookie`, and calls `new_connection` with
+it the first time this process sees it — so the `spa_connection_id` cookie
+carries Django's `sessionid` and the pool sends that session back to the process
+that holds it. **Who the user is, Django says with one line of `MIDDLEWARE`
+(landed 2026-09-12, #96).** `UserStickyMiddleware` watches `_auth_user_id`
+across the request — the one thing `django.contrib.auth.login` and `logout`
+write in and take out of the session — and calls `DjangoWorker.declare_user`
+(the session key the login cycled to, plus the username: `new_connection` when
+unseen, then `change_connection_user` on this request's own slot, which is where
+the core's login tail reads it) or `DjangoWorker.retire_connection`, which drops
+the row because the core has no way back to nobody. It reaches the worker
+through the environ: `serve_django` puts itself under `WORKER_ENVIRON_KEY`
+(`genro.spa_worker`), beside the core's `genro.identity`, and an environ with no
+worker in it — `manage.py runserver` — makes the middleware do nothing. The
+signals `user_logged_in` / `user_logged_out` were refused: a receiver is armed
+in a module-level registry, not in `MIDDLEWARE`. The examples and their recipes live
+in `contrib/django/examples/` — `hello_world/`, which grew Django's own login
+over two literal users and still has no database (`django.contrib.auth` connects
+`update_last_login`, the only thing a login writes a row for, and the example's
+`AppConfig.ready` disconnects it), and `bakerydemo/` (#95), Wagtail's
+demo site on a checkout outside this tree, whose static and media stay Django's
+own views because its dev settings keep `DEBUG` on; the guide is
+`docs/guides/django.md`.
+
 **Not yet built (second pass).** The deliberate reboot command on `_server`
 (`reboot now`/`reboot wait N`, notify_user, the consumer service-message
 lane); the single-group reboot (needs no photo — the commander survives) and

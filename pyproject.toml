@@ -53,6 +53,10 @@ test = [
     # The suite exercises the TYTX msgpack transport branch of response.py:
     # without this extra that coverage silently vanishes in a clean env.
     "genro-tytx[msgpack]>=0.15.0",
+    # contrib/django/examples/hello_world is built and served for real by the
+    # tests of the django adapter: the pool is proved against the framework,
+    # not against a callable written for the occasion.
+    "django>=5.0",
 ]
 dev = [
     "genro-asgi[test]",
@@ -80,7 +84,12 @@ Repository = "https://github.com/genropy/genro-asgi"
 "Bug Tracker" = "https://github.com/genropy/genro-asgi/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/genro_asgi", "src/genro_asgi_multiworker_spa", "src/genro_asgi_server_app"]
+packages = [
+    "src/genro_asgi",
+    "src/genro_asgi_multiworker_spa",
+    "src/genro_asgi_server_app",
+    "src/genro_asgi_django",
+]
 exclude = ["**/tests/"]
 
 [tool.pytest.ini_options]
@@ -88,7 +97,7 @@ testpaths = ["tests"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
-addopts = "-v --cov=genro_asgi --cov=genro_asgi_multiworker_spa --cov=genro_asgi_server_app --cov-report=term-missing"
+addopts = "-v --cov=genro_asgi --cov=genro_asgi_multiworker_spa --cov=genro_asgi_server_app --cov=genro_asgi_django --cov-report=term-missing"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
@@ -227,3 +236,10 @@ disable_error_code = ["attr-defined"]
 [[tool.mypy.overrides]]
 module = "genro_asgi_server_app.server_sections.tasks_section"
 disable_error_code = ["union-attr", "no-any-return"]
+
+# Django ships no py.typed marker, so every import of it is "missing library
+# stubs" — a fact about the framework and not about this code. Scoped to
+# Django's own modules: nothing of ours is silenced.
+[[tool.mypy.overrides]]
+module = ["django.*"]
+ignore_missing_imports = true
