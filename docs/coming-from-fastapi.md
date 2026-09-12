@@ -136,7 +136,7 @@ application chose.
   the whole site — and the server builds itself from it; `genro-asgi serve
   template=default` serves a ready-made configuration, and `genro-asgi serve
   application=./hello.py:Hello` is the closer analogue, for when there is one
-  application and no recipe of its own. The registry (`--name`, then `apps`/`stop`/`remove`)
+  application and no recipe of its own. The registry of site cards (`--name` or `configure`, then `sites`/`stop`/`remove`)
   has no FastAPI counterpart. There is still no `.run()` method: programmatically
   you build the server and call `.serve()`, which boots a uvicorn loop and blocks
   (`port=0` asks the OS for a free port, useful in tests). See

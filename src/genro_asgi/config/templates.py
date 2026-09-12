@@ -26,7 +26,8 @@ the constructor kwargs it was handed, and it is layered ON TOP of a template by
 ``AsgiServer``. From the handler down nothing knows which of the two roads was
 taken: there is one tree, read through one door.
 
-The shortcut writes every option it receives — the ``server`` scalars (``debug``
+The shortcut writes every option it receives — the ``site`` identity (``site_name``
+and ``site_home``, the folder the site owns), the ``server`` scalars (``debug``
 among them), the session ttl, the ``middleware`` and ``plugins`` switches (both
 elements have an OPEN signature, so a name registered from outside is an
 attribute like any other) and one ``application`` node per declared class — and
@@ -58,8 +59,9 @@ class DefaultConfiguration(BaseConfiguration):
     """
 
     def main(self, root: Any) -> None:
-        """The default document: server, storage, applications."""
+        """The default document: site, server, storage, applications."""
         cfg = root.configuration()
+        self.site_section(cfg)
         self.server_section(cfg)
         self.storage_section(cfg)
         self.applications_section(cfg)
@@ -101,6 +103,8 @@ class ShortcutConfiguration(AsgiConfigBuilder):
 
     def __init__(self, kwargs: dict[str, Any], name: str | None = None) -> None:
         super().__init__(name)
+        self.site_name = kwargs.pop("site_name", None)
+        self.site_home = kwargs.pop("site_home", None)
         self.server_options = {
             word: kwargs.pop(word) for word in self.server_words if kwargs.get(word) is not None
         }
@@ -136,6 +140,7 @@ class ShortcutConfiguration(AsgiConfigBuilder):
     def main(self, root: Any) -> None:
         """Every section the kwargs describe, each in the grammar's own words."""
         cfg = root.configuration()
+        self.site_section(cfg)
         self.server_section(cfg)
         self.middleware_section(cfg)
         self.plugins_section(cfg)
@@ -190,12 +195,17 @@ class ShortcutConfiguration(AsgiConfigBuilder):
 
         An empty list is written as the bare section, which the composition reads
         as "the default layout"; nothing declared leaves the template's section
-        alone.
+        alone — unless a home was declared, whose whole point is to be what
+        ``site:`` is anchored on.
         """
-        if self.storage_mounts_declared is None and self.storage_key is None:
+        declared = (self.storage_mounts_declared, self.storage_key, self.site_home)
+        if all(item is None for item in declared):
             return
         section = cfg.storage(app=StorageManager, storage_key=self.storage_key)
-        for mount in self.storage_mounts_declared or ():
+        if self.storage_mounts_declared is None:
+            self.storage_mounts(section)
+            return
+        for mount in self.storage_mounts_declared:
             attrs = dict(mount)
             getattr(section, attrs.pop("protocol"))(**attrs)
 

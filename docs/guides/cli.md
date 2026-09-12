@@ -9,9 +9,10 @@ server without you writing an entry point, and it keeps a small registry of
 named servers so you can start, list and stop them from any shell.
 
 ```
-genro-asgi serve <source> [--host H] [--port P] [--reload] [--name N] [--debug [PARAMETERS]]
-    <source> = ./config.py | template=<name> | application=<target> | <registered name>
-genro-asgi apps
+genro-asgi serve <source> [--home D] [--host H] [--port P] [--reload] [--name N] [--debug [PARAMETERS]]
+    <source> = ./config.py | template=<name> | application=<target> | <site name>
+genro-asgi configure <name> [--home D] [--template T] [--applications T1,T2] [--host H] [--port P]
+genro-asgi sites
 genro-asgi stop <name>
 genro-asgi remove <name>
 ```
@@ -126,37 +127,104 @@ genro-asgi serving http://127.0.0.1:8125
 `default` is the only name today; an unknown one is an error listing the known
 ones. The form is the CLI face of `AsgiServer(config="<name>")`.
 
-## The registry of named servers
+## The site home
 
-`--name` registers the server under that name and records its pid, so other
-shells can see and stop it:
+A site is a **folder**, and inside it every path the site owns is relative and
+named:
 
 ```
-$ genro-asgi serve ./config.py --name demo
-$ genro-asgi apps
-demo                 running (pid 72897)  -:-                      ./config.py
+<home>/
+    config.py            the configuration recipe (the card names the file)
+    static/              the site's static files (the turn before the 404 is later work)
+    data/
+        frozen_users/    the deposit of the frozen users
+        sessions/        the session snapshots
+    sockets/             the worker sockets of an orchestrated site
+    logs/                the orchestration log and its decisions journal
+    run/                 the pidfile
+```
+
+The same site is therefore the same thing in development, in classic
+production, in a virtualenv, in Docker and in Kubernetes: only the folder moves.
+The home is a configuration word — `site(home=...)`, written by the recipe
+attribute `site_home` or by the card — and the server hands it out as
+`server.site_home`, a `SiteHome` whose properties are the paths above.
+
+The shipped storage layout is **two volumes**, not one:
+
+- **`site:`** is the site's own folder as the configuration declares it — its
+  code and its resources — anchored on the deployment directory;
+- **`home:`** is the space the site keeps its own things in — `static/`,
+  `data/frozen_users`, `data/sessions`, `sockets/`, `logs/` are paths inside it
+  — anchored on the folder the card names. With no home declared it is the
+  folder of `site:`.
+
+The pool's own path words (`instance_dir`, the frozen-users deposit, the
+orchestration log) are **not** derived from the home: they stay the
+configuration words they are.
+
+`GENRO_ASGI_HOME` is a different thing: the **installation** root, where
+genro-asgi keeps the site cards and the machine defaults layer. One mechanism,
+five values — `~/.genroasgi` on a developer's machine, the service user's
+folder in classic production, `$VIRTUAL_ENV/.genroasgi` in a virtualenv, a path
+in the image in Docker, a mounted path in Kubernetes.
+
+## The cards of the configured sites
+
+One card per site, `<GENRO_ASGI_HOME>/sites/<name>.json`: the home folder, the
+source and the options. Resolving a name means reading its card — no search
+order, no precedence.
+
+`configure` writes one. Every question it asks can be given as an option
+instead, and with all of them given it runs without a prompt, which is what
+Docker and Kubernetes need:
+
+```
+$ genro-asgi configure demo --home /srv/demo --template default \
+      --applications myshop.app:Shop --host 0.0.0.0 --port 8080
+demo: configured in /srv/demo
+```
+
+It lays the home out, writes its `config.py` from the named template, and files
+the card. Then the name is a source of its own:
+
+```
+$ genro-asgi serve demo
+$ genro-asgi sites
+demo                 running (pid 72897)  0.0.0.0:8080   /srv/demo    config.py
 $ genro-asgi stop demo
 demo: stopped (pid 72897)
-$ genro-asgi apps
-demo                 stopped              -:-                      ./config.py
 $ genro-asgi remove demo
 demo: removed
 ```
 
-A registered name then becomes a source of its own — `genro-asgi serve demo`
-relaunches with the stored options — and an unknown name is an error listing the
-names that do exist.
+An unknown name is an error listing the names that do exist. `--name` on `serve`
+still files a card for a server started any other way, and so does the
+**configuration itself**: `genro-asgi serve ./config.py` on a recipe that names
+its site (`site_name`, which writes `site(name=...)`) files that site's card, so
+the next boot is `genro-asgi serve <name>`. A configuration that names no site
+runs anonymous and files nothing.
+
+A card's relative source is read **inside the home**, so `serve demo` runs
+`/srv/demo/config.py` whatever directory you start from.
+
+**`serve` creates nothing.** A name with no card stops with
+`shop is not a configured site, run 'genro-asgi configure shop'`, and a card
+whose home is not on disk stops the same way. Laying a home out is `configure`'s
+job and nobody else's — a container's mounted volume is prepared by an init step
+that runs `configure`, not by the boot.
 
 **Naming an instance also arms the session snapshot**: the sessions of
-`--name demo` are pickled to `~/.genroasgi/sessions/demo.pickle` at shutdown
+`--name demo` are pickled to `<home>/data/sessions/demo.pickle` — or
+`~/.genroasgi/sessions/demo.pickle` when the site has no home — at shutdown
 and reloaded at the next boot (expired ones filtered out by their TTL). A
 nameless serve stays volatile. This is a development convenience — production
 deployments will bring their own persistence. See the
 [sessions guide](sessions.md) for details.
 
-The store is `~/.genroasgi`: `apps/<name>.json` holds the **pointer** (the
-source string and the options you gave), `run/<name>.pid` the pid of the running
-process. It never copies your application, so relaunching by name always runs the
+The store is `~/.genroasgi`: `sites/<name>.json` holds the **card** (the home,
+the source string and the options you gave), `run/<name>.pid` the pid of the
+running process. It never copies your application, so relaunching by name always runs the
 current code. `stop` sends `SIGTERM`; `remove` refuses to drop a registration
 while it is running and tells you to stop it first.
 
@@ -177,7 +245,8 @@ parent survives into it. So the command passes it
 `genro_asgi.__main__:factory` and sends the description of the server across the
 process boundary in one environment variable, **`GENRO_ASGI_LAUNCHER`** — a JSON
 object carrying one source key (`config` or `application`, always an absolute
-path) plus `host`/`port` *only when you gave them explicitly*, so an absent key
+path), the site's name and home when it has them, plus `host`/`port` *only when
+you gave them explicitly*, so an absent key
 still lets the config's own value apply. `factory()` reads it and rebuilds the
 very same server each time.
 
@@ -202,8 +271,8 @@ genro-asgi serving http://127.0.0.1:8124
 $ curl -s 'http://127.0.0.1:8124/greet?name=cli'
 {"hello":"cli"}
 
-$ genro-asgi apps
-quick                running (pid 75171)  -:8124                   application=./hello.py:Hello
+$ genro-asgi sites
+quick                running (pid 75171)  -:8124        -          application=./hello.py:Hello
 
 $ genro-asgi stop quick
 quick: stopped (pid 75171)
@@ -211,14 +280,18 @@ quick: stopped (pid 75171)
 
 ## Gotchas
 
-- **`apps` shows the options you gave, not the address in use.** The registry
+- **`sites` shows the options you gave, not the address in use.** The registry
   stores the command line, so a host or port that came from the `config.py`
   prints as `-`. The line the server prints on boot
   (`genro-asgi serving http://...`) is the address it actually bound.
-- **A relative source is resolved against the shell you serve from.** It is
-  stored in the registry as you typed it, so `genro-asgi serve demo` from a
-  different directory will not find a relative `./config.py`. Register with an
-  absolute path if you plan to relaunch from elsewhere.
+- **A relative source with no home is resolved against the shell you serve
+  from.** It is stored on the card as you typed it, so `genro-asgi serve demo`
+  from a different directory will not find a relative `./config.py`. Give the
+  site a home (the card's source is then read inside it) or register an
+  absolute path.
+- **`configure` mounts importable targets only** (`package.module:ClassName`):
+  the recipe it writes is a Python file that imports what it mounts, and a
+  single-file target has no import line to write.
 - **No `--workers`.** The CLI starts one server process (plus a reload supervisor when requested).
   A [multiworker SPA](multiworker-spa.md) starts its own configured pool. `--debug` declares a usage mode (optionally a comma-separated parameter list);
   the core does not branch on it.

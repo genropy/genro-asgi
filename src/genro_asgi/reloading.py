@@ -58,6 +58,8 @@ def serve_reloading(
     config: str | None = None,
     application: str | None = None,
     save_session: str | None = None,
+    site_name: str | None = None,
+    site_home: str | None = None,
     debug: bool | str = False,
 ) -> None:
     """Boot under the reload supervisor, watching the roots the caller names.
@@ -72,6 +74,8 @@ def serve_reloading(
         application: the quickstart target, when there is no config; exactly
             one of the two must be given.
         save_session: the session snapshot file, when a named serve armed one.
+        site_name: the name the site is filed under, when it has a card.
+        site_home: the folder the site owns, when it has one.
         debug: the declared usage mode, carried to the rebuilt server as is.
 
     Raises:
@@ -89,6 +93,9 @@ def serve_reloading(
         payload["application"] = application
     if save_session is not None:
         payload["save_session"] = save_session
+    for word, value in (("site_name", site_name), ("site_home", site_home)):
+        if value is not None:
+            payload[word] = value
     if debug is not False:
         payload["debug"] = debug
     os.environ[LAUNCHER_ENV] = json.dumps(payload)

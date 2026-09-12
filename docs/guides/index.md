@@ -51,7 +51,7 @@ multiworker-spa
   from, keep secrets out of it with resolvers, and read values back through the
   server and its applications.
 - **[The `genro-asgi` command](cli.md)** — boot a server from a `config.py` or a
-  single application, manage the named ones with `apps`/`stop`/`remove`, and
+  single application, manage the configured sites with `configure`/`sites`/`stop`/`remove`, and
   reload on source changes.
 
 - **[Requests and errors](requests.md)** — body decoding, uploads, validation and status codes.

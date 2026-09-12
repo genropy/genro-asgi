@@ -32,6 +32,7 @@ The helpers read the tree by two rules, and the grammar decides which applies:
 
 Section → constructor kwarg:
 
+- ``site`` → ``site_name``/``site_home`` (the folder the site owns).
 - ``server`` → ``host``/``port``/``external_url``/``max_threads``/``shutdown_timeout_seconds``/``debug``, its
   ``session`` child → ``session_ttl``, its ``tasks`` child → ``tasks``.
 - ``middleware`` → ``middleware`` ({name: bool | dict} switches).
@@ -66,6 +67,15 @@ class ConfigError(Exception):
 
 class ConfigurationHandler(ConfigHandler):
     """Read door over an ``asgiconfig`` tree, plus the section→kwargs mapping."""
+
+    def site_kwargs(self) -> dict[str, Any]:
+        """The ``site`` section as server kwargs: ``site_name`` and ``site_home``.
+
+        The element spells them ``name`` and ``home`` because it IS the site;
+        the server prefixes both, where ``name`` alone would say nothing.
+        """
+        declared = self.closed_attrs("site", "name", "home")
+        return {f"site_{word}": value for word, value in declared.items()}
 
     def server_kwargs(self) -> dict[str, Any]:
         """The ``server`` section as server kwargs, its children lifted.

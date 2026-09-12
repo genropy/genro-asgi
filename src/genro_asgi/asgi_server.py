@@ -91,6 +91,7 @@ from .middleware import MiddlewareMixin
 from .plugin_mixin import PluginMixin
 from .server import BaseServer
 from .session import SessionMixin
+from .site_home import SiteHome
 from .storage_mixin import StorageMixin
 from .tasks import TaskMixin
 
@@ -112,8 +113,10 @@ class AsgiServer(
     """The shipped composition: communication + auth + sessions + chain + plugins + storage + base.
 
     Constructor kwargs peeled here: ``config`` — the configuration source this
-    server reads itself from — ``host`` and ``port`` (the ``serve`` defaults)
-    and ``external_url`` (the public base address, trailing slash stripped).
+    server reads itself from — ``site_name`` and ``site_home`` (the site's
+    identity and the folder it owns), ``host`` and ``port`` (the ``serve``
+    defaults) and ``external_url`` (the public base address, trailing slash
+    stripped).
     Every other kwarg flows to the capability mixins and the base (D16
     cooperative init).
     """
@@ -123,6 +126,9 @@ class AsgiServer(
     def __init__(self, config: ConfigSource | None = None, **kwargs: Any) -> None:
         self._config = self._build_config(config, kwargs)
         kwargs = {**self._configured_kwargs(self.config), **kwargs}
+        self._site_name: str | None = kwargs.pop("site_name", None)
+        site_home = kwargs.pop("site_home", None)
+        self._site_home = SiteHome(site_home) if site_home is not None else None
         self._config_host: str | None = kwargs.pop("host", None)
         self._config_port: int | None = kwargs.pop("port", None)
         external_url: str | None = kwargs.pop("external_url", None)
@@ -176,7 +182,8 @@ class AsgiServer(
         surfaces as a boot error instead of a broken server. There is one road:
         a server composed in code declares CLASSES too, through the shortcut.
         """
-        kwargs: dict[str, Any] = config.server_kwargs()
+        kwargs: dict[str, Any] = config.site_kwargs()
+        kwargs.update(config.server_kwargs())
         kwargs.update(config.identity_kwargs())
         for name, value in (
             ("middleware", config.middleware_config()),
@@ -241,6 +248,21 @@ class AsgiServer(
                 "external_url: OIDC needs the public base URL to build the "
                 "absolute redirect_uri (set server(external_url=...))"
             )
+
+    @property
+    def site_name(self) -> str | None:
+        """The name this site is filed under (``None`` when it has none)."""
+        return self._site_name
+
+    @property
+    def site_home(self) -> SiteHome | None:
+        """The folder this site owns, ``None`` when it is homeless.
+
+        Every site-owned path hangs from it by name (``site_home.static``,
+        ``site_home.logs``, ...). An explicit ``site_home=`` kwarg wins over the
+        configured ``site(home=...)``, the rule host and port already follow.
+        """
+        return self._site_home
 
     @property
     def config_host(self) -> str | None:

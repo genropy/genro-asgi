@@ -158,8 +158,8 @@ parent recipes, lowest first, the site always last and winning (attribute by
 attribute — a section that sets only `port` inherits everything else).
 
 1. **`BaseConfiguration`** — the package's shipped defaults, as a recipe. It
-   declares the default storage layout (the single `site:` mount on the
-   deployment directory) and exposes one hook per concern, so the minimal
+   declares the default storage layout (the `site:` and `home:` mounts) and
+   exposes one hook per concern, so the minimal
    deployment is a subclass that sets what deviates:
 
    ```python
@@ -183,8 +183,8 @@ attribute — a section that sets only `port` inherits everything else).
 
 3. **The site recipe** — always the top layer.
 
-`<home>` is genro-asgi's own directory — the registry, the pids, the defaults
-file — and resolves as: explicit `base_dir` argument → the **`GENRO_ASGI_HOME`**
+`<home>` here is genro-asgi's own INSTALLATION directory — the site cards, the
+pids, the defaults file, not a site's own home folder — and it resolves as: explicit `base_dir` argument → the **`GENRO_ASGI_HOME`**
 environment variable → `~/.genroasgi`. The variable is how a container or a
 virtualenv gets an isolated home (`GENRO_ASGI_HOME=$VIRTUAL_ENV/.genroasgi`);
 nothing is inferred from the environment beyond it. The test suite pins it to
@@ -266,6 +266,13 @@ the children live in the mounted one. An undeclared child is a boot error.
 
 One line each; the deep dives live in their own guides.
 
+- **`site`** — the site's identity: `name` (the card it is filed under) and
+  `home` (the folder it owns, inside which every path is relative and named).
+  A recipe usually declares them as the `site_name` / `site_home` class
+  attributes, which write this section; the home anchors the default `home:`
+  storage volume, beside `site:`. A configuration that carries the name gets its
+  card written on the first `serve <path>`. See
+  [the site home](cli.md#the-site-home).
 - **`server`** — `host`, `port`, `external_url` (the PUBLIC address, not the
   listener), `max_threads`, `shutdown_timeout_seconds` (default 5.0), plus `websocket`
   (`origins`, `max_concurrent`), `session` (its `ttl`) and `tasks` (see [Background tasks](tasks.md)).
@@ -311,9 +318,13 @@ def storage_section(self, cfg):
     s.s3(name="uploads", bucket="shop-media", default_encrypted="shopspa")
 ```
 
-Omit the section entirely and the server builds its default manager: the single
-`site:` mount on the deployment directory (the process cwd). The mount must
-already exist — a recipe naming a missing directory is a boot error.
+Omit the section entirely and the server builds its default manager: **two**
+mounts, `site:` and `home:`. `site:` is the site's own folder as the
+configuration declares it — its code and its resources — on the deployment
+directory (the process cwd); `home:` is the space the site keeps its own things
+in, on the folder the [site home](cli.md#the-site-home) names, and with no home
+declared on the folder of `site:`. Both must already exist — a recipe naming a
+missing directory is a boot error.
 
 `site:` is where the server's own state lands, all in one tree: `site:users` and
 `site:api_keys` (written `encrypted=True`), `site:sessions`, `site:tasks` and
@@ -321,9 +332,10 @@ already exist — a recipe naming a missing directory is a boot error.
 what lands on disk is self-describing — an envelope whose first line starts
 `#GNRE1:` — so reads declare nothing.
 
-Outside a recipe the same three shapes reach the constructor as `storage=`:
-`None` for the default `site:` mount, a ready `StorageManager` to adopt, or
-genro-storage's own `list[dict]` of mount configurations.
+Outside a recipe the same shapes reach the constructor as `storage=`: `None` for
+the default layout, or genro-storage's own `list[dict]` of mount configurations
+(which override the shipped ones one by one, so a single declared mount leaves
+`home:` standing under it).
 
 ## The pool subtree: `orchestration`, its `commander` and its `groups`
 

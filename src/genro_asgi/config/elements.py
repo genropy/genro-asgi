@@ -89,7 +89,7 @@ class AsgiServerGrammar(TaskGrammar):
 
     @element(
         sub_tags=(
-            "server[0:1],middleware[0:1],authentication[0:1],storage[0:1],"
+            "site[0:1],server[0:1],middleware[0:1],authentication[0:1],storage[0:1],"
             "applications[0:1],databases[0:1],plugins[0:1],openapi[0:1]"
         ),
         node_label="configuration",
@@ -100,6 +100,31 @@ class AsgiServerGrammar(TaskGrammar):
         Overrides the contrib root with the full section list of this dialect.
         Each section is a singleton, so its label IS its tag and every path
         below it is stable.
+        """
+
+    @element(parent_tags="configuration", sub_tags="")
+    def site(
+        self,
+        name: str | BagResolver = None,
+        home: str | BagResolver = None,
+    ) -> None:
+        """The site's identity: the name it is filed under and the folder it owns.
+
+        ``name`` is the name of its card, ``<GENRO_ASGI_HOME>/sites/<name>.json``.
+
+        ``home`` is the site's own folder. Inside it every site-owned path is
+        relative and named — the recipe, ``static/``, ``data/frozen_users``,
+        ``data/sessions``, ``sockets/``, ``logs/``, ``run/`` — and the server
+        hands the folder out as ``server.site_home`` (``SiteHome``). It anchors
+        the default ``home:`` storage volume — beside ``site:``, the site's
+        folder as the configuration declares it — and with no home declared the
+        two coincide.
+
+        A site declares both in its recipe (the ``site_name`` / ``site_home``
+        attributes of ``AsgiConfigBuilder`` write this element); the CLI writes
+        them from the card. A configuration carrying a ``name`` is a site the
+        CLI recognises: ``genro-asgi serve <path>`` files its card, so the next
+        boot is ``genro-asgi serve <name>``.
         """
 
     @element(parent_tags="configuration", sub_tags="session[0:1],tasks[0:1],websocket[0:1]")
