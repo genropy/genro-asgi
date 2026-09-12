@@ -46,10 +46,13 @@ two exception codes genro-routes distinguishes: ``signature_error`` (the bind
 against the handler signature fails: unknown keyword, missing required
 argument, too many positionals) → ``HTTPBadRequest`` (400);
 ``validation_error`` (the signature is satisfied and pydantic rejects the
-values) → ``HTTPUnprocessableContent`` (422). The handler BODY is mapped to
-neither: whatever it raises — a ``TypeError`` included, sync body or async —
-propagates and reaches ``ErrorMiddleware`` as a 500. There is no local
-cleanup drain: the server ``finally`` owns end-of-request cleanups.
+values) → the status the application declared in its own grammar
+(``application.validation_error_status``: 400 under the strict reading, the
+default, and 422 for an application asking for the FastAPI convention — issue
+#87). The handler BODY is mapped to neither: whatever it raises — a
+``TypeError`` included, sync body or async — propagates and reaches
+``ErrorMiddleware`` as a 500. There is no local cleanup drain: the server
+``finally`` owns end-of-request cleanups.
 
 Kwargs binding: ``bind_kwargs`` starts from ``request.handler_kwargs()``
 (query + body by content-type) and reconciles a hydrated JSON body with a
@@ -73,10 +76,10 @@ from genro_routes import RoutingClass, is_result_wrapper
 from .application import BaseApplication
 from .exceptions import (
     HTTPBadRequest,
+    HTTPException,
     HTTPForbidden,
     HTTPNotFound,
     HTTPUnauthorized,
-    HTTPUnprocessableContent,
 )
 from .request import Request
 from .streaming import StreamingResponse
@@ -197,10 +200,10 @@ class RoutedApplication(BaseApplication, RoutingClass):
         Raises the mapped ``ROUTER_ERRORS`` exception when resolution fails;
         the server's ``ErrorMiddleware`` answers it. A call that does not fit
         the handler signature surfaces as ``HTTPBadRequest`` (400); values the
-        handler's pydantic validation rejects surface as
-        ``HTTPUnprocessableContent`` (422). Both keep the original error as
-        ``__cause__``. What the handler body raises is mapped to neither: it
-        propagates as a 500.
+        handler's pydantic validation rejects surface on this application's
+        ``validation_error_status`` (400 strict, 422 FastAPI). Both keep the
+        original error as ``__cause__``. What the handler body raises is mapped
+        to neither: it propagates as a 500.
 
         A handler that answers with a ``StreamingResponse`` — an SSE stream, a
         long download — speaks the wire itself: it is called with the ASGI
@@ -228,7 +231,9 @@ class RoutedApplication(BaseApplication, RoutingClass):
             raise HTTPBadRequest(f"Arguments do not fit the handler: {detail}") from exc
         except _HandlerArgumentsInvalid as exc:
             detail = exc.__cause__ or exc
-            raise HTTPUnprocessableContent(f"Invalid argument values: {detail}") from exc
+            raise HTTPException(
+                self.validation_error_status, f"Invalid argument values: {detail}"
+            ) from exc
         if isinstance(result, StreamingResponse):
             await result(scope, receive, send)
             return

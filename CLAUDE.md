@@ -171,10 +171,24 @@ NEITHER is the base worker, legitimate, which serves its orders and refuses an
 http CALL with the property's message.
 `Request` reads the ASGI request by itself (landed 2026-09-02): headers and
 cookies off the scope, the query, the body drained ALWAYS from `receive` and
-joined once; the body is decoded by content-type — json/xml/msgpack hydrated,
+joined once. **Decoding the body is an option of the application, and the codes
+are the strict HTTP reading (landed 2026-09-12, #87).** The two words live in
+the application's own grammar — `request(body=..., error_codes=...)` under
+`applications.<code>`, declarable on the class as `request_body` /
+`request_error_codes` when the composition carries no recipe. Decoded (the
+default), the body is decoded by content-type — json/xml/msgpack hydrated,
 urlencoded via `from_qs`, `multipart/form-data` via the stdlib `email` parser
 into fields (text hydrated, files as `UploadedFile` with `name`/`filename`/
-`content_type`/`data`), anything else raw bytes. Form fields, files included,
+`content_type`/`data`); a body that is not what its content-type declares is
+400 with the decoder's reason, raised inside `Request` so nothing escapes as a
+500, and a content-type with no decoder is 415 (`HTTPUnsupportedMediaType`).
+`body="raw"` hands the handler the bytes as `body_raw` and `decode_body`,
+`decode_json`, `decode_multipart` and `get_transport` stay public for it. The
+second word moves ONE case: values pydantic rejects answer
+`application.validation_error_status` — 400 strict, 422 under the FastAPI
+convention — and the core produces 422 nowhere else; the OpenAPI document
+declares the code the application chose
+(`OpenApiApplication.declare_validation_error`). Form fields, files included,
 reach the handler as kwargs named after the form field (a repeated name gives
 a list). genro-tytx is used ONLY as a serializer (`from_tytx`, `from_qs`,
 `to_tytx`, `json_dumps`): nothing is imported from `genro_tytx.http`, and the

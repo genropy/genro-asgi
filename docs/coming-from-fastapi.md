@@ -1,6 +1,6 @@
 # Coming from Starlette / FastAPI
 
-> **Status:** Draft; implementation checked against the development source on 2026-09-08.
+> **Status:** Draft; implementation checked against the development source on 2026-09-12.
 
 If you already know Starlette or FastAPI, genro-asgi will feel familiar in the
 small — you still decorate a callable to make a route, params still bind to the
@@ -101,6 +101,34 @@ to `McpOpenApiApplication` and mark `search` with
 `@route(channel_channels="mcp,rest")`, and the same method is now both a REST
 endpoint and an MCP tool.
 
+## Error codes
+
+FastAPI answers **422** when a request is well formed but its values fail
+validation. genro-asgi reads HTTP strictly instead, and this is its default:
+every failure the core judges — a body that is not what its content type
+declares, a malformed form, arguments that do not fit the signature, a value
+pydantic rejects — answers **400**, and a content type the core cannot decode
+answers **415**. The core never produces 422: that code belongs to the handler,
+for a domain rule it decides itself.
+
+An application that serves clients expecting the FastAPI convention declares it:
+
+```python
+class Shop(OpenApiApplication):
+    request_error_codes = "fastapi"     # a rejected value answers 422
+```
+
+or in a configuration recipe:
+
+```python
+app = cfg.applications(default="shop").application(code="shop", app_class=Shop)
+app.request(error_codes="fastapi")
+```
+
+Only the rejected-value case moves. Everything else stays 400 or 415, under
+both conventions, and the generated OpenAPI document declares the code the
+application chose.
+
 ## Honest notes on the differences
 
 - **No dependency-injection container.** There is no `Depends`. Handlers reach
@@ -129,6 +157,10 @@ endpoint and an MCP tool.
   explicit options can disable them.
 - **The OpenAPI prefix is `_meta`.** Not `/docs` and `/openapi.json` — the Swagger
   UI is at `/_meta/docs` and the schema at `/_meta/schema_json`.
+- **422 is not the validation code.** See [Error codes](#error-codes) above: a
+  rejected value answers 400 unless the application declares the FastAPI
+  convention. Bodies are also decoded by the core only for an application that
+  wants them decoded — `request_body = "raw"` hands the handler the bytes.
 - **An internal `_server` app is always mounted.** Login, task management and the
   system OpenAPI live under `/_server/...` with no setup on your part — there is no
   FastAPI equivalent you need to wire up.

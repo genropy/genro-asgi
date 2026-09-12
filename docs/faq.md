@@ -52,13 +52,18 @@ See [Configuration](guides/configuration.md) and
 
 ## Requests, authentication and plugins
 
-### When do invalid arguments produce 400, 422 or 500?
+### When do invalid arguments produce 400, 415, 422 or 500?
 
-A missing required argument or an unexpected keyword produces 400. Values
-that fit the signature but fail pydantic validation produce 422. An exception
-inside the handler produces 500 unless it is an HTTP exception with its own
-status. Payload decoding is a separate step; do not assume every malformed
-body maps to 400 or 422.
+Every failure the core judges produces 400: a missing required argument, an
+unexpected keyword, a body that is not what its content type declares, a
+malformed form or multipart, and — under the default `strict` reading — values
+that fit the signature but fail pydantic validation. A content type the core
+cannot decode produces 415. An exception inside the handler produces 500 unless
+it is an HTTP exception with its own status.
+
+422 is the handler's, for a domain rule, unless the application declares the
+FastAPI convention (`request_error_codes = "fastapi"`), which answers 422 to a
+rejected value.
 
 See [Requests and errors](guides/requests.md#validation-and-status-codes).
 
@@ -66,9 +71,10 @@ See [Requests and errors](guides/requests.md#validation-and-status-codes).
 
 Declare a `body_data` parameter to receive the hydrated document without
 spreading its fields over individual parameters. A handler accepting
-`**kwargs` also receives the document under `body_data`. Undecoded bytes use
-`body_raw`. Extra JSON fields are dropped when the document is spread over
-declared scalar parameters.
+`**kwargs` also receives the document under `body_data`. An application
+declaring `request_body = "raw"` receives every body as bytes in `body_raw`.
+Extra JSON fields are dropped when the document is spread over declared scalar
+parameters.
 
 See [Body arguments](guides/requests.md#body-arguments).
 

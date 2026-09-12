@@ -44,6 +44,7 @@ def test_root_exports_public_api():
         "HTTPNotFound",
         "HTTPUnauthorized",
         "HTTPUnprocessableContent",
+        "HTTPUnsupportedMediaType",
         "McpApplication",
         "McpEngine",
         "McpError",
