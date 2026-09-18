@@ -1,5 +1,12 @@
 # genro-asgi
 
+> **Continued as [kajenn](https://github.com/kajenn-org/kajenn).** Development of this server
+> goes on under the name kajenn, in the `kajenn-org` organization: the core as
+> [`kajenn`](https://pypi.org/project/kajenn/), the SPA application and worker pool as
+> [`kajenn-orchestra`](https://pypi.org/project/kajenn-orchestra/). Documentation:
+> https://kajenn.readthedocs.io/en/latest/. genro-asgi stays available on PyPI at 0.46.3
+> and receives no further releases.
+
 **A minimal ASGI server core** — one instance-isolated server that mounts your
 applications, routes requests through [genro-routes](https://pypi.org/project/genro-routes/),
 and grows authentication, sessions, background tasks, OpenAPI and MCP by
